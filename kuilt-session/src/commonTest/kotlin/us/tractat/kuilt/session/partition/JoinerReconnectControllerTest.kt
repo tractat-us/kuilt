@@ -58,6 +58,43 @@ class JoinerReconnectControllerTest {
             )
         }
 
+    /**
+     * [JoinerReconnectEvent.WindowOpened.detectedAt] is the `at` the controller was **handed**,
+     * echoed unchanged — the identity of the partition episode this window belongs to (#1781).
+     *
+     * The fixture's [fixedClock] reads 0 while the drop is reported at [DROP_AT], so the two
+     * candidate sources are distinguishable: an implementation that sampled a clock at the emit
+     * site — which would name *when the announcement was made* rather than *which drop it is
+     * about*, reintroducing exactly the ambiguity the field exists to remove — reads 0 here.
+     */
+    @Test
+    fun `WindowOpened echoes the detection instant it was handed, not a clock read`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+
+            val eventJob = async { ctrl.events.first() }
+            ctrl.onPeerUnresponsive(peerA, at = DROP_AT)
+            testScheduler.advanceTimeBy(1)
+
+            val event = assertIs<JoinerReconnectEvent.WindowOpened>(eventJob.await())
+            assertAll(
+                {
+                    assertEquals(
+                        DROP_AT,
+                        event.detectedAt,
+                        "detectedAt must be the reported drop instant; 0 would mean it came from the clock",
+                    )
+                },
+                {
+                    assertEquals(
+                        DROP_AT + windowMs,
+                        event.expiresAt,
+                        "…and the deadline is still measured from that same instant",
+                    )
+                },
+            )
+        }
+
     // ── Happy-path resume ─────────────────────────────────────────────────────
 
     @Test
@@ -296,6 +333,11 @@ class JoinerReconnectControllerTest {
     @Test
     fun `default reconnect window is 60s`() {
         assertEquals(60_000L, DefaultJoinerReconnectController.DEFAULT_RECONNECT_WINDOW_MS)
+    }
+
+    private companion object {
+        /** A drop instant the fixture's always-zero clock could never produce. */
+        const val DROP_AT = 7_000L
     }
 }
 
