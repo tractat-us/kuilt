@@ -17,9 +17,17 @@ import us.tractat.kuilt.warp.WarpNode
  * claim path). It has no notion of *how much* any lane may take. This adapter supplies that
  * missing dimension without warp core learning a single fair-share type: it implements warp's
  * opaque [AdmissionControl], and warp calls it just before running each task. The adapter maps
- * the task's [Lane] to a fair-share **leaf** and [reserves][FairShareExecution.reserve] one task's
+ * the task's [Lane] to a fair-share **leaf** and [reserves][FairShareExecution.reserve] one run's
  * worth of that leaf's entitlement; when the task finishes warp calls [AdmissionTicket.settle],
- * which [completes][FairShareExecution.complete] the reservation and charges the ledger exactly once.
+ * which [completes][FairShareExecution.complete] the reservation and charges the ledger once for
+ * that run.
+ *
+ * **Costing is per execution, not per task** (design §14.4). Warp's free claim path is
+ * at-least-once, so under ring or roster churn one logical task can run on two peers and cost its
+ * lane twice. That is the intended semantics: both peers really consumed capacity, and charging
+ * once would let a churning lane push its waste onto every other lane. The overshoot is the
+ * duplicate-execution rate — zero at stable membership — and design §8.2 states the fairness-error
+ * bound over executions for the same reason.
  *
  * The behaviour that falls out, per warp's contract:
  *  - **Untagged is free.** A task on the [Lane.ROOT] lane (the default) is admitted immediately
@@ -35,7 +43,7 @@ import us.tractat.kuilt.warp.WarpNode
  *
  * Entitlement itself flows the ordinary heddle way — a consumer advertises demand and calls
  * [HeddleNode.schedule] to delegate holdings down the tree by weight. Two lanes weighted `3:1`
- * therefore complete tasks in a `3:1` ratio: each lane runs exactly as many tasks as it was
+ * therefore complete work in a `3:1` ratio: each lane runs exactly as many executions as it was
  * delegated entitlement for.
  *
  * @param heddle the fair-share data plane whose holdings this adapter reserves against — the
@@ -45,10 +53,11 @@ import us.tractat.kuilt.warp.WarpNode
  *   governed node must have enrolled **itself** before it will author any entitlement — until
  *   `enroll(self)` applies, its write gate is closed, so `reserve` returns `null` and `schedule`
  *   delegates nothing and this adapter admits no gated task (#1693, design §13.2).
- * @param costPerTask service units reserved and charged per task. Defaults to `1` — the §14.4
- *   "one unit per task" costing; a caller with variable-cost work supplies a per-descriptor cost
- *   via [costOf].
- * @param costOf per-task cost function; defaults to a flat [costPerTask] for every descriptor.
+ * @param costPerTask service units reserved and charged per **execution**. Defaults to `1` — the
+ *   §14.4 one-unit-per-execution costing; a caller with variable-cost work supplies a
+ *   per-descriptor cost via [costOf].
+ * @param costOf per-descriptor cost function; defaults to a flat [costPerTask] for every
+ *   descriptor. Charged once per execution, so a task run twice is charged twice.
  * @param laneToLeaf maps a task's [Lane] to the fair-share leaf [GroupId] to charge, or `null`
  *   to admit the task un-gated. The default treats [Lane.ROOT] as un-gated and every other tag
  *   as the identically-named leaf (`Lane("acme/batch") → GroupId("acme/batch")`).
