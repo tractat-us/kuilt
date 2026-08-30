@@ -40,18 +40,19 @@ import kotlinx.serialization.Serializable
  * deeper transfer chains are the accepted transient. **Consumers must not hard-gate on
  * `validate().isEmpty()`** while rebalancing is in flight — gate on the mutator's `null`.
  *
- * ## One root per ledger (a standing invariant)
+ * ## One root per ledger (structural, plus a diagnostic)
  *
  * A ledger describes **one** tree, with exactly one root: the group [bootstrap] was called
- * with. [holdings] credits a group's `creditIn` from the minted supply whenever that group
- * has no inbound edge, and [MintRecord] carries only a holder and an amount — it is not bound
- * to a root. So if two independently-[bootstrap]ped ledgers are [piece]d together, the merged
- * state has two rootless groups and **each of them is credited the full `mintedTotal`**,
- * double-counting every mint in the Σ-holdings conservation identity.
+ * with. [holdings] credits a group's `creditIn` from the minted supply whenever that group has
+ * no inbound edge — and every [MintRecord] is **bound to the root it was minted at** (#1751),
+ * so a rootless group is credited only the mints naming *it*. Merging two
+ * independently-[bootstrap]ped ledgers therefore leaves each root holding its own supply and
+ * Σ holdings still equal to `mintedTotal`: the double count is unrepresentable, not merely
+ * undetected.
  *
- * Nothing in the representation prevents this, so it is a **caller invariant**: never merge
- * ledgers from different bootstraps. Binding a [MintRecord] to its root would make it
- * structural, but that is a wire-format change and is deliberately not taken here.
+ * Doing it is still a caller mistake — one ledger, one tree — so [validate] reports
+ * [LedgerConflict.MultipleRoots] when the merged state carries mints at more than one root.
+ * That is defence in depth over an already-structural guarantee, not the guarantee itself.
  *
  * ## Delta-state idiom: two patches from one base lose the first
  *
@@ -459,7 +460,9 @@ public class EntitlementLedger private constructor(
      * ```
      *
      * where `f = inbound(group)`; `creditIn` is the sum of minted amounts held by
-     * [r] at the root, else `effIssued(f)[r] − returned(f)[r]`. `effLeafSpent(f)[r]` is
+     * [r] **at [group] itself** when [group] has no inbound edge (a [MintRecord] names the root it
+     * was minted at, so no other group's supply is creditable here — #1751), else
+     * `effIssued(f)[r] − returned(f)[r]`. `effLeafSpent(f)[r]` is
      * subtracted **unconditionally** — no `isLeaf` test — which keeps conservation
      * topology-independent when a former leaf later gains a child (design fix 1). Both the
      * issuance and the leaf-spend terms read **effective** values (base ± relocation), so a
@@ -475,7 +478,7 @@ public class EntitlementLedger private constructor(
         val lineage = lineageEdges(group) ?: return 0L
         val f = lineage.lastOrNull()
         val pathKey = if (f == null) PathKey.ROOT else PathKey.of(f)
-        val creditIn = if (f == null) mintedHeldBy(r) else netInflow(f, r)
+        val creditIn = if (f == null) mintedHeldBy(group, r) else netInflow(f, r)
         var acc = checkedAdd(creditIn, transferNet(pathKey, r))
         for (c in childEdges(group)) {
             acc = checkedSub(acc, netInflow(c, r))
@@ -489,11 +492,15 @@ public class EntitlementLedger private constructor(
         checkedSub(effIssuedSlot(edge, r), slot(returned, edge, r))
 
     /**
-     * Σ minted amounts credited to [r] (the root's `creditIn`). Every mint counts, whatever
-     * root it was bootstrapped for — see the class KDoc's one-root-per-ledger invariant.
+     * Σ minted amounts credited to [r] **at [root]** — the `creditIn` of a group with no inbound
+     * edge. Scoped by root (#1751): a mint bound to some other tree's root is not creditable here,
+     * so a state carrying two bootstraps hands each root its own supply instead of both roots all
+     * of it. See the class KDoc's one-root-per-ledger section.
      */
-    private fun mintedHeldBy(r: ReplicaId): Long =
-        minted.values.fold(0L) { acc, m -> if (m.holder == r) checkedAdd(acc, m.amount) else acc }
+    private fun mintedHeldBy(root: GroupId, r: ReplicaId): Long =
+        minted.values.fold(0L) { acc, m ->
+            if (m.holder == r && m.root == root) checkedAdd(acc, m.amount) else acc
+        }
 
     /** `Σ_s transfers[pathKey][s][r] − Σ_t transfers[pathKey][r][t]` — [r]'s net transfer at a path. */
     private fun transferNet(pathKey: PathKey, r: ReplicaId): Long {
@@ -893,14 +900,18 @@ public class EntitlementLedger private constructor(
     )
 
     /**
-     * Introduce root supply: credit [holder] with [amount] units under [mintId].
+     * Introduce root supply at [root]: credit [holder] with [amount] units under [mintId].
      * Control-plane only (design §9); the one non-conserving op and the only mutator
      * with no feasibility gate, so it never returns `null`. [mintId] MUST be unique
      * per mint act so distinct acts union rather than max-collide (design fix 4).
+     *
+     * [root] must be the ledger's one root: the supply is creditable only at the group it names
+     * (#1751), so minting at any other group strands the units where [holdings] never reads them
+     * — and [validate] reports the resulting two-rooted state as [LedgerConflict.MultipleRoots].
      */
-    public fun mint(mintId: MintId, holder: ReplicaId, amount: Long): Patch<EntitlementLedger> {
+    public fun mint(mintId: MintId, root: GroupId, holder: ReplicaId, amount: Long): Patch<EntitlementLedger> {
         require(amount >= 0L) { "mint amount must be non-negative, was $amount" }
-        return Patch(of(minted = mapOf(mintId to MintRecord(holder, amount))))
+        return Patch(of(minted = mapOf(mintId to MintRecord(root, holder, amount))))
     }
 
     /**
@@ -1200,6 +1211,11 @@ public class EntitlementLedger private constructor(
      *    that conservation is *structurally* blind to — `Σ_r transferNet(k, r) = 0` on every key, so
      *    abandoning a whole key is sum-preserving — and that the negative-holdings check misses
      *    because the recipient lands on `0` rather than below it.
+     *  - [LedgerConflict.MultipleRoots] — supply minted at more than one root: two [bootstrap]s
+     *    merged into one ledger (#1751). Keyed on the distinct roots [MintRecord] names,
+     *    deliberately **not** on "more than one group has no inbound edge" — that second spelling
+     *    is also the shape of an honest partially-delivered topology and would fire on healthy
+     *    traffic. Alone among these it is not a delivery transient in either direction.
      *
      * **What is deliberately not reported:** a group whose only inbound edges are all
      * prepared/retired is quarantined (holdings `0`) but *silent* — that is the normal window
@@ -1236,6 +1252,11 @@ public class EntitlementLedger private constructor(
             }
         }
         for (path in orphanedTransferPaths()) conflicts += LedgerConflict.OrphanedTransferPath(path)
+        // Two bootstraps in one ledger (#1751). Read off `minted` alone: a group is not a mint root
+        // merely because its inbound edge is still in flight, so this cannot false-fire on the
+        // partially-delivered topology a topology-keyed predicate would report.
+        val roots = mintedRoots()
+        if (roots.size > 1) conflicts += LedgerConflict.MultipleRoots(roots)
         // The global backstop, last: totals read straight off the components, so it survives a
         // regression in the per-lineage derivation the checks above all depend on.
         val spentTotal = leafSpentTotal()
@@ -1425,6 +1446,15 @@ public class EntitlementLedger private constructor(
     internal fun mintedTotal(): Long = minted.values.fold(0L) { acc, m -> checkedAdd(acc, m.amount) }
 
     /**
+     * The distinct roots supply has been minted at, sorted — one on a healthy ledger. More is the
+     * [LedgerConflict.MultipleRoots] fault (#1751). `internal` — test support.
+     *
+     * A zero-amount record counts: it is still evidence of a mint act on a second tree, and
+     * excluding it would make the report depend on an amount the fault has nothing to do with.
+     */
+    internal fun mintedRoots(): List<GroupId> = minted.values.mapTo(HashSet()) { it.root }.sorted()
+
+    /**
      * Total service charged where an edge is a path's final edge (the conservation term), at
      * **effective** values — a relocation moves leaf spend between edges in equal and opposite
      * amounts, so this sum is invariant under any move.
@@ -1554,15 +1584,15 @@ public class EntitlementLedger private constructor(
          * yet — the topology is grown by the mutators (a later phase). Every amount
          * must be non-negative.
          *
-         * [root] names the tree this supply belongs to, but it reaches the state only inside
-         * the generated [MintId] — a [MintRecord] is *not* structurally bound to a root. So a
-         * ledger must have **exactly one bootstrap**: merging two independently-bootstrapped
-         * ledgers leaves two rootless groups, each credited the whole minted supply. See the
-         * "One root per ledger" section of the class KDoc.
+         * [root] names the tree this supply belongs to, and every [MintRecord] carries it (#1751),
+         * so the supply is creditable at [root] and nowhere else. A ledger should still have
+         * **exactly one bootstrap** — merging two leaves two rootless groups, each holding its own
+         * supply, which [validate] reports as [LedgerConflict.MultipleRoots] — but the merge no
+         * longer double-counts either one. See the "One root per ledger" section of the class KDoc.
          */
         public fun bootstrap(root: GroupId, mint: Map<ReplicaId, Long>, nonce: String): EntitlementLedger {
             val minted = mint.entries.associate { (holder, amount) ->
-                MintId("${root.value}#$nonce#${holder.value}") to MintRecord(holder, amount)
+                MintId("${root.value}#$nonce#${holder.value}") to MintRecord(root, holder, amount)
             }
             return EntitlementLedger(
                 records = emptyMap(),

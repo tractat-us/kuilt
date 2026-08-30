@@ -123,7 +123,7 @@ class EntitlementLedgerValidateTest {
     fun recordDivergenceIsReportedAndQuarantinesHoldings() {
         val left = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
-            minted = mapOf(MintId("m") to MintRecord(alice, 10L)), // funded, so root is not itself negative
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 10L)), // funded, so root is not itself negative
             issued = mapOf(e1 to GCounter.of(alice to 10L)),
         )
         val right = EntitlementLedger.of(
@@ -190,7 +190,7 @@ class EntitlementLedgerValidateTest {
                 e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
                 e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 50L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 50L)),
             issued = mapOf(e1 to GCounter.of(alice to 50L), e2 to GCounter.of(alice to 20L)),
         )
         assertEquals(30L, healthy.holdings(g1, alice)) // 50 credited − 20 delegated to g2
@@ -266,7 +266,7 @@ class EntitlementLedgerValidateTest {
     fun conservationViolationBackstopsServiceChargedBeyondMintedSupply() {
         val overcharged = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
-            minted = mapOf(MintId("m") to MintRecord(alice, 10L)), // only 10 ever minted
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 10L)), // only 10 ever minted
             issued = mapOf(e1 to GCounter.of(alice to 25L)),
             leafSpent = mapOf(e1 to GCounter.of(alice to 25L)), // yet 25 charged
         )
@@ -347,16 +347,31 @@ class EntitlementLedgerValidateTest {
     }
 
     /**
-     * Pins the **documented limitation** of the one-root-per-ledger invariant (#1642 item 2),
-     * not desired behaviour. A [MintRecord] carries a holder and an amount but is not bound to
-     * a root, and [EntitlementLedger.holdings] credits the full minted supply to *any* group
-     * with no inbound edge — so merging two independently bootstrapped ledgers double-counts
-     * every mint, silently. Binding the record to its root is a wire-format change and was
-     * deliberately not taken here; when it lands, this test should flip.
+     * A [MintRecord] is bound to the root it was minted at (#1751), so [EntitlementLedger.holdings]
+     * credits a rootless group **only** the supply minted at *that* group. Merging two
+     * independently bootstrapped ledgers therefore leaves each root holding its own mint and
+     * Σ holdings equal to `mintedTotal` **once** — the double count is unrepresentable, not
+     * merely undetected.
+     *
+     * Superseded `mergingTwoIndependentBootstrapsDoubleCountsMintAtEveryRoot`, which pinned the
+     * pre-#1751 double count as a documented limitation (#1642 item 2).
      */
     @Test
-    fun mergingTwoIndependentBootstrapsDoubleCountsMintAtEveryRoot() {
-        val otherRoot = GroupId("otherRoot")
+    fun mergingTwoIndependentBootstrapsCreditsEachMintOnlyAtItsOwnRoot() {
+        val merged = twoBootstrapsMerged()
+        val sumHoldings = merged.allGroups().sumOf { g -> merged.holdings(g, alice) }
+        assertAll(
+            { assertEquals(20L, merged.mintedTotal()) },
+            { assertEquals(10L, merged.holdings(root, alice), "root holds only what was minted at root") },
+            { assertEquals(10L, merged.holdings(otherRoot, alice), "…and otherRoot only its own") },
+            { assertEquals(merged.mintedTotal(), sumHoldings, "Σ holdings counts the supply once, not twice") },
+        )
+    }
+
+    private val otherRoot = GroupId("otherRoot")
+
+    /** Two independently bootstrapped one-edge trees, merged — the #1751 hazard state. */
+    private fun twoBootstrapsMerged(): EntitlementLedger {
         val g4 = GroupId("g4")
         val e4 = AttachmentId("e4") // otherRoot → g4
         val left = EntitlementLedger
@@ -365,14 +380,98 @@ class EntitlementLedgerValidateTest {
         val right = EntitlementLedger
             .of(records = mapOf(e4 to setOf(AttachmentRecord(e4, otherRoot, g4, Weight.ONE))))
             .piece(EntitlementLedger.bootstrap(otherRoot, mapOf(alice to 10L), nonce = "right"))
-        val merged = left.piece(right)
+        return left.piece(right)
+    }
+
+    /**
+     * The #1751 diagnostic on top of the structural fix: two bootstraps in one state is still a
+     * caller mistake, and [LedgerConflict.MultipleRoots] names both roots.
+     */
+    @Test
+    fun mintsAtTwoRootsAreReportedAsMultipleRoots() {
+        val merged = twoBootstrapsMerged()
         assertAll(
+            {
+                assertTrue(
+                    LedgerConflict.MultipleRoots(listOf(otherRoot, root)) in merged.validate(),
+                    "the two-tree state must be named: ${merged.validate()}",
+                )
+            },
+            // The report is a diagnostic ON TOP of the structural fix, not instead of it: the state
+            // it names is still correctly accounted. A fix that reported by *breaking* holdings reds here.
             { assertEquals(20L, merged.mintedTotal()) },
-            { assertEquals(20L, merged.holdings(root, alice), "each root is credited the WHOLE supply") },
-            { assertEquals(20L, merged.holdings(otherRoot, alice), "…so Σ holdings is 40 against 20 minted") },
-            { assertTrue(merged.validate().isEmpty(), "and the double-count is silent — the hazard this pins") },
+            { assertEquals(10L, merged.holdings(root, alice)) },
         )
     }
+
+    /**
+     * The negative arm, and the reason the predicate reads `minted` rather than the topology: a
+     * group with **no inbound edge yet** is the ordinary shape of a partially-delivered tree, and
+     * must stay silent.
+     *
+     * `gA` and `gC` here each hold a delivered child edge whose *parent* edge (root→gA, root→gC)
+     * has not arrived — two rootless groups on one honest state, exactly what a
+     * "more than one group has no inbound edge" rule would report. One root ever minted, so
+     * nothing is reported.
+     */
+    @Test
+    fun aPartiallyDeliveredTopologyWithTwoRootlessGroupsIsNotMultipleRoots() {
+        val partial = midDelivery(EntitlementLedger.bootstrap(root, mapOf(alice to 10L), nonce = "g"))
+        assertAll(
+            // ── the rig: both gA and gC really do read as roots on this state. Only a group whose
+            // lineage is empty is credited minted supply at all, so a mint bound to each in turn
+            // lands ⟺ that group has no inbound edge here.
+            {
+                assertEquals(
+                    10L,
+                    midDelivery(EntitlementLedger.bootstrap(gA, mapOf(alice to 10L), nonce = "g")).holdings(gA, alice),
+                    "rig: gA has no inbound edge on this state",
+                )
+            },
+            {
+                assertEquals(
+                    10L,
+                    midDelivery(EntitlementLedger.bootstrap(gC, mapOf(alice to 10L), nonce = "g")).holdings(gC, alice),
+                    "rig: …and neither does gC — two rootless groups, on honest traffic",
+                )
+            },
+            // ── and the state under test is entirely silent.
+            { assertTrue(partial.validate().isEmpty(), "mid-delivery must not be reported: ${partial.validate()}") },
+        )
+    }
+
+    /**
+     * The other negative arm: two independent mint **acts** at the **same** root union into one
+     * tree's supply and are not a fault. Keys the report on the distinct roots, never on the number
+     * of [MintRecord]s.
+     */
+    @Test
+    fun twoMintActsAtOneRootAreNotMultipleRoots() {
+        val twice = EntitlementLedger
+            .of(records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))))
+            .piece(EntitlementLedger.bootstrap(root, mapOf(alice to 10L), nonce = "act-1"))
+            .piece(EntitlementLedger.bootstrap(root, mapOf(alice to 40L), nonce = "act-2"))
+        assertAll(
+            { assertEquals(50L, twice.mintedTotal(), "rig: two distinct acts really did union") },
+            { assertTrue(twice.validate().isEmpty(), "one root, two acts: ${twice.validate()}") },
+        )
+    }
+
+    private val gA = GroupId("gA")
+    private val gC = GroupId("gC")
+
+    /**
+     * Two subtrees delivered without their parent edges — `root→gA` and `root→gC` are still in
+     * flight, so `gA` and `gC` both read as rootless. [supply] is the mint state merged onto it.
+     */
+    private fun midDelivery(supply: EntitlementLedger): EntitlementLedger = EntitlementLedger
+        .of(
+            records = mapOf(
+                AttachmentId("eAB") to setOf(AttachmentRecord(AttachmentId("eAB"), gA, GroupId("gB"), Weight.ONE)),
+                AttachmentId("eCD") to setOf(AttachmentRecord(AttachmentId("eCD"), gC, GroupId("gD"), Weight.ONE)),
+            ),
+        )
+        .piece(supply)
 
     // ─────────────────────────────────────────────────────────────────────────
     // OrphanedTransferPath (#2366) — transfer rows the topology moved out from under
@@ -401,7 +500,7 @@ class EntitlementLedgerValidateTest {
             e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
             e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
         ),
-        minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+        minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
         issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
         returned = mapOf(e2 to GCounter.of(alice to 60L)), // the move drained the strand…
         issuedRelocIn = mapOf(e3 to GCounter.of(alice to 60L)), // …and credited the successor
@@ -460,7 +559,7 @@ class EntitlementLedgerValidateTest {
                 e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
                 e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
             transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
         )
@@ -611,7 +710,7 @@ class EntitlementLedgerValidateTest {
                 e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
                 e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
             returned = mapOf(e2 to GCounter.of(alice to 20L)), // alice released what she still held
             leafSpent = mapOf(e2 to GCounter.of(bob to 40L)), // bob spent what he was handed
@@ -663,7 +762,7 @@ class EntitlementLedgerValidateTest {
     fun aHandOffAtTheRootPathIsNeverOrphaned() {
         val atRoot = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             transfers = mapOf(PathKey.ROOT to mapOf(alice to GCounter.of(bob to 30L))),
         )
         assertAll(
@@ -682,7 +781,7 @@ class EntitlementLedgerValidateTest {
     fun rowsAtAKeyNamingNoKnownGenerationAreReported() {
         val dangling = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             transfers = mapOf(PathKey.of(AttachmentId("nowhere")) to mapOf(alice to GCounter.of(bob to 30L))),
         )
         assertEquals(
@@ -706,7 +805,7 @@ class EntitlementLedgerValidateTest {
     fun aDanglingKeyWhoseRowsCancelIsNotReported() {
         val cancelling = EntitlementLedger.of(
             records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             transfers = mapOf(
                 PathKey.of(AttachmentId("nowhere")) to mapOf(
                     alice to GCounter.of(bob to 30L),
@@ -745,7 +844,7 @@ class EntitlementLedgerValidateTest {
                 e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
                 e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
             returned = mapOf(e2 to GCounter.of(alice to 20L)),
             transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
@@ -798,7 +897,7 @@ class EntitlementLedgerValidateTest {
                 e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
                 e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
             transfers = mapOf(
                 PathKey.of(e2) to mapOf(
@@ -840,7 +939,7 @@ class EntitlementLedgerValidateTest {
                 ),
                 e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
             ),
-            minted = mapOf(MintId("m") to MintRecord(alice, 100L)),
+            minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
             issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
             transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
             lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to Lifecycle.ACTIVE),

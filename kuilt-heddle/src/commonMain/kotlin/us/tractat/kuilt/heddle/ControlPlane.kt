@@ -36,9 +36,21 @@ import kotlin.time.Duration
  */
 @Serializable
 internal sealed interface ControlCommand {
-    /** Introduce root supply: credit [holder] with [amount] units (§9 #1). */
+    /**
+     * Introduce root supply at [root]: credit [holder] with [amount] units (§9 #1).
+     *
+     * [root] rides the **committed bytes** rather than being read from the applying peer's local
+     * configuration, for the same reason [ControlEnvelope.proposer] does: every input to a gate must
+     * be a function of the log prefix, or two peers decide one index differently. A peer configured
+     * with a divergent root therefore proposes a `Mint` that *every* peer — itself included —
+     * refuses identically, instead of quietly seeding a second tree in its own projection (#1751).
+     *
+     * Refused when the projection already carries supply at a **different** root: one ledger
+     * describes one tree, and admitting the second mint is what would produce the
+     * [LedgerConflict.MultipleRoots] state.
+     */
     @Serializable
-    data class Mint(val holder: ReplicaId, val amount: Long) : ControlCommand
+    data class Mint(val root: GroupId, val holder: ReplicaId, val amount: Long) : ControlCommand
 
     /** Introduce a new attachment generation ([EntitlementLedger.prepare]); idempotent per id. */
     @Serializable
@@ -569,17 +581,53 @@ internal class HeddleControlPlane(
      * order. The dual-inbound gate reading `projection.liveInboundEdges` is why the control plane
      * exists (see the class KDoc).
      *
-     * Every input is a function of the log prefix — including [ControlEnvelope.proposer], which is
-     * read out of the committed bytes rather than from local knowledge, so the `Depart` gate below
-     * decides identically on every peer.
+     * Every input is a function of the log prefix — including [ControlEnvelope.proposer] and
+     * [ControlCommand.Mint.root], both read out of the committed bytes rather than from local
+     * knowledge, so the `Depart` and one-root gates below decide identically on every peer. A gate
+     * reading a *constructor argument* instead would quietly break that: two peers configured
+     * differently would apply one index to different effect, with nothing in the log to show it
+     * (#1751).
      */
     private fun decideAndApply(envelope: ControlEnvelope, index: Long): ControlOutcome =
         when (val command = envelope.command) {
             is ControlCommand.Mint -> {
-                // Mint identity is derived from the (unique, retry-stable, restart-safe) requestKey, so
-                // distinct acts never max-collide into one lost mint and a retry never double-mints.
-                apply(projection.mint(MintId("mint#${envelope.requestKey}"), command.holder, command.amount))
-                ControlOutcome.Applied(index)
+                // One ledger, one tree (#1751). The incumbent roots are read off the PROJECTION — a
+                // function of the log prefix — and the challenger off the COMMITTED command, so this
+                // gate decides identically on every peer, exactly as the `Depart` gate below does.
+                // A peer misconfigured with a second root is refused rather than seeding a second
+                // tree in its own projection, and the refusal names every root involved so the
+                // misconfiguration is diagnosable instead of silent.
+                //
+                // **The comparison is over the whole set, never over a unique incumbent.** Keying it
+                // on `mintedRoots().singleOrNull()` fails OPEN in exactly the state
+                // [LedgerConflict.MultipleRoots] exists to report: `singleOrNull` is `null` for
+                // two-or-more as well as for zero, so once the invariant is already violated the gate
+                // reads "no incumbent, carry on" and admits any root at all. That state is reachable —
+                // [EntitlementLedger.piece] of two independently bootstrapped ledgers is the headline
+                // defect of #1751 — and it is the one state where the two guards must not disagree.
+                val roots = projection.mintedRoots()
+                if (roots.isNotEmpty() && roots != listOf(command.root)) {
+                    ControlOutcome.Conflict(
+                        index,
+                        ControlConflict.Refused(
+                            "mint: supply is already committed at " +
+                                roots.joinToString(", ") { it.value } +
+                                "; this act names ${command.root.value} — one ledger describes one tree",
+                        ),
+                    )
+                } else {
+                    // Mint identity is derived from the (unique, retry-stable, restart-safe) requestKey,
+                    // so distinct acts never max-collide into one lost mint and a retry never double-mints.
+                    apply(
+                        projection.mint(
+                            MintId("mint#${envelope.requestKey}"),
+                            command.root,
+                            command.holder,
+                            command.amount,
+                        ),
+                    )
+                    ControlOutcome.Applied(index)
+                }
             }
 
             is ControlCommand.Prepare -> {

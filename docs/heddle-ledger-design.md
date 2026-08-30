@@ -43,8 +43,8 @@ public class EntitlementLedger private constructor(
     private val records: Map<AttachmentId, Set<AttachmentRecord>>,
 
     // Root supply, keyed by a unique MintId (NOT by ReplicaId) so mints UNION, never
-    // max-collide — see fix 4. Value carries the holder + amount.
-    private val minted: Map<MintId, MintRecord>,          // MintRecord(holder: ReplicaId, amount: Long)
+    // max-collide — see fix 4. Value carries the root it was minted at, the holder + amount.
+    private val minted: Map<MintId, MintRecord>,          // MintRecord(root: GroupId, holder: ReplicaId, amount: Long)
 
     // Per-edge monotone counters. Every GCounter slot (edge e, replica r) is written
     // EXCLUSIVELY by r; merge = per-slot max.
@@ -134,9 +134,10 @@ the caller untouched; the delta is a minimal `EntitlementLedger` carrying only t
 slot(s) at their new **absolute** value (max-merge → idempotent), **plus a self-justifying
 witness** (fix 2). Overflow-checked adds throughout.
 
-- **`mint(mintId, holder, amount)`** — control-plane only (§9). Delta: `minted[mintId] =
-  MintRecord(holder, amount)`. Unique `mintId` per mint ⇒ union, never a lost mint under
-  failover (fix 4). The one non-conserving op.
+- **`mint(mintId, root, holder, amount)`** — control-plane only (§9). Delta: `minted[mintId] =
+  MintRecord(root, holder, amount)`. Unique `mintId` per mint ⇒ union, never a lost mint under
+  failover (fix 4). The one non-conserving op. `root` must be the ledger's one root: the supply
+  is creditable only at the group it names (#1751).
 - **`delegate(r, edge, amount)`** — require ACTIVE; `if amount > holdings(parent(edge), r)
   return null`; delta bumps `issued(edge)[r] += amount`. One slot; read `+` at the child
   path, `−` at the parent path. Holder at the child is the same `r` (§4.2).
@@ -238,14 +239,19 @@ each mutator must be called on a ledger that has already absorbed the previous p
 fanned out from one snapshot. `HeddleNode` satisfies this by running every op *inside* its
 `Quilter.mutate` block, so the op always sees fresh state.
 
-**One root per ledger.** `holdings` credits `creditIn` from the minted supply for any group
-with **no inbound edge**, and a `MintRecord` carries only a holder and an amount — the root
-reaches the state solely inside the generated `MintId` string. Merging two independently
-bootstrapped ledgers therefore leaves two rootless groups, **each credited the whole
-`mintedTotal`**, double-counting every mint in the Σ-holdings identity — and silently, since no
-`validate()` check looks at root cardinality. This is a **caller invariant** (never merge
-across bootstraps), not a structural guarantee. Binding a `MintRecord` to its root would make
-it structural at the cost of a wire-format change; that call is deliberately deferred.
+**One root per ledger (#1751).** `holdings` credits `creditIn` from the minted supply for any
+group with **no inbound edge** — and a `MintRecord` names the root it was minted at, so a
+rootless group is credited only the mints naming *it*. Merging two independently bootstrapped
+ledgers leaves two rootless groups each holding **its own** supply, with Σ holdings still equal
+to `mintedTotal`: the double count is **unrepresentable**, not a caller invariant. Doing it is
+still a mistake — one ledger, one tree — so `validate()` reports `MultipleRoots` on top; that
+is defence in depth over an already-structural guarantee.
+
+Binding the root **breaks the `@Serializable` shape of `MintRecord`**, and `ControlCommand.Mint`
+with it. Do not read that as cheap: `:kuilt-heddle` *is* published to Maven Central (0.7.2, 0.7.3),
+it applies `kuilt.publish` by way of `kuilt.kmp-library`, and `kuilt-bom` constrains it — so a
+mixed-version pair of peers cannot exchange a mint, and a persisted log or snapshot written by an
+older version does not decode. The version handling that implies is a deliberate human call.
 
 `edge(id) = EdgeSummary(effIssued(id), returned(id).value, effLeafSpent(id)+effRollupSpent(id))`
 — a per-edge read, at effective values. `activeChildren(g)` = summaries of `childEdges(g)`.
@@ -306,6 +312,14 @@ list a false conflict that self-heals on anti-entropy. The checks:
   strands a `PersistentNegativeHoldings` at the delegator — a second voice on one fault. On a
   bare delta carrying no records it can be the only report (`allGroups()` is empty, so no
   per-group check runs).
+- **`MultipleRoots(roots)`** — supply minted at more than one root: two bootstraps merged into
+  one ledger (#1751). Keyed on the distinct roots `minted` names, deliberately **not** on "more
+  than one group has no inbound edge" — records are grow-only and arrive unordered, so a peer
+  holding a child edge whose parent edge is still in flight sees a rootless group legitimately,
+  and the topology-keyed spelling would fire on that healthy mid-delivery state. Reading `minted`
+  alone touches no topology at all, so the two cases separate cleanly. Alone among these checks
+  it is **not** a delivery transient in either direction: `minted` is grow-only and a record's
+  root never changes, so once two roots are on a state they stay.
 
 **Honest scope note (fix 6, from C/D reviews):** under the stated non-Byzantine model,
 `piece`'s max erases the loser of an *equivocated* one-writer slot, so `heddle-design.md`

@@ -218,7 +218,7 @@ class HeddleRosterTest {
         // stands in for the slice-3 `Quiesce` — this slice ships the quantifier, not the fence.)
         val plane = soloPlane(backgroundScope, RecordingSink())
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(a)))
-        val barrier = plane.submit(ControlCommand.Mint(a, 1L))
+        val barrier = plane.submit(ControlCommand.Mint(root, a, 1L))
         assertIs<ControlOutcome.Applied>(barrier)
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(b)))
 

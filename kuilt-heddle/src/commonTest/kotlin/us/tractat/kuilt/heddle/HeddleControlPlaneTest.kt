@@ -120,8 +120,8 @@ class HeddleControlPlaneTest {
         sim.awaitLeader(among = majority)
 
         val holder = ReplicaId("acme")
-        val majMint = backgroundScope.async { planes.getValue(NodeId("v1")).submit(ControlCommand.Mint(holder, 100L)) }
-        val minMint = backgroundScope.async { planes.getValue(NodeId("v4")).submit(ControlCommand.Mint(holder, 100L)) }
+        val majMint = backgroundScope.async { planes.getValue(NodeId("v1")).submit(ControlCommand.Mint(root, holder, 100L)) }
+        val minMint = backgroundScope.async { planes.getValue(NodeId("v4")).submit(ControlCommand.Mint(root, holder, 100L)) }
 
         sim.awaitTrue("majority mint committed and applied across the majority") {
             majMint.isCompleted && majority.all { sinks.getValue(it).snapshot().mintedTotal() == 100L }
@@ -226,7 +226,7 @@ class HeddleControlPlaneTest {
 
         // Incarnation A mints 100.
         val a = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-A")
-        assertIs<ControlOutcome.Applied>(a.submit(ControlCommand.Mint(holder, 100L)))
+        assertIs<ControlOutcome.Applied>(a.submit(ControlCommand.Mint(root, holder, 100L)))
         assertEquals(100L, durable.snapshot().mintedTotal())
 
         // "Restart": a fresh control plane with a FRESH injected incarnation over the same log/ledger,
@@ -234,7 +234,7 @@ class HeddleControlPlaneTest {
         // max-collide the 40 into the 100 (a lost mint); a fresh incarnation keeps them distinct.
         val b = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-B")
         runCurrent() // let B replay the committed mint
-        assertIs<ControlOutcome.Applied>(b.submit(ControlCommand.Mint(holder, 40L)))
+        assertIs<ControlOutcome.Applied>(b.submit(ControlCommand.Mint(root, holder, 40L)))
         assertEquals(140L, durable.snapshot().mintedTotal(), "the second mint must not collide with the first")
     }
 
@@ -257,10 +257,109 @@ class HeddleControlPlaneTest {
         val sink = RecordingSink()
         val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-3")
 
-        val outcome = plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L))
+        val outcome = plane.submit(ControlCommand.Mint(root, ReplicaId("acme"), 100L))
         assertIs<ControlOutcome.Applied>(outcome)
         assertEquals(100L, sink.snapshot().mintedTotal(), "the retry must not double-mint")
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // One ledger, one tree (#1751): a mint naming a second root is refused, and the
+    // gate is decided from the LOG (the projection's committed root vs. the committed
+    // command's), never from a constructor argument — so every peer refuses the same act.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun aMintNamingASecondRootIsRefusedAndNeverReachesTheProjection() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+            val sink = RecordingSink()
+            val plane = HeddleControlPlane(
+                fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER,
+                EntitlementLedger.ZERO, "boot-one-root",
+            )
+            val acme = ReplicaId("acme")
+            // The first mint establishes the tree — there is no incumbent root to disagree with.
+            assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(root, acme, 100L)))
+            // A second act at the SAME root is ordinary supply and must still be admitted, so the
+            // gate is not simply "at most one mint".
+            assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(root, acme, 40L)))
+
+            val refused = plane.submit(ControlCommand.Mint(GroupId("otherRoot"), acme, 500L))
+            val conflict = assertIs<ControlOutcome.Conflict>(refused, "a second root must not be admitted")
+            val reason = assertIs<ControlConflict.Refused>(conflict.conflict)
+            assertAll(
+                { assertTrue("root" in reason.reason && "otherRoot" in reason.reason, "names both roots: $reason") },
+                {
+                    assertEquals(
+                        listOf(root),
+                        sink.snapshot().mintedRoots(),
+                        "the refused act must not reach the data plane",
+                    )
+                },
+                { assertEquals(140L, sink.snapshot().mintedTotal(), "…and must mint nothing") },
+                {
+                    assertTrue(
+                        sink.snapshot().validate().none { it is LedgerConflict.MultipleRoots },
+                        "the state the report exists for was never constructed",
+                    )
+                },
+            )
+        }
+
+    /**
+     * The gate must not fail **open** on an already-two-rooted projection.
+     *
+     * Keying it on `mintedRoots().singleOrNull()` reads `null` for two-or-more exactly as it does
+     * for zero, so the moment the invariant is genuinely violated the gate would see "no incumbent"
+     * and admit *any* root — it would stop enforcing precisely where enforcement matters, and would
+     * disagree with its sibling [LedgerConflict.MultipleRoots], which calls that same state a fault.
+     *
+     * The state is reachable, and reachable the ordinary way: this projection is seeded with a
+     * `piece` of two independently bootstrapped ledgers — the construction
+     * `EntitlementLedgerValidateTest` uses, and the headline defect of #1751 itself. A peer meeting
+     * it (from a durable snapshot, or from a pre-fix peer) must refuse every mint — at **either**
+     * incumbent root, and at a third — until a human resolves it.
+     */
+    @Test
+    fun anAlreadyTwoRootedProjectionRefusesEveryMintRatherThanFailingOpen() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val otherRoot = GroupId("otherRoot")
+            val acme = ReplicaId("acme")
+            val twoRooted = EntitlementLedger.bootstrap(root, mapOf(acme to 100L), nonce = "left")
+                .piece(EntitlementLedger.bootstrap(otherRoot, mapOf(acme to 100L), nonce = "right"))
+            val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+            val sink = RecordingSink()
+            val plane = HeddleControlPlane(
+                fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER,
+                twoRooted, "boot-two-rooted",
+            )
+            // Neither incumbent is privileged, and neither is a third root. Submitted outside
+            // `assertAll` because its arms are not suspending.
+            val atFirst = plane.submit(ControlCommand.Mint(root, acme, 10L))
+            val atSecond = plane.submit(ControlCommand.Mint(otherRoot, acme, 10L))
+            val atThird = plane.submit(ControlCommand.Mint(GroupId("thirdRoot"), acme, 10L))
+            assertAll(
+                // ── the rig: the projection really is in the state the report exists for.
+                { assertEquals(listOf(otherRoot, root), twoRooted.mintedRoots(), "rig: two roots committed") },
+                {
+                    assertTrue(
+                        LedgerConflict.MultipleRoots(listOf(otherRoot, root)) in twoRooted.validate(),
+                        "rig: and validate() already calls it a fault",
+                    )
+                },
+                {
+                    val c = assertIs<ControlOutcome.Conflict>(atFirst, "a mint at the first incumbent is not admitted")
+                    val reason = assertIs<ControlConflict.Refused>(c.conflict)
+                    assertTrue(
+                        "otherRoot" in reason.reason && "root" in reason.reason,
+                        "the refusal must name every incumbent, not just one: $reason",
+                    )
+                },
+                { assertIs<ControlOutcome.Conflict>(atSecond, "nor a mint at the second incumbent") },
+                { assertIs<ControlOutcome.Conflict>(atThird, "and certainly not one at a third root") },
+                // ── nothing was minted: a refusal publishes no patch at all.
+                { assertEquals(0L, sink.snapshot().mintedTotal(), "no refused act may reach the data plane") },
+            )
+        }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // BLOCKER 2 (ergonomics): a bounded submit surfaces a leader crash as a timeout
@@ -272,7 +371,7 @@ class HeddleControlPlaneTest {
         fake.proposeBehavior = { awaitCancellation() } // a forwarded proposal that never commits (leader crash)
         val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-4")
         assertFailsWith<TimeoutCancellationException> {
-            plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L), timeout = 1.seconds)
+            plane.submit(ControlCommand.Mint(root, ReplicaId("acme"), 100L), timeout = 1.seconds)
         }
     }
 
@@ -476,7 +575,7 @@ class HeddleControlPlaneTest {
         }
         // Control-plane topology: e1,e2 active; then close+retire e1 with a LAGGED (empty) drain witness —
         // the projection has no data-plane counters, so its outstanding reads 0 and the retire is admitted.
-        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Mint(p3, 10L)) }
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Mint(root, p3, 10L)) }
         awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(rec(e1, root, g))) }
         awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Activate(e1)) }
         awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(rec(e2, g, h))) }
@@ -901,7 +1000,7 @@ class HeddleControlPlaneTest {
             fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-1717",
         )
 
-        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(root, ReplicaId("acme"), 100L)))
         val projectionBefore = plane.projectionSnapshot()
         val indexBefore = plane.rosterSnapshot().appliedIndex
 

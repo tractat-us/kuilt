@@ -443,7 +443,7 @@ class HeddleFenceTest {
         for (id in ids) {
             applied(sim, backgroundScope) { planes.getValue(id).submit(ControlCommand.Enroll(ReplicaId(id.value))) }
         }
-        applied(sim, backgroundScope) { opener.submit(ControlCommand.Mint(p3, 10L)) }
+        applied(sim, backgroundScope) { opener.submit(ControlCommand.Mint(root, p3, 10L)) }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Prepare(AttachmentRecord(e1, root, g, Weight.ONE))) }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Activate(e1)) }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Close(e1)) }
@@ -619,7 +619,7 @@ class HeddleFenceTest {
             assertIs<ControlOutcome.Applied>(plane.submit(command), "expected Applied for $command")
 
         commit(ControlCommand.Enroll(self))
-        commit(ControlCommand.Mint(self, 10L))
+        commit(ControlCommand.Mint(root, self, 10L))
         for ((id, parent, child) in listOf(Triple(ea, root, a), Triple(eb, root, b), Triple(e5, a, g))) {
             commit(ControlCommand.Prepare(rec(id, parent, child)))
             commit(ControlCommand.Activate(id))
@@ -703,7 +703,7 @@ class HeddleFenceTest {
         /** Mint 10 at the root and let the ordinary scheduler delegate it down `e1` into the leaf `g`. */
         suspend fun mintAndDelegateDownE1() {
             check(plane.submit(ControlCommand.Enroll(self)) is ControlOutcome.Applied)
-            check(plane.submit(ControlCommand.Mint(self, 10L)) is ControlOutcome.Applied)
+            check(plane.submit(ControlCommand.Mint(root, self, 10L)) is ControlOutcome.Applied)
             check(plane.submit(ControlCommand.Prepare(rec(e1, root, g))) is ControlOutcome.Applied)
             check(plane.submit(ControlCommand.Activate(e1)) is ControlOutcome.Applied)
             node.advertise(e1, Demand(targetOutstanding = 10L, maximumUsefulGrant = 10L))

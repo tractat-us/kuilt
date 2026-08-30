@@ -40,6 +40,34 @@ class EntitlementLedgerLawsTest {
             weight = Weight.of(rnd.nextLong(1L, 8L), rnd.nextLong(1L, 8L)),
         )
 
+    /**
+     * The [MintRecord.root] field participates in the join, named directly rather than left to the
+     * randomized laws above.
+     *
+     * `piece` merges two records under one [MintId] with `maxOf`, and `maxOf(a, b)` is
+     * `if (a >= b) a else b` — so if [MintRecord.compareTo] ties on two **unequal** records, the
+     * result depends on which side you merge from and the join stops being commutative: two peers
+     * converge on different roots for the same mint. `root` is therefore the most significant key of
+     * that ordering (#1751).
+     *
+     * `randomLedger` cannot be trusted to cover this. It can only red on an exact tie — same holder,
+     * same amount, different root — and it draws the amount from `[0, 1_000)`, so the tie it needs
+     * is roughly a 1-in-3000 event per colliding [MintId]. The amount range is a fixture knob that
+     * switches this property off, which is why it gets its own arm with the tie constructed rather
+     * than hoped for.
+     */
+    @Test
+    fun aMintRecordsRootParticipatesInTheJoin() {
+        val m = mintIds[0]
+        val a = EntitlementLedger.of(minted = mapOf(m to MintRecord(groups[0], replicas[0], 5L)))
+        val b = EntitlementLedger.of(minted = mapOf(m to MintRecord(groups[1], replicas[0], 5L)))
+        assertEquals(
+            a.piece(b),
+            b.piece(a),
+            "same holder and amount, different root: the join must still be commutative",
+        )
+    }
+
     private fun randomLedger(rnd: Random): EntitlementLedger =
         EntitlementLedger.of(
             // Occasionally emit a *divergent* set (>1 record) under one id, so the laws
@@ -47,8 +75,11 @@ class EntitlementLedgerLawsTest {
             records = edges.filter { rnd.nextBoolean() }.associateWith { id ->
                 List(rnd.nextInt(1, 3)) { randomRecord(id, rnd) }.toSet()
             },
+            // The root a mint is bound to (#1751) is drawn from the same pool as every other
+            // group, so the same id can carry records naming different roots on two replicas —
+            // the max-join over the third field has to be exercised, not held constant.
             minted = mintIds.filter { rnd.nextBoolean() }.associateWith {
-                MintRecord(replicas.random(rnd), rnd.nextLong(0L, 1_000L))
+                MintRecord(groups.random(rnd), replicas.random(rnd), rnd.nextLong(0L, 1_000L))
             },
             issued = randomEdgeCounters(rnd),
             returned = randomEdgeCounters(rnd),

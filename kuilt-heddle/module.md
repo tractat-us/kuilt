@@ -85,7 +85,10 @@ whole ledger inherits the three merge laws for free.
   cross-multiplication, never floating point, so every peer orders them identically.
 - `ServiceUnits` — a non-negative quantity of service, with overflow-checked
   arithmetic.
-- `AttachmentRecord` / `MintRecord` — the immutable facts the ledger unions.
+- `AttachmentRecord` / `MintRecord` — the immutable facts the ledger unions. A
+  `MintRecord` names the root it was minted at, so supply is creditable at that
+  group and nowhere else: merging two separately bootstrapped ledgers cannot
+  count either one's mint twice.
 - `Lifecycle` — an edge's `PREPARED → ACTIVE → CLOSING → RETIRED` state, merged by
   taking the higher one so closure always dominates activation.
 - `LedgerConflict` — the surfaced integrity/topology faults, including
@@ -93,8 +96,9 @@ whole ledger inherits the three merge laws for free.
   `ClosureViolation` (entitlement crossing a retired generation), `LineageCycle`
   (inbound edges that loop instead of reaching a root), `OrphanedTransferPath`
   (a peer-to-peer hand-off the topology moved out from under, which conservation
-  is structurally blind to) and `ConservationViolation` (the global backstop:
-  more service charged than supply ever minted).
+  is structurally blind to), `MultipleRoots` (supply minted at more than one root —
+  two bootstraps merged into one ledger) and `ConservationViolation` (the global
+  backstop: more service charged than supply ever minted).
 - `EdgeSummary` — the parent-facing projection of one edge (`issued`/`returned`/
   `spent` and the derived `outstanding`).
 - `EntitlementLedger` — the replicated `Quilted` state itself.
