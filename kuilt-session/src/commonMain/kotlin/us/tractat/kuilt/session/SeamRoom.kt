@@ -456,6 +456,36 @@ private sealed interface WindowEpisode {
     data object Unidentified : WindowEpisode
 }
 
+/**
+ * What `SeamRoom.refineWindow` decided about one incoming reconnect deadline.
+ *
+ * It exists so the decision can be reached under the lock and *acted on* outside it — specifically
+ * so [StaleEpisode], the only outcome that discards a value a consumer supplied, can be logged
+ * rather than vanishing into a bare `return` from the critical section (#1781).
+ */
+private sealed interface RefineVerdict {
+    /** The deadline moved; announce it (and, on a host, re-fan it). */
+    data object Applied : RefineVerdict
+
+    /** The member is not [Liveness.Partitioned] — recovered, or gone. The documented no-op. */
+    data object NotPartitioned : RefineVerdict
+
+    /** The announced deadline is the one already held. Nothing to say. */
+    data object Unchanged : RefineVerdict
+
+    /**
+     * The announcement named partition episode [announced] while this room holds [held] (null when
+     * it holds none) — so the deadline belongs to an episode that is over, and applying it would
+     * move the level backwards.
+     *
+     * Both instants are carried rather than a flag because they are what tells the two causes apart:
+     * a real late announcement leaves [held] at some *other* genuine detection instant, whereas a
+     * hold policy that fails to echo the `at` it was handed produces an [announced] that matches no
+     * [held] this room will ever record.
+     */
+    data class StaleEpisode(val held: Long?, val announced: Long) : RefineVerdict
+}
+
 internal class SeamRoom(
     private val seam: Seam,
     role: SessionRole,
@@ -586,10 +616,18 @@ internal class SeamRoom(
     private val admittedById = mutableMapOf<PeerId, Member>()
 
     /**
-     * The identity of each peer's **current partition episode**: the detection instant most
-     * recently handed to [JoinerReconnectController.onPeerUnresponsive] for it (#1781). Guarded by
+     * The detection instant most recently handed to
+     * [JoinerReconnectController.onPeerUnresponsive] for each peer (#1781) — the identity of the
+     * partition episode a [JoinerReconnectEvent.WindowOpened] must name to be applied. Guarded by
      * [lock] and written in the same critical section as the level itself; reaped with the member in
      * [removeFromRoster].
+     *
+     * **Not "the episode of every partitioned member":** it is written only by [markPartitioned], so
+     * on a joiner a member paused by an inbound [AdmitMessage.Paused] ([handlePaused]) is
+     * [Liveness.Partitioned] with no entry here at all. Harmless, because only
+     * [WindowEpisode.Unidentified] reaches [refineWindow] on that path and it never consults this
+     * map — but the map and the level do genuinely disagree there, and a reader should not be told
+     * otherwise.
      *
      * A [JoinerReconnectEvent.WindowOpened] echoes that instant back as
      * [JoinerReconnectEvent.WindowOpened.detectedAt], and [refineWindow] applies the announcement
@@ -598,13 +636,16 @@ internal class SeamRoom(
      * episode the peer already recovered from and re-entered — and the latter moves the deadline
      * **backwards**, so a seat counts down to an instant the host is no longer holding it to.
      *
-     * **Not [Liveness.Partitioned.since], and the difference is load-bearing.** `since` is
-     * *first*-detection and deliberately does not drift on a re-detection, while the host genuinely
-     * re-arms the window from the *new* instant and hands that one to the controller. Keying on
-     * `since` would therefore reject the re-arm's own refinement — an injected hold policy's
-     * deadline (#1614) would silently stop reaching the roster. It also stays out of
-     * [Liveness.Partitioned]: this is bookkeeping about who was told what, not a fact about the
-     * member that belongs on the public roster surface.
+     * **Not [Liveness.Partitioned.since].** Today the two agree on every reachable host path: host
+     * re-detection *within* one episode is unreachable — see
+     * `WindowLevelTest.reDetectionReEmitsWindowOpenedWithoutRegressingTheDeadline`'s KDoc for why —
+     * so `existing` is always null at [markPartitioned] on a host and `since` is always the same
+     * `at`. But `since` is a **public contract field defined never to drift** on a re-detection,
+     * while [markPartitioned] re-arms the host window from the *new* `at`. Keying this gate on it
+     * would couple the gate to a promise made for an unrelated purpose, and would break *silently* —
+     * dropping an injected hold policy's refinements (#1614) — the day re-detection becomes
+     * reachable. It also stays out of [Liveness.Partitioned] itself: this is bookkeeping about who
+     * was told what, not a fact about the member that belongs on the public roster surface.
      *
      * An entry survives recovery unread — [refineWindow] rejects any announcement for a member that
      * is not partitioned before it consults this map — and the next episode overwrites it.
@@ -1988,9 +2029,12 @@ internal class SeamRoom(
             // Written under the SAME critical section as the level, and BEFORE the
             // `onPeerUnresponsive` call below hands the same instant to the controller — so no
             // announcement the controller derives from it can be judged against a stale entry.
-            // Deliberately NOT `level.since`: a re-detection re-arms the window from the new `at`
-            // while `since` stays at first-detection, so keying the episode on `since` would make
-            // refineWindow drop the re-arm's own refinement. See [episodeDetectedAtMs].
+            //
+            // Deliberately NOT `level.since`, even though on a host the two are always equal today
+            // (re-detection within one episode is unreachable, so `existing` is null here): `since`
+            // is a public contract field defined never to drift on a re-detection, while this line
+            // re-arms from the new `at`. Keying the gate on `since` would rest on those two
+            // happening to coincide rather than on either one's promise. See [episodeDetectedAtMs].
             episodeDetectedAtMs[peerId] = at.toEpochMilliseconds()
             // Null only for a peer that is not admitted, already excluded above.
             updateMemberLiveness(peerId, level) ?: return
@@ -2129,19 +2173,56 @@ internal class SeamRoom(
      * `WindowEpisodeIdentityTest` is written so that guard leaves it red.
      */
     private fun refineWindow(peerId: PeerId, expiresAt: Instant, episode: WindowEpisode) {
-        lock.withLock {
-            val current = admittedById[peerId]?.liveness as? Liveness.Partitioned ?: return
-            val staleEpisode = when (episode) {
-                is WindowEpisode.Detected -> episodeDetectedAtMs[peerId] != episode.atMs
-                WindowEpisode.Unidentified -> false
+        // The decision is made under the lock and ACTED ON outside it, so the one outcome that
+        // discards a consumer-supplied value can be logged. Returning straight out of the critical
+        // section — as this did — made the gate the only place in this file that drops such a value
+        // silently, the absence [fanOutToOtherMembers] and [recordOversizeDrop] already decided has
+        // to be diagnosable off-device (#1781).
+        val verdict = lock.withLock {
+            val current = admittedById[peerId]?.liveness as? Liveness.Partitioned
+                ?: return@withLock RefineVerdict.NotPartitioned
+            val held = episodeDetectedAtMs[peerId]
+            val stale = when (episode) {
+                // A null `held` is stale too: an announcement naming an episode this room never
+                // recorded a detection for is as unusable as one naming a superseded episode.
+                is WindowEpisode.Detected ->
+                    if (held == episode.atMs) null else RefineVerdict.StaleEpisode(held, episode.atMs)
+                WindowEpisode.Unidentified -> null
             }
-            if (staleEpisode) return
-            if (current.windowExpiresAt == expiresAt) return
-            updateMemberLiveness(peerId, current.copy(windowExpiresAt = expiresAt)) ?: return
+            if (stale != null) return@withLock stale
+            if (current.windowExpiresAt == expiresAt) return@withLock RefineVerdict.Unchanged
+            updateMemberLiveness(peerId, current.copy(windowExpiresAt = expiresAt))
+                ?: return@withLock RefineVerdict.NotPartitioned
+            RefineVerdict.Applied
         }
-        emitEvent(MembershipEvent.WindowOpened(peerId, expiresAt))
-        if (_role.value == SessionRole.Host) {
-            propagatePaused(peerId, expiresAtMs = expiresAt.toEpochMilliseconds())
+        when (verdict) {
+            RefineVerdict.Applied -> {
+                emitEvent(MembershipEvent.WindowOpened(peerId, expiresAt))
+                if (_role.value == SessionRole.Host) {
+                    propagatePaused(peerId, expiresAtMs = expiresAt.toEpochMilliseconds())
+                }
+            }
+            is RefineVerdict.StaleEpisode ->
+                // `debug`, not `warn`: a genuine stale race is expected and rare, and the gate
+                // dropping it is the fix working. It is logged at all for the OTHER cause — an
+                // injected hold policy (#1614) that does not echo the `at` it was handed, whose
+                // every refinement is then dropped forever with the deadline stuck at the room's
+                // [HeartbeatConfig] estimate. That obligation is stated in
+                // [JoinerReconnectController.onPeerUnresponsive]'s KDoc and cannot be
+                // compiler-checked, so this line is the only way to see it being broken.
+                //
+                // IDENTITIES, not a count: `announced` against `held` is what separates "a late
+                // announcement for a superseded episode" (held is some other real instant) from
+                // "this controller echoes the wrong value" (announced matches no held, ever), and a
+                // counter cannot tell those apart.
+                logger.debug {
+                    "room.window.stale-episode self=${selfId.value} peer=${peerId.value} " +
+                        "announced=${verdict.announced} held=${verdict.held} " +
+                        "discardedExpiresAt=${expiresAt.toEpochMilliseconds()}"
+                }
+            // Neither discards a value: NotPartitioned is the documented no-op for a member that
+            // recovered or left, and Unchanged means this names the deadline already held.
+            RefineVerdict.NotPartitioned, RefineVerdict.Unchanged -> Unit
         }
     }
 
