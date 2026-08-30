@@ -59,7 +59,8 @@ class ChicoryWasmRuntimeTest {
      * downgraded to a weaker assertion — and **only** a budget overrun is retried, so a trap, a
      * poisoned worker, wrong bytes, or a runaway that escapes its bound all still fail on the first
      * attempt — see [retryingOnlyBudgetOverruns] for the ordered safety argument (type, then
-     * message, then persistence) and the one class it deliberately absorbs (#1802). The 60 s
+     * message, then persistence). #1802's residual-drain skew used to be absorbed here too; it is
+     * now fixed at the source in [GuestWorker], so only host contention is. The 60 s
      * `runTest` ceiling is a wedge backstop covering all attempts, not a timed assertion; the
      * reference invocation gets a *strictly smaller* 5 s budget so it can still report inside that
      * ceiling after the attempts have spent part of it.
