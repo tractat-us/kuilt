@@ -306,7 +306,9 @@ class MeshRoomRecoveredWindowExpiryTest {
      */
     @Ignore
     @Test
-    fun `the eviction lands on the controller's deadline, not the survivor's own detector window`() =
+    // Name kept free of commas and apostrophes: Kotlin/Native rejects them in a backticked
+    // declaration name ("Name contains illegal characters"), and jvmTest alone would not have said so.
+    fun `a stale window expiry evicts on the controller deadline not the detector window`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Ten seconds: nothing in this test advances far enough for the survivor's own detector
             // to mature to PeerLost, recovered or not.
