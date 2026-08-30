@@ -106,8 +106,9 @@ import kotlin.time.Instant
  *
  * They also do not cover the *other* half of #1781 — a controller's local
  * [JoinerReconnectEvent.WindowOpened] for partition episode *N* landing after episode *N+1* opened.
- * That reordering happens before `refineWindow` is reached rather than on the wire after it, and
- * closing it needs episode identity on the event (a public-API change); see `refineWindow`'s KDoc.
+ * That reordering happens before `refineWindow` is reached rather than on the wire after it, so no
+ * send-side ordering can see it; it is closed instead by episode identity on the event
+ * ([JoinerReconnectEvent.WindowOpened.detectedAt]) and covered by [WindowEpisodeIdentityTest].
  *
  * Nor can they pin the *enqueue* half of the guarantee — that `markPartitioned` enqueues its estimate
  * before it calls `onPeerUnresponsive`, the head of the refinement's path. `markPartitioned` is
@@ -491,7 +492,9 @@ class AdmitFanOutOrderingTest {
         override val events: SharedFlow<JoinerReconnectEvent> = _events.asSharedFlow()
 
         override fun onPeerUnresponsive(peerId: PeerId, at: Long) {
-            _events.tryEmit(JoinerReconnectEvent.WindowOpened(peerId, expiresAt = expiresAt))
+            _events.tryEmit(
+                JoinerReconnectEvent.WindowOpened(peerId, expiresAt = expiresAt, detectedAt = at),
+            )
         }
 
         override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =

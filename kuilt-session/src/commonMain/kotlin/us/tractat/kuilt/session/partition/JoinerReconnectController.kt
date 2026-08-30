@@ -46,6 +46,11 @@ public interface JoinerReconnectController {
      *
      * When a [PartitionEvent.PeerUnresponsive] feed is available, bridge
      * it here: `partitionEvents.collect { if (it is PeerUnresponsive) onPeerUnresponsive(it.peerId, it.at) }`.
+     *
+     * **[at] is the identity of this partition episode, not just a timestamp.** Every
+     * [JoinerReconnectEvent.WindowOpened] emitted for the drop this call reports must echo it
+     * unchanged as [JoinerReconnectEvent.WindowOpened.detectedAt] — including a later
+     * re-announcement that extends the same window. See that field for what the caller does with it.
      */
     public fun onPeerUnresponsive(
         peerId: PeerId,
@@ -82,10 +87,38 @@ public interface JoinerReconnectController {
 
 /** Events emitted by [JoinerReconnectController] over its [SharedFlow]. */
 public sealed interface JoinerReconnectEvent {
-    /** The reconnect window opened for [peerId]. It expires at epoch-millis [expiresAt]. */
+    /**
+     * The reconnect window opened for [peerId]. It expires at epoch-millis [expiresAt].
+     *
+     * [detectedAt] names **which partition episode this window belongs to**: it is the `at` this
+     * controller was handed in [JoinerReconnectController.onPeerUnresponsive] for the drop that
+     * opened the window, echoed back unchanged. A receiver compares it against the episode it is
+     * currently holding and drops the announcement outright when the two disagree.
+     *
+     * **Why the event needs an identity at all (#1781).** A controller emits this from its own
+     * coroutine — [DefaultJoinerReconnectController.onPeerUnresponsive] does
+     * `scope.launch { openWindow(…) }` — so an announcement for episode *N* can reach the collector
+     * after the peer has recovered *and dropped again*, opening episode *N+1*. Without an identity
+     * the receiver can only ask whether the peer is partitioned **now**, which is true in that case,
+     * and episode *N*'s deadline replaces episode *N+1*'s: a seat counts down to the wrong instant.
+     * Ordering cannot substitute for identity here — comparing [expiresAt] against the new episode's
+     * start passes whenever the window is longer than the recovery→re-detection gap, which the
+     * default 60 s window comfortably is.
+     *
+     * **Echo it; never sample a clock at the emit site.** A freshly-read "now" answers *when this
+     * announcement was made*, which is precisely the ambiguous quantity — it would make a stale
+     * episode's late announcement look current. The value handed to
+     * [JoinerReconnectController.onPeerUnresponsive] answers *which drop this is about*, and only
+     * that discriminates.
+     *
+     * **Required, and deliberately not nullable.** A nullable field would let every existing
+     * emitter compile unchanged and keep the defect, silently — the receiver would have nothing to
+     * compare and would have to fall back to the guard that does not work.
+     */
     public data class WindowOpened(
         val peerId: PeerId,
         val expiresAt: Long,
+        val detectedAt: Long,
     ) : JoinerReconnectEvent
 
     /** [peerId] successfully resumed within the window. */

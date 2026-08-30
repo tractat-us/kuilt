@@ -60,7 +60,9 @@ class HostReconnectControllerInjectionTest {
 
         override fun onPeerUnresponsive(peerId: PeerId, at: Long) {
             unresponsivePeer.complete(peerId)
-            _events.tryEmit(JoinerReconnectEvent.WindowOpened(peerId, expiresAt = SENTINEL_EXPIRES_AT))
+            _events.tryEmit(
+                JoinerReconnectEvent.WindowOpened(peerId, expiresAt = SENTINEL_EXPIRES_AT, detectedAt = at),
+            )
         }
 
         override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
