@@ -96,6 +96,8 @@ class NearbySeamTearDownTest {
             selfId = selfId,
             endpointPeers = endpoints.toMutableMap(),
             endpointPeersMutex = Mutex(),
+            // Derived from the SAME map as endpointPeers — see registryOver.
+            registry = registryOver(selfId, endpoints),
             api = api,
             sharedPeers = sharedPeers,
             scope = scope,

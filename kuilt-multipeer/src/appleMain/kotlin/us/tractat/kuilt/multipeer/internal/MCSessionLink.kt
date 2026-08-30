@@ -29,6 +29,7 @@ import platform.darwin.NSObject
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerIdentityRegistry
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -92,7 +93,7 @@ internal class MCSessionLink(
     // cross-peer serialization guarantee) and is the source of truth for the
     // peer set; each mutation republishes `registry.peers + selfId` to `_peers`,
     // a StateFlow whose value write is itself atomic.
-    private val registry = PeerIdentityRegistry<MCPeerID>()
+    private val registry = PeerIdentityRegistry<MCPeerID>(selfId)
 
     private val _peers: MutableStateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
@@ -324,6 +325,24 @@ internal class MCSessionLink(
                             log.error {
                                 "mc.session.collision localPeer=${selfId.value} peer=${peer.displayName} " +
                                     "id=${peerId.value} — refusing to merge two distinct devices onto one id"
+                            }
+                        // The registry's own self refusal (#1821). Unreachable from here — the
+                        // guard above this `when` already returned on `peerId == selfId`, and it
+                        // stays because it must cover the OTHER states too. Kept as an arm rather
+                        // than folded into an `else` so a future edit that removes that guard
+                        // still lands on a refusal instead of a silent bind.
+                        PeerIdentityRegistry.BindResult.REFUSED_SELF ->
+                            log.info {
+                                "mc.session.self-dial localPeer=${selfId.value} peer=${peer.displayName} " +
+                                    "→ refused by the registry"
+                            }
+                        // An MCPeerID whose displayName is blank or whitespace: not a peer, and an
+                        // unaddressable entry in `peers` would keep `remaining == setOf(selfId)`
+                        // from ever holding again (#1821).
+                        PeerIdentityRegistry.BindResult.REFUSED_BLANK ->
+                            log.error {
+                                "mc.session.blank-id localPeer=${selfId.value} " +
+                                    "peer=${peer.displayName} — refusing a blank peer id"
                             }
                     }
                 }

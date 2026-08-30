@@ -46,6 +46,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a blob cache keyed by a content hash, a "have you got these bytes?" request/response, a manifest of what each peer holds | `Creel` + `BobbinExchange` | [Code mobility](#code-mobility) |
 | running code that arrived from another peer — a plugin loader, an `eval`, a bespoke sandbox or timeout-and-kill wrapper | `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch` | [Code mobility](#code-mobility) |
 | a `try`/`catch` inside an `onEach { … }.launchIn(scope)` so one bad item cannot kill a long-lived collector — or a fix for "the pump stopped and nothing said so", a `Seam`/`Room` that goes deaf after one throw, an iOS crash traced to an unhandled coroutine exception | `Flow.pumpIn(scope, onFailure) { … }` — it owns the upstream half your `try` structurally cannot see | [Long-lived pumps](#long-lived-pumps) |
+| turning a peer-supplied id into a roster entry while writing a fabric — `PeerId(bytes.decodeToString())`, a `Set<PeerId>` a callback adds to and removes from, `peers == setOf(selfId)` meaning "the session is over" | `PeerIdentityRegistry` | [A peer id off the wire](#a-peer-id-off-the-wire-straight-into-a-setpeerid) |
 
 ## Discovery
 
@@ -70,6 +71,47 @@ mdnsGone.emit("alice")
 runCurrent()
 check(roster.value.map { it.peerKey }.toSet() == setOf("bob"))
 ```
+
+### A peer id off the wire, straight into a `Set<PeerId>`
+
+**Intent:** you are writing a fabric, and a remote has just told you who it is — a display name, a handshake payload, a native callback's string. You are about to write `PeerId(bytes.decodeToString())` and `peers.update { it + peer }`, and decide the session is over when `peers == setOf(selfId)`.
+
+**Primitive:** `PeerIdentityRegistry` (`:kuilt-core`). Those bytes are the least trustworthy input a fabric handles, and every path that judged them for itself judged them differently — three times, over #1432, #1466, #1494 and #1821. Key membership by the underlying **device identity** and ask the registry:
+
+<!-- verbatim from kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/PeerIdentityRegistry.kt#bind -->
+```kotlin
+public fun bind(
+    id: PeerId,
+    token: T,
+): BindResult =
+    lock.withLock {
+        when {
+            id.value.isBlank() -> BindResult.REFUSED_BLANK
+            id == selfId -> BindResult.REFUSED_SELF
+            else ->
+                when (bound[id]) {
+                    null -> {
+                        bound[id] = token
+                        BindResult.BOUND
+                    }
+                    token -> BindResult.ALREADY_BOUND
+                    else -> BindResult.COLLISION
+                }
+        }
+    }
+```
+
+Derive the roster from `registry.peers + selfId`, evict with the identity-scoped `unbind(id, token)` so a drop can only ever remove the device that actually holds the id, and `clear()` at teardown so a post-tear callback cannot recompute the roster from stale bindings.
+
+Three things a bare set gets wrong, each of which has shipped:
+
+- **Two devices on one id merge, then one drop evicts both.** A set has one entry; whoever leaves first takes the other with them. `COLLISION` refuses the newcomer instead, and the incumbent keeps the id.
+- **A peer registers *itself*.** A symmetric advertise+browse fabric is handed its own advertisement, dials it, and the eventual drop of that self-link evicts the peer from its own roster — the #1466 signature. `REFUSED_SELF`.
+- **A blank id is unaddressable and wedges teardown.** `PeerId("")` in the roster makes a `remaining == setOf(selfId)` end-of-session test unsatisfiable forever, so the seam never tears, `incoming` never completes, and the session slot is never freed. `REFUSED_BLANK` — and ask `registry.peers.isEmpty()` rather than comparing a set that peer-supplied strings can pollute.
+
+**Decoding is still yours.** The registry judges an id, not bytes: `ByteArray.decodeToString()` defaults to *lossy*, mapping every malformed sequence to U+FFFD, so two entirely different announcements arrive as the same id and there is nothing left for a collision check to see. Decode with `throwOnInvalidSequence = true` and refuse what does not decode.
+
+**The one thing it cannot do** is un-merge what the layer beneath already merged. If your transport hands up only the id string with no device handle to key by, pass the id as its own token: you still get the refusals and the identity-scoped eviction, but `COLLISION` is unreachable and closing it means changing the layer below. Say so where a reader will hit it, rather than leaving the arm looking covered.
 
 ### Peers pile up and are never removed
 

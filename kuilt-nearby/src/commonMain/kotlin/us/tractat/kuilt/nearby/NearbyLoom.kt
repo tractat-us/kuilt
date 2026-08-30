@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerIdentityRegistry
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
@@ -106,6 +107,11 @@ public class NearbyLoom(
     private suspend fun openSession(config: Pattern): Seam {
         val peerId = freshPeerId()
         val endpointPeers = mutableMapOf<String, PeerId>()
+        // The weave's peer-identity authority (#1821), keyed by Nearby endpoint ID and shared with
+        // the handshake that admits an id and the seam that evicts one, so both answer from the
+        // same bindings. `endpointPeers` remains the reassembly/send index and is written only
+        // where the registry has already said yes.
+        val registry = PeerIdentityRegistry<String>(peerId)
         // Single mutex shared with the seam — all endpointPeers access on both sides
         // serialises on this one lock, eliminating the two-mutex race.
         val endpointPeersMutex = Mutex()
@@ -116,6 +122,7 @@ public class NearbyLoom(
             selfId = peerId,
             endpointPeers = endpointPeers,
             endpointPeersMutex = endpointPeersMutex,
+            registry = registry,
             api = api,
             sharedPeers = sharedPeers,
             scope = seamScope,
@@ -143,6 +150,7 @@ public class NearbyLoom(
                     endpointId = null,
                     serviceId = serviceId,
                     handshakeTimeout = handshakeTimeout,
+                    registry = registry,
                 )
                 // Advertiser: already advertising, so no kickoff — just await a peer.
                 val link = machine.run(this) {}
@@ -167,6 +175,8 @@ public class NearbyLoom(
     private suspend fun joinSession(advertisement: Tag): Seam {
         val joinerPeerId = freshPeerId()
         val endpointPeers = mutableMapOf<String, PeerId>()
+        // See openSession — one registry per weave, shared with the handshake and the seam.
+        val registry = PeerIdentityRegistry<String>(joinerPeerId)
         // Single mutex shared with the seam — same pattern as openSession.
         val endpointPeersMutex = Mutex()
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
@@ -175,6 +185,7 @@ public class NearbyLoom(
             selfId = joinerPeerId,
             endpointPeers = endpointPeers,
             endpointPeersMutex = endpointPeersMutex,
+            registry = registry,
             api = api,
             sharedPeers = sharedPeers,
             scope = seamScope,
@@ -196,6 +207,7 @@ public class NearbyLoom(
             endpointId = hostEndpointId,
             serviceId = serviceId,
             handshakeTimeout = handshakeTimeout,
+            registry = registry,
         )
 
         // run() subscribes the handshake collectors before triggering requestConnection.

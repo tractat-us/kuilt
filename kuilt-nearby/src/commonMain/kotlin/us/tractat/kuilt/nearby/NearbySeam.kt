@@ -19,6 +19,7 @@ import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerIdentityRegistry
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -47,6 +48,13 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbySeam")
  * @param endpointPeersMutex  The single [Mutex] that guards [endpointPeers]. Created once
  *                            by [NearbyLoom] and passed here so both sides serialise every
  *                            read and write on the same lock instance.
+ * @param registry            The weave's peer-identity authority (#1821), keyed by endpoint ID and
+ *                            shared with the [ConnectStateMachine] that admitted each id. It is what
+ *                            makes an eviction identity-scoped: [disconnectLoop] evicts a peer from
+ *                            [sharedPeers] only when the departing endpoint is the one that actually
+ *                            holds that id, so a departure can never take a different endpoint's peer
+ *                            with it. [endpointPeers] stays as the derived reassembly/send index and
+ *                            is only ever written where the registry has already said yes.
  * @param api                 The [NearbyApi] instance.
  * @param sharedPeers         The shared [MutableStateFlow] of the whole session's peer set
  *                            (owned by [NearbyLoom]). It is the same instance every seam this loom
@@ -73,6 +81,7 @@ internal class NearbySeam(
     override val selfId: PeerId,
     private val endpointPeers: MutableMap<String, PeerId>,
     private val endpointPeersMutex: Mutex,
+    private val registry: PeerIdentityRegistry<String>,
     private val api: NearbyApi,
     private val sharedPeers: MutableStateFlow<Set<PeerId>>,
     private val scope: CoroutineScope,
@@ -202,7 +211,14 @@ internal class NearbySeam(
                 val peerId = endpointPeers.remove(event.endpointId) ?: return@collect
                 reassemblers.remove(event.endpointId)?.reset()
                 sequences.remove(event.endpointId)
-                sharedPeers.update { it - peerId }
+                // Identity-scoped: the loom-wide eviction happens only if THIS endpoint is the one
+                // holding that id (#1821). `endpointPeers` and the registry agree today — nothing
+                // writes the map without a successful bind — so this gates rather than changes the
+                // eviction; what it removes is the possibility of them disagreeing later, when a
+                // second endpoint on this weave holds an id the departing one merely announced.
+                if (registry.unbind(peerId, event.endpointId)) {
+                    sharedPeers.update { it - peerId }
+                }
                 // Honour the Seam contract: `incoming` completes on a remote disconnect too.
                 // The session is genuinely over only when a peer that had CONNECTED (state Woven)
                 // just lost its LAST endpoint — not on a partial drop, and not while still Weaving

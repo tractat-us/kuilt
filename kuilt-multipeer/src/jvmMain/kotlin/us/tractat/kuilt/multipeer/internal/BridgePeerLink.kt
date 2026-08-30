@@ -11,13 +11,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerIdentityRegistry
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -64,6 +63,22 @@ internal class BridgePeerLink(
     dispatcher: CoroutineContext = Dispatchers.Default,
 ) : Seam {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
+
+    // The one implementation of "may this announced identity join, and who may take it away"
+    // (#1821), shared with the Apple `MCSessionLink` and `:kuilt-nearby`. It is the source of truth
+    // for the remote roster: every mutation republishes `registry.peers + selfId` into [_peers], and
+    // the terminal-teardown test asks the registry rather than comparing [_peers] to `{ selfId }`.
+    //
+    // **`T` is the PeerId itself, and that is a real limit, not a shortcut.**
+    // `MultipeerNativeLib.PeerStateCallback` carries `(peerId: String, isConnected: Int)` and
+    // nothing else — the native bridge has already flattened the `MCPeerID` device identity that
+    // the Apple half keys by into a bare string. So two devices sharing one display name have
+    // become one identity BELOW this file, and `BindResult.COLLISION` is structurally unreachable
+    // here; un-merging them needs a device handle on the ABI (#1539), not a change in this class.
+    // What the registry does buy this path is the rest of the rules: a blank id is refused, a
+    // self-dial is refused, and `unbind` is identity-scoped, so a drop for an id nothing holds
+    // evicts nobody.
+    private val registry = PeerIdentityRegistry<PeerId>(selfId)
 
     private val _peers: MutableStateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
@@ -116,10 +131,52 @@ internal class BridgePeerLink(
     private val peerStateCallback: MultipeerNativeLib.PeerStateCallback =
         MultipeerNativeLib.PeerStateCallback { peerId, isConnected ->
             val peer = PeerId(peerId)
-            if (peer == selfId) return@PeerStateCallback
+            // Self-connection guard, ahead of the branch so it covers EVERY state rather than just
+            // `connected` — the placement `MCSessionLink`'s delegate argues for, and for the same
+            // reason. The end-of-session test below asks "are there no bound remotes?", which cannot
+            // by itself tell *before the first peer* from *after the last one*; a self `.notConnected`
+            // reaching it would unbind nothing, find an empty registry, and tear down a Weaving link
+            // that never had a peer.
+            //
+            // The RULE is still the registry's — [PeerIdentityRegistry.BindResult.REFUSED_SELF] below
+            // is the same refusal and this line cannot drift from it, because both spell self-identity
+            // as `selfId`. What is fabric-specific, and so lives here, is WHICH callback states the
+            // refusal has to cover.
+            if (peer == selfId) {
+                log.info {
+                    "mc.session.self-dial selfId=${selfId.value} peer=$peerId connected=$isConnected " +
+                        "→ dropped (connected to own advertisement)"
+                }
+                return@PeerStateCallback
+            }
             if (isConnected == 1) {
-                _peers.update { it + peer }
-                if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven
+                when (registry.bind(peer, peer)) {
+                    PeerIdentityRegistry.BindResult.BOUND -> {
+                        _peers.value = registry.peers + selfId
+                        if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven
+                    }
+                    PeerIdentityRegistry.BindResult.ALREADY_BOUND -> Unit // duplicate connect callback
+                    // See the [registry] comment: with `T` = the id itself this arm cannot fire.
+                    // Left explicit rather than folded into a shared `else` so it stays visible as
+                    // the thing the ABI, not this file, has to fix.
+                    PeerIdentityRegistry.BindResult.COLLISION ->
+                        log.error {
+                            "mc.session.collision selfId=${selfId.value} peer=$peerId — " +
+                                "refusing to merge two distinct devices onto one id"
+                        }
+                    // Unreachable from here — the guard above the branch already returned. Kept as
+                    // an arm rather than folded into an `else` so a future edit that removes that
+                    // guard still lands on a refusal instead of a silent bind (#1821).
+                    PeerIdentityRegistry.BindResult.REFUSED_SELF ->
+                        log.info {
+                            "mc.session.self-dial selfId=${selfId.value} peer=$peerId → refused by the registry"
+                        }
+                    // A blank id from native. Admitting one used to put an unaddressable entry in
+                    // `peers` that the old `remaining == setOf(selfId)` teardown test could never
+                    // clear, so the seam stayed Woven after its last real peer had gone (#1821).
+                    PeerIdentityRegistry.BindResult.REFUSED_BLANK ->
+                        log.error { "mc.session.blank-id selfId=${selfId.value} — refusing a blank peer id" }
+                }
             } else {
                 // MC has no dedicated error callback; .notConnected is the
                 // closest session-level error surface (unexpected drops fire here).
@@ -128,7 +185,11 @@ internal class BridgePeerLink(
                 if (!closing.get()) {
                     log.warn { "mc.session.error selfId=${selfId.value} peer=$peerId" }
                 }
-                val remaining = _peers.updateAndGet { it - peer }
+                // Identity-scoped removal: a drop for an id this device does not hold — a refused
+                // self-dial, a blank id, a peer that never bound — removes nothing, so it cannot
+                // take a live peer with it.
+                registry.unbind(peer, peer)
+                _peers.value = registry.peers + selfId
                 // Terminal peer-level drop. When the last remote peer is gone the
                 // whole session is dead — tear the seam down (latch Torn, complete
                 // `incoming`) so the Seam contract holds on a remote disconnect. The
@@ -137,7 +198,12 @@ internal class BridgePeerLink(
                 // side-channel callback. No mc_session_close here: it runs inside the
                 // JNA callback and the native handle is disposed only by the consumer's
                 // explicit close(). Mirrors the apple MCSessionLink behaviour.
-                if (remaining == setOf(selfId)) {
+                //
+                // Asked of the REGISTRY ("are there no bound remotes?") rather than as the old
+                // set-equality test `remaining == setOf(selfId)` on `_peers`. The two agree only
+                // while `_peers` holds nothing but selfId and live remotes — which is exactly the
+                // property a blank or self id used to break, wedging the seam Woven forever (#1821).
+                if (registry.peers.isEmpty()) {
                     tearDown(CloseReason.RemoteRequested)
                 }
             }
@@ -227,8 +293,16 @@ internal class BridgePeerLink(
      * caller costs nothing and buys the stronger post-condition that `peers` is collapsed once
      * *any* `tearDown` has returned. Previously only the remote-drop path reached `{ selfId }`,
      * leaving a locally-closed link advertising its pre-close roster forever (#1851).
+     *
+     * Clearing [registry] is **part of** that collapse, not housekeeping — the same argument
+     * `MCSessionLink.tearDown` makes, and it becomes load-bearing here the moment [_peers] is
+     * derived from the registry: [closeNow] follows this with `mc_session_close`, after which
+     * native fires `.notConnected` for every peer that was connected, and the first such callback
+     * would recompute `registry.peers + selfId` from stale bindings and republish peers that are
+     * gone (#1851).
      */
     private fun tearDown(reason: CloseReason) {
+        registry.clear()
         _peers.value = setOf(selfId)
         if (!tornDown.compareAndSet(false, true)) return
         _state.value = SeamState.Torn(reason)
