@@ -68,6 +68,11 @@ class HostReconnectControllerInjectionTest {
         override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
             ResumeResult.WindowNotYetOpen
 
+        // Honest rather than a stub: this policy owns no timer and never emits a `WindowExpired`,
+        // so it already satisfies `onPeerRecovered`'s only obligation — emit no expiry for the
+        // episode this closes — by doing nothing. A fake that *did* arm one would cancel it here.
+        override fun onPeerRecovered(peerId: PeerId, at: Long) = Unit
+
         override fun expire(peerId: PeerId, at: Long) = Unit
     }
 

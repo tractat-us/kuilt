@@ -23,26 +23,33 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
- * Evidence pass for #2556 — **the arc [MeshRoomRecoveryTest] stops one step short of.**
+ * Regression test for #2556 — **the arc [MeshRoomRecoveryTest] stops one step short of.**
  *
  * `MeshRoomRecoveryTest`'s recover-within-window case advances `timeout + interval * 9` against a
  * 2 s reconnect window, so it observes the recovery and then ends. It never crosses the window's
- * own deadline, and everything this file is about happens *after* that crossing: the host's
- * [us.tractat.kuilt.session.partition.JoinerReconnectController] timer is still armed for a member
- * that already came back, because nothing on the recovery path closes it —
- * [SeamRoom]'s `markRecovered` tells the controller nothing, and no production code calls
- * [us.tractat.kuilt.session.partition.JoinerReconnectController.expire].
+ * own deadline, and everything this file is about happened *after* that crossing.
  *
- * When that stale timer fires, `runReconnectEventLoop`'s `WindowExpired` arm runs
- * `propagateFarewell(peerId, expired = true)` **before** any liveness check. The host's own
- * eviction backstop (`evictOnExpiredWindowIfPartitioned`) then correctly declines — the member is
- * [Liveness.Connected] again — but the `Farewell` has already been enqueued on every *other*
- * member's admit lane, and `handleFarewell` removes it with no liveness check and no re-admit path.
+ * **What it was.** The host's [us.tractat.kuilt.session.partition.JoinerReconnectController] timer
+ * stayed armed for a member that had already come back, because nothing on the recovery path closed
+ * it: [SeamRoom]'s `markRecovered` told the controller nothing, and no production code called
+ * [us.tractat.kuilt.session.partition.JoinerReconnectController.expire]. When that stale timer
+ * fired, `runReconnectEventLoop`'s `WindowExpired` arm ran `propagateFarewell(peerId, expired =
+ * true)` **before** any liveness check. The host's own eviction backstop then correctly declined —
+ * the member is [Liveness.Connected] again — but the `Farewell` had already been enqueued on every
+ * *other* member's admit lane, and `handleFarewell` removes a peer with no liveness check and no
+ * re-admit path.
  *
  * The subject of the fan-out is excluded from it ([SeamRoom]'s `fanOutToOtherMembers` filters
- * `it != subject`), so the recovered member is never told. In a room of three that is a permanent
+ * `it != subject`), so the recovered member was never told. In a room of three that is a permanent
  * three-way split: the host holds the member `Connected`, the survivor has evicted it, and the
  * member believes it is still seated.
+ *
+ * **What it is now.** `markRecovered` closes the window through
+ * [us.tractat.kuilt.session.partition.JoinerReconnectController.onPeerRecovered], so the timer is
+ * disarmed rather than merely ignored; and `SeamRoom.handleWindowExpired` reaches one verdict under
+ * one acquisition of the room lock, so the fan-out and the eviction can no longer disagree about
+ * whether the member came back. `WindowEpisodeIdentityTest` covers the other half — an expiry for a
+ * *superseded* episode, which liveness alone cannot reject.
  *
  * ### Why this is a mesh and why it must run past the window
  *
@@ -56,7 +63,7 @@ import kotlin.time.Instant
  * ### Provenance
  *
  * These arrived from the #2556 evidence branch (`evidence/2556-farewell-divergence`, draft #2559),
- * where they were [Ignore]d because that branch changed no production source and a green branch
+ * where they were `@Ignore`d because that branch changed no production source and a green branch
  * must not read as a repaired one. Here they are **live**, and they are the red this PR was written
  * against — the observed failure of each on `main` is quoted on it.
  */
@@ -129,7 +136,7 @@ class MeshRoomRecoveredWindowExpiryTest {
      * and the room then runs past the window's original deadline. Every peer must still agree that
      * the recovered member is seated.
      *
-     * Asserts the *correct* behaviour, so it fails on `main`:
+     * Asserts the *correct* behaviour, and this is what it observed before the fix:
      *
      * ```
      * #2556 ids: host=peer-1 dropped=peer-2 survivor=peer-3
@@ -282,20 +289,21 @@ class MeshRoomRecoveredWindowExpiryTest {
      * PeerLost never fires` separates them: a **long** (10 s) detector window against a **short**
      * (1 s) injected reconnect-controller window. Inside the advance the survivor's own
      * [us.tractat.kuilt.liveness.PartitionEvent.PeerLost] is structurally unreachable — and it is a
-     * joiner, so it has no controller and no `evictOnExpiredWindowIfPartitioned` backstop either.
+     * joiner, so it has no controller and no host-side eviction backstop either.
      * A joiner has exactly one remaining way to reach `Left(PartitionExpired)`: `handleFarewell` on
      * a host-sent `Farewell(expired = true)`.
      *
      * The host's own eviction is not that producer either — `handlePeerLost` does not fan a
-     * `Farewell` out at all, and `evictOnExpiredWindowIfPartitioned` (which does not fan one out
-     * either) declines here because the member is [Liveness.Connected]. On the host the **only**
-     * producer of `Farewell(expired = true)` is `runReconnectEventLoop`'s `WindowExpired` arm.
+     * `Farewell` out at all, and `handleWindowExpired`'s eviction declines here because the
+     * member is [Liveness.Connected]. On the host the **only** producer of
+     * `Farewell(expired = true)` is `handleWindowExpired`, off `runReconnectEventLoop`'s
+     * `WindowExpired` arm.
      *
      * This test is therefore the positive control for the mechanism *and* the refutation of rival
      * explanations 1 and 3 in #2556: it asserts the survivor still holds the member one tick
      * *before* the controller's deadline and observes the eviction land on the far side of it.
      *
-     * Observed on `main`:
+     * Observed before the fix:
      *
      * ```
      * #2556-B detectorWindowMs=10000 controllerWindowMs=1000

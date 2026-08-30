@@ -5,6 +5,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
@@ -179,6 +180,118 @@ class JoinerReconnectControllerTest {
             )
         }
 
+    @Test
+    fun `WindowExpired echoes the detection instant of the window it closes`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+
+            val eventsJob = async { ctrl.events.take(2).toList() }
+            // Not 0: an `at` of 0 is indistinguishable from an un-set field and from a `clock()`
+            // read (the injected clock returns 0), so it could not tell an echo from either.
+            ctrl.onPeerUnresponsive(peerA, at = DETECTED_AT)
+            testScheduler.advanceTimeBy(1)
+
+            ctrl.expire(peerA, at = DETECTED_AT + 10L)
+            testScheduler.advanceTimeBy(1)
+
+            val expired = assertIs<JoinerReconnectEvent.WindowExpired>(eventsJob.await()[1])
+            assertAll(
+                {
+                    assertEquals(
+                        DETECTED_AT,
+                        expired.detectedAt,
+                        "the expiry must name the episode it closes, echoed from onPeerUnresponsive",
+                    )
+                },
+                {
+                    assertEquals(
+                        DETECTED_AT + 10L,
+                        expired.at,
+                        "…and `at` stays the expiry instant, so the two are not the same field twice",
+                    )
+                },
+            )
+        }
+
+    // ── Recovery closes the window without expiring it ────────────────────────
+
+    /**
+     * The #2556 root cause, at the controller: a peer restored by the liveness detector alone never
+     * presents a token, so `tryResume` — the only other thing that closes a window — is never
+     * reached, and the timer stayed armed behind a peer that was already back. Its `WindowExpired`
+     * is what a room fans out as an authoritative farewell.
+     *
+     * The advance is a **full window past** the deadline, not up to it: a test that stopped at the
+     * deadline could not distinguish "disarmed" from "not yet fired".
+     */
+    @Test
+    fun `onPeerRecovered disarms the timer so no WindowExpired ever fires`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val events = mutableListOf<JoinerReconnectEvent>()
+            val collector = backgroundScope.launch { ctrl.events.collect { events += it } }
+            testScheduler.runCurrent()
+
+            ctrl.onPeerUnresponsive(peerA, at = 0L)
+            testScheduler.advanceTimeBy(1)
+            ctrl.onPeerRecovered(peerA, at = 1L)
+            testScheduler.advanceTimeBy(windowMs * 2)
+            testScheduler.runCurrent()
+            collector.cancel()
+
+            assertAll(
+                {
+                    assertEquals(
+                        1,
+                        events.size,
+                        "rig: exactly the WindowOpened must have been seen — observed $events",
+                    )
+                },
+                { assertIs<JoinerReconnectEvent.WindowOpened>(events.single()) },
+            )
+        }
+
+    /**
+     * Recovery closes the window **without expiring it**, and the difference is observable: an
+     * expiry would leave the window terminally closed, so the next `tryResume` would answer
+     * [ResumeResult.WindowClosed] — "re-join fresh" — for a peer whose window merely stopped being
+     * needed. Routing recovery through `expire` would pass the test above and fail this one.
+     */
+    @Test
+    fun `tryResume after onPeerRecovered is not answered as a closed window`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            ctrl.onPeerUnresponsive(peerA, at = 0L)
+            testScheduler.advanceTimeBy(1)
+
+            ctrl.onPeerRecovered(peerA, at = 1L)
+            testScheduler.advanceTimeBy(1)
+
+            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 2L)
+            assertEquals(
+                ResumeResult.Success,
+                ctrl.tryResume(token, at = 2L),
+                "a window whose peer recovered is closed, not expired — an in-flight resume must " +
+                    "still be honoured rather than told the seat is gone",
+            )
+        }
+
+    @Test
+    fun `onPeerRecovered for a peer with no window is a no-op`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val events = mutableListOf<JoinerReconnectEvent>()
+            val collector = backgroundScope.launch { ctrl.events.collect { events += it } }
+            testScheduler.runCurrent()
+
+            ctrl.onPeerRecovered(peerB, at = 5L)
+            testScheduler.advanceTimeBy(windowMs * 2)
+            testScheduler.runCurrent()
+            collector.cancel()
+
+            assertEquals(emptyList(), events, "no window was open, so nothing may be announced")
+        }
+
     // ── force-expire ──────────────────────────────────────────────────────────
 
     @Test
@@ -338,6 +451,9 @@ class JoinerReconnectControllerTest {
     private companion object {
         /** A drop instant the fixture's always-zero clock could never produce. */
         const val DROP_AT = 7_000L
+
+        /** The same, for the expiry echo — distinct from [DROP_AT] so neither can stand in. */
+        const val DETECTED_AT = 3_500L
     }
 }
 

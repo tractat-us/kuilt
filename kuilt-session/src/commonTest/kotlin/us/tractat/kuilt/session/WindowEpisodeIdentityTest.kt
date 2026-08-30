@@ -101,8 +101,22 @@ class WindowEpisodeIdentityTest {
         /** The `at` of every drop reported to this controller, in order — one per episode. */
         val detections: MutableList<Long> = mutableListOf()
 
+        /**
+         * The `at` of every **recovery** reported to this controller, in order (#2556).
+         *
+         * Recorded rather than ignored because it is a fact about the room worth asserting: a real
+         * hold policy would cancel its timer here, and a policy that is never told cannot. This
+         * fake deliberately does *not* stop announcing afterwards — that is what lets the stale
+         * expiry below be delivered on purpose rather than raced for.
+         */
+        val recoveries: MutableList<Long> = mutableListOf()
+
         /** Announcements whose `emit` returned, i.e. that the room's collector actually took. */
         var announcementsDelivered: Int = 0
+            private set
+
+        /** Expiries whose `emit` returned — counted apart from [announcementsDelivered]. */
+        var expiriesDelivered: Int = 0
             private set
 
         val subscriberCount: Int get() = _events.subscriptionCount.value
@@ -119,8 +133,20 @@ class WindowEpisodeIdentityTest {
             announcementsDelivered++
         }
 
+        /** Expire the window for the episode detected at [detectedAt]. Suspends until delivered. */
+        suspend fun announceExpiry(peerId: PeerId, detectedAt: Long, at: Long) {
+            _events.emit(
+                JoinerReconnectEvent.WindowExpired(peerId, at = at, detectedAt = detectedAt),
+            )
+            expiriesDelivered++
+        }
+
         override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
             ResumeResult.WindowNotYetOpen
+
+        override fun onPeerRecovered(peerId: PeerId, at: Long) {
+            recoveries += at
+        }
 
         override fun expire(peerId: PeerId, at: Long) = Unit
     }
@@ -261,6 +287,171 @@ class WindowEpisodeIdentityTest {
             )
         }
 
+    /**
+     * The same identity hole one event over, where the action it drives is **irreversible** (#2556).
+     *
+     * `SeamRoom.handleWindowExpired` fans out an authoritative `Farewell` and evicts the seat. Its
+     * only guard used to be *"is this peer partitioned right now?"* — the guard the test above
+     * proves insufficient for merely moving a deadline. Under a recover→re-partition cycle it
+     * answers **yes** for an expiry belonging to the episode the peer already came back from, so
+     * episode *N*'s expiry takes a seat whose episode *N+1* window has not run out. There is no
+     * re-admit path behind an admit fan-out, so nothing corrects it afterwards.
+     *
+     * **Control arm, on the same flow, immediately after.** The stale expiry must be refused and
+     * the very next expiry — differing *only* in naming the current episode — must still evict.
+     * Without it "the member is still seated" is equally green if the whole arm is dead, which is
+     * the shape the `handleWindowExpired` rewrite could plausibly have produced.
+     *
+     * **The bystander is not scenery.** The eviction this file is about happens on *other* members'
+     * rosters, via the `Farewell` fan-out, and the host declines it locally — so a host-only
+     * assertion is exactly the one #2556 slipped past. Both rosters are read on both arms.
+     */
+    @Test
+    fun aStaleEpisodesWindowExpiryDoesNotEvictAMemberWhoseCurrentWindowIsStillOpen() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val policy = RecordingHoldPolicy()
+            val loom = InMemoryLoom()
+            val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
+            val hostFactory = SeamRoomFactory(
+                loom,
+                backgroundScope,
+                clock,
+                fastConfig,
+                reconnectControllerFactory = { _, _, _ -> policy },
+            )
+            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
+
+            val host = hostFactory.host(Pattern("Host"))
+            val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
+            val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
+            val bystander = joinerFactory.join(InMemoryTag("Bystander"))
+            host.roster.first { it.size == 2 }
+            bystander.roster.first { it.size == 2 }
+            val dropped = droppedRoom.selfId
+            testScheduler.runCurrent()
+
+            // ── Episode N: drop, announce, recover ────────────────────────────
+            droppedLink.partition()
+            testScheduler.advanceTimeBy(DETECTION_BUDGET)
+            testScheduler.runCurrent()
+            val episodeOne = policy.detections.singleOrNull()
+            assertTrue(
+                episodeOne != null,
+                "rig: exactly ONE drop must have been reported by now — more means the detector is " +
+                    "flapping and there is no single episode N. Observed ${policy.detections}",
+            )
+            deliver(policy, dropped, detectedAt = episodeOne, expiresAt = EPISODE_ONE_DEADLINE)
+
+            droppedLink.heal()
+            testScheduler.advanceTimeBy(RECOVERY_BUDGET)
+            testScheduler.runCurrent()
+            val recoveredLiveness = host.livenessOf(dropped)
+
+            // ── Episode N+1 ───────────────────────────────────────────────────
+            droppedLink.partition()
+            testScheduler.advanceTimeBy(DETECTION_BUDGET)
+            testScheduler.runCurrent()
+            val episodeTwo = policy.detections.getOrNull(1)
+            assertTrue(
+                episodeTwo != null && policy.detections.size == 2,
+                "rig: exactly TWO drops must have been reported by now — one per outage. Observed " +
+                    "${policy.detections}",
+            )
+            deliver(policy, dropped, detectedAt = episodeTwo, expiresAt = EPISODE_TWO_DEADLINE)
+
+            // ── Episode N's EXPIRY, delivered late ────────────────────────────
+            deliverExpiry(policy, dropped, detectedAt = episodeOne, at = STALE_EXPIRY_AT)
+            val hostHoldsAfterStale = host.holds(dropped)
+            val bystanderHoldsAfterStale = bystander.holds(dropped)
+            val deadlineAfterStale = host.windowDeadlineMs(dropped)
+
+            // ── Control arm: the CURRENT episode's expiry, same flow ──────────
+            deliverExpiry(policy, dropped, detectedAt = episodeTwo, at = CONTROL_EXPIRY_AT)
+            val hostHoldsAfterControl = host.holds(dropped)
+            val bystanderHoldsAfterControl = bystander.holds(dropped)
+
+            assertAll(
+                {
+                    assertEquals(
+                        2,
+                        policy.expiriesDelivered,
+                        "rig: both expiries must have reached the room's collector — a test that " +
+                            "never delivered the stale one passes trivially",
+                    )
+                },
+                {
+                    assertNotEquals(
+                        episodeOne,
+                        episodeTwo,
+                        "rig: the two episodes must have distinct detection instants, or there is " +
+                            "nothing for episode identity to tell apart",
+                    )
+                },
+                {
+                    assertIs<Liveness.Connected>(
+                        recoveredLiveness,
+                        "sanity: the peer must have RECOVERED between the two episodes — without that " +
+                            "there is one episode and the stale expiry is not stale at all",
+                    )
+                },
+                {
+                    // The exact instant is the detector's business (recovery needs a ping, a pong,
+                    // and a later poll), so the property asserted is the SHAPE: told once, and told
+                    // between the two episodes. Both halves bite — an empty list is the pre-#2556
+                    // behaviour, and a recovery reported outside that interval would not be the one
+                    // that separates the episodes.
+                    val recovery = policy.recoveries.singleOrNull()
+                    assertTrue(
+                        recovery != null && recovery > episodeOne && recovery < episodeTwo,
+                        "#2556: the room must TELL its hold policy the peer came back, exactly once " +
+                            "and between the two episodes, so a policy that owns a timer can disarm " +
+                            "it — detections=${policy.detections} recoveries=${policy.recoveries}",
+                    )
+                },
+                {
+                    assertEquals(
+                        true,
+                        hostHoldsAfterStale,
+                        "#2556: episode N's expiry, delivered after episode N+1 opened, must not evict " +
+                            "the member from the host's own roster",
+                    )
+                },
+                {
+                    assertEquals(
+                        true,
+                        bystanderHoldsAfterStale,
+                        "#2556: nor may it reach the BYSTANDER as an authoritative Farewell — that is " +
+                            "the roster the host's own liveness guard never protected",
+                    )
+                },
+                {
+                    assertEquals(
+                        EPISODE_TWO_DEADLINE,
+                        deadlineAfterStale,
+                        "sanity: the member is still held to episode N+1's deadline, i.e. its current " +
+                            "window genuinely had NOT run out when the stale expiry was refused",
+                    )
+                },
+                {
+                    assertEquals(
+                        false,
+                        hostHoldsAfterControl,
+                        "control arm: the very next expiry on the SAME flow, differing only in naming " +
+                            "the CURRENT episode, must still evict — otherwise the assertions above are " +
+                            "green because the WindowExpired arm is dead, not because it is guarded",
+                    )
+                },
+                {
+                    assertEquals(
+                        false,
+                        bystanderHoldsAfterControl,
+                        "control arm: and the Farewell for a genuine expiry must still reach the " +
+                            "bystander (#1557)",
+                    )
+                },
+            )
+        }
+
     // ── Harness ───────────────────────────────────────────────────────────────
 
     /**
@@ -288,6 +479,29 @@ class WindowEpisodeIdentityTest {
         )
         testScheduler.runCurrent()
     }
+
+    /**
+     * Deliver one **expiry** and prove it landed in the room's collector before returning — the
+     * [deliver] contract, on the sibling event.
+     */
+    private suspend fun TestScope.deliverExpiry(
+        policy: RecordingHoldPolicy,
+        peerId: PeerId,
+        detectedAt: Long,
+        at: Long,
+    ) {
+        assertEquals(1, policy.subscriberCount, "rig: the room must still be collecting the policy's events")
+        val emission = backgroundScope.launch { policy.announceExpiry(peerId, detectedAt, at) }
+        testScheduler.runCurrent()
+        assertTrue(
+            emission.isCompleted,
+            "rig: the expiry (detectedAt=$detectedAt at=$at) was never taken by the room's collector " +
+                "— a rendezvous emit only completes once it has been",
+        )
+        testScheduler.runCurrent()
+    }
+
+    private fun Room.holds(peerId: PeerId): Boolean = roster.value.any { it.id == peerId }
 
     private fun Room.livenessOf(peerId: PeerId): Liveness =
         roster.value.first { it.id == peerId }.liveness
@@ -317,5 +531,10 @@ class WindowEpisodeIdentityTest {
         const val EPISODE_ONE_DEADLINE = 1_000_000L
         const val EPISODE_TWO_DEADLINE = 2_000_000L
         const val EPISODE_TWO_EXTENDED = 3_000_000L
+
+        // The `at` of an expiry is only ever logged, never compared — the episode gate reads
+        // `detectedAt`. Distinct values so a log line names which of the two arms produced it.
+        const val STALE_EXPIRY_AT = 4_000_000L
+        const val CONTROL_EXPIRY_AT = 5_000_000L
     }
 }

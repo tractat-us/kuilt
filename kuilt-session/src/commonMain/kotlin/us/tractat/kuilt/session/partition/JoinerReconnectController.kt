@@ -74,6 +74,37 @@ public interface JoinerReconnectController {
     ): ResumeResult.HostVerdict
 
     /**
+     * [peerId] became responsive again **without resuming** — close its reconnect window, and
+     * close it *without expiring it*.
+     *
+     * The counterpart of [onPeerUnresponsive] on the lane that has no token in it. A peer whose
+     * link merely blipped is restored by the liveness detector alone: it never presents a
+     * [ResumeToken], so [tryResume] — the only other thing that closes a window — is never reached,
+     * and before this method existed the window a blip opened stayed armed for its full duration
+     * behind a peer that was already back (#2556). What that stale timer then does is not
+     * cosmetic: its [JoinerReconnectEvent.WindowExpired] is what a room fans out as an
+     * authoritative farewell, so a healthy member was evicted from every roster but the host's.
+     *
+     * **The obligation: emit no [JoinerReconnectEvent.WindowExpired] for the episode this closes.**
+     * That is the whole contract — an implementation with no timer to cancel (a hold policy that
+     * only ever answers questions) satisfies it by doing nothing, and should say so rather than
+     * leave a reader guessing. [at] identifies the recovery instant for logging; it is **not** an
+     * expiry, so do not treat it as one.
+     *
+     * Distinct from [expire], deliberately, and not expressible in terms of it: [expire] *is* an
+     * expiry — it emits [JoinerReconnectEvent.WindowExpired] and leaves the window terminally
+     * closed, so a later [tryResume] answers [ResumeResult.WindowClosed] ("re-join fresh") where
+     * the honest answer for a recovered peer is that no window is pending at all. Routing recovery
+     * through it would re-file a blip as a kick.
+     *
+     * Idempotent, and a no-op for a peer with no open window.
+     */
+    public fun onPeerRecovered(
+        peerId: PeerId,
+        at: Long,
+    )
+
+    /**
      * Force-expires the reconnect window for [peerId] before the timer fires.
      *
      * Useful for explicit kick and in tests that need deterministic expiry
@@ -127,10 +158,31 @@ public sealed interface JoinerReconnectEvent {
         val at: Long,
     ) : JoinerReconnectEvent
 
-    /** The reconnect window for [peerId] expired without a valid resume. */
+    /**
+     * The reconnect window for [peerId] expired at epoch-millis [at] without a valid resume.
+     *
+     * [detectedAt] names **which partition episode expired**, on exactly the terms
+     * [WindowOpened.detectedAt] does: the `at` this controller was handed in
+     * [JoinerReconnectController.onPeerUnresponsive] for the drop that opened *this* window, echoed
+     * back unchanged. Never a clock read at the emit site — that would answer *when the expiry
+     * happened*, which every receiver already has as [at].
+     *
+     * **Why the identity matters more here than on [WindowOpened], not less (#2556).** A receiver
+     * without it can only ask whether the peer is partitioned *now* — the guard #1781 already
+     * proved insufficient for the announcement's *reversible* effect, moving a deadline. What a
+     * `WindowExpired` drives is not reversible: the room fans out an authoritative `Farewell` and
+     * evicts the seat, and there is no re-admit path behind it. So a late expiry for an episode the
+     * peer already recovered from — arriving while it is partitioned again in a *later* episode —
+     * would pass a liveness-only guard and take a seat whose window has not run out. Identity is
+     * what rejects it.
+     *
+     * Required and non-nullable for [WindowOpened.detectedAt]'s reason: a nullable field lets every
+     * existing emitter compile unchanged and keeps the defect, silently.
+     */
     public data class WindowExpired(
         val peerId: PeerId,
         val at: Long,
+        val detectedAt: Long,
     ) : JoinerReconnectEvent
 }
 
