@@ -548,10 +548,11 @@ internal class CompositeSeam(
             )
         }
 
-        // Every pump below is launched through [pumpIn], never a bare `.onEach { }.launchIn(plyScope)`.
-        // All five collect a **consumer-authored** `StateFlow`, and a flow that throws is an *upstream*
-        // throw: it ends the flow, so no `onEach`-body guard can see it, and it reaches the global handler
-        // and aborts the process on Kotlin/Native by the identical route a malformed frame did (#1788).
+        // Every one of the six pumps below is launched through [pumpIn], never a bare
+        // `.onEach { }.launchIn(plyScope)`. Five collect a **consumer-authored** `StateFlow` and the sixth
+        // an arbitrary consumer-authored `Flow<Swatch>`; a flow that throws is an *upstream* throw, which
+        // ends the flow, so no `onEach`-body guard can see it, and it reaches the global handler and aborts
+        // the process on Kotlin/Native by the identical route a malformed frame did (#1788).
         // Five hand-rolled copies of the body guard had already accumulated in this file and not one of
         // them covered that half — which is why the guard is now a property of how a pump is launched
         // rather than a convention each site has to remember (#1803).
