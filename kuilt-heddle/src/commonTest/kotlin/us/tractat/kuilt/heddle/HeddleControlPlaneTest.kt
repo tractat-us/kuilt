@@ -72,7 +72,7 @@ class HeddleControlPlaneTest {
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
             raft = fake, self = ReplicaId("solo"), scope = backgroundScope,
-            sink = sink, membership = NO_REMONITOR, barrier = NO_BARRIER, initial = EntitlementLedger.ZERO, root = root, incarnation = "boot-1",
+            sink = sink, membership = NO_REMONITOR, barrier = NO_BARRIER, initial = EntitlementLedger.ZERO, incarnation = "boot-1",
         )
         val c = GroupId("c")
         val eA = AttachmentId("eA")
@@ -120,8 +120,8 @@ class HeddleControlPlaneTest {
         sim.awaitLeader(among = majority)
 
         val holder = ReplicaId("acme")
-        val majMint = backgroundScope.async { planes.getValue(NodeId("v1")).submit(ControlCommand.Mint(holder, 100L)) }
-        val minMint = backgroundScope.async { planes.getValue(NodeId("v4")).submit(ControlCommand.Mint(holder, 100L)) }
+        val majMint = backgroundScope.async { planes.getValue(NodeId("v1")).submit(ControlCommand.Mint(root, holder, 100L)) }
+        val minMint = backgroundScope.async { planes.getValue(NodeId("v4")).submit(ControlCommand.Mint(root, holder, 100L)) }
 
         sim.awaitTrue("majority mint committed and applied across the majority") {
             majMint.isCompleted && majority.all { sinks.getValue(it).snapshot().mintedTotal() == 100L }
@@ -225,16 +225,16 @@ class HeddleControlPlaneTest {
         val holder = ReplicaId("acme")
 
         // Incarnation A mints 100.
-        val a = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "boot-A")
-        assertIs<ControlOutcome.Applied>(a.submit(ControlCommand.Mint(holder, 100L)))
+        val a = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-A")
+        assertIs<ControlOutcome.Applied>(a.submit(ControlCommand.Mint(root, holder, 100L)))
         assertEquals(100L, durable.snapshot().mintedTotal())
 
         // "Restart": a fresh control plane with a FRESH injected incarnation over the same log/ledger,
         // replaying the committed log, then minting 40. A reused incarnation would regenerate `#0` and
         // max-collide the 40 into the 100 (a lost mint); a fresh incarnation keeps them distinct.
-        val b = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "boot-B")
+        val b = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, durable, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-B")
         runCurrent() // let B replay the committed mint
-        assertIs<ControlOutcome.Applied>(b.submit(ControlCommand.Mint(holder, 40L)))
+        assertIs<ControlOutcome.Applied>(b.submit(ControlCommand.Mint(root, holder, 40L)))
         assertEquals(140L, durable.snapshot().mintedTotal(), "the second mint must not collide with the first")
     }
 
@@ -255,12 +255,55 @@ class HeddleControlPlaneTest {
             entry
         }
         val sink = RecordingSink()
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "boot-3")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-3")
 
-        val outcome = plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L))
+        val outcome = plane.submit(ControlCommand.Mint(root, ReplicaId("acme"), 100L))
         assertIs<ControlOutcome.Applied>(outcome)
         assertEquals(100L, sink.snapshot().mintedTotal(), "the retry must not double-mint")
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // One ledger, one tree (#1751): a mint naming a second root is refused, and the
+    // gate is decided from the LOG (the projection's committed root vs. the committed
+    // command's), never from a constructor argument — so every peer refuses the same act.
+    // ═══════════════════════════════════════════════════════════════════════════
+    @Test
+    fun aMintNamingASecondRootIsRefusedAndNeverReachesTheProjection() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
+            val sink = RecordingSink()
+            val plane = HeddleControlPlane(
+                fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER,
+                EntitlementLedger.ZERO, "boot-one-root",
+            )
+            val acme = ReplicaId("acme")
+            // The first mint establishes the tree — there is no incumbent root to disagree with.
+            assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(root, acme, 100L)))
+            // A second act at the SAME root is ordinary supply and must still be admitted, so the
+            // gate is not simply "at most one mint".
+            assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(root, acme, 40L)))
+
+            val refused = plane.submit(ControlCommand.Mint(GroupId("otherRoot"), acme, 500L))
+            val conflict = assertIs<ControlOutcome.Conflict>(refused, "a second root must not be admitted")
+            val reason = assertIs<ControlConflict.Refused>(conflict.conflict)
+            assertAll(
+                { assertTrue("root" in reason.reason && "otherRoot" in reason.reason, "names both roots: $reason") },
+                {
+                    assertEquals(
+                        listOf(root),
+                        sink.snapshot().mintedRoots(),
+                        "the refused act must not reach the data plane",
+                    )
+                },
+                { assertEquals(140L, sink.snapshot().mintedTotal(), "…and must mint nothing") },
+                {
+                    assertTrue(
+                        sink.snapshot().validate().none { it is LedgerConflict.MultipleRoots },
+                        "the state the report exists for was never constructed",
+                    )
+                },
+            )
+        }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // BLOCKER 2 (ergonomics): a bounded submit surfaces a leader crash as a timeout
@@ -270,9 +313,9 @@ class HeddleControlPlaneTest {
     fun submitTimeoutSurfacesLeaderCrash() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         fake.proposeBehavior = { awaitCancellation() } // a forwarded proposal that never commits (leader crash)
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "boot-4")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-4")
         assertFailsWith<TimeoutCancellationException> {
-            plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L), timeout = 1.seconds)
+            plane.submit(ControlCommand.Mint(root, ReplicaId("acme"), 100L), timeout = 1.seconds)
         }
     }
 
@@ -350,7 +393,7 @@ class HeddleControlPlaneTest {
     @Test
     fun prepareConflictingRecordIsRefusedNotSilentlyApplied() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "boot-prep")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-prep")
         val id = AttachmentId("e")
         val rec = AttachmentRecord(id, root, GroupId("c"), Weight.ONE)
         val differentRec = AttachmentRecord(id, GroupId("otherParent"), GroupId("c"), Weight.ONE)
@@ -371,7 +414,7 @@ class HeddleControlPlaneTest {
     @Test
     fun activateAndCloseOfMissingOrRetiredEdgeAreRefused() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
-        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "boot-refuse")
+        val plane = HeddleControlPlane(fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-refuse")
         val unknown = AttachmentId("never-prepared")
 
         // Activate/Close of an edge the projection has never seen: refused, not applied.
@@ -476,7 +519,7 @@ class HeddleControlPlaneTest {
         }
         // Control-plane topology: e1,e2 active; then close+retire e1 with a LAGGED (empty) drain witness —
         // the projection has no data-plane counters, so its outstanding reads 0 and the retire is admitted.
-        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Mint(p3, 10L)) }
+        awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Mint(root, p3, 10L)) }
         awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(rec(e1, root, g))) }
         awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Activate(e1)) }
         awaitOutcome(sim, backgroundScope) { v1.submit(ControlCommand.Prepare(rec(e2, g, h))) }
@@ -563,7 +606,7 @@ class HeddleControlPlaneTest {
         val plane = HeddleControlPlane(
             raft = fake, self = p3, scope = backgroundScope, sink = sink, membership = NO_REMONITOR,
             barrier = ControlBarrierSink { edge -> sink.snapshot().baseFinalsOn(edge, p3) },
-            initial = EntitlementLedger.ZERO, root = root, incarnation = "boot-reloc-gate",
+            initial = EntitlementLedger.ZERO, incarnation = "boot-reloc-gate",
         )
         val child = GroupId("g")
         val old = AttachmentId("eOld") // root → g, retired
@@ -624,7 +667,7 @@ class HeddleControlPlaneTest {
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
             raft = fake, self = solo, scope = backgroundScope, sink = sink, membership = NO_REMONITOR,
-            barrier = NO_BARRIER, initial = EntitlementLedger.ZERO, root = root, incarnation = "boot-ack-gate",
+            barrier = NO_BARRIER, initial = EntitlementLedger.ZERO, incarnation = "boot-ack-gate",
         )
         val edge = AttachmentId("e")
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(solo)))
@@ -832,7 +875,7 @@ class HeddleControlPlaneTest {
     fun twoProposersOfOneIdAreOrderedFirstWinsAndDoNotStarveTheChild() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val plane = HeddleControlPlane(
-            fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "boot-two-fronts",
+            fake, ReplicaId("solo"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-two-fronts",
         )
         val id = AttachmentId("contested")
         val child = GroupId("c")
@@ -898,10 +941,10 @@ class HeddleControlPlaneTest {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
-            fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "boot-1717",
+            fake, ReplicaId("solo"), backgroundScope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-1717",
         )
 
-        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(ReplicaId("acme"), 100L)))
+        assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(root, ReplicaId("acme"), 100L)))
         val projectionBefore = plane.projectionSnapshot()
         val indexBefore = plane.rosterSnapshot().appliedIndex
 
@@ -945,7 +988,7 @@ class HeddleControlPlaneTest {
     )
 
     private fun plane(raft: RaftNode, id: NodeId, sink: ControlLedgerSink, scope: CoroutineScope) =
-        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "inc-${id.value}")
+        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "inc-${id.value}")
 
     /**
      * A plane whose §6.2 barrier answers from its **own** data-plane view for its **own** replica —
@@ -956,7 +999,7 @@ class HeddleControlPlaneTest {
         return HeddleControlPlane(
             raft, replica, scope, sink, NO_REMONITOR,
             ControlBarrierSink { edge -> sink.snapshot().baseFinalsOn(edge, replica) },
-            EntitlementLedger.ZERO, root, "inc-${id.value}",
+            EntitlementLedger.ZERO, "inc-${id.value}",
         )
     }
 

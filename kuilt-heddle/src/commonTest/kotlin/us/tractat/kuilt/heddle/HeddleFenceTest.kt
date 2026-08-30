@@ -433,7 +433,7 @@ class HeddleFenceTest {
             HeddleControlPlane(
                 sim.nodes.getValue(id), replica, backgroundScope, sinks.getValue(id), ControlMembershipSink { },
                 ControlBarrierSink { edge -> sinks.getValue(id).snapshot().baseFinalsOn(edge, replica) },
-                EntitlementLedger.ZERO, root, "inc-${id.value}",
+                EntitlementLedger.ZERO, "inc-${id.value}",
             )
         }
         sim.awaitLeader()
@@ -443,7 +443,7 @@ class HeddleFenceTest {
         for (id in ids) {
             applied(sim, backgroundScope) { planes.getValue(id).submit(ControlCommand.Enroll(ReplicaId(id.value))) }
         }
-        applied(sim, backgroundScope) { opener.submit(ControlCommand.Mint(p3, 10L)) }
+        applied(sim, backgroundScope) { opener.submit(ControlCommand.Mint(root, p3, 10L)) }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Prepare(AttachmentRecord(e1, root, g, Weight.ONE))) }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Activate(e1)) }
         applied(sim, backgroundScope) { opener.submit(ControlCommand.Close(e1)) }
@@ -610,7 +610,7 @@ class HeddleFenceTest {
             raft = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader),
             self = self, scope = backgroundScope, sink = sink, membership = ControlMembershipSink { },
             barrier = ControlBarrierSink { edge -> sink.snapshot().baseFinalsOn(edge, self) },
-            initial = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "cross-parent-genesis"), root = root,
+            initial = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "cross-parent-genesis"),
             incarnation = "cross-parent",
         )
         fun rec(id: AttachmentId, parent: GroupId, child: GroupId) =
@@ -619,7 +619,7 @@ class HeddleFenceTest {
             assertIs<ControlOutcome.Applied>(plane.submit(command), "expected Applied for $command")
 
         commit(ControlCommand.Enroll(self))
-        commit(ControlCommand.Mint(self, 10L))
+        commit(ControlCommand.Mint(root, self, 10L))
         for ((id, parent, child) in listOf(Triple(ea, root, a), Triple(eb, root, b), Triple(e5, a, g))) {
             commit(ControlCommand.Prepare(rec(id, parent, child)))
             commit(ControlCommand.Activate(id))
@@ -697,13 +697,13 @@ class HeddleFenceTest {
         fun peerPlane(replica: ReplicaId): HeddleControlPlane = HeddleControlPlane(
             raft = raft, self = replica, scope = scope, sink = ControlLedgerSink { },
             membership = ControlMembershipSink { }, barrier = ControlBarrierSink { SlotFinals.ZERO },
-            initial = initial, root = root, incarnation = "peer-${replica.value}",
+            initial = initial, incarnation = "peer-${replica.value}",
         )
 
         /** Mint 10 at the root and let the ordinary scheduler delegate it down `e1` into the leaf `g`. */
         suspend fun mintAndDelegateDownE1() {
             check(plane.submit(ControlCommand.Enroll(self)) is ControlOutcome.Applied)
-            check(plane.submit(ControlCommand.Mint(self, 10L)) is ControlOutcome.Applied)
+            check(plane.submit(ControlCommand.Mint(root, self, 10L)) is ControlOutcome.Applied)
             check(plane.submit(ControlCommand.Prepare(rec(e1, root, g))) is ControlOutcome.Applied)
             check(plane.submit(ControlCommand.Activate(e1)) is ControlOutcome.Applied)
             node.advertise(e1, Demand(targetOutstanding = 10L, maximumUsefulGrant = 10L))
@@ -735,7 +735,7 @@ class HeddleFenceTest {
         val plane = HeddleControlPlane(
             raft = fake, self = self, scope = backgroundScope, sink = node.asControlSink(),
             membership = node.asMembershipSink(), barrier = node.asBarrierSink(),
-            initial = initial, root = root, incarnation = "fence-boot",
+            initial = initial, incarnation = "fence-boot",
         )
         return Fixture(self, node, plane, fake, initial, backgroundScope, root, g, e1, e3)
     }

@@ -198,14 +198,14 @@ class HeddleRosterTest {
             val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
             val solo = ReplicaId("solo")
             val author = HeddleControlPlane(
-                fake, solo, backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "boot-author",
+                fake, solo, backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-author",
             )
             assertIs<ControlOutcome.Applied>(author.submit(ControlCommand.Enroll(a)))
             assertIs<ControlOutcome.Applied>(author.submit(ControlCommand.Enroll(solo)))
             assertIs<ControlOutcome.Applied>(author.submit(ControlCommand.Depart(solo)))
 
             val observer = HeddleControlPlane(
-                fake, ReplicaId("observer"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "boot-obs",
+                fake, ReplicaId("observer"), backgroundScope, RecordingSink(), NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "boot-obs",
             )
             runCurrent() // let the observer replay the committed prefix
             assertEquals(author.rosterSnapshot(), observer.rosterSnapshot())
@@ -218,7 +218,7 @@ class HeddleRosterTest {
         // stands in for the slice-3 `Quiesce` — this slice ships the quantifier, not the fence.)
         val plane = soloPlane(backgroundScope, RecordingSink())
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(a)))
-        val barrier = plane.submit(ControlCommand.Mint(a, 1L))
+        val barrier = plane.submit(ControlCommand.Mint(root, a, 1L))
         assertIs<ControlOutcome.Applied>(barrier)
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Enroll(b)))
 
@@ -364,7 +364,7 @@ class HeddleRosterTest {
     ) = HeddleControlPlane(
         raft = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader),
         self = ReplicaId("solo"), scope = scope, sink = sink, membership = membership, barrier = NO_BARRIER,
-        initial = EntitlementLedger.ZERO, root = root, incarnation = "boot-roster",
+        initial = EntitlementLedger.ZERO, incarnation = "boot-roster",
     )
 
     private fun config(seed: Int) = HeddleConfig(
@@ -377,7 +377,7 @@ class HeddleRosterTest {
     )
 
     private fun plane(raft: RaftNode, id: NodeId, sink: ControlLedgerSink, scope: CoroutineScope) =
-        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, root, "inc-${id.value}")
+        HeddleControlPlane(raft, ReplicaId(id.value), scope, sink, NO_REMONITOR, NO_BARRIER, EntitlementLedger.ZERO, "inc-${id.value}")
 
     /** Launch [block] on [scope], pump [sim]'s virtual time until it commits, and require it Applied. */
     private suspend fun applied(

@@ -65,7 +65,13 @@ import kotlin.time.Instant
  * @param seam the data-plane fabric this peer participates over.
  * @param self this peer's replica identity; matches [Seam.selfId] by string value.
  * @param raft the control plane — the required consensus log mint and reshape serialize through.
- * @param root the root group of the fairness tree (the handle consumers build [AttachmentRecord]s against).
+ * @param root the root group of the fairness tree (the handle consumers build [AttachmentRecord]s
+ *   against), and the group every mint this peer proposes credits its supply at. **Every peer must
+ *   pass an identical value** — one ledger describes one tree (#1751). A peer that passes a
+ *   different one is not silently tolerated: its root rides the committed `Mint` bytes, so once any
+ *   supply is committed the disagreeing act is refused with a [ControlConflict.Refused] naming both
+ *   roots, identically on every peer. Unlike [incarnation] this is a *shared* constant, not a
+ *   per-peer one — deriving it per process is the mistake to avoid.
  * @param clock the injected wall clock, used for demand TTL and liveness timing.
  * @param config the policy caps, §8.2 bound cap, TTL, and replication/liveness/RNG knobs.
  * @param incarnation a token that MUST be **fresh on every process incarnation** of this peer — a boot
@@ -109,10 +115,9 @@ public fun CoroutineScope.heddleGoverned(
         membership = node.asMembershipSink(),
         barrier = node.asBarrierSink(),
         initial = initialLedger,
-        root = root,
         incarnation = incarnation,
     )
-    return GovernedHeddleNode(node, control)
+    return GovernedHeddleNode(node, control, root)
 }
 
 private const val GOVERNED_GENESIS_NONCE: String = "heddle-governed-genesis"
@@ -134,6 +139,7 @@ private const val GOVERNED_GENESIS_NONCE: String = "heddle-governed-genesis"
 public class GovernedHeddleNode internal constructor(
     private val node: HeddleNode,
     private val control: HeddleControlPlane,
+    private val root: GroupId,
 ) : FairShareExecution {
 
     /** The §6.5.3 boot gate. Set once, by [enroll]; a restart starts a fresh incarnation closed. */
@@ -237,10 +243,15 @@ public class GovernedHeddleNode internal constructor(
      * but a timeout only cancels the await, not the proposal: the act may still commit, and a fresh
      * `mint` call is a *new* act (a retried mint can double-mint), so resubmit only if a read confirms
      * the first did not land. Returns [ControlOutcome.Applied].
+     *
+     * The supply is credited at this node's configured root, which rides the committed act. If the
+     * log already carries supply at a *different* root — i.e. this peer was configured with a root
+     * its cluster does not share — the act is refused rather than applied, so a misconfiguration
+     * surfaces as a [ControlOutcome.Conflict] instead of a second tree in one ledger (#1751).
      */
     public suspend fun mint(holder: ReplicaId, amount: Long, timeout: Duration? = null): ControlOutcome {
         require(amount >= 0L) { "mint amount must be non-negative, was $amount" }
-        return control.submit(ControlCommand.Mint(holder, amount), timeout)
+        return control.submit(ControlCommand.Mint(root, holder, amount), timeout)
     }
 
     /**
