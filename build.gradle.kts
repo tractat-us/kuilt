@@ -897,10 +897,17 @@ val forbidUnboundedSwatchDelivery by tasks.registering {
 // `ServerSocket(0)` + `.use` + a `localPort` read inside the first few lines of the block, i.e. "the
 // only thing taken out of this socket is its number, and then it is closed".
 //
-// The allowlist is the #1590 backlog, not an escape hatch: `TcpLoom`/mDNS sites need their host to
-// bind 0 itself (a per-site change, not a mechanical one) and the `*ConformanceTest` files are held
-// out to avoid colliding with in-flight work. Every entry is a known site awaiting conversion — do
-// NOT add a new file here; bind 0 instead.
+// The allowlist was the #1590 backlog, never an escape hatch. It is now EMPTY (#1749): every known
+// site is converted, so the guard applies to the whole tree with no exceptions. Keep it that way —
+// an entry here is a file the guard cannot see, so do NOT add one; bind 0 instead.
+//
+// The last group to land was the mDNS tests, deferred because the port is an *input* to the
+// advertisement and the `embeddedServer` module lambda runs during `start()`, strictly before
+// `resolvedConnectors()` can answer. The restructure that unblocks them: give the lambda no body,
+// and mount the route on `server.application` AFTER `start()`, once the real port is known.
+// `EmbeddedServer.application` is the same `Application` the lambda receives, and `KtorServerLoom`'s
+// route + plugin install works on a started application — `MDNSConformanceTest` drives all 30
+// `SeamConformanceSuite` cases over a route mounted that way.
 val forbidPortProbeRebind by tasks.registering {
     group = "verification"
     description = "Fails if a source probes a free port with ServerSocket(0) and then re-binds it (#1590)."
@@ -913,19 +920,9 @@ val forbidPortProbeRebind by tasks.registering {
     outputs.file(stamp)
     outputs.cacheIf { true }
     val rootPath = rootDir
-    // Known #1590 sites not yet converted. Shrinks to empty as they land; never grows.
-    val allowlist = setOf(
-        // Held out of the sweep to avoid a merge collision with in-flight conformance work.
-        "WebSocketConformanceTest.kt",
-        "MDNSConformanceTest.kt",
-        // mDNS: the port is an *input* to the advertisement built inside the embeddedServer module
-        // lambda, so it must be known before start() — needs a restructure, not a one-line change.
-        "MDNSLoomCapabilityTest.kt",
-        "MDNSMultiAcceptHostTest.kt",
-        "MDNSRoomKeySourcingTest.kt",
-        "MDNSSelfDiscoveryFilterTest.kt",
-        "MDNSSelfDiscoveryMulticastTest.kt",
-    )
+    // The #1590 backlog, drained to empty by #1749. It shrank as sites landed and never grows: a
+    // name here is a file this guard stops reading, so a new one is a regression, not a deferral.
+    val allowlist = emptySet<String>()
     doLast {
         // Matches the aliased import too (`JvmServerSocket(0)` contains `ServerSocket(0)`).
         val probe = Regex("""ServerSocket\(\s*0\s*\)""")

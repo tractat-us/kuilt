@@ -14,7 +14,6 @@ import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Tag
-import java.net.ServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
@@ -47,8 +46,11 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
 
     @BeforeTest
     fun setUp() {
-        port = ServerSocket(0).use { it.localPort }
-        server = embeddedServer(Netty, port = port) {
+        // Bind 0 and read the port back from the *live* connector. Probing a free port with a
+        // throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU:
+        // the probe closes before Netty binds, so another process on a loaded box can take the port
+        // in that window (`BindException: Address already in use` — #1590). Binding 0 has no window.
+        server = embeddedServer(Netty, port = 0) {
             // BOTH looms take the observer, not just the client one. The suite's
             // `wovenSeamCapabilityIsHonest` reads the **host** seam — which is this server loom's —
             // so wiring only the client leaves the awaited transition unreachable and the test
@@ -56,6 +58,7 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
             serverLoom = KtorServerLoom(this, serverPath, connectivity = connectivity)
         }
         server.start(wait = false)
+        port = runBlocking { server.engine.resolvedConnectors().first().port }
         httpClient = HttpClient(OkHttp) { install(ClientWebSockets) }
     }
 

@@ -17,7 +17,6 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
-import java.net.ServerSocket
 import javax.jmdns.ServiceInfo
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -109,22 +108,32 @@ class MDNSRoomKeySourcingTest {
 
     // ── Harness ──────────────────────────────────────────────────────────────
 
-    /** Stands up a [MDNSMultiAcceptHost] for [pattern], advertises once, returns the captured record. */
+    /**
+     * Stands up a [MDNSMultiAcceptHost] for [pattern], advertises once, returns the captured record.
+     *
+     * Binds port 0 and reads the port back off the *live* connector, then mounts the host on the
+     * already-started [io.ktor.server.application.Application]. Probing a free port with a throwaway
+     * `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU: the probe socket
+     * is closed before Netty binds, so on a loaded box another process can take the port in that
+     * window (`BindException: Address already in use` — #1590, #1749). Binding 0 has no window.
+     *
+     * The port is an **input** to the host — it is the very TXT field these tests read back — so the
+     * host cannot be built inside the `embeddedServer` module lambda: that lambda runs during
+     * `start()`, strictly before `resolvedConnectors()` can answer.
+     */
     private suspend fun advertiseMultiAccept(pattern: Pattern): ServiceInfo {
-        val port = ServerSocket(0).use { it.localPort }
         val jmdns = CapturingJmDNS()
-        lateinit var host: MDNSMultiAcceptHost
-        val server = embeddedServer(Netty, port = port) {
-            host = MDNSMultiAcceptHost(
-                serviceType = MDNSServiceType("_kuilt-test._tcp"),
-                application = this,
-                jmdns = jmdns,
-                port = port,
-                pattern = pattern,
-                wsPath = "/ws/room-source",
-            )
-        }.also { servers += it }
+        val server = embeddedServer(Netty, port = 0) { /* route mounted post-start, see KDoc */ }
+            .also { servers += it }
         server.start(wait = false)
+        val host = MDNSMultiAcceptHost(
+            serviceType = MDNSServiceType("_kuilt-test._tcp"),
+            application = server.application,
+            jmdns = jmdns,
+            port = server.engine.resolvedConnectors().first().port,
+            pattern = pattern,
+            wsPath = "/ws/room-source",
+        )
         host.advertise()
         return assertNotNull(jmdns.lastRegistered, "advertise() must register a service")
     }
@@ -134,23 +143,25 @@ class MDNSRoomKeySourcingTest {
      * registers the mDNS service and then blocks until the first joiner connects, so a real
      * OkHttp joiner is driven concurrently to let `weave` complete. The registration lands
      * during `weave` (before the block); the captured record is returned once both sides settle.
+     *
+     * Port handling is [advertiseMultiAccept]'s: bind 0, read the port back off the live connector,
+     * mount the factory on the started [io.ktor.server.application.Application] (#1590, #1749).
      */
     private suspend fun advertisePeerLink(pattern: Pattern): ServiceInfo {
-        val port = ServerSocket(0).use { it.localPort }
         val jmdns = CapturingJmDNS()
         val wsPath = "/ws/room-source-link"
-        lateinit var factory: MDNSPeerLinkFactory
-        val server = embeddedServer(Netty, port = port) {
-            factory = MDNSPeerLinkFactory(
-                serviceType = MDNSServiceType("_kuilt-test._tcp"),
-                application = this,
-                jmdns = jmdns,
-                port = port,
-                wsPath = wsPath,
-                httpClientFactory = { HttpClient(OkHttp) { install(ClientWebSockets) }.also { clients += it } },
-            )
-        }.also { servers += it }
+        val server = embeddedServer(Netty, port = 0) { /* route mounted post-start, see KDoc */ }
+            .also { servers += it }
         server.start(wait = false)
+        val port = server.engine.resolvedConnectors().first().port
+        val factory = MDNSPeerLinkFactory(
+            serviceType = MDNSServiceType("_kuilt-test._tcp"),
+            application = server.application,
+            jmdns = jmdns,
+            port = port,
+            wsPath = wsPath,
+            httpClientFactory = { HttpClient(OkHttp) { install(ClientWebSockets) }.also { clients += it } },
+        )
 
         return coroutineScope {
             // weave(New) registers then blocks awaiting a joiner — connect one so it completes.

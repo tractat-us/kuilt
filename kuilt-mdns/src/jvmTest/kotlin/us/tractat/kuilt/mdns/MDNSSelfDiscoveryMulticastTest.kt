@@ -16,7 +16,6 @@ import org.junit.Before
 import org.junit.Test
 import us.tractat.kuilt.core.Rendezvous
 import java.net.NetworkInterface
-import java.net.ServerSocket
 import javax.jmdns.JmDNS
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -86,7 +85,6 @@ class MDNSSelfDiscoveryMulticastTest {
     fun `a single advertise+browse device discovers its own service over real multicast and refuses to dial it`() {
         val jmdns = requireNotNull(jmdns)
         val serviceType = MDNSServiceType("_kuilt-self._tcp")
-        val port = ServerSocket(0).use { it.localPort }
         val wsPath = "/ws/self-discovery-multicast"
 
         // Build the factory (its KtorServerLoom mints the local selfPeerId). embeddedServer is called
@@ -94,18 +92,25 @@ class MDNSSelfDiscoveryMulticastTest {
         // runBlocking receiver the CoroutineScope.embeddedServer extension parents the Netty job to the
         // enclosing runBlocking, which then deadlocks on its own server child. Here it binds to the
         // top-level overload; the server is a root job we stop in tearDown.
-        lateinit var factory: MDNSPeerLinkFactory
-        val server = embeddedServer(Netty, port = port) {
-            factory = MDNSPeerLinkFactory(
-                serviceType = serviceType,
-                application = this,
-                jmdns = jmdns,
-                port = port,
-                wsPath = wsPath,
-                httpClientFactory = { HttpClient(OkHttp) { install(ClientWebSockets) }.also { clients += it } },
-            )
-        }.also { servers += it }
+        //
+        // Bind 0 and read the port back off the *live* connector. Probing a free port with a
+        // throwaway `ServerSocket(0).use { it.localPort }` and re-binding the number is a TOCTOU: the
+        // probe closes before Netty binds, so another process can take the port in that window
+        // (#1590, #1749). The port is an input to the factory (it is the advertised port this test
+        // then discovers over real multicast), so the factory is built after start() — the module
+        // lambda runs strictly before resolvedConnectors() can answer.
+        val server = embeddedServer(Netty, port = 0) { /* route mounted post-start, see above */ }
+            .also { servers += it }
         server.start(wait = false)
+        val port = runBlocking { server.engine.resolvedConnectors().first().port }
+        val factory = MDNSPeerLinkFactory(
+            serviceType = serviceType,
+            application = server.application,
+            jmdns = jmdns,
+            port = port,
+            wsPath = wsPath,
+            httpClientFactory = { HttpClient(OkHttp) { install(ClientWebSockets) }.also { clients += it } },
+        )
 
         val selfId = factory.selfPeerId
 

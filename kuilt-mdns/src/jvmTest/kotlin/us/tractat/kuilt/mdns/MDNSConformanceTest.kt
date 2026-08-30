@@ -16,7 +16,6 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Tag
-import java.net.ServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.assertFailsWith
@@ -66,20 +65,34 @@ class MDNSConformanceTest : SeamConformanceSuite() {
     private val joinerClients = mutableListOf<HttpClient>()
     private val openSeams = mutableListOf<Seam>()
 
+    /**
+     * Binds port 0 and reads the port back off the *live* connector, then mounts the host factory
+     * on the already-started [io.ktor.server.application.Application].
+     *
+     * Probing a free port with a throwaway `ServerSocket(0).use { it.localPort }` and re-binding the
+     * number is a TOCTOU: the probe socket is closed before Netty binds, so on a loaded box another
+     * process can take the port in that window and `@BeforeTest` dies with `BindException: Address
+     * already in use` on a PR that cannot have caused it (#1590, #1749). Binding 0 has no window.
+     *
+     * The port is an **input** to the factory (it goes in the advertised record), so the factory
+     * cannot be built inside the `embeddedServer` module lambda — that lambda runs during `start()`,
+     * strictly before `resolvedConnectors()` can answer. [io.ktor.server.engine.EmbeddedServer.application]
+     * is the same `Application` the lambda receives, and mounting a route on it after `start()`
+     * works: [newLoomPair] has always built its joiner factory that way.
+     */
     @BeforeTest
     fun setUp() {
-        port = ServerSocket(0).use { it.localPort }
-        server = embeddedServer(Netty, port = port) {
-            hostFactory = MDNSPeerLinkFactory(
-                serviceType = MDNSServiceType("_kuilt-test._tcp"),
-                application = this,
-                jmdns = CapturingJmDNS(),
-                port = port,
-                wsPath = hostWsPath,
-                httpClientFactory = ::freshJoinerClient,
-            )
-        }
+        server = embeddedServer(Netty, port = 0) { /* routes mounted post-start, see KDoc */ }
         server.start(wait = false)
+        port = runBlocking { server.engine.resolvedConnectors().first().port }
+        hostFactory = MDNSPeerLinkFactory(
+            serviceType = MDNSServiceType("_kuilt-test._tcp"),
+            application = server.application,
+            jmdns = CapturingJmDNS(),
+            port = port,
+            wsPath = hostWsPath,
+            httpClientFactory = ::freshJoinerClient,
+        )
     }
 
     /**
