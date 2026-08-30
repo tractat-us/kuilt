@@ -2,6 +2,7 @@ package us.tractat.kuilt.otel.logging
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.test.runTest
+import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.store.InMemoryDurableStore
@@ -106,6 +107,99 @@ class AttributesResolveAtEdgeTest {
     }
 
     /**
+     * Regression for #1745. The trace/sampling gate is the *other* thing that can
+     * decide an event produces no record, and it too must run before the mapper: a
+     * consumer who wires a provider with [UntracedPolicy.DROP] is by definition
+     * expecting most lines to be discarded, so that is exactly the configuration in
+     * which paying a mapper on the application's logging thread is pure waste.
+     *
+     * The assertion is on the **mapper invocation count**, not on the record: the
+     * event is dropped either way, so "no record was exported" passes before and
+     * after the fix. The second arm — a sampled trace pays the mapper exactly once —
+     * keeps the first from being satisfied by a mapper that is never called at all.
+     */
+    @Test
+    fun mapperIsNotAppliedToAnUntracedEventUnderDropPolicy() = runTest {
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore())
+        var mapperCalls = 0
+        val config = CaptureConfig(
+            untracedPolicy = UntracedPolicy.DROP,
+            attributeMapper = { event ->
+                mapperCalls++
+                defaultAttributeMapper(event)
+            },
+        )
+
+        var current: ActiveTrace? = null
+        val installation = installLogCapture(
+            exporter, config, fixedClock, Random(0), backgroundScope, TraceContextProvider { current },
+        )
+        try {
+            val logger = KotlinLogging.logger("com.example.Edge")
+            logger.info { "outside any trace" }
+            testScheduler.runCurrent()
+            assertAll(
+                { assertEquals(0, mapperCalls, "an untraced event under DROP must not pay the mapper at the edge") },
+                { assertTrue(exporter.snapshot().toList().isEmpty(), "an untraced event under DROP produces no record") },
+            )
+
+            current = SAMPLED_TRACE
+            logger.info { "inside a sampled trace" }
+            testScheduler.runCurrent()
+            assertAll(
+                { assertEquals(1, mapperCalls, "a sampled event still pays the mapper, exactly once") },
+                { assertEquals(1, exporter.snapshot().toList().size) },
+            )
+        } finally {
+            installation.close()
+        }
+    }
+
+    /**
+     * The unsampled half of the same gate (#1745), under the **default**
+     * [UntracedPolicy.CAPTURE] — an active-but-unsampled trace is dropped whatever
+     * the untraced policy says, so it must not pay the mapper either.
+     *
+     * The second arm pins that `CAPTURE` is otherwise untouched: an untraced line
+     * still produces a record, and still pays the mapper exactly once.
+     */
+    @Test
+    fun mapperIsNotAppliedToAnUnsampledTrace() = runTest {
+        val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore())
+        var mapperCalls = 0
+        val config = CaptureConfig(
+            attributeMapper = { event ->
+                mapperCalls++
+                defaultAttributeMapper(event)
+            },
+        )
+
+        var current: ActiveTrace? = SAMPLED_TRACE.copy(sampled = false)
+        val installation = installLogCapture(
+            exporter, config, fixedClock, Random(0), backgroundScope, TraceContextProvider { current },
+        )
+        try {
+            val logger = KotlinLogging.logger("com.example.Edge")
+            logger.info { "inside an unsampled trace" }
+            testScheduler.runCurrent()
+            assertAll(
+                { assertEquals(0, mapperCalls, "an unsampled trace must not pay the mapper at the edge") },
+                { assertTrue(exporter.snapshot().toList().isEmpty(), "an unsampled trace produces no record") },
+            )
+
+            current = null
+            logger.info { "outside any trace, CAPTURE policy" }
+            testScheduler.runCurrent()
+            assertAll(
+                { assertEquals(1, mapperCalls, "CAPTURE keeps untraced lines, so the mapper is still paid") },
+                { assertEquals(1, exporter.snapshot().toList().size) },
+            )
+        } finally {
+            installation.close()
+        }
+    }
+
+    /**
      * Resolving on the caller puts consumer code on the application's logging path,
      * so a throwing mapper must not escape into the `log()` call. It drops that one
      * record — the same outcome as when the mapper still ran on the drain behind the
@@ -130,5 +224,7 @@ class AttributesResolveAtEdgeTest {
 
     private companion object {
         private const val GAME_ID_ATTRIBUTE = "game.id"
+        private val SAMPLED_TRACE =
+            ActiveTrace(ByteString(ByteArray(16) { 3 }), ByteString(ByteArray(8) { 4 }), sampled = true)
     }
 }
