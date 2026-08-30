@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerIdentityRegistry
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -56,13 +57,7 @@ class ConnectStateMachineTest {
     fun happyPathResolvesWithRemoteIdentity() =
         runTest(UnconfinedTestDispatcher()) {
             val api = ControllableNearbyApi()
-            val machine = ConnectStateMachine(
-                PeerId("me"),
-                api,
-                endpointId = "ep1",
-                serviceId = "svc",
-                handshakeTimeout = NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT,
-            )
+            val machine = machineFor(api)
 
             val link =
                 machine.run(backgroundScope) {
@@ -85,13 +80,7 @@ class ConnectStateMachineTest {
     fun rejectionThrowsConnectionFailed() =
         runTest(UnconfinedTestDispatcher()) {
             val api = ControllableNearbyApi()
-            val machine = ConnectStateMachine(
-                PeerId("me"),
-                api,
-                endpointId = "ep1",
-                serviceId = "svc",
-                handshakeTimeout = NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT,
-            )
+            val machine = machineFor(api)
 
             val outcome =
                 runCatchingCancellable {
@@ -118,6 +107,7 @@ class ConnectStateMachineTest {
                     endpointId = "ep1",
                     serviceId = "svc",
                     handshakeTimeout = 1.seconds,
+                    registry = PeerIdentityRegistry(PeerId("me")),
                 )
 
             // trigger emits nothing → withTimeout fires on the virtual clock.
@@ -157,6 +147,7 @@ class ConnectStateMachineTest {
             endpointId = "ep1",
             serviceId = "svc",
             handshakeTimeout = NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT,
+            registry = PeerIdentityRegistry(PeerId("me")),
         )
 
     @Test

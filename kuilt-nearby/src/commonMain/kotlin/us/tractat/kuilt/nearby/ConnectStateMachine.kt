@@ -7,6 +7,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerIdentityRegistry
+import us.tractat.kuilt.core.PeerIdentityRejectedException
 import kotlin.time.Duration
 
 /**
@@ -37,6 +39,22 @@ import kotlin.time.Duration
  * the CONNECTED result; the machine resolves only once both CONNECTED and the
  * remote identity payload have arrived.
  *
+ * ## Those bytes are peer-supplied, and this is where they are checked (#1821)
+ * The identity payload is the first thing a stranger's radio hands this process, and it used to
+ * become a [PeerId] with no check at all: `PeerId(event.bytes.decodeToString())`. Two things now
+ * stand between the bytes and the roster, and they are deliberately different in kind:
+ *  - **decoding** is this machine's own business — [decodeAnnouncedId] decodes strictly, so bytes
+ *    that are not valid UTF-8 fail the handshake instead of being folded lossily onto U+FFFD (the
+ *    default substitutes the replacement character, so two *distinct* invalid announcements
+ *    silently became one identical id);
+ *  - **admission** is not — a blank id, this peer's own [PeerId] and an id another endpoint already
+ *    holds are refused by the shared [PeerIdentityRegistry], the same rules `:kuilt-multipeer`'s
+ *    two links are held to, rather than a third hand-rolled approximation of them.
+ *
+ * A refusal completes the handshake exceptionally with [PeerIdentityRejectedException]: the
+ * endpoint never becomes a peer, so nothing downstream — [NearbyLoom]'s `sharedPeers`, the seam's
+ * `endpointPeers`, a `sendTo` target — can ever name it.
+ *
  * ## Endpoint filtering
  * A single [NearbyApi] may serve both roles at once (one loom, two machines in the
  * fake), so events are filtered by endpoint ID:
@@ -50,6 +68,13 @@ internal class ConnectStateMachine(
     private val endpointId: String?,
     private val serviceId: String,
     private val handshakeTimeout: Duration,
+    /**
+     * The weave's peer-identity authority, keyed by Nearby endpoint ID. Required, not defaulted:
+     * a fresh registry per machine would still refuse a blank or self id, but it would answer the
+     * *collision* question against an empty roster and so could not see an id a sibling endpoint on
+     * the same weave already holds. The one shared instance is what makes the answer true.
+     */
+    private val registry: PeerIdentityRegistry<String>,
 ) {
 
     /**
@@ -69,11 +94,17 @@ internal class ConnectStateMachine(
             val deferred = CompletableDeferred<ConnectedLink>()
             val handshake = HandshakeState(initialEndpoint = endpointId)
             val jobs = launchListeners(scope, deferred, handshake)
+            var resolved = false
             try {
                 trigger()
-                deferred.await()
+                deferred.await().also { resolved = true }
             } finally {
                 jobs.forEach { it.cancel() }
+                // A handshake that failed, timed out or was cancelled AFTER the identity payload
+                // bound its id must not leave that binding behind: the endpoint never became a
+                // peer, and a stale binding would make the id look taken to the next endpoint that
+                // legitimately announces it. Only the resolving path hands the binding on.
+                if (!resolved) handshake.releaseBinding(registry)
             }
         }
 
@@ -116,18 +147,95 @@ internal class ConnectStateMachine(
                     if (deferred.isCompleted) return@collect
                     if (!handshake.isOurEndpoint(event.endpointId)) return@collect
                     if (handshake.remoteSelfId == null) {
-                        handshake.remoteSelfId = PeerId(event.bytes.decodeToString())
-                        handshake.maybeResolve(deferred)
+                        admitAnnouncedIdentity(event, handshake, deferred)
                     }
                 }
             },
         )
 
+    /**
+     * Turn the remote's announced bytes into an admitted [PeerId], or fail the handshake.
+     *
+     * Both refusals land on the same [PeerIdentityRejectedException] because the caller's remedy is
+     * the same — this endpoint is not a peer — but the [PeerIdentityRejectedException.reason]
+     * distinguishes them, so a log line says which rule fired.
+     */
+    private fun admitAnnouncedIdentity(
+        event: PayloadReceived,
+        handshake: HandshakeState,
+        deferred: CompletableDeferred<ConnectedLink>,
+    ) {
+        val endpoint = event.endpointId
+        val announced = decodeAnnouncedId(event.bytes)
+        if (announced == null) {
+            deferred.completeExceptionally(
+                PeerIdentityRejectedException(endpoint, "identity payload is not valid UTF-8"),
+            )
+            return
+        }
+        when (val outcome = registry.bind(announced, endpoint)) {
+            // ALREADY_BOUND is this same endpoint re-announcing the id it already holds — the
+            // `remoteSelfId == null` guard above makes that unreachable today, and it is admitted
+            // rather than refused so a duplicate payload could never fail a healthy handshake.
+            PeerIdentityRegistry.BindResult.BOUND,
+            PeerIdentityRegistry.BindResult.ALREADY_BOUND,
+            -> {
+                handshake.bind(announced)
+                handshake.maybeResolve(deferred)
+            }
+            else ->
+                deferred.completeExceptionally(
+                    PeerIdentityRejectedException(endpoint, "announced id refused: $outcome"),
+                )
+        }
+    }
+
+    /**
+     * Decode the announced identity **strictly**, returning `null` on bytes that are not valid
+     * UTF-8.
+     *
+     * `ByteArray.decodeToString()` defaults to lossy decoding: every malformed sequence becomes
+     * U+FFFD, so `0xC3` alone and `0x80` alone — two entirely different announcements — both decode
+     * to the *same* one-character id. That is a silent merge of two devices onto one identity, which
+     * is the half of the #1466 class a collision check downstream cannot see, because by then there
+     * is only one id.
+     */
+    private fun decodeAnnouncedId(bytes: ByteArray): PeerId? =
+        try {
+            PeerId(bytes.decodeToString(throwOnInvalidSequence = true))
+        } catch (_: CharacterCodingException) {
+            null
+        }
+
     private class HandshakeState(initialEndpoint: String?) {
         var endpoint: String? = initialEndpoint
             private set
         var connected: Boolean = false
+
+        /**
+         * The remote's admitted identity — set only by [bind], i.e. only once the shared
+         * [PeerIdentityRegistry] has accepted it. A non-null value therefore means "this endpoint
+         * holds this id in the registry", which is what [releaseBinding] relies on to undo it.
+         */
         var remoteSelfId: PeerId? = null
+            private set
+
+        /** Record the id this endpoint was just admitted under. */
+        fun bind(admitted: PeerId) {
+            remoteSelfId = admitted
+        }
+
+        /**
+         * Give the id back if this handshake bound one and then failed. A no-op when nothing was
+         * bound, and identity-scoped through [PeerIdentityRegistry.unbind], so it can only ever
+         * release *this* endpoint's own binding.
+         */
+        fun releaseBinding(registry: PeerIdentityRegistry<String>) {
+            val bound = remoteSelfId ?: return
+            val ep = endpoint ?: return
+            registry.unbind(bound, ep)
+            remoteSelfId = null
+        }
 
         /**
          * Try to claim [candidate] as our target endpoint.

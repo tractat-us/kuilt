@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerIdentityRegistry
 
 /**
  * In-memory Nearby Connections radio supporting a single advertiser↔discoverer pair.
@@ -206,3 +208,22 @@ internal class FakeNearbyApi(radio: FakeNearbyRadio) : NearbyApi {
     internal suspend fun emit(event: PayloadReceived) = _payloadReceived.emit(event)
     internal suspend fun emit(event: EndpointDisconnected) = _endpointDisconnected.emit(event)
 }
+
+/**
+ * A [PeerIdentityRegistry] pre-bound to match a fixture's pre-populated `endpointPeers` map.
+ *
+ * [NearbySeam] takes both, and production keeps them in step by construction — nothing writes
+ * `endpointPeers` that the registry has not already admitted. A hand-built fixture can break that
+ * by populating one and not the other, and the resulting seam would answer the eviction question
+ * from an empty registry: `disconnectLoop` would find nothing to unbind and quietly skip the
+ * `sharedPeers` write, so a test about disconnection would pass or fail for a reason that has
+ * nothing to do with the seam. Deriving both from the *same* map at the call site is what keeps a
+ * fixture honest.
+ */
+internal fun registryOver(
+    selfId: PeerId,
+    endpoints: Map<String, PeerId>,
+): PeerIdentityRegistry<String> =
+    PeerIdentityRegistry<String>(selfId).apply {
+        endpoints.forEach { (endpointId, peerId) -> bind(peerId, endpointId) }
+    }
