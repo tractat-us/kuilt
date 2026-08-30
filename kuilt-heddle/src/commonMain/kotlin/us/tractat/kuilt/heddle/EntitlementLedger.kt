@@ -1211,6 +1211,11 @@ public class EntitlementLedger private constructor(
      *    that conservation is *structurally* blind to — `Σ_r transferNet(k, r) = 0` on every key, so
      *    abandoning a whole key is sum-preserving — and that the negative-holdings check misses
      *    because the recipient lands on `0` rather than below it.
+     *  - [LedgerConflict.MultipleRoots] — supply minted at more than one root: two [bootstrap]s
+     *    merged into one ledger (#1751). Keyed on the distinct roots [MintRecord] names,
+     *    deliberately **not** on "more than one group has no inbound edge" — that second spelling
+     *    is also the shape of an honest partially-delivered topology and would fire on healthy
+     *    traffic. Alone among these it is not a delivery transient in either direction.
      *
      * **What is deliberately not reported:** a group whose only inbound edges are all
      * prepared/retired is quarantined (holdings `0`) but *silent* — that is the normal window
@@ -1247,6 +1252,11 @@ public class EntitlementLedger private constructor(
             }
         }
         for (path in orphanedTransferPaths()) conflicts += LedgerConflict.OrphanedTransferPath(path)
+        // Two bootstraps in one ledger (#1751). Read off `minted` alone: a group is not a mint root
+        // merely because its inbound edge is still in flight, so this cannot false-fire on the
+        // partially-delivered topology a topology-keyed predicate would report.
+        val roots = mintedRoots()
+        if (roots.size > 1) conflicts += LedgerConflict.MultipleRoots(roots)
         // The global backstop, last: totals read straight off the components, so it survives a
         // regression in the per-lineage derivation the checks above all depend on.
         val spentTotal = leafSpentTotal()
@@ -1434,6 +1444,15 @@ public class EntitlementLedger private constructor(
 
     /** Total minted supply. */
     internal fun mintedTotal(): Long = minted.values.fold(0L) { acc, m -> checkedAdd(acc, m.amount) }
+
+    /**
+     * The distinct roots supply has been minted at, sorted — one on a healthy ledger. More is the
+     * [LedgerConflict.MultipleRoots] fault (#1751). `internal` — test support.
+     *
+     * A zero-amount record counts: it is still evidence of a mint act on a second tree, and
+     * excluding it would make the report depend on an amount the fault has nothing to do with.
+     */
+    internal fun mintedRoots(): List<GroupId> = minted.values.mapTo(HashSet()) { it.root }.sorted()
 
     /**
      * Total service charged where an edge is a path's final edge (the conservation term), at
