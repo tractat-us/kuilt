@@ -359,7 +359,7 @@ internal class CompositeSeam(
         // another ply, and on Kotlin/Native the throw aborts the process (#1788). [reconcile]'s own body
         // is already total per ply, so it is the upstream half that is uncovered here; the guard is the
         // same one either way.
-        desired.pumpIn(scope, ::absorbDesiredFailure) { reconcile(it) }
+        desired.pumpIn(scope, ::absorbDesiredFailure, "composite-desired") { reconcile(it) }
     }
 
     /**
@@ -626,7 +626,7 @@ internal class CompositeSeam(
         // them covered that half — which is why the guard is now a property of how a pump is launched
         // rather than a convention each site has to remember (#1803).
         seam.state
-            .pumpIn(plyScope, plyPumpFailure(id)) { s ->
+            .pumpIn(plyScope, plyPumpFailure(id), "composite-ply-state[${id.value}]") { s ->
                 // Mirror what THIS pump observed onto the handle BEFORE requesting the fold, so the fold
                 // never reads state no trigger announced — see [publishCapability].
                 lock.withLock { live[id]?.woven = s is SeamState.Woven }
@@ -645,7 +645,7 @@ internal class CompositeSeam(
         // wakeup for a fresh read of the seam — that distinction is the whole of [publishCapability]'s
         // correctness argument.
         seam.capability
-            .pumpIn(plyScope, plyPumpFailure(id)) { cap ->
+            .pumpIn(plyScope, plyPumpFailure(id), "composite-ply-capability[${id.value}]") { cap ->
                 lock.withLock { live[id]?.availability = cap.availability }
                 recomputeCapability()
             }
@@ -660,7 +660,7 @@ internal class CompositeSeam(
         // on a bare pump means the pump is *cancelled, not failed*, dead silently with nothing reported
         // (#1803's sixth instance was exactly this shape) — plus the upstream half, which is the fatal one.
         seam.state
-            .pumpIn(plyScope, plyPumpFailure(id)) {
+            .pumpIn(plyScope, plyPumpFailure(id), "composite-ply-announce-woven[${id.value}]") {
                 if (it is SeamState.Woven) {
                     runCatchingCancellable { seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId))) }
                 }
@@ -694,6 +694,7 @@ internal class CompositeSeam(
         seam.incoming.pumpIn(
             plyScope,
             onFailure = { _, failure -> raisePlyFailure(id, PlyReconcileException.Phase.INBOUND, failure) },
+            name = "composite-ply-inbound[${id.value}]",
         ) { swatch ->
             onPlyFrame(id, swatch)
         }
@@ -716,7 +717,7 @@ internal class CompositeSeam(
         // suspension point in it, and the send lives below — the same split `seam.state` already has between
         // its mirror pump and its Woven re-announce pump.
         seam.peers
-            .pumpIn(plyScope, plyPumpFailure(id)) { newPeers ->
+            .pumpIn(plyScope, plyPumpFailure(id), "composite-ply-peers[${id.value}]") { newPeers ->
                 lock.withLock { live[id]?.transportPeers = newPeers }
                 recomputePeers()
             }
@@ -729,7 +730,7 @@ internal class CompositeSeam(
         // conflate independently, so this one may skip an intermediate peers value the mirror pump saw —
         // already within contract, since the far side re-learns the mapping on the next Woven/peers event.
         seam.peers
-            .pumpIn(plyScope, plyPumpFailure(id)) { newPeers ->
+            .pumpIn(plyScope, plyPumpFailure(id), "composite-ply-announce-peers[${id.value}]") { newPeers ->
                 if (newPeers.size > 1 && seam.state.value is SeamState.Woven) {
                     runCatchingCancellable { seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId))) }
                 }

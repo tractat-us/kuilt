@@ -2,11 +2,13 @@ package us.tractat.kuilt.core
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -54,7 +56,7 @@ class PumpInTest {
         val rig = PumpRig(this)
         val seen = mutableListOf<Int>()
 
-        val job = flowOf(1, 2, 3).pumpIn(rig.scope, rig::record) { value ->
+        val job = flowOf(1, 2, 3).pumpIn(rig.scope, rig::record, PUMP) { value ->
             if (value == 2) error(BOOM)
             seen += value
         }
@@ -79,7 +81,7 @@ class PumpInTest {
         val job = flow<Int> {
             emit(1)
             error(BOOM)
-        }.pumpIn(rig.scope, rig::record) { seen += it }
+        }.pumpIn(rig.scope, rig::record, PUMP) { seen += it }
         runCurrent()
 
         assertAll(
@@ -101,7 +103,7 @@ class PumpInTest {
 
         // What a consumer's `withTimeout(…) { … }` throws at us while our own job is perfectly alive.
         // `runCatchingCancellable` rethrows this by type, which kills the pump *silently*.
-        val job = flowOf(1, 2, 3).pumpIn(rig.scope, rig::record) { value ->
+        val job = flowOf(1, 2, 3).pumpIn(rig.scope, rig::record, PUMP) { value ->
             if (value == 2) throw CancellationException("callee-minted")
             seen += value
         }
@@ -122,7 +124,7 @@ class PumpInTest {
 
         // Suspended inside the BODY, so our own cancellation arrives at the body guard — the one place a
         // `catch (_: Throwable) { }` would swallow it and leave an uncancellable pump behind.
-        val job = flowOf(1).pumpIn(rig.scope, rig::record) { awaitCancellation() }
+        val job = flowOf(1).pumpIn(rig.scope, rig::record, PUMP) { awaitCancellation() }
         runCurrent()
         assertTrue(job.isActive, "precondition: the pump is parked in the body")
 
@@ -149,6 +151,7 @@ class PumpInTest {
                 rig.record(phase, failure)
                 throw CancellationException("observer")
             },
+            name = PUMP,
         ) { value ->
             if (value == 2) error(BOOM)
             seen += value
@@ -189,7 +192,69 @@ class PumpInTest {
         fun close() = scope.cancel()
     }
 
+    /**
+     * The name has to reach the **launched coroutine's own context**, which is the only place a census
+     * can read it from (#1811).
+     *
+     * `launchIn` takes no context parameter, so a name held anywhere else — a local, a field, a wrapper
+     * around the flow — is invisible to `DebugProbes.dumpCoroutinesInfo()`, which walks
+     * `CoroutineInfo.context` and nothing else. Read from *inside* the body for that reason: that is the
+     * continuation whose context a dump reports, and asserting on anything the caller still holds would
+     * be asserting on the instrument rather than the outcome.
+     */
+    @Test
+    fun theNameReachesTheLaunchedCoroutinesOwnContext() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val rig = PumpRig(this)
+        val seenInBody = mutableListOf<String?>()
+
+        val job = flowOf(1, 2).pumpIn(rig.scope, rig::record, PUMP) {
+            seenInBody += currentCoroutineContext()[CoroutineName]?.name
+        }
+        runCurrent()
+
+        assertAll(
+            {
+                assertEquals(
+                    listOf<String?>(PUMP, PUMP),
+                    seenInBody,
+                    "every item runs in the named coroutine — a dump reads the name off this context",
+                )
+            },
+            { assertTrue(job.isCompleted, "the pump still ran to completion") },
+            { assertTrue(rig.failures.isEmpty(), "naming a pump must not change what it reports") },
+            { assertTrue(rig.unhandled.isEmpty()) },
+        )
+        rig.close()
+    }
+
+    /**
+     * Two pumps in one scope must be **separable**, which is the whole of #1811: the census cannot say
+     * which of a peer's pumps wedged when they all render identically. A single-pump test would pass
+     * against an implementation that hardcoded one constant name for every launch.
+     */
+    @Test
+    fun twoPumpsInOneScopeCarryTheirOwnNames() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val rig = PumpRig(this)
+        val names = mutableListOf<String?>()
+
+        flowOf(1).pumpIn(rig.scope, rig::record, "$PUMP-left") {
+            names += currentCoroutineContext()[CoroutineName]?.name
+        }
+        flowOf(1).pumpIn(rig.scope, rig::record, "$PUMP-right") {
+            names += currentCoroutineContext()[CoroutineName]?.name
+        }
+        runCurrent()
+
+        assertEquals(
+            listOf<String?>("$PUMP-left", "$PUMP-right"),
+            names,
+            "sibling pumps must be distinguishable — one shared constant would leave them a single blob",
+        )
+        rig.close()
+    }
+
     private companion object {
         const val BOOM = "pump-in boom"
+        const val PUMP = "pump-in-test"
     }
 }

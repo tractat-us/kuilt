@@ -31,6 +31,8 @@ internal fun samplePumpIn() = runTest {
         scope = backgroundScope,
         // ITEM: that update was lost, the pump lives. UPSTREAM: the pump is over — say so, loudly.
         onFailure = { half, _ -> reported += half },
+        // What a coroutine census calls this pump when it is the one that wedged.
+        name = "sample-updates",
     ) { update ->
         if (update == "i-will-not-apply") error("this update could not be applied")
         applied += update
