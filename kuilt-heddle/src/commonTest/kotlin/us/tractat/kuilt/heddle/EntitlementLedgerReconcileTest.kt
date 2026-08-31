@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.test.assertAll
@@ -1031,6 +1032,67 @@ class EntitlementLedgerReconcileTest {
                 assertIs<Relocation.Nothing>(
                     drained.relocationPatch(e8, mapOf(e4 to departedAcks)),
                     "a drained carried row must not re-refuse when its donor is gone",
+                )
+            },
+        )
+    }
+
+    /**
+     * The arm that pins the refusal's **scope**, and the reason `unackedCarriedDonors` reads
+     * `transferRelocIn − transferRelocOut` rather than [EntitlementLedger] `effRow`.
+     *
+     * `alice` is absent from the acks and holds a **base** row at the dead key, but her carried row
+     * there is fully cancelled. The base row is the *documented left-untouched case* — it is
+     * reported by [LedgerConflict.OrphanedTransferPath] and is not a refusal condition on `main` —
+     * so the move must proceed. Widening the residual back to `effRow` (`transfers + In − Out`)
+     * reads that base row and refuses, which is the rule the KDoc explicitly disclaims: *refuse on
+     * an unacked base row iff this donor once held a carried row here.*
+     *
+     * Written against a hand-built receiver rather than the two-move chain on purpose. The chain's
+     * receiver is a control-plane relocation accumulator, whose `transfers` is empty by
+     * construction — exactly as on the production path — so no arm derived from it can tell the two
+     * spellings apart, and this property would sit unpinned.
+     */
+    @Test
+    fun anUnackedBaseRowIsNotARefusalOnceTheCarriedRowIsCancelled() {
+        val deadPath = PathKey.of(e4)
+        val receiver = EntitlementLedger.of(
+            // alice's BASE row to carol: unacked, uncancelled — and none of this arm's business.
+            transfers = mapOf(deadPath to mapOf(alice to GCounter.of(carol to 7L))),
+            // …and her CARRIED row to bob, cancelled by an earlier move.
+            transferRelocIn = mapOf(deadPath to mapOf(alice to GCounter.of(bob to 40L))),
+            transferRelocOut = mapOf(deadPath to mapOf(alice to GCounter.of(bob to 40L))),
+        )
+        val acksWithoutAlice = mapOf(bob to SlotFinals.ZERO)
+        assertAll(
+            // ── the rig: all three of the arm's premises, so a green cannot be an accident.
+            {
+                assertTrue(
+                    alice in receiver.carriedDonorsOn(e4),
+                    "rig: alice must be reachable by the enumeration, or no filter is exercised",
+                )
+            },
+            {
+                assertEquals(
+                    0L,
+                    receiver.carriedResidualOn(e4, alice, bob),
+                    "rig: her carried row must be fully cancelled",
+                )
+            },
+            {
+                assertEquals(
+                    7L,
+                    receiver.transfersAt(deadPath)[alice]?.count(carol),
+                    "rig: …while her BASE row is real and non-zero — the thing effRow would read",
+                )
+            },
+            { assertTrue(alice !in acksWithoutAlice.keys, "rig: alice must be absent from the acks") },
+            // ── the property.
+            {
+                assertIs<Relocation.Nothing>(
+                    receiver.relocationPatch(e8, mapOf(e4 to acksWithoutAlice)),
+                    "an unacked BASE row must not refuse the move — it is the documented " +
+                        "left-untouched case, reported by OrphanedTransferPath and not a refusal",
                 )
             },
         )
