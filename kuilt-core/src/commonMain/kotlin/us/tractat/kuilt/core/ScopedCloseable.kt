@@ -75,11 +75,25 @@ public abstract class ScopedCloseable(parentScope: CoroutineScope) : AutoCloseab
      *
      * The [parentScope] passed at construction is **not** cancelled — only [ownJob] and
      * its children are stopped.
+     *
+     * A throwing [onClose] does **not** strand the instance: [ownJob] is cancelled from a `finally`,
+     * so the coroutine tree always dies, and the throwable then propagates to the caller (#2330).
+     * The latch stays claimed either way — releasing it on a throw would make the hook re-entrant,
+     * which is exactly the at-most-once contract [onClose] states. So a failed hook leaves an
+     * instance that is *closed* and whose failure was reported, never one that is neither open nor
+     * closed with no retry.
      */
     final override fun close() {
         if (!_closed.compareAndSet(expect = false, update = true)) return
-        onClose()
-        ownJob.cancel()
+        try {
+            onClose()
+        } finally {
+            // In `finally`, not after: the latch is already claimed, so a hook that throws would
+            // otherwise leak every coroutine under `ownJob` with no second call able to get past
+            // the guard and finish the job (#2330). Ordering is unchanged on the happy path —
+            // `finally` still runs after `onClose()` returns.
+            ownJob.cancel()
+        }
     }
 
     /**
@@ -89,6 +103,12 @@ public abstract class ScopedCloseable(parentScope: CoroutineScope) : AutoCloseab
      *
      * This method is called at most once — even if several threads call [close] at the same
      * instant — and always before [ownJob] is cancelled.
+     *
+     * Throwing from here is reported, not swallowed: the throwable propagates out of [close] to its
+     * caller. [ownJob] is cancelled regardless, so a hook that fails partway still stops every
+     * coroutine this instance owns. What a partial hook leaves behind is the subclass's own problem
+     * — a body that tears down several things wants one `try`/`catch` per item if it must finish
+     * them all, since the first throw ends the hook.
      */
     protected open fun onClose() {}
 }
