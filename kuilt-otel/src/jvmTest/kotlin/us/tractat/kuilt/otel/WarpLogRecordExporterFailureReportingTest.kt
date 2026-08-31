@@ -81,7 +81,10 @@ class WarpLogRecordExporterFailureReportingTest {
      * appender in `finally` keeps the swap from leaking into whatever runs next in this JVM.
      */
     private suspend fun <T> capturingExporterLogs(block: suspend (List<ILoggingEvent>) -> T): T {
-        val logger = LoggerFactory.getLogger(EXPORTER_LOGGER) as Logger
+        // Through a declared non-null slf4j type first: `getLogger` is a platform type, and casting
+        // one straight to logback's `Logger` is a nullable-to-non-nullable cast detekt rejects.
+        val slf4j: org.slf4j.Logger = LoggerFactory.getLogger(EXPORTER_LOGGER)
+        val logger = slf4j as Logger
         val appender = ListAppender<ILoggingEvent>().apply { start() }
         val previousLevel = logger.level
         logger.level = Level.TRACE
