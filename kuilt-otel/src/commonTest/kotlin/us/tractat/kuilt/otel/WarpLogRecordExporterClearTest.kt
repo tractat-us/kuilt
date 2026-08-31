@@ -5,7 +5,6 @@ import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.InMemoryDurableStore
-import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -167,16 +166,6 @@ class WarpLogRecordExporterClearTest {
         )
     }
 
-    private class WriteRefusingStore(private val backing: DurableStore) : DurableStore {
-        var refuse: Boolean = false
-        override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
-        override suspend fun write(key: StoreKey, bytes: ByteArray) {
-            if (refuse) throw IllegalStateException("store refused $key")
-            backing.write(key, bytes)
-        }
-        override suspend fun delete(key: StoreKey) = backing.delete(key)
-    }
-
     @Test
     fun aRefusedClearReportsFailureAndARetryConverges() = runTest {
         val store = WriteRefusingStore(InMemoryDurableStore())
@@ -188,7 +177,7 @@ class WarpLogRecordExporterClearTest {
         val acceptedBefore = exporter.health.value.accepted
         val failedBefore = exporter.health.value.failed
 
-        store.refuse = true
+        store.refuseWrites()
         val refused = exporter.clear()
         val failedAfterRefusal = exporter.health.value.failed
 
@@ -196,7 +185,7 @@ class WarpLogRecordExporterClearTest {
         // the documented divergence. A caller must read this as "count unknown", not zero.
         val snapshotAfterRefusal = exporter.snapshot().toList()
 
-        store.refuse = false
+        store.allowWrites()
         val retried = exporter.clear()
 
         // THE assertion of this test. A retry that returns Success having written nothing
