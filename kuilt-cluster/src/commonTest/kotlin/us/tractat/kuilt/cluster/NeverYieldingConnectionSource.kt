@@ -9,18 +9,25 @@ import us.tractat.kuilt.core.fabric.ConnectionSource
  * A [ConnectionSource] whose [accept] suspends forever — the "this voter's roster never fills" stall
  * every formation-timeout test is built on, plus the observability that makes the *teardown* provable.
  *
- * [accepting] completes when the accept-pump has actually entered `accept()` (so a test can tell
- * "the pump never started" from "the pump started and was left running"), and [cancelled] completes
- * from the cancellation `finally` — which is exactly the "the accept-pump was torn down" signal
- * [assembleVoterMesh]'s formation-failure path is required to produce. A test that awaits [cancelled]
- * is therefore red on any code that fails formation without cancelling the mesh scope.
+ * [accepting] completes when the accept-pump has actually entered [accept]; [cancelled] completes from
+ * that suspension's cancellation `finally`. The pair is what lets a test tell **"the pump never
+ * started"** from **"the pump started and was left running"** — without [accepting] a green would be
+ * indistinguishable from a rig that never fired.
  *
- * Shared by the deterministic [VoterMeshFormationTimeoutTest] and the real-socket
+ * ## Why [cancelled] can only mean "the pump job was cancelled"
+ *
+ * `acceptPump` bounds `handle(conn)` — **not** `source.accept()` — with its `handshakeTimeout`, so no
+ * timer inside the pump can ever cancel this suspension. Nothing offers a connection here either. The
+ * only reachable cancellation is the pump [kotlinx.coroutines.Job]'s own, which on the formation-failure
+ * path arrives from `assembleVoterMesh`'s `meshScope.cancel()`. [cancelled] is therefore a signal for
+ * that teardown and nothing else.
+ *
+ * Shared by the deterministic [VoterMeshFormationTimeoutTest] and the opt-in real-socket
  * `WebSocketVoterMeshFormationTimeoutTest`, so both pin the same signal with one definition of it.
  */
 internal class NeverYieldingConnectionSource : ConnectionSource {
 
-    /** Completes once the accept-pump has entered [accept]. */
+    /** Completes once the accept-pump has entered [accept] — the rig-fired precondition. */
     val accepting: CompletableDeferred<Unit> = CompletableDeferred()
 
     /** Completes once the [accept] suspension is cancelled — i.e. the accept-pump was torn down. */
