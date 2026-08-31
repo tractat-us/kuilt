@@ -148,7 +148,7 @@ class NearbySeamStateLatchConcurrencyTest {
             endpointPeersMutex = Mutex(),
             registry = registryOver(self, emptyMap()),
             api = SilentNearbyApi(),
-            sharedPeers = weavePeers,
+            weavePeers = weavePeers,
             scope = scope,
             msgIdCounter = MsgIdCounter(),
         )

@@ -85,7 +85,7 @@ class NearbyMalformedChunkTest {
             endpointPeersMutex = Mutex(),
             registry = registryOver(self, mapOf(endpointId to remote)),
             api = api,
-            sharedPeers = MutableStateFlow(setOf(self, remote)),
+            weavePeers = MutableStateFlow(setOf(self, remote)),
             scope = scope,
             msgIdCounter = MsgIdCounter(),
         )
