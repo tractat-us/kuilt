@@ -6,6 +6,7 @@ import io.ktor.network.sockets.aSocket
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
@@ -32,6 +33,10 @@ import kotlin.coroutines.CoroutineContext
  * mutex. Blocking socket reads run on [ioDispatcher] (see [tcpConnection]), so the scheduling
  * dispatcher only serialises seam state, never blocks on the wire.
  *
+ * The woven seam's inbox obeys a [DeliveryPolicy], defaulting to [DeliveryPolicy.Reliable].
+ * It is a real knob here only since #2323 taught [handshaking] to carry one: before that this
+ * fabric had no way to reach `identified`'s policy at all, so the seam was hard-wired lossless.
+ *
  * [weave] guards against accidental virtual-time construction: building this real-IO seam
  * under a `kotlinx.coroutines.test.TestDispatcher` fails loudly (see
  * [checkNotUnderTestDispatcher]) — under virtual time the blocking socket IO would never
@@ -43,6 +48,7 @@ public class TcpLoom private constructor(
     private val selector: SelectorManager,
     private val seamDispatcher: CoroutineContext,
     private val ioDispatcher: CoroutineDispatcher,
+    private val policy: DeliveryPolicy,
     private val serverSocket: ServerSocket?,
 ) : Loom {
     override fun capability(): TransportCapability =
@@ -72,7 +78,7 @@ public class TcpLoom private constructor(
                 aSocket(selector).tcp().connect(address.host, address.port)
             }
         }
-        return handshaking(tcpConnection(socket, ioDispatcher), selfId, seamDispatcher)
+        return handshaking(tcpConnection(socket, ioDispatcher), selfId, seamDispatcher, policy)
     }
 
     public companion object {
@@ -87,7 +93,8 @@ public class TcpLoom private constructor(
             selector: SelectorManager,
             seamDispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
             ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-        ): TcpLoom = TcpLoom(selfId, selector, seamDispatcher, ioDispatcher, serverSocket)
+            policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+        ): TcpLoom = TcpLoom(selfId, selector, seamDispatcher, ioDispatcher, policy, serverSocket)
 
         /** A joiner loom: [weave] of [Rendezvous.Existing] dials the tag's [TcpAddress]. */
         public fun join(
@@ -95,6 +102,7 @@ public class TcpLoom private constructor(
             selector: SelectorManager,
             seamDispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
             ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-        ): TcpLoom = TcpLoom(selfId, selector, seamDispatcher, ioDispatcher, serverSocket = null)
+            policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+        ): TcpLoom = TcpLoom(selfId, selector, seamDispatcher, ioDispatcher, policy, serverSocket = null)
     }
 }

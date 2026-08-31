@@ -16,10 +16,13 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.Overflow
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.AfterTest
@@ -36,8 +39,8 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Every knob they expose is asserted to *reach* the loom it configures — a factory that quietly
  * dropped an argument would compile and pass a construction smoke test. And because the whole
- * point of the convention is to expose only knobs this fabric can honour, the two it deliberately
- * omits (`policy`, `weaveTimeout`) are pinned as absent by
+ * point of the convention is to expose only knobs this fabric can honour, the one it deliberately
+ * omits (`weaveTimeout`) is pinned as absent by
  * [theSignatureExposesOnlyTheKnobsThisFabricHonours].
  *
  * `runBlocking`, never `runTest`: [TcpLoom] is real-IO only and its `weave` refuses a virtual
@@ -138,13 +141,13 @@ class TcpLoomFactoryTest {
     }
 
     /**
-     * The omissions are a decision, not an oversight, so they are pinned.
+     * The omission is a decision, not an oversight, so it is pinned.
      *
-     * `weaveTimeout` is absent because `weave` bounds neither `accept()` nor `connect()`, and
-     * `policy` because `handshaking` — the identity negotiation this fabric goes through — hands
-     * `identified` no [us.tractat.kuilt.core.DeliveryPolicy] (#2323). Either one added here would
-     * be accepted and then silently dropped, which is what got a shared config bag rejected on
-     * #1430 in the first place.
+     * `weaveTimeout` is absent because `weave` bounds neither `accept()` nor `connect()`; added
+     * here it would be accepted and then silently dropped, which is what got a shared config bag
+     * rejected on #1430 in the first place. `policy` was absent for that same reason until #2323
+     * taught `handshaking` to carry a [DeliveryPolicy] through to `identified`; it is present now
+     * and [aLossyPolicyReachesTheWovenSeam] proves it is honoured rather than merely accepted.
      *
      * Asserted over the JVM signature because absence is not otherwise observable at runtime, and
      * over the *whole ordered list* because erasure hides a type-by-type check: `PeerId` and
@@ -154,17 +157,56 @@ class TcpLoomFactoryTest {
      */
     @Test
     fun theSignatureExposesOnlyTheKnobsThisFabricHonours() {
-        // selfId erases to String (PeerId is a value class over it).
-        val universalKnobs = listOf(String::class.java, CoroutineContext::class.java, CoroutineDispatcher::class.java)
+        // selfId erases to String (PeerId is a value class over it); DeliveryPolicy is a plain
+        // data class, so it survives erasure as itself.
+        val universalKnobs = listOf(
+            String::class.java,
+            DeliveryPolicy::class.java,
+            CoroutineContext::class.java,
+            CoroutineDispatcher::class.java,
+        )
         assertEquals(
             listOf(ServerSocket::class.java, SelectorManager::class.java) + universalKnobs,
             factoryParameterTypes("tcpLoomHost"),
-            "tcpLoomHost: (serverSocket, selector, selfId, dispatcher, ioDispatcher)",
+            "tcpLoomHost: (serverSocket, selector, selfId, policy, dispatcher, ioDispatcher)",
         )
         assertEquals(
             listOf(SelectorManager::class.java) + universalKnobs,
             factoryParameterTypes("tcpLoomJoin"),
-            "tcpLoomJoin: (selector, selfId, dispatcher, ioDispatcher)",
+            "tcpLoomJoin: (selector, selfId, policy, dispatcher, ioDispatcher)",
+        )
+    }
+
+    /**
+     * `policy` must *reach the woven seam*, not merely appear on the signature (#2323).
+     *
+     * The whole reason this knob was withheld from these factories is that an accepted-then-dropped
+     * argument is worse than an absent one, so presence on the parameter list proves nothing on its
+     * own — the three hops `tcpLoomJoin` → `TcpLoom` → `weave` → `handshaking` each had to be wired.
+     *
+     * The joiner asks for a **capacity-1 `FAIL`** inbox and then never collects `incoming`. The
+     * host sends four frames: the first fills the joiner's spool, and the second makes
+     * `Spool.deliver` raise `FrameOverflow` inside `LinkSeam`'s read loop, which treats any read
+     * failure as a lost wire and tears the seam down. So an overflow that reaches the seam is
+     * observable at the [Seam] contract level, as [SeamState.Torn].
+     *
+     * Under the default [DeliveryPolicy.Reliable] the same four frames sit in a 256-deep buffer and
+     * the seam stays `Woven` forever — which is exactly what a dropped `policy` argument produces,
+     * and why the wait below times out rather than passing on a technicality. Real time, not
+     * virtual: `TcpLoom` refuses a `TestDispatcher`, and the ceiling is a generous wedge backstop —
+     * a live overflow latches in milliseconds.
+     */
+    @Test
+    fun aLossyPolicyReachesTheWovenSeam() = weavePair(
+        host = tcpLoomHost(serverSocket, selector),
+        joiner = tcpLoomJoin(selector, policy = DeliveryPolicy(capacity = 1, overflow = Overflow.FAIL)),
+    ) { hostSeam, joinerSeam ->
+        repeat(4) { hostSeam.broadcast(byteArrayOf(it.toByte())) }
+        withTimeout(10.seconds) { joinerSeam.state.first { it is SeamState.Torn } }
+        assertTrue(
+            joinerSeam.state.value is SeamState.Torn,
+            "a capacity-1 FAIL inbox must overflow on the second frame; the seam is still " +
+                "${joinerSeam.state.value}, so the policy never reached it",
         )
     }
 
