@@ -250,12 +250,18 @@ class RgaSequenceThreadingTest {
      * never reads the order today, so it may only propagate a list already in hand. Forcing one
      * would put a full `computeSequence()` on every remote `Remove`, a new Θ(N) per op on the
      * gossip path.
+     *
+     * ⚠ **The statement order below is load-bearing, not stylistic (#2225).** Since a *forced
+     * lazy* counts as an order in hand, `cold` stops being cold the instant anything reads its
+     * [Rga.sequence] — and `removeAt` reads it. `coldAfterRemove` must therefore be built
+     * **before** the `removeAt` on the next line. Move it down and the first assertion asserts
+     * nothing: the "cold" arm would be handed the order the `removeAt` forced.
      */
     @Test
     fun applyRemovePropagatesAWarmOrderAndNeverForcesAColdOne() {
         val (s1, x) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "x")
         val (cold, y) = s1.insertAfter(a, x.id, "y")
-        val coldAfterRemove = cold.apply(RgaOp.Remove<String>(y.id))
+        val coldAfterRemove = cold.apply(RgaOp.Remove<String>(y.id)) // MUST precede the removeAt
 
         val (warm, _) = requireNotNull(cold.removeAt(0))
         val warmAfterRemove = warm.apply(RgaOp.Remove<String>(y.id))
@@ -379,6 +385,152 @@ class RgaSequenceThreadingTest {
             { assertEquals(oracle(log).sequence, log.sequence, "and the threaded order must still be the real one") },
             { assertEquals(CAP, survivors.size) },
             { assertEquals("t${TURNS - 1}.${BATCH - 1}", survivors.last()) },
+        )
+    }
+
+    // ---- 5. A forced lazy is an order in hand too (#2225) ------------------------------------
+
+    /**
+     * The append-then-read loop — the archetypal consumer shape, and the one that threaded
+     * **nothing** before #2225. Warmth here never comes from the cache: no [Rga.removeAt] /
+     * [Rga.removeFirst] / [Rga.insertAt] runs, so the only thing that ever materializes the
+     * order is the plain read standing in for a render.
+     *
+     * Counted structurally, exactly as [theExporterSteadyStateRecomputesTheOrderExactlyOnce]
+     * does. The instance whose [Rga.sequence] the read forces is the one the append just
+     * produced, and it is brand new — nothing has read it — so it recomputes precisely when
+     * the append handed it no order. Before #2225 that was **every** turn, since
+     * `insertAfter` consulted only the cache and a plain read leaves the cache untouched.
+     */
+    @Test
+    fun theAppendThenReadLoopRecomputesTheOrderExactlyOnce() {
+        var log = Rga.empty<String>()
+        var tail = RgaId.HEAD
+        val recomputedOnTurn = mutableListOf<Int>()
+        val handedBackTheThreadedList = mutableListOf<Boolean>()
+        repeat(TURNS) { turn ->
+            val (next, op) = log.insertAfter(a, tail, "v$turn")
+            log = next
+            tail = op.id
+            if (log.threadedSequence == null) recomputedOnTurn += turn
+            log.toList() // the render: this is what forces the lazy
+            if (turn > 0) handedBackTheThreadedList += log.sequence === log.threadedSequence
+        }
+
+        assertAll(
+            {
+                assertEquals(
+                    listOf(0),
+                    recomputedOnTurn,
+                    "only the first read may recompute; a later one means the append threaded nothing",
+                )
+            },
+            {
+                assertTrue(
+                    handedBackTheThreadedList.all { it },
+                    "sequence must hand back the threaded list itself, not an equal copy",
+                )
+            },
+            { assertEquals(oracle(log).sequence, log.sequence, "and the threaded order must still be the real one") },
+            { assertEquals(List(TURNS) { "v$it" }, log.toList()) },
+        )
+    }
+
+    /**
+     * The in-tree conformance idiom — `acc.insertAfter(r, acc.sequence.last(), v)`
+     * (`JsonCrdtConformanceTest.arrNode`, `JsonCrdtConvergenceTest`). It reads the order and
+     * appends after its last element, which is the guard's **ideal** case, and before #2225 it
+     * recomputed on every element.
+     */
+    @Test
+    fun theConformanceArrayBuilderIdiomRecomputesTheOrderExactlyOnce() {
+        var log = Rga.empty<String>()
+        val recomputedOn = mutableListOf<Int>()
+        repeat(CHAIN) { i ->
+            val after = if (i == 0) RgaId.HEAD else log.sequence.last()
+            if (i > 0 && log.threadedSequence == null) recomputedOn += i
+            log = log.insertAfter(a, after, "v$i").first
+        }
+
+        assertAll(
+            { assertEquals(listOf(1), recomputedOn, "only the first read may recompute") },
+            { assertEquals(oracle(log).sequence, log.sequence) },
+            { assertEquals(List(CHAIN) { "v$it" }, log.toList()) },
+        )
+    }
+
+    @Test
+    fun bulkAppendingAfterAPlainReadThreadsFromTheForcedLazy() {
+        val (filled, seeded) = Rga.empty<String>().insertAllAfter(a, RgaId.HEAD, List(CHAIN) { "v$it" })
+        val fillStayedCold = filled.threadedSequence == null
+        filled.toList() // a plain read — the cache stays untouched, only the lazy is forced
+        val (appended, minted) = filled.insertAllAfter(a, seeded.last().id, listOf("w", "x"))
+
+        assertAll(
+            { assertTrue(fillStayedCold, "the fill path must leave the cache empty, or this proves nothing") },
+            { assertNull(filled.threadedSequence, "warmth must come from the forced lazy, not the cache") },
+            { assertNotNull(appended.threadedSequence, "a bulk append after a plain read must thread") },
+            { assertSame(appended.threadedSequence, appended.sequence) },
+            { assertEquals(oracle(appended).sequence, appended.sequence) },
+            { assertEquals(filled.sequence + minted.map { it.id }, appended.sequence) },
+            { assertEquals(List(CHAIN) { "v$it" } + listOf("w", "x"), appended.toList()) },
+        )
+    }
+
+    /**
+     * The guard is unchanged by #2225 — only its *supply* widened. A base taken from a forced
+     * lazy must fall through on a `after` that is the last **visible** element rather than the
+     * last full-sequence one, exactly as a cache-threaded base does.
+     *
+     * The `afterTheTrueTail` arm is the rig: without it a broken supply (base always `null`)
+     * would satisfy the fall-through assertion vacuously.
+     */
+    @Test
+    fun appendingAfterTheLastVisibleElementOfAPlainlyReadLogMustNotThread() {
+        val (s1, x) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "x")
+        val (s2, y) = s1.insertAfter(a, x.id, "y")
+        val (s3, z) = s2.insertAfter(a, y.id, "z")
+        val log = s3.apply(RgaOp.Remove<String>(z.id)) // a remote Remove tombstones the tail
+        log.toList() // the only thing that materializes the order here
+
+        val (afterLastVisible, w) = log.insertAfter(a, y.id, "w")
+        val (afterTheTrueTail, _) = log.insertAfter(a, z.id, "t")
+
+        assertAll(
+            { assertNull(log.threadedSequence, "the cache must be empty, or the forced lazy is not what is tested") },
+            { assertNotNull(afterTheTrueTail.threadedSequence, "the forced lazy must reach the guard at all") },
+            { assertNull(afterLastVisible.threadedSequence, "last VISIBLE is not last in sequence") },
+            { assertEquals(listOf(x.id, y.id, w.id, z.id), afterLastVisible.sequence, "the append sorts ahead") },
+            { assertEquals(oracle(afterLastVisible).sequence, afterLastVisible.sequence) },
+            {
+                assertNotEquals(
+                    listOf(x.id, y.id, z.id, w.id),
+                    afterLastVisible.sequence,
+                    "a suffix would have been the wrong order",
+                )
+            },
+        )
+    }
+
+    /**
+     * [Rga.applyRemove] draws from the same widened supply. A remote `Remove` landing on a
+     * plainly-read log propagates that order (a `Remove` reorders nothing) and still never
+     * forces a genuinely cold one — the pin for the latter is
+     * [applyRemovePropagatesAWarmOrderAndNeverForcesAColdOne].
+     */
+    @Test
+    fun applyRemovePropagatesAPlainlyReadOrder() {
+        val (s1, x) = Rga.empty<String>().insertAfter(a, RgaId.HEAD, "x")
+        val (log, y) = s1.insertAfter(a, x.id, "y")
+        val read = log.sequence
+
+        val applied = log.apply(RgaOp.Remove<String>(y.id))
+
+        assertAll(
+            { assertNull(log.threadedSequence, "the cache must be empty, or the forced lazy is not what is tested") },
+            { assertSame(read, applied.threadedSequence, "the same list, not a copy") },
+            { assertEquals(oracle(applied).sequence, applied.sequence) },
+            { assertEquals(listOf("x"), applied.toList()) },
         )
     }
 
