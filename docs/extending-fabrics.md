@@ -19,16 +19,19 @@ Two tracks are presented side by side:
 `Connection` is the only interface a transport must implement. It models a
 point-to-point, message-framed, full-duplex link between exactly two peers.
 
+<!-- verbatim from kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Connection.kt#Connection -->
 ```kotlin
-// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Connection.kt:16-25
 public interface Connection {
-    /** Send one whole message. Suspends until the transport accepts it. */
+    /**
+     * Send one whole message. Suspends until the transport accepts it (backpressure).
+     *
+     * A send failure must **not** be reported as a cancellation — see [us.tractat.kuilt.core.Seam.close].
+     */
     public suspend fun send(frame: ByteArray)
 
     /** Whole messages received from the peer, in order. Single-collection. */
     public val incoming: Flow<ByteArray>
-
-    /** Close the link. Idempotent. Completes [incoming]. */
+    // …
     public suspend fun close()
 }
 ```
@@ -61,8 +64,8 @@ delivers frames in the background; you just consume them). No pump needed.
 **Out-of-band identity** — if you know both peer IDs before the connection
 (e.g. from an authentication layer), call `identified()` directly:
 
+<!-- verbatim from kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/LinkSeam.kt#identified -->
 ```kotlin
-// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/LinkSeam.kt
 public fun identified(
     conn: Connection,
     selfId: PeerId,
@@ -76,8 +79,8 @@ public fun identified(
 `handshaking()`. It sends a `Hello` preamble as the first frame and reads
 the peer's preamble:
 
+<!-- verbatim from kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Handshaking.kt#handshaking -->
 ```kotlin
-// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Handshaking.kt
 public suspend fun handshaking(
     conn: Connection,
     selfId: PeerId,
@@ -87,6 +90,10 @@ public suspend fun handshaking(
     conn.send(Hello.encode(selfId))
     val single = conn.singleCollection(dispatcher)
     val remoteId = Hello.decode(single.firstFrame())
+    // Self-connection guard (#1488): a peer that dials its own advertised endpoint handshakes a
+    // preamble claiming its own id. A 2-peer seam whose "remote" is itself would echo its own frames;
+    // refuse it fast rather than weave a degenerate self-seam. Mirrors the mesh/NwSeam self-drop.
+    require(remoteId != selfId) { "handshaking refused a self-connection: remote resolved to selfId=${selfId.value}" }
     return identified(single, selfId, remoteId, dispatcher, policy)
 }
 ```
@@ -100,8 +107,8 @@ the knob until #2323.
 
 `Hello` encodes a `PeerId` as its UTF-8 bytes — one frame, one round-trip:
 
+<!-- verbatim from kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Hello.kt#Hello -->
 ```kotlin
-// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Hello.kt:6-9
 public object Hello {
     public fun encode(selfId: PeerId): ByteArray = selfId.value.encodeToByteArray()
     public fun decode(frame: ByteArray): PeerId = PeerId(frame.decodeToString())
@@ -148,8 +155,8 @@ A byte stream has no message boundaries. `framed()` from `:kuilt-stream`
 adds a 4-byte big-endian length prefix and reassembles frames at the other
 end:
 
+<!-- verbatim from kuilt-stream/src/commonMain/kotlin/us/tractat/kuilt/stream/Framed.kt#framed -->
 ```kotlin
-// kuilt-stream/src/commonMain/kotlin/us/tractat/kuilt/stream/Framed.kt:37-41
 public fun framed(
     source: Source,
     sink: Sink,
@@ -177,8 +184,8 @@ through an unbounded `Channel`, so the preamble read and the read loop draw from
 that single re-collectable stream. The transport just hands its raw `framed()`
 `Connection` straight in.
 
+<!-- condensed from kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Handshaking.kt#handshaking -->
 ```kotlin
-// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Handshaking.kt
 public suspend fun handshaking(
     conn: Connection,                  // a cold framed() Connection is fine — wrapped internally
     selfId: PeerId,
@@ -198,14 +205,16 @@ so the seam's state loop is never stalled by a slow read.
 
 `:kuilt-tcp`'s `tcpConnection` shows the complete pipeline for a Ktor TCP socket:
 
+<!-- verbatim from kuilt-tcp/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/tcp/TcpConnection.kt#tcpConnection -->
 ```kotlin
-// kuilt-tcp/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/tcp/TcpConnection.kt:28-40
 internal fun tcpConnection(socket: Socket, ioDispatcher: CoroutineDispatcher): Connection {
     val source = socket.openReadChannel().toInputStream().asSource().buffered()
     val sink = socket.openWriteChannel(autoFlush = true).toOutputStream().asSink().buffered()
     val framed = framed(source, sink)
     return object : Connection {
         override suspend fun send(frame: ByteArray) = framed.send(frame)
+        // Only the read side is re-dispatched; the frame ceiling is [framed]'s, unchanged (#2047).
+        override val maxFrameBytes: Int? get() = framed.maxFrameBytes
         override val incoming: Flow<ByteArray> = framed.incoming.flowOn(ioDispatcher)
         override suspend fun close() {
             framed.close()
@@ -223,8 +232,8 @@ teardown.
 For the proprietary-socket case — a plain `java.net.Socket` with no Ktor —
 the bridge is even simpler, using the `kotlinx-io` JVM adapters directly:
 
+<!-- verbatim from kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/ProprietaryRpcExampleTest.kt#rpcConnection -->
 ```kotlin
-// kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/ProprietaryRpcExampleTest.kt:49-53
 private fun rpcConnection(socket: Socket): Connection =
     framed(
         source = socket.getInputStream().asSource().buffered(),
@@ -241,8 +250,8 @@ exposes.
 The `Tag` a joiner passes to `weave(Rendezvous.Existing(tag))` is just a data
 class in `commonMain`:
 
+<!-- verbatim from kuilt-tcp/src/commonMain/kotlin/us/tractat/kuilt/tcp/TcpAddress.kt#TcpAddress -->
 ```kotlin
-// kuilt-tcp/src/commonMain/kotlin/us/tractat/kuilt/tcp/TcpAddress.kt:11-17
 public data class TcpAddress(
     val host: String,
     val port: Int,
@@ -256,10 +265,12 @@ Your own fabric can inline a similar type or reuse an existing address class.
 
 ### Step 5 — `TcpLoom.weave`: the dial/accept loop (~10 lines)
 
+<!-- verbatim from kuilt-tcp/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/tcp/TcpLoom.kt#weave -->
 ```kotlin
-// kuilt-tcp/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/tcp/TcpLoom.kt
 override suspend fun weave(rendezvous: Rendezvous): Seam {
-    // Real-IO seam: refuse to build under a virtual TestDispatcher (would deadlock silently).
+    // The real-IO TCP seam must never be built under a virtual TestDispatcher — its blocking
+    // socket reads would never advance under virtual time, deadlocking the test silently. The
+    // in-memory LinkSeam/MeshSeam are virtual-time-safe by design and deliberately omit this.
     checkNotUnderTestDispatcher(
         scope = CoroutineScope(seamDispatcher),
         typeName = "TcpLoom",
@@ -343,8 +354,8 @@ This is **required** — never optional, never defaulted by the kit.
 For real-network IO (TCP, WebSocket), pass real production dispatchers.
 `:kuilt-tcp` uses two:
 
+<!-- verbatim from kuilt-tcp/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/tcp/TcpLoom.kt -->
 ```kotlin
-// kuilt-tcp/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/tcp/TcpLoom.kt:79-80
 seamDispatcher: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
 ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ```
@@ -373,8 +384,8 @@ idempotency, availability).
 
 `:kuilt-tcp`'s conformance test is the copy-paste template:
 
+<!-- verbatim from kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpConformanceTest.kt#TcpConformanceTest -->
 ```kotlin
-// kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpConformanceTest.kt:34-63
 class TcpConformanceTest : SeamConformanceSuite() {
 
     private val selector = SelectorManager(Dispatchers.IO)
@@ -383,6 +394,7 @@ class TcpConformanceTest : SeamConformanceSuite() {
 
     @BeforeTest
     fun setUp() = runBlocking {
+        // …
         serverSocket = aSocket(selector).tcp().bind("127.0.0.1", 0)
         port = (serverSocket.localAddress as InetSocketAddress).port
     }
@@ -400,6 +412,7 @@ class TcpConformanceTest : SeamConformanceSuite() {
     }
 
     override fun joinTag(): Tag = TcpAddress(host = "127.0.0.1", port = port)
+    // …
 }
 ```
 
@@ -447,14 +460,16 @@ The `ProprietaryRpcExampleTest` in `:kuilt-tcp` is the end-to-end sanity check
 for non-Ktor consumers. It uses a plain `java.net.Socket` — no Ktor required —
 and runs under `runBlocking`:
 
+<!-- verbatim from kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/ProprietaryRpcExampleTest.kt#aProprietarySocketRpcBecomesAKuiltSeam -->
 ```kotlin
-// kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/ProprietaryRpcExampleTest.kt:59-84
 @Test
 fun aProprietarySocketRpcBecomesAKuiltSeam() = runBlocking {
     withContext(Dispatchers.IO) {
         ServerSocket(0).use { server ->
             withTimeout(10.seconds) {
                 coroutineScope {
+                    // Weave both ends concurrently: handshaking exchanges Hello preambles
+                    // in-band, so each side's weave suspends until the other has begun.
                     val hostDeferred = async { weaveSeam(server.accept(), PeerId("rpc-host")) }
                     val client = weaveSeam(
                         Socket("127.0.0.1", server.localPort),
@@ -480,8 +495,8 @@ The `weaveSeam` helper is the complete transport bridge from Step 3 and Step 4
 of Track B — `framed()` + `handshaking()` (which wraps the cold connection internally) —
 all in:
 
+<!-- verbatim from kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/ProprietaryRpcExampleTest.kt#weaveSeam -->
 ```kotlin
-// kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/ProprietaryRpcExampleTest.kt:55-56
 private suspend fun weaveSeam(socket: Socket, selfId: PeerId): Seam =
     handshaking(rpcConnection(socket), selfId, Dispatchers.IO)
 ```
@@ -500,13 +515,14 @@ gracefully (the `Seam` stays `Woven` when a single link drops), and guards all
 mutable mesh state with a lock — the injected `dispatcher` schedules the per-link
 read loops, it is not a mutex:
 
+<!-- condensed from kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt#meshSeam -->
 ```kotlin
-// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:126
 public suspend fun meshSeam(
     selfId: PeerId,
     connections: List<Connection>,
     dispatcher: CoroutineContext,
     random: Random = Random.Default,
+    // … further defaulted parameters: policy, admission, drainBound, orderingHoldCapacity, onDisplacement
 ): Mesh
 ```
 
@@ -516,7 +532,7 @@ single-collection `Connection` a stream fabric's `framed()` produces works direc
 no hot-reader pump needed. Pass one `Connection` per peer; `meshSeam()` handles the
 rest. A late joiner that dials in after construction is admitted with
 `Mesh.addLink(connection)`
-(`kuilt-core/.../MeshSeam.kt:49`), which runs the same preamble exchange and
+(`kuilt-core/.../MeshSeam.kt`), which runs the same preamble exchange and
 dedup, then launches the new link's read loop.
 
 **A deduplicated loser is drained, not dropped — at construction and via `addLink`
@@ -536,15 +552,15 @@ per-sender attribution:
 
 - It opens one real loopback connection per spoke and adapts each end to a `Connection`
   via `tcpConnection`
-  (`kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpClusterExampleTest.kt:97`,
+  (`kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpClusterExampleTest.kt`,
   `tcpConnectionPair`).
 - A hub peer A weaves `meshSeam(a, listOf(connectionToB), Dispatchers.IO)`; B weaves its
   own single-link `meshSeam` to A. Both run concurrently so the preambles cross.
 - A late joiner C dials in and A admits it with `hub.addLink(connectionToC)`
-  (`TcpClusterExampleTest.kt:65`); C weaves its own `meshSeam` to A.
+  (`TcpClusterExampleTest.kt`); C weaves its own `meshSeam` to A.
 - A `broadcast` from the hub reaches both B and C, each attributing the frame to
   A
-  (`TcpClusterExampleTest.kt:44`,
+  (`TcpClusterExampleTest.kt`,
   `threePeerTcpClusterFormsViaMeshSeamAndAddLink`).
 
 Because sockets cannot be driven by a virtual clock, the example is a real-IO
@@ -560,7 +576,7 @@ focused files:
 
 | File | Lines | What it does |
 |------|-------|--------------|
-| `TcpConnection.kt` | ~11 | Bridge socket channels → `Source`/`Sink` → `framed()` |
+| `TcpConnection.kt` | ~15 | Bridge socket channels → `Source`/`Sink` → `framed()` |
 | `TcpAddress.kt` | ~7 | Discovery handle (`Tag` implementation) |
 | `TcpLoom.weave` | ~10 | Dial or accept, build `Connection`, call `handshaking()` |
 

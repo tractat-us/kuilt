@@ -1473,6 +1473,84 @@ val verifyDocCitations by tasks.registering {
             )
         }
 
+        // ── The OTHER way to cite nothing: a bare line range ───────────────────────────────────
+        // `stowaways` above catches a real citation on a surface nobody reads. This catches a block
+        // that never carried a citation in the first place, because its provenance was written as a
+        // source comment instead: `// kuilt-tcp/src/.../TcpConformanceTest.kt:34-64`. That shape is
+        // invisible to every check in this task, and it rots the moment any line ABOVE the cited
+        // range moves — silently, since a line number carries no signal about what it pointed at.
+        //
+        // Not hypothetical: `docs/extending-fabrics.md` carried 15 of them and 13 were already wrong
+        // when #2281 swept them, three quoting API that no longer existed at all (a
+        // `PreambleStrippedConnection` deleted from the tree, and two signatures whose parameters had
+        // changed). One had been broken by a PR that merely deleted a line inside the cited range.
+        //
+        // The remedy is always the same and is never a better line number: name the declaration, and
+        // let the two markers above content-check it. So this refuses the shape rather than teaching
+        // the task to resolve it — a resolvable line range would confirm the range is IN BOUNDS,
+        // which is not the property anyone wants; the property is that the block still quotes the
+        // thing it claims to quote, and only a `#symbol` can express that.
+        //
+        // Scoped to the first non-blank line of a fenced block — the citation slot. A line range in
+        // running prose ("`ControlPlane.kt:417-450`", common in the design docs) is a pointer, not a
+        // claim that a quoted block is faithful, so it is deliberately out of scope.
+        //
+        // The line range is OPTIONAL, because dropping it is the tempting half-fix: a reader who is
+        // told the number rots deletes the number and leaves `// kuilt-core/src/.../Handshaking.kt`,
+        // which no longer rots but still checks nothing — the block underneath may drift as freely
+        // as it ever did. Both spellings are the same defect, so both are refused.
+        //
+        // A directory separator is what separates a provenance claim from an instructional label:
+        // `// build.gradle.kts` and `// settings.gradle.kts` head the copy-this-into-your-project
+        // blocks in README.md, PUBLISHING.md and the Writerside install topics, and name a file in
+        // the READER's project, not one in this repo. Requiring a `/` excludes all 11 of them and
+        // leaves the baseline at zero; matching a bare filename would have made this guard's first
+        // act a false accusation against the install docs.
+        val bareRange = Regex("""^//\s*\S+/\S+\.(?:kt|kts|java|swift)(?:\s*:\s*\d+(?:-\d+)?)?\s*$""")
+        val lineRangeCites = allMarkdown.files
+            .asSequence()
+            .filterNot(::exempt)
+            .sortedBy { it.invariantSeparatorsPath }
+            .flatMap { md ->
+                val lines = md.readLines()
+                var inFence = false
+                var atBlockStart = false
+                lines.asSequence().withIndex().mapNotNull { (n, line) ->
+                    val t = line.trim()
+                    when {
+                        t.startsWith("```") -> {
+                            inFence = !inFence
+                            atBlockStart = inFence
+                            null
+                        }
+                        inFence && atBlockStart && t.isNotEmpty() -> {
+                            atBlockStart = false
+                            if (bareRange.matches(t)) {
+                                "${md.relativeTo(rootPath).invariantSeparatorsPath}:${n + 1}\n      $t"
+                            } else {
+                                null
+                            }
+                        }
+                        else -> null
+                    }
+                }
+            }
+            .toList()
+        if (lineRangeCites.isNotEmpty()) {
+            error(
+                "Fenced block(s) whose provenance is a bare source-path comment (#2281). No check in " +
+                    "this task can see one, so the block underneath may drift freely — and with a line " +
+                    "number it is worse, since that is wrong after any edit above it and says nothing " +
+                    "about WHAT it pointed at:\n\n" +
+                    lineRangeCites.joinToString("\n\n") + "\n\n" +
+                    "Replace the comment with a citation naming the declaration:\n" +
+                    "      <!-- verbatim from <path>#<symbol> -->\n" +
+                    "Leave the middle out with a bare `// …` line if the block is an abridged shell; " +
+                    "use `<!-- condensed from <path>#<symbol> -->` ONLY if the block cannot be a " +
+                    "literal quote — that exempts it from content checking for good.\n",
+            )
+        }
+
         // Cited source files, parsed once each — several citations share one file.
         val codeCache = mutableMapOf<java.io.File, Pair<List<String>, List<String>>>()
         fun loadSource(f: java.io.File): Pair<List<String>, List<String>> =
