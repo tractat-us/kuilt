@@ -41,7 +41,10 @@ kotlin {
         // every source in this module is common. KMP's default hierarchy applies.
 
         jvmTest.dependencies {
-            runtimeOnly(libs.logback)
+            // Compile access (not just runtime) so WarpLogRecordExporterFailureReportingTest can
+            // attach a logback ListAppender and assert on the lines the exporter actually emits,
+            // rather than on a counter kept beside them (#2237).
+            implementation(libs.logback)
         }
         androidUnitTest.dependencies {
             runtimeOnly(libs.logback)
