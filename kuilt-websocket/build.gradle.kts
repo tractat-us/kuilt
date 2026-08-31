@@ -10,7 +10,7 @@ plugins {
 //                                   loopback socket; opt-in because it binds a real port).
 //   -Pintegration.tests=true      → WebSocketPeerLinkFactoryTest (Ktor testApplication, wall-clock
 //                                   awaits rather than virtual time).
-// Mirrors :kuilt-cluster's cluster.realsocket.reconnection.tests and :kuilt-mdns's mdns.multicast.tests.
+// Mirrors :kuilt-cluster's cluster.realsocket.tests and :kuilt-mdns's mdns.multicast.tests.
 tasks.withType<Test>().configureEach {
     listOf("server.realnet.tests", "integration.tests").forEach { name ->
         val flag = providers.gradleProperty(name).orNull
