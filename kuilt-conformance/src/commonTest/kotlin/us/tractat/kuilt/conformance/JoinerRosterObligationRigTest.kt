@@ -87,7 +87,7 @@ class JoinerRosterObligationRigTest {
         sightedJoinerHarness().runPeersReportsSelfIdAndAtLeastTwo(this)
     }
 
-    // ── half 2: the fixture declaration is refuted when a single Loom is handed back twice ──
+    // ── half 2: a fixture declaration that costs nothing is refused, on both arms ──
 
     @Test
     fun aBlankJoinPathMechanismIsRefused() {
