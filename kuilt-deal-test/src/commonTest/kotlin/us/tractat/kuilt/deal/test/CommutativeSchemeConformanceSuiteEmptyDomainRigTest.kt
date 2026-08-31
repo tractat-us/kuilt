@@ -8,6 +8,34 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
+ * Every property of [CommutativeSchemeConformanceSuite], paired with the name it is asserted under.
+ *
+ * Hand-listed, because neither Kotlin/Native nor wasmJs can enumerate a class's `@Test` methods.
+ * `CommutativeSchemeConformanceSuitePropertyCoverageTest` in `jvmTest` is what keeps the list
+ * honest — it reflects over the suite on the one target that can and fails if this table has
+ * drifted from the real `@Test` surface, in either direction.
+ */
+internal val COMMUTATIVE_SCHEME_SUITE_PROPERTIES:
+    List<Pair<String, (CommutativeSchemeConformanceSuite) -> Unit>> = listOf(
+        "encryptHidesThePlaintextAndStripRecoversIt" to { it.encryptHidesThePlaintextAndStripRecoversIt() },
+        "encryptionIsCommutative" to { it.encryptionIsCommutative() },
+        "encryptionIsCommutativeAcrossPeerInstances" to { it.encryptionIsCommutativeAcrossPeerInstances() },
+        "multiLayerDealRecoversPlaintextRegardlessOfStripOrder" to {
+            it.multiLayerDealRecoversPlaintextRegardlessOfStripOrder()
+        },
+        "multiLayerDealAcrossPeerInstancesRecoversPlaintextRegardlessOfStripOrder" to {
+            it.multiLayerDealAcrossPeerInstancesRecoversPlaintextRegardlessOfStripOrder()
+        },
+        "distinctKeysProduceDistinctCiphertexts" to { it.distinctKeysProduceDistinctCiphertexts() },
+        "generatedKeyPairsAreUsable" to { it.generatedKeyPairsAreUsable() },
+        "verifyAcceptsHonestTransitions" to { it.verifyAcceptsHonestTransitions() },
+        "verifyAnswersForgedTransitionsAsDeclared" to { it.verifyAnswersForgedTransitionsAsDeclared() },
+    )
+
+/** The message every property's non-empty check carries, and the thing this rig matches on. */
+internal const val EMPTY_DOMAIN_MESSAGE: String = "validPlaintexts() is empty"
+
+/**
  * Proves that **no** property of [CommutativeSchemeConformanceSuite] can be reached with an empty
  * plaintext domain.
  *
@@ -22,14 +50,14 @@ import kotlin.test.assertTrue
  *    setting that emptied it, and it aborts before the property's own diagnostics run.
  *
  * Both now assert the domain is non-empty first, so both name their own cause. This file is what
- * holds that: a green reference subclass shows a property *can* pass, never that it would notice
- * an empty domain, and every property here is a quantifier that an empty list satisfies for free.
+ * holds that: a green reference subclass shows a property *can* pass, never that it would notice an
+ * empty domain, and every property here is a quantifier that an empty list satisfies for free.
  *
  * **The harness is an anonymous object built by a factory, not a named subclass.** A concrete
- * subclass of the suite inherits its `@Test` methods, so the test runner would collect it as a
- * test class of its own and every property would red for real. Same reason
- * `SeamConformanceUngatedCoreTest` and `DiscoverySourceConformanceSuiteRigTest` are written this
- * way; a fresh harness per property, because the suite's rigs count encryptions per instance.
+ * subclass of the suite inherits its `@Test` methods, so the test runner would collect it as a test
+ * class of its own and every property would red for real. Same reason `SeamConformanceUngatedCoreTest`
+ * and `DiscoverySourceConformanceSuiteRigTest` are written this way; a fresh harness per property,
+ * because the suite's rigs count encryptions per instance.
  *
  * Every property here returns `Unit` rather than a `TestResult`, so unlike the discovery-source rig
  * this one runs on every target rather than JVM only.
@@ -39,8 +67,8 @@ class CommutativeSchemeConformanceSuiteEmptyDomainRigTest {
     /**
      * The one fixture edit under test: a domain that computes empty. Everything else is a healthy
      * [XorKeystreamScheme] binding, so a red here is the empty domain and nothing else — and the
-     * scheme is the cheap test double rather than SRA, since no property gets far enough to
-     * encrypt anything.
+     * scheme is the cheap test double rather than SRA, since no property gets far enough to encrypt
+     * anything.
      */
     private fun emptyDomainSuite(): CommutativeSchemeConformanceSuite =
         object : CommutativeSchemeConformanceSuite() {
@@ -58,44 +86,29 @@ class CommutativeSchemeConformanceSuiteEmptyDomainRigTest {
     @Test
     fun everyPropertyRedsOnItsOwnCauseWhenTheDomainIsEmpty() {
         assertAll(
-            *propertiesUnderTest.map { (name, property) -> { assertNamesTheEmptyDomain(name, property) } }
+            *COMMUTATIVE_SCHEME_SUITE_PROPERTIES
+                .map { (name, property) -> { assertNamesTheEmptyDomain(name, property) } }
                 .toTypedArray(),
         )
     }
 
     /**
-     * The suite's full `@Test` surface, listed by hand.
+     * The rig's own positive control: the *same* harness with the default domain restored must run
+     * every property green.
      *
-     * Hand-listed is the cost of the anonymous harness — there is no reflective enumeration on
-     * Kotlin/Native or wasmJs — so [everyPropertyIsListed] pins the count, and a property added
-     * without a row here reds there rather than going quietly unchecked.
+     * Without it, a suite that had grown some unrelated defect would red above for a reason that
+     * has nothing to do with the domain — and the message check would be the only thing separating
+     * the two. This makes the separation an assertion rather than a hope.
      */
-    private val propertiesUnderTest: List<Pair<String, (CommutativeSchemeConformanceSuite) -> Unit>> = listOf(
-        "encryptHidesThePlaintextAndStripRecoversIt" to { it.encryptHidesThePlaintextAndStripRecoversIt() },
-        "encryptionIsCommutative" to { it.encryptionIsCommutative() },
-        "encryptionIsCommutativeAcrossPeerInstances" to { it.encryptionIsCommutativeAcrossPeerInstances() },
-        "multiLayerDealRecoversPlaintextRegardlessOfStripOrder" to {
-            it.multiLayerDealRecoversPlaintextRegardlessOfStripOrder()
-        },
-        "multiLayerDealAcrossPeerInstancesRecoversPlaintextRegardlessOfStripOrder" to {
-            it.multiLayerDealAcrossPeerInstancesRecoversPlaintextRegardlessOfStripOrder()
-        },
-        "distinctKeysProduceDistinctCiphertexts" to { it.distinctKeysProduceDistinctCiphertexts() },
-        "generatedKeyPairsAreUsable" to { it.generatedKeyPairsAreUsable() },
-        "verifyAcceptsHonestTransitions" to { it.verifyAcceptsHonestTransitions() },
-        "verifyAnswersForgedTransitionsAsDeclared" to { it.verifyAnswersForgedTransitionsAsDeclared() },
-    )
-
     @Test
-    fun everyPropertyIsListed() {
-        // A bare count, because that is all this can be without reflection — but it is enough to
-        // stop a tenth property from being added to the suite and silently skipping this rig.
-        assertTrue(
-            propertiesUnderTest.size == EXPECTED_PROPERTY_COUNT,
-            "CommutativeSchemeConformanceSuite's @Test surface changed: ${propertiesUnderTest.size} " +
-                "properties listed here, $EXPECTED_PROPERTY_COUNT expected. Add the new property to " +
-                "propertiesUnderTest (and give it a non-empty check) rather than bumping this number.",
-        )
+    fun everyPropertyPassesOnceTheDomainIsRestored() {
+        val healthy = object : CommutativeSchemeConformanceSuite() {
+            private val seeder = Random(seed = 0x600D)
+            override fun newScheme(): CommutativeScheme = XorKeystreamScheme(Random(seeder.nextInt()))
+            override fun newPeerScheme(): CommutativeScheme = XorKeystreamScheme(Random(seeder.nextInt()))
+            override fun proofStrength() = ProofStrength.AcceptsEverything
+        }
+        assertAll(*COMMUTATIVE_SCHEME_SUITE_PROPERTIES.map { (_, property) -> { property(healthy) } }.toTypedArray())
     }
 
     private fun assertNamesTheEmptyDomain(name: String, property: (CommutativeSchemeConformanceSuite) -> Unit) {
@@ -110,10 +123,5 @@ class CommutativeSchemeConformanceSuiteEmptyDomainRigTest {
             "$name red for a reason other than the empty domain, so it does not name its own cause. " +
                 "Expected a message containing \"$EMPTY_DOMAIN_MESSAGE\", got: ${failure.message}",
         )
-    }
-
-    private companion object {
-        const val EMPTY_DOMAIN_MESSAGE = "validPlaintexts() is empty"
-        const val EXPECTED_PROPERTY_COUNT = 9
     }
 }
