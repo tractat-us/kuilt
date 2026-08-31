@@ -154,14 +154,17 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
     val meshScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
     val fullPeerIdSet: Set<PeerId> = ordered.map { PeerId(it.value) }.toSet()
 
-    // Formation dials that this function has opened but no seam has taken ownership of yet — see
-    // [closeAbandonedDials] for why they exist and why nothing else can close them. Registered
-    // immediately after `dial` returns and dropped the instant `addLink` returns, so membership means
-    // exactly "the handshake was still running". The dial coroutines below run concurrently (one per
-    // voter, on a production dispatcher), so this is lock-guarded rather than relying on where those
-    // coroutines happen to be scheduled.
-    val abandonedDialsLock = reentrantLock()
-    val abandonedDials = mutableListOf<Connection>()
+    // Formation dials this function has opened that no seam has taken ownership of YET. Joined
+    // immediately after `dial` returns and left the instant `addLink` returns, so membership means
+    // exactly "the MeshHello exchange is still running" — which on the failure path below means
+    // "abandoned mid-handshake, and nothing but this function can close it" (#2587).
+    //
+    // Neither boundary can be skipped by a cancellation: no suspension point separates `dial`
+    // returning from the join, or `addLink` returning from the leave, and a coroutine is only
+    // cancellable at a suspension point. The dial coroutines run concurrently (one per voter, on a
+    // production dispatcher), so the list is lock-guarded rather than resting on where they schedule.
+    val unpublishedDialsLock = reentrantLock()
+    val unpublishedDials = mutableListOf<Connection>()
 
     try {
         // (a) Persistent accept-pump per voter, from t0. Drains each voter's inbound route forever, so a
@@ -188,15 +191,15 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
                     launch {
                         ordered.drop(index + 1).forEach { higher ->
                             val conn = dial(voter, PeerId(higher.value))
-                            abandonedDialsLock.withLock { abandonedDials += conn }
+                            unpublishedDialsLock.withLock { unpublishedDials += conn }
                             mesh.addLink(conn)
                             // addLink returned, so the mesh has taken the conn off our hands on every
                             // arm it has: it published the link, registered it as draining, or already
                             // closed it itself. Deregister BY IDENTITY — a Connection is free to define
                             // equals, and two distinct links must never be conflated into one entry.
-                            abandonedDialsLock.withLock {
-                                val at = abandonedDials.indexOfFirst { it === conn }
-                                if (at >= 0) abandonedDials.removeAt(at)
+                            unpublishedDialsLock.withLock {
+                                val at = unpublishedDials.indexOfFirst { it === conn }
+                                if (at >= 0) unpublishedDials.removeAt(at)
                             }
                         }
                     }
@@ -279,7 +282,7 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
             // is the repo's standing no. Per-conn `try`/`catch (Throwable)` for the same reason the seam
             // loop above has one — inside this shield a CancellationException can only be one the conn's
             // own `close` minted, and rethrowing it would skip every remaining conn (#1803, #1824).
-            abandonedDialsLock.withLock { abandonedDials.toList() }.forEach {
+            unpublishedDialsLock.withLock { unpublishedDials.toList() }.forEach {
                 try {
                     it.close()
                 } catch (_: Throwable) {
