@@ -134,11 +134,35 @@ internal class FailReadOfStore(private val backing: DurableStore, private val po
     override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
 }
 
-/** Delegates to [backing], but throws on every delete. */
+/**
+ * Delegates to [backing], but throws on every delete.
+ *
+ * Counts what it refused, in the two units that are **not** the same number once the exporter
+ * starts retrying: [deleteAttempts] is every call, [deleteTargets] is the distinct keys behind
+ * them. A retry path re-attempts a key it already failed, so the gap between the two is what a
+ * test asserting "reported once per segment, not once per attempt" measures against.
+ */
 internal class FailDeleteStore(private val backing: DurableStore) : DurableStore {
+    private val lock = reentrantLock()
+    private var attempts = 0
+    private val targets = mutableSetOf<StoreKey>()
+
+    /** Every [delete] call this store refused. */
+    val deleteAttempts: Int get() = lock.withLock { attempts }
+
+    /** The distinct keys those attempts named. */
+    fun deleteTargets(): Set<StoreKey> = lock.withLock { targets.toSet() }
+
     override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
     override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = backing.write(key, bytes)
-    override suspend fun delete(key: StoreKey): Unit = throw IllegalStateException("simulated delete failure")
+
+    override suspend fun delete(key: StoreKey) {
+        lock.withLock {
+            attempts++
+            targets += key
+        }
+        throw IllegalStateException("simulated delete failure")
+    }
 }
 
 /** Fails the [failOn]-th [write] call, then keeps failing until [failing] is cleared. */

@@ -411,6 +411,26 @@ public class WarpLogRecordExporter(
     internal var dropSummariesEmitted: Int = 0
         private set
 
+    /**
+     * How many delete-failure lines [sweep] has emitted. Guarded by [lock].
+     *
+     * Same role as [dropSummariesEmitted], for the same reason: the quantity under test **is**
+     * the log volume, this module cannot capture its own logger output, and nothing else moves
+     * when a once-per-segment report degrades back into a once-per-attempt one. Pinned by
+     * `WarpLogRecordExporterRetryLoggingTest`.
+     *
+     * `internal` for test verification only; nothing in production reads it.
+     */
+    internal var sweepFailuresReported: Int = 0
+        private set
+
+    /**
+     * How many durable-write-failure lines [commit] has emitted — see [reportTurnFailure].
+     * Guarded by [lock], and the write-path twin of [sweepFailuresReported].
+     */
+    internal var turnFailuresReported: Int = 0
+        private set
+
     // Maps recordId → RgaId of the Insert op, so that re-export is a no-op.
     // Mutated in place on export()/eviction and rebuilt from the op-log on recover().
     private val seenIds: MutableMap<ByteString, RgaId> = mutableMapOf()
