@@ -146,6 +146,15 @@ public class WarpTelemetry(
      * [WarpSpanExporter.clear], which owns the clock, so a caller reaching that exporter
      * directly gets the same treatment. This facade adds nothing there.
      *
+     * **Never throws, and a non-[ExportResult.Success] means *count unknown* rather than
+     * "nothing was cleared".** Each signal drops its buffer before its write, so a refused write
+     * leaves that signal reading empty in memory while the store still holds its state — and,
+     * because the fan-out continues, the signals after it may have cleared cleanly. The result
+     * names the *first* signal that failed and says nothing about how many did. Retrying
+     * re-converges: every signal's clear is idempotent, so repeating it over the ones that
+     * already succeeded costs a rewrite and changes nothing. See [WarpSpanExporter.clear],
+     * [WarpLogRecordExporter.clear] and [WarpMetricExporter.clear] for each signal's own terms.
+     *
      * @sample us.tractat.kuilt.otel.sampleWarpTelemetryClear
      */
     public suspend fun clear(): ExportResult {

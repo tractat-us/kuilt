@@ -250,6 +250,20 @@ public class WarpSpanExporter(
      *
      * Shares [ioMutex] with [export] and [merge] so a concurrent export cannot land a stale
      * encoded snapshot after the clear.
+     *
+     * **Never throws**, on the same terms as [export]: a refused durable write is reported as
+     * [ExportResult.Failure] carrying the store's cause, never propagated. Retrying a failed
+     * clear re-converges — [ORSet.removeAll] over an already-emptied set is the lattice
+     * identity, emptying an already-empty frontier is too, and both writes are unconditional,
+     * so the retry rewrites the same bytes it would have written the first time.
+     *
+     * **On failure, [snapshot] already reads empty while the store still holds every span**, and
+     * a configured clock's [WarpCausalClock.frontier] likewise reads empty while the persisted
+     * one still names the pre-clear dots. Both mutations precede the writes and — unlike
+     * [export], which rolls a freshly-minted stamp back out — neither is undone. A caller that
+     * uses the span count as a baseline must treat any non-[ExportResult.Success] as *count
+     * unknown* rather than as zero. On success the count reads zero synchronously, because the
+     * drop precedes the write.
      */
     public suspend fun clear(): ExportResult = ioMutex.withLock {
         runCatchingCancellable {
