@@ -71,11 +71,12 @@ import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
  *
  * These real-socket tests are a manual smoke, **not** part of the always-run gate: their coverage in
  * ci-required is provided by the deterministic, virtual-time [VoterMeshReconnectionTest] over a
- * severable in-memory fabric (no real sockets, no flake surface). To run the real-socket suite
- * (e.g. to sanity-check the actual Ktor CIO ping/redial path):
+ * severable in-memory fabric (no real sockets, no flake surface). The flag is shared with the sibling
+ * [WebSocketVoterMeshFormationTimeoutTest], which is opt-in for the same reason (#2226). To run the
+ * real-socket suite (e.g. to sanity-check the actual Ktor CIO ping/redial path):
  *
  * ```
- * ./gradlew :kuilt-cluster:jvmTest -Pcluster.realsocket.reconnection.tests=true
+ * ./gradlew :kuilt-cluster:jvmTest -Pcluster.realsocket.tests=true
  * ```
  *
  * Absent the flag every `@Test` here self-skips (a JUnit assumption), so `./gradlew build` compiles
@@ -84,14 +85,14 @@ import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 class WebSocketVoterMeshReconnectionTest {
 
     /**
-     * Self-skip unless `-Pcluster.realsocket.reconnection.tests=true` was forwarded to the test JVM
+     * Self-skip unless `-Pcluster.realsocket.tests=true` was forwarded to the test JVM
      * (see the build script). Mirrors the mdns multicast opt-in — keeps the flaky real-socket suite
      * out of ci-required while leaving it runnable on demand.
      */
     private fun assumeRealSocketReconnectionEnabled() =
         assumeTrue(
-            "real-socket reconnection suite is opt-in: run with -Pcluster.realsocket.reconnection.tests=true",
-            System.getProperty("cluster.realsocket.reconnection.tests") == "true",
+            "real-socket reconnection suite is opt-in: run with -Pcluster.realsocket.tests=true",
+            System.getProperty("cluster.realsocket.tests") == "true",
         )
 
     // Short so the test is snappy; production defaults to 15s (KtorServerLoom.DEFAULT_PING_PERIOD).

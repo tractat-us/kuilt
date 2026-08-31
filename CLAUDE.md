@@ -155,7 +155,7 @@ source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem
 | All platforms' tests | `./gradlew allTests` |
 | wasmJs / iOS sim / macOS | `./gradlew wasmJsTest` · `iosSimulatorArm64Test` · `macosArm64Test` |
 | mDNS multicast integration (off by default — needs a real network) | `./gradlew :kuilt-mdns:jvmTest -Pmdns.multicast.tests=true` |
-| Real-socket voter-mesh reconnection smoke (off by default — `ci-required` covers reconnection via the deterministic `VoterMeshReconnectionTest`) | `./gradlew :kuilt-cluster:jvmTest -Pcluster.realsocket.reconnection.tests=true` |
+| Real-socket voter-mesh smoke — reconnection + formation timeout (off by default — `ci-required` covers both via the deterministic `VoterMeshReconnectionTest` / `VoterMeshFormationTimeoutTest`) | `./gradlew :kuilt-cluster:jvmTest -Pcluster.realsocket.tests=true` |
 | Lint / static analysis | `./gradlew detektAll` |
 
 **Use `detektAll`, not bare `detekt`.** Plain `detekt` is `NO-SOURCE` in this KMP setup (the per-target tasks have no aggregated source) and reports BUILD SUCCESSFUL without analyzing anything. `detektAll` is the real check — and the one CI runs. "Detekt passed locally" via bare `detekt` is a false green.
@@ -168,8 +168,11 @@ The mDNS multicast suite is opt-in because it sends real multicast packets; the
 `-P` flag is forwarded to JVM tests as a system property and to K/N simulator
 tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
 
-Absent `-Pcluster.realsocket.reconnection.tests=true`, `WebSocketVoterMeshReconnectionTest`
-still compiles but self-skips at runtime, so `./gradlew build` doesn't run it.
+Absent `-Pcluster.realsocket.tests=true`, `WebSocketVoterMeshReconnectionTest` and
+`WebSocketVoterMeshFormationTimeoutTest` still compile but self-skip at runtime, so `./gradlew build`
+doesn't run them. Both assert **downstream of a live loopback WebSocket upgrade**, which a saturated
+box can lose — the failure that follows describes the box, not the code (#2226) — so neither gates a
+merge; the deterministic virtual-time siblings do.
 
 ## Conventions specific to this repo
 

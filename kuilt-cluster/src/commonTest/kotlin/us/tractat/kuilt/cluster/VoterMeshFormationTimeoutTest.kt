@@ -78,15 +78,16 @@ class VoterMeshFormationTimeoutTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val rig = stallFormation()
             val (dialerEnd, acceptorEnd) = rig.fabric.endsOf(VoterEdge(LOWER, MIDDLE))
+            val edge = "${LOWER.value}→${MIDDLE.value}"
 
             // Precondition: this edge really did go live. A dialed-but-unanswered edge is un-closed too,
             // so without this the assertions below could not tell "the seam failed to close a live link"
             // from "there was never a live link to close".
-            dialerEnd.answered.awaitOrFail("$LOWER→$MIDDLE was answered (the link went live)")
-            acceptorEnd.answered.awaitOrFail("$MIDDLE's end of $LOWER→$MIDDLE was answered")
+            dialerEnd.answered.awaitOrFail("$edge was answered (the link went live)")
+            acceptorEnd.answered.awaitOrFail("${MIDDLE.value}'s end of $edge was answered")
 
-            dialerEnd.closed.awaitOrFail("$LOWER's seam closed its end of the $LOWER→$MIDDLE link")
-            acceptorEnd.closed.awaitOrFail("$MIDDLE's seam closed its end of the $LOWER→$MIDDLE link")
+            dialerEnd.closed.awaitOrFail("${LOWER.value}'s seam closed its end of the $edge link")
+            acceptorEnd.closed.awaitOrFail("${MIDDLE.value}'s seam closed its end of the $edge link")
         }
 
     /** What [stallFormation] hands back: the observable link ends, and the starved voter's source. */
