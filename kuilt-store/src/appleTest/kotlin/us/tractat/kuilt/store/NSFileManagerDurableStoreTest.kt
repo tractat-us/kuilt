@@ -2,6 +2,8 @@
 
 package us.tractat.kuilt.store
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.runTest
 import platform.Foundation.NSFileManager
 import us.tractat.kuilt.conformance.DurableStoreConformanceSuite
@@ -62,14 +64,22 @@ class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
      * Deliberately not `assertFailsWith`: "did it throw?" and "did the destination
      * survive?" are two independent facts about the same call, and an
      * `assertFailsWith` that trips first would hide the second — which is the one
-     * that actually names the data loss. Catching [IllegalStateException] only,
-     * never [Throwable], keeps cancellation propagating.
+     * that actually names the data loss.
+     *
+     * Catching [IllegalStateException] rather than [Throwable] does **not**, on its own, keep
+     * cancellation propagating — which is what this KDoc used to claim (#2535).
+     * `CancellationException` extends [IllegalStateException], so [write] being a `suspend` call makes
+     * this arm a cancellation swallow: a cancelled test would come back holding the cancellation as if
+     * it were a reported write failure, and the assertions below would run on it. Narrowing the type is
+     * not the guard; `ensureActive()` is — it rethrows only a cancellation of THIS job and lets an
+     * ordinary `check()`/`error()` failure fall through to be returned.
      */
     private suspend fun DurableStore.writeFailure(key: StoreKey, bytes: ByteArray): IllegalStateException? =
         try {
             write(key, bytes)
             null
         } catch (failure: IllegalStateException) {
+            currentCoroutineContext().ensureActive()
             failure
         }
 
