@@ -333,6 +333,12 @@ public class Rga<V> private constructor(
      * producer, or forced by an earlier read — and `null` when reading [sequence] would have to
      * compute it. Never forces the lazy; [Lazy.isInitialized] cannot, and that is rule 2 of
      * [RgaCache.sequence]. This is the supply every threading site draws from.
+     *
+     * Safe to read concurrently. [sequenceLazy] is the default synchronized [Lazy], so a racing
+     * [Lazy.isInitialized] either observes the fully-published list or does not observe it yet —
+     * there is no half-built list to see. Losing the race costs a threading opportunity, never
+     * correctness, and the *wrong* list is the only outcome that could diverge two replicas
+     * silently (see [RgaCache.sequence]).
      */
     private val materializedSequence: List<RgaId>?
         get() = cache?.sequence ?: sequenceLazy.takeIf { it.isInitialized() }?.value
