@@ -721,14 +721,22 @@ jobs:
             kuilt-core/build/test-results/
 
   # ── concurrency-probes ──────────────────────────────────────────────────────
-  # Every `*ConcurrencyTest` in kuilt-core is a real-threaded probe (the name is the
-  # contract — deliberately not an enumeration here, which is what went stale as
-  # probes were added). They run on real threads, not
+  # Every `*ConcurrencyTest` in kuilt-core and kuilt-conformance is a real-threaded
+  # probe (the name is the contract — deliberately not an enumeration here, which is
+  # what went stale as probes were added). They run on real threads, not
   # virtual time, so they are starved when other test JVMs saturate the box (the
   # #1135 hang — root-caused as OS-CPU contention, not a code defect; see #1158).
-  # They are -P-gated OUT of the normal build (kuilt-core/build.gradle.kts) and run
+  # They are -P-gated OUT of the normal build (each module's build.gradle.kts) and run
   # here ALONE on a dedicated runner with no sibling test forks, so they finish in
   # seconds. Mirrors build-jvm's setup + docs-only guard.
+  #
+  # kuilt-conformance joined in #2584 (DelayedWovenSeamCloseOnceConcurrencyTest, the
+  # #2328 close-once guard). NON-GATING first, on purpose and for the reason
+  # nw-concurrency-probes' header states: the case for letting a job block merges is
+  # made from behaviour observed on THIS runner over a stated window, never from a
+  # workstation measurement. That probe's own KDoc carries its reverted-vs-fixed
+  # receipt (RED 3/3 runs at 15–42 violated rounds of 2000; GREEN 3/3 at 0), which is
+  # what a later graduation to capability-probes would have to re-establish here.
   #
   # STILL INTENTIONALLY NOT in ci-required's needs/aggregation. #1768's option 2
   # split the probes: the deterministic ones now gate via capability-probes above,
@@ -800,11 +808,15 @@ jobs:
 
       - name: Run real-threaded concurrency probes (isolated runner, NON-BLOCKING)
         # -Pconcurrency.stress.tests=true un-gates the *ConcurrencyTest classes
-        # (excluded from the normal run in kuilt-core/build.gradle.kts); --tests scopes
-        # the JVM test task to exactly them so nothing else co-schedules on this runner.
+        # (excluded from the normal run in each module's build.gradle.kts); --tests scopes
+        # the JVM test tasks to exactly them so nothing else co-schedules on this runner.
         # The count is deliberately not stated — the name is the contract (see header).
+        # Every module named here must actually own a matching class: `--tests` is an
+        # include filter across all the selected Test tasks, and Gradle FAILS a task it
+        # matches nothing in, so adding a module before its first probe reds this job.
         run: >-
-          ./gradlew :kuilt-core:jvmTest -Pconcurrency.stress.tests=true
+          ./gradlew :kuilt-core:jvmTest :kuilt-conformance:jvmTest
+          -Pconcurrency.stress.tests=true
           --tests "*ConcurrencyTest"
 
       # `:kuilt-nearby`'s probe (#1879). A separate step rather than a second module on the line
@@ -829,6 +841,8 @@ jobs:
             kuilt-core/build/test-results/
             kuilt-nearby/build/reports/tests/
             kuilt-nearby/build/test-results/
+            kuilt-conformance/build/reports/tests/
+            kuilt-conformance/build/test-results/
 
   # ── nw-concurrency-probes ───────────────────────────────────────────────────
   # `:kuilt-nw`'s real-threaded probes (#2481). Same shape as concurrency-probes
