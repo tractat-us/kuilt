@@ -3,6 +3,7 @@
 
 package us.tractat.kuilt.test
 
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-OS-thread harness — see the concurrency probes that use it.
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.debug.CoroutineInfo
@@ -202,10 +203,18 @@ private fun boxTelemetry(): String {
  * group by far; a coroutine parked with a kuilt frame in its stack is parked **inside** library code,
  * and that is the finding. Sorting purely by count buries the answer under the wallpaper.
  *
- * Known blind spot: `launchIn` keeps the `onEach` lambda out of the suspended continuation chain, so
- * `CompositeSeam`'s five per-ply pumps all collapse into one `$NO_KUILT_FRAME` group and cannot be told
- * apart. The ordering above stops that hiding the answer; naming the pumps would let the census name it
- * outright, tracked in #1811.
+ * The blind spot this used to carry is closed (#1811). `launchIn` keeps the `onEach` lambda out of the
+ * suspended continuation chain, so every pump of that shape parks at the same frame with no kuilt frame
+ * in its stack — `CompositeSeam`'s per-ply pumps all collapsed into one `$NO_KUILT_FRAME` group and could
+ * not be told apart. They are now launched through `pumpIn`, which puts a [CoroutineName] on the launch,
+ * and [censusKey] leads with it.
+ *
+ * **Grouped by pump *kind*, not by full name** — the name up to its first `[`. The distinction is load
+ * bearing: a four-ply composite runs six pumps per ply per peer, so grouping on the full name produces
+ * ~48 singleton groups against [MAX_CENSUS_GROUPS], and the census truncates. One unreadable blob would
+ * become a different unreadable census. Kind-grouping gives the six groups the question actually needs,
+ * and [identities] carries the full name per member, so the ply is still recoverable — the same
+ * "identities, never just counts" principle this census is built on, one level down.
  */
 private fun coroutineCensus(): String {
     val infos = DebugProbes.dumpCoroutinesInfo()
@@ -234,7 +243,10 @@ private fun coroutineCensus(): String {
                 "which live on a root `SupervisorJob` of their own — that is what makes this census worth " +
                 "having, and it is also the only thing it is evidence about.\n",
         )
-        append("grouped by (state, top frame, first kuilt frame); groups parked INSIDE kuilt code first:\n")
+        append(
+            "grouped by (pump kind, state, top frame, first kuilt frame); groups parked INSIDE kuilt code " +
+                "first:\n",
+        )
         groups.take(MAX_CENSUS_GROUPS).forEach { (key, members) ->
             append("  ×").append(members.size).append("  ").append(key).append('\n')
             append("        ").append(identities(members)).append('\n')
@@ -246,32 +258,59 @@ private fun coroutineCensus(): String {
             "How to read this: a group whose frame is `$NO_KUILT_FRAME` is a pump idle at its own source " +
                 "(a StateFlow collect, a channel receive) — the healthy resting state, and normally the " +
                 "largest group. A group WITH a kuilt frame is parked inside library code; that is where a " +
-                "wedge lives.\n",
+                "wedge lives. A group LEADING WITH A PUMP KIND is one named pump kind across every " +
+                "instance of it; the identities line under it names each instance, so a wedge in one ply " +
+                "is read off that line rather than inferred.\n",
         )
     }
 }
 
-/** `(state, top frame, first kuilt frame)` — the triple that names *which* path is parked where. */
+/**
+ * `(pump kind, state, top frame, first kuilt frame)` — the tuple that names *which* path is parked where.
+ *
+ * The pump kind leads because it is the only component that survives `launchIn`'s continuation gap: a
+ * named pump's other three components are identical to every other pump's, so without it the whole set
+ * is one group (#1811). It is read off the coroutine's own context, not the rendered dump text, which
+ * carries a name only when `kotlinx.coroutines.debug` is enabled.
+ */
 private fun censusKey(info: CoroutineInfo): String {
+    val kind = pumpKind(info)
     val frames = try {
         info.lastObservedStackTrace()
     } catch (e: Throwable) {
         // Broad on purpose: a coroutine that completes mid-walk must not take the census with it.
-        return "${info.state} $STACK_UNAVAILABLE: ${e::class.simpleName}"
+        return "$kind${info.state} $STACK_UNAVAILABLE: ${e::class.simpleName}"
     }
     val top = frames.firstOrNull()?.toString() ?: "<no observed frame>"
     val kuilt = frames.firstOrNull { it.className.startsWith(KUILT_PACKAGE) }?.toString() ?: NO_KUILT_FRAME
-    return "${info.state} at $top  ←  $kuilt"
+    return "$kind${info.state} at $top  ←  $kuilt"
+}
+
+/**
+ * The census group a named coroutine belongs to: its [CoroutineName] up to the first `[`, i.e. the pump
+ * KIND with the instance qualifier dropped — see [coroutineCensus] for why the qualifier must not be part
+ * of the key. Empty for an unnamed coroutine, which then groups exactly as it did before.
+ */
+private fun pumpKind(info: CoroutineInfo): String {
+    val name = info.context[CoroutineName]?.name ?: return ""
+    return "${name.substringBefore('[')}  "
 }
 
 /**
  * The coroutines in a census group, by identity — the `Job` string carries class, lifecycle state and
  * identity hash, so a group's members are individually traceable back into the full dump. Truncated
  * by count only; a group of thousands is itself the finding.
+ *
+ * The **full** [CoroutineName] leads where there is one, instance qualifier and all: [censusKey] drops
+ * that qualifier so a many-plied peer does not fragment the census into singletons, and this line is
+ * where it comes back. Without it "one of this ply-pump kind is wedged" would not say *which* ply
+ * (#1811). The `Job` string alone does not carry the name — it renders one only under
+ * `kotlinx.coroutines.debug`, which needs a `CoroutineId` in context too.
  */
 private fun identities(members: List<CoroutineInfo>): String {
     val ids = members.take(MAX_IDENTITIES_PER_GROUP).map { info ->
-        info.context[kotlinx.coroutines.Job]?.toString() ?: info.context.toString()
+        val job = info.context[kotlinx.coroutines.Job]?.toString() ?: info.context.toString()
+        info.context[CoroutineName]?.let { "${it.name} $job" } ?: job
     }
     val suffix = if (members.size > MAX_IDENTITIES_PER_GROUP) ", … ${members.size - MAX_IDENTITIES_PER_GROUP} more" else ""
     return ids.joinToString(prefix = "[", postfix = "$suffix]")
