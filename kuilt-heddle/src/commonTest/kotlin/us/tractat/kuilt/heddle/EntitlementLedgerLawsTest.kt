@@ -85,9 +85,7 @@ class EntitlementLedgerLawsTest {
             returned = randomEdgeCounters(rnd),
             leafSpent = randomEdgeCounters(rnd),
             rollupSpent = randomEdgeCounters(rnd),
-            transfers = pathKeys.filter { rnd.nextBoolean() }.associateWith {
-                replicas.filter { rnd.nextBoolean() }.associateWith { randomGCounter(rnd) }
-            },
+            transfers = randomRows(rnd),
             // The relocation families (#1691) are ordinary GCounter maps, so the laws must hold
             // over them by the same product-of-lattices argument — parameterise them in too.
             issuedRelocIn = randomEdgeCounters(rnd),
@@ -99,7 +97,19 @@ class EntitlementLedgerLawsTest {
             // two total orders, so the same product-of-lattices argument covers it. Parameterised
             // in so the fourteenth component is not silently exempt from the laws.
             gauges = edges.filter { rnd.nextBoolean() }.associateWith { randomGauge(rnd) },
+            // The transfer relocation pair (#2366) is the same per-donor-row matrix `transfers`
+            // is, joined by the same rule, so the laws must hold over it identically. Drawn
+            // independently of `transfers` and of each other — a shared draw would make the three
+            // matrices move together and hide a join that mixed them up.
+            transferRelocIn = randomRows(rnd),
+            transferRelocOut = randomRows(rnd),
         )
+
+    /** A random per-donor-row matrix — the shape `transfers` and its relocation pair all take. */
+    private fun randomRows(rnd: Random): Map<PathKey, Map<ReplicaId, GCounter>> =
+        pathKeys.filter { rnd.nextBoolean() }.associateWith {
+            replicas.filter { rnd.nextBoolean() }.associateWith { randomGCounter(rnd) }
+        }
 
     private fun randomGauge(rnd: Random): Gauge =
         Gauge(

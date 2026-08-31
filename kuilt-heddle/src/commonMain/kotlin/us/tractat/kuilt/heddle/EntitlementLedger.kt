@@ -1661,6 +1661,21 @@ public class EntitlementLedger private constructor(
         transferRelocIn = transferRelocIn, transferRelocOut = transferRelocOut,
     )
 
+    /**
+     * Structural equality over **every** lattice component.
+     *
+     * This is not a convenience: it is load-bearing for replication. `Quilter` gates every write
+     * path on it — `MutableStateFlow.update` stores nothing when `old == new`, and anti-entropy
+     * both heals and pushes back only on `merged != current`. A component omitted here is therefore
+     * a component whose patches are **silently discarded**, on the authoring node and on every
+     * receiver, unrecoverably: a delta touching only that component compares equal to the state it
+     * would have changed, so it is neither applied nor re-requested.
+     *
+     * `EntitlementLedgerComponentTest` walks every component and reds if one stops being observable
+     * through `equals`/`hashCode`/`toString`; its JVM arm derives the component set by reflection,
+     * so a new constructor parameter fails there rather than going quietly unobservable (as
+     * `transferRelocIn`/`transferRelocOut` did, #2366).
+     */
     override fun equals(other: Any?): Boolean =
         other is EntitlementLedger &&
             records == other.records &&
@@ -1676,7 +1691,9 @@ public class EntitlementLedger private constructor(
             leafRelocOut == other.leafRelocOut &&
             rollupRelocIn == other.rollupRelocIn &&
             rollupRelocOut == other.rollupRelocOut &&
-            gauges == other.gauges
+            gauges == other.gauges &&
+            transferRelocIn == other.transferRelocIn &&
+            transferRelocOut == other.transferRelocOut
 
     override fun hashCode(): Int {
         var h = records.hashCode()
@@ -1693,6 +1710,8 @@ public class EntitlementLedger private constructor(
         h = 31 * h + rollupRelocIn.hashCode()
         h = 31 * h + rollupRelocOut.hashCode()
         h = 31 * h + gauges.hashCode()
+        h = 31 * h + transferRelocIn.hashCode()
+        h = 31 * h + transferRelocOut.hashCode()
         return h
     }
 
@@ -1701,7 +1720,8 @@ public class EntitlementLedger private constructor(
             "returned=$returned, leafSpent=$leafSpent, rollupSpent=$rollupSpent, " +
             "transfers=$transfers, lifecycle=$lifecycle, issuedRelocIn=$issuedRelocIn, " +
             "leafRelocIn=$leafRelocIn, leafRelocOut=$leafRelocOut, " +
-            "rollupRelocIn=$rollupRelocIn, rollupRelocOut=$rollupRelocOut, gauges=$gauges)"
+            "rollupRelocIn=$rollupRelocIn, rollupRelocOut=$rollupRelocOut, gauges=$gauges, " +
+            "transferRelocIn=$transferRelocIn, transferRelocOut=$transferRelocOut)"
 
     public companion object {
         /** The empty ledger: no topology, no supply, no accounting. The lattice bottom. */
