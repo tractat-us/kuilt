@@ -15,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.Overflow
@@ -192,9 +193,11 @@ class TcpLoomFactoryTest {
      *
      * Under the default [DeliveryPolicy.Reliable] the same four frames sit in a 256-deep buffer and
      * the seam stays `Woven` forever — which is exactly what a dropped `policy` argument produces,
-     * and why the wait below times out rather than passing on a technicality. Real time, not
-     * virtual: `TcpLoom` refuses a `TestDispatcher`, and the ceiling is a generous wedge backstop —
-     * a live overflow latches in milliseconds.
+     * and why the wait below expires rather than passing on a technicality. Real time, not virtual:
+     * `TcpLoom` refuses a `TestDispatcher`, and the ceiling is a generous wedge backstop — a live
+     * overflow latches in milliseconds. `withTimeoutOrNull`, not `withTimeout`, so the *assertion*
+     * reports the failure with the seam's actual state; a thrown
+     * `TimeoutCancellationException` would preempt it and say only that ten seconds passed.
      */
     @Test
     fun aLossyPolicyReachesTheWovenSeam() = weavePair(
@@ -202,9 +205,9 @@ class TcpLoomFactoryTest {
         joiner = tcpLoomJoin(selector, policy = DeliveryPolicy(capacity = 1, overflow = Overflow.FAIL)),
     ) { hostSeam, joinerSeam ->
         repeat(4) { hostSeam.broadcast(byteArrayOf(it.toByte())) }
-        withTimeout(10.seconds) { joinerSeam.state.first { it is SeamState.Torn } }
+        val torn = withTimeoutOrNull(5.seconds) { joinerSeam.state.first { it is SeamState.Torn } }
         assertTrue(
-            joinerSeam.state.value is SeamState.Torn,
+            torn is SeamState.Torn,
             "a capacity-1 FAIL inbox must overflow on the second frame; the seam is still " +
                 "${joinerSeam.state.value}, so the policy never reached it",
         )
