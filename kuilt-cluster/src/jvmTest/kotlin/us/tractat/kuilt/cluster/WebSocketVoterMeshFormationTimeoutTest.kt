@@ -7,17 +7,14 @@ import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.withTimeout
-import us.tractat.kuilt.core.fabric.Connection
-import us.tractat.kuilt.core.fabric.ConnectionSource
+import org.junit.Assume.assumeTrue
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.websocket.KtorConnectionSource
@@ -25,44 +22,53 @@ import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
 import kotlin.test.Test
-import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 
 /**
- * Formation-timeout teardown for the real inter-server voter mesh.
+ * Formation-timeout teardown over the **real** inter-server WebSocket fabric — an opt-in smoke that
+ * `voterMeshOverWebSockets` reaches [assembleVoterMesh]'s failure path with real Netty/CIO sockets
+ * under it, rather than only in-memory ones.
  *
- * `voterMeshOverWebSockets` launches a persistent accept-pump per voter on a mesh lifecycle scope
- * *before* formation, then awaits the full K_M roster under a `formationTimeout`. If a voter never
- * completes its roster (a crashed/stalled peer), formation throws — and the caller never receives a
- * [VoterMesh], so it has **no handle** to close the mesh scope. This test proves that on that failure
- * path the function itself tears down what it started: the accept-pumps are cancelled and the
- * partially-formed seams are closed, so nothing is orphaned.
+ * ## Not in ci-required — opt-in via `-P` (#2226)
  *
- * ## Deterministic timeout with minimal sockets
+ * The assertion here sits **downstream of a live loopback WebSocket upgrade**: the lower voter must
+ * complete its dial to `/higher`, because a dial that throws fails formation *fast* rather than via the
+ * timeout under test. A saturated box loses that race — the server closes before the client parses the
+ * upgrade response — and the test then reported a bare exception-type mismatch, naming the timeout
+ * logic for a failure that never reached it. That is a property of the box, not of the code, so it must
+ * not gate a merge.
  *
- * One real Netty route (`/higher`) exists only so the lower voter's dial completes its WebSocket
- * upgrade cleanly (no connect throw — that would fail formation *fast*, not via the timeout under
- * test). The higher voter's [WebSocketVoter.source] is a [NeverYieldingSource] whose `accept()`
- * suspends forever, so the higher voter's roster never fills and `withTimeout(formationTimeout)`
- * fires deterministically. The never-yielding source completes a [CompletableDeferred] in its
- * `accept()` cancellation `finally`, so "was the accept-pump cancelled?" is directly observable.
+ * The behaviour is guarded in ci-required by the deterministic, virtual-time
+ * [VoterMeshFormationTimeoutTest], which pins **both** halves of the failure-path obligation (cancel the
+ * accept-pumps; close the partially-formed seams) with no socket on the assertion path. This test adds
+ * only the real-transport dimension. Run it with:
  *
- * On the pre-fix code the timeout propagates out with the mesh scope never cancelled — the pump keeps
- * draining forever and the deferred never completes; this test times out awaiting it (RED). The fix's
- * try/catch cancels the mesh scope and closes the partial seams, completing the deferred (GREEN).
+ * ```
+ * ./gradlew :kuilt-cluster:jvmTest -Pcluster.realsocket.tests=true
+ * ```
+ *
+ * Absent the flag it self-skips (a JUnit assumption), so `./gradlew build` compiles it but does not run
+ * it. When it *is* run, a lost dial is reported as a lost dial — see [failNamingTheRealEvent].
+ *
+ * ## What the rig does
+ *
+ * One real Netty route (`/higher`) exists only so the lower voter's dial upgrades cleanly. The higher
+ * voter's accept-source is a [NeverYieldingConnectionSource] — the same rig the deterministic test uses
+ * — so the higher voter's roster never fills, `withTimeout(formationTimeout)` fires, and the source's
+ * `accept()` cancellation `finally` makes "was the accept-pump torn down?" directly observable.
  */
 class WebSocketVoterMeshFormationTimeoutTest {
 
     private val pingPeriod = 500.milliseconds
 
-    // Short so the timeout fires fast; the never-yielding source guarantees it fires deterministically.
+    // Short so the timeout fires fast; the never-yielding source guarantees it fires at all.
     private val formationTimeout = 2.seconds
 
-    // Generous bound for observing the post-failure cancellation — far longer than the fix needs, but
-    // it MUST time out on the unfixed code (which never cancels the pump), so it is the RED/GREEN pivot.
+    // Generous bound for observing the post-failure cancellation — far longer than the teardown needs,
+    // but it MUST expire on code that never cancels the pump, so it is the RED/GREEN pivot.
     private val observeWindow = 20.seconds
 
     private val raftCfg = RaftConfig(
@@ -76,8 +82,24 @@ class WebSocketVoterMeshFormationTimeoutTest {
     private var httpClient: HttpClient? = null
     private var hostScope: CoroutineScope? = null
 
+    /**
+     * Self-skip unless `-Pcluster.realsocket.tests=true` was forwarded to the test JVM (see the build
+     * script). Shared with [WebSocketVoterMeshReconnectionTest] — one flag for the whole real-socket
+     * voter-mesh smoke.
+     */
+    private fun assumeRealSocketEnabled() =
+        assumeTrue(
+            "real-socket voter-mesh suite is opt-in: run with -Pcluster.realsocket.tests=true",
+            System.getProperty("cluster.realsocket.tests") == "true",
+        )
+
     @Test
-    fun formationTimeoutCancelsPumpsAndClosesPartialSeams() = runMeshTest {
+    fun formationTimeoutCancelsTheAcceptPumps() {
+        assumeRealSocketEnabled()
+        runMeshTest { assertFormationTimeoutTearsDownItsPumps() }
+    }
+
+    private suspend fun CoroutineScope.assertFormationTimeoutTearsDownItsPumps() {
         val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor] as? CoroutineDispatcher)
         // A real route at /higher so the lower voter's dial upgrades cleanly (no connect throw).
         // Bind 0 and read the port back from the *live* connector. Probing a free port with a
@@ -97,18 +119,23 @@ class WebSocketVoterMeshFormationTimeoutTest {
         // never yields, so the higher's roster never fills and formation times out.
         val lower = NodeId("voter-a")
         val higher = NodeId("voter-b")
-        val higherSource = NeverYieldingSource()
+        val higherSource = NeverYieldingConnectionSource()
         val voters = listOf(
             // lower's own inbound route is never dialed (higher dials nothing), so a never-yielding
             // source here is harmless; lower still dials the higher below.
-            WebSocketVoter(lower, NeverYieldingSource(), "ws://localhost:$port/higher"),
+            WebSocketVoter(lower, NeverYieldingConnectionSource(), "ws://localhost:$port/higher"),
             WebSocketVoter(higher, higherSource, "ws://localhost:$port/higher"),
         )
 
         val scope = CoroutineScope(dispatcher + Job()).also { hostScope = it }
 
-        // Formation must throw a timeout — the caller gets no VoterMesh handle back.
-        assertFailsWith<TimeoutCancellationException> {
+        // Formation must throw the FORMATION TIMEOUT — the caller gets no VoterMesh handle back. Any
+        // other throwable means the dial lost its race with the box and formation never got far enough
+        // for the timeout to be the thing that fired; that is reported as itself, not as a type
+        // mismatch, so a reader sees the real event (#2226).
+        // Classify first, assert after — a `fail()` written inside the `try` would be swallowed by the
+        // catch-all below and re-reported as a lost dial.
+        val failure: Throwable? = try {
             scope.voterMeshOverWebSockets(
                 voters = voters,
                 httpClient = client,
@@ -117,15 +144,35 @@ class WebSocketVoterMeshFormationTimeoutTest {
                 random = Random(1450),
                 formationTimeout = formationTimeout,
             )
+            null
+        } catch (thrown: Throwable) {
+            thrown
+        }
+        when (failure) {
+            null -> fail("formation was expected to time out after $formationTimeout, but it succeeded")
+            is TimeoutCancellationException -> Unit   // the path under test
+            else -> failNamingTheRealEvent(failure)
         }
 
-        // The fix must have cancelled the accept-pump: the never-yielding source's accept() suspension
-        // is cancelled, completing this deferred. On the unfixed code the pump keeps running forever and
-        // this await times out (the RED signal).
+        // The teardown must have cancelled the accept-pump: the never-yielding source's accept()
+        // suspension is cancelled, completing `cancelled`. `accepting` first, so a green cannot come
+        // from a pump that never started.
         withTimeout(observeWindow) { higherSource.accepting.await() }
         withTimeout(observeWindow) { higherSource.cancelled.await() }
-        assertTrue(higherSource.cancelled.isCompleted, "formation timeout must cancel the accept-pump")
     }
+
+    /**
+     * Fail with the *cause* rather than a bare exception-type mismatch. The distinction #2226 asks this
+     * test to preserve is "formation timeout is broken" versus "the box could not complete a loopback
+     * WebSocket handshake in time" — the second is an environment condition and says so.
+     */
+    private fun failNamingTheRealEvent(actual: Throwable): Nothing = fail(
+        "the voter dial failed before formation could time out, so the formation timeout was never " +
+            "exercised — this is an environment condition (a lost loopback WebSocket upgrade), not a " +
+            "formation-timeout regression; the deterministic VoterMeshFormationTimeoutTest is what " +
+            "guards the behaviour. Actual failure: $actual",
+        actual,
+    )
 
     /**
      * Run [body] under a real [runBlocking] dispatcher and tear every resource down inside the same
@@ -140,24 +187,6 @@ class WebSocketVoterMeshFormationTimeoutTest {
             httpClient?.close()
             server?.stop(gracePeriodMillis = 0, timeoutMillis = 500)
             this.coroutineContext.cancelChildren()
-        }
-    }
-
-    /**
-     * A [ConnectionSource] whose [accept] suspends forever. It records when it was entered
-     * ([accepting]) and when its suspension was cancelled ([cancelled]) — the latter is exactly the
-     * "the accept-pump was torn down" signal.
-     */
-    private class NeverYieldingSource : ConnectionSource {
-        val accepting = CompletableDeferred<Unit>()
-        val cancelled = CompletableDeferred<Unit>()
-        override suspend fun accept(): Connection {
-            accepting.complete(Unit)
-            try {
-                awaitCancellation()
-            } finally {
-                cancelled.complete(Unit)
-            }
         }
     }
 }
