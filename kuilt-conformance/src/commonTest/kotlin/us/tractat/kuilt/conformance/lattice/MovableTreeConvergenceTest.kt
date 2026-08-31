@@ -6,7 +6,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 
 // Random adds and moves (including cycle-attempting moves, which replay skips
 // deterministically) — the patterns that reveal move-log total-order and replay bugs.
-internal class MovableTreeConvergenceTest : LatticeLawSuite<MovableTree<String>>() {
+internal class MovableTreeConvergenceTest : CompactableLatticeLawSuite<MovableTree<String>>() {
     override fun newHarness(): LatticeLawHarness<MovableTree<String>> = LatticeLawHarness(
         initial = MovableTree.empty(),
         // `move` is the RETIRE op. Nothing is deleted from a `MovableTree` — the move log only
@@ -75,6 +75,30 @@ internal class MovableTreeConvergenceTest : LatticeLawSuite<MovableTree<String>>
         serializer = MovableTree.serializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
+        // The #1957 field is `compactedDots`, and it is the case worth reading before copying this
+        // binding: `compact` selects droppable ops by filtering a `log` kept sorted by
+        // `(ts, replicaId)`, so the minted `MoveTreeCompact.droppedDots` is ALREADY canonical and
+        // its iteration order varies across the six folds on 0 of 32 seeds. The post-merge phase
+        // therefore pins nothing here, however often it fires; only the pre-merge phase does, by
+        // merging two independently-compacted `compactedDots` sets with `Set.plus`.
+        compactor = { state, stableCut, frontierMax, delivered ->
+            state.compact(stableCut, frontierMax, delivered)
+                ?.let { (compacted, op) -> CompactionStep(compacted, op.droppedDots.size) }
+        },
+    )
+
+    // Measured over seeds 0..31 on 2026-08-30, at opsPerReplica = 8: post-merge 24/32, max dropped
+    // in one step 7, pre-merge >=2 replicas 16/32. Floors at ~three-quarters of each.
+    //
+    // The post-merge floors are kept even though the post-merge phase pins none of this type's
+    // *current* mechanisms — the reason it pins nothing is a property of `compact`'s log ordering,
+    // not of the phase, and the phase still asserts something with content: that compacting the
+    // merged state converges and encodes identically under every fold. It is a standing net for a
+    // mechanism this type does not have yet.
+    override val compactionFloors: CompactionFloors = CompactionFloors(
+        postMergeRunsWithCompaction = 18,
+        postMergeMaxDroppedInOneStep = 5,
+        preMergeRunsWithTwoOrMoreCompacting = 12,
     )
 }
 

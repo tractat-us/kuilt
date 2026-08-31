@@ -286,11 +286,11 @@ public class LatticeLawHarness<S : Quilted<S>>(
     public fun run(seed: Long): S {
         val random = Random(seed)
         val replicas = buildReplicas(random)
+        val compactor = this.compactor
+        if (compactor != null) assertReplicaHistoriesAreDisjoint(replicas, seed)
         val canonical = mergeAll(replicas)
         assertAllPermutationsConverge(replicas, canonical)
-        val compactor = this.compactor
         if (compactor != null) {
-            assertReplicaHistoriesAreDisjoint(replicas, seed)
             runPostMergePhase(compactor, replicas, seed)
             runPreMergePhase(compactor, replicas, seed)
             runs++
@@ -1292,6 +1292,14 @@ public class LatticeLawHarness<S : Quilted<S>>(
      * of its dots. Two replicas sharing an author id would break that quietly, and the resulting
      * "convergence failure" would be the generator's fault rather than the type's — so it is named
      * here instead.
+     *
+     * **It runs before phase 0, and that ordering was checked rather than chosen.** A gate placed
+     * ahead of an older one is normally how the older one's coverage silently drops to zero — but
+     * this gate can only fire on a generator whose replicas share an author id, and such a generator
+     * mints the same dot twice, so phase 0 is *already* red on every one of those inputs (measured:
+     * it reds with a canonical-encoding failure). No input moves from red to green; only the message
+     * changes, from a byte diff to the name of the generator fault that produced it. Placing it
+     * after phase 0 would mean the diagnosis never printed, because phase 0 raises first.
      */
     private fun assertReplicaHistoriesAreDisjoint(replicas: List<S>, seed: Long) {
         val authorsPerReplica = replicas.map { r -> r.causalDots().mapTo(mutableSetOf()) { it.replica } }

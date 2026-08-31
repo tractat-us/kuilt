@@ -6,7 +6,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 
 // Random-position inserts plus removes force concurrent same-anchor siblings and
 // tombstone merges — the patterns that reveal Fugue tree-ordering (non-interleaving) bugs.
-internal class FugueConvergenceTest : LatticeLawSuite<Fugue<String>>() {
+internal class FugueConvergenceTest : CompactableLatticeLawSuite<Fugue<String>>() {
     override fun newHarness(): LatticeLawHarness<Fugue<String>> = LatticeLawHarness(
         initial = Fugue.empty(),
         // Pinned head ops so the derived shape `insert-head · remove-head · insert-roam` retires
@@ -36,6 +36,28 @@ internal class FugueConvergenceTest : LatticeLawSuite<Fugue<String>>() {
         floors = VacuityFloors(maxNoOpSteps = 0.12),
         serializer = Fugue.wireSerializer(String.serializer()),
         replicaCount = 3,
-        opsPerReplica = 8,
+        // 16, not the shared default of 8, and the only generator knob this change moves.
+        // Measured over seeds 0..31: pre-merge runs with >=2 replicas compacting go 13/32 -> 24/32
+        // and post-merge runs 27/32 -> 31/32. Strictly more search — more ops can only add
+        // trajectories — but it does move an existing load-bearing test's shape, so the #1978
+        // mutation was re-run at 16 and is still red (see the PR's matrix).
+        // It does NOT move the causal pool the associativity/codec/vacuity passes walk: that
+        // builder stops at POOL_LIMIT = 14, which this binding reaches well inside 8 ops.
+        opsPerReplica = 16,
+        // The `Compact.positions` map, the identical #1978 mechanism at the identical position as
+        // `Rga`'s. `Fugue` additionally has the #713 axis — the order *between* several `Compact`
+        // ops in one log — which only the pre-merge phase reaches.
+        compactor = { state, stableCut, frontierMax, delivered ->
+            state.compact(stableCut, frontierMax, delivered)
+                ?.let { (compacted, op) -> CompactionStep(compacted, op.positions.size) }
+        },
+    )
+
+    // Measured over seeds 0..31 on 2026-08-30, at opsPerReplica = 16: post-merge 31/32, max
+    // dropped in one step 5, pre-merge >=2 replicas 24/32. Floors at ~three-quarters of each.
+    override val compactionFloors: CompactionFloors = CompactionFloors(
+        postMergeRunsWithCompaction = 23,
+        postMergeMaxDroppedInOneStep = 4,
+        preMergeRunsWithTwoOrMoreCompacting = 18,
     )
 }

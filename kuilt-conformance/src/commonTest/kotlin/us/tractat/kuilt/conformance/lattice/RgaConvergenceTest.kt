@@ -6,7 +6,7 @@ import us.tractat.kuilt.crdt.Rga
 
 // Random-position inserts plus removes force concurrent same-predecessor siblings and
 // tombstone merges — exactly the patterns that reveal ordering-tiebreak bugs.
-internal class RgaConvergenceTest : LatticeLawSuite<Rga<String>>() {
+internal class RgaConvergenceTest : CompactableLatticeLawSuite<Rga<String>>() {
     override fun newHarness(): LatticeLawHarness<Rga<String>> = LatticeLawHarness(
         initial = Rga.empty(),
         // `insert-head` / `remove-head` both pin index 0, so the derived shape
@@ -38,5 +38,22 @@ internal class RgaConvergenceTest : LatticeLawSuite<Rga<String>>() {
         serializer = Rga.wireSerializer(String.serializer()),
         replicaCount = 3,
         opsPerReplica = 8,
+        // Reaches `compact()` at the harness-derived cut. The `Compact.positions` map is the
+        // #1978 field: derived from `tombstones`, which `piece` builds with `Set.plus` — a
+        // `LinkedHashSet` in merge order — so its key order is a function of the fold, and the
+        // post-merge phase is what varies the fold.
+        compactor = { state, stableCut, frontierMax, delivered ->
+            state.compact(stableCut, frontierMax, delivered)
+                ?.let { (compacted, op) -> CompactionStep(compacted, op.positions.size) }
+        },
+    )
+
+    // Measured over seeds 0..31 on 2026-08-30, at this binding's own opsPerReplica = 8:
+    // post-merge 32/32, max dropped in one step 8, pre-merge >=2 replicas 32/32. Floors at
+    // ~three-quarters of each, so a drift is visible as a drift rather than as a pass.
+    override val compactionFloors: CompactionFloors = CompactionFloors(
+        postMergeRunsWithCompaction = 24,
+        postMergeMaxDroppedInOneStep = 6,
+        preMergeRunsWithTwoOrMoreCompacting = 24,
     )
 }
