@@ -94,6 +94,14 @@ internal val MEMBERSHIP_SETTLE_BOUND: Duration = 600.milliseconds
  * and heartbeat timers re-arm forever, so the scheduler is never idle and that call cannot return.
  * Failing to settle within [within] fails the test naming the trajectory, rather than hanging.
  *
+ * **Every duration here is virtual, and must stay that way.** [step], [stableFor] and [within] are
+ * summed from [kotlinx.coroutines.test.TestScope.advanceTimeBy] steps; nothing reads a wall clock,
+ * so the verdict is identical on an idle box and a saturated one. A quiescence window keyed to real
+ * time would be load-sensitive in exactly the way `runTest`'s own `timeout` is — wall-clock over a
+ * virtual-time trajectory, measuring the host rather than the code — and would trade the transient
+ * this helper exists to catch for a contention flake. If a change here needs a deadline, spend
+ * virtual time; never `TimeSource`, `Clock`, or elapsed real time.
+ *
  * Two caller obligations, because both silently defeat it:
  * - **Hold the injected liveness clock still** (or advance it deliberately). This moves only the
  *   *coroutine* clock; a `clock` frozen at a fixed [kotlin.time.Instant] is what keeps the eviction
