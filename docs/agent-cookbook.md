@@ -672,8 +672,34 @@ predecessor you dropped re-anchors to the front of the list rather than to that 
 relative order with older entries is not preserved (see `Rga.compactedBelow`). And if you replicate
 through `Quilter`, read `causalFloor()` alongside `causalDots()` when you fold a delivered
 frontier — the floored dots leave `causalDots()` entirely, and a walk that counts only dots reports
-a frontier of zero for that author and stalls every downstream collection. `Quilter` already does
-this; hand-rolled frontier arithmetic must too.
+a frontier of zero for that author and stalls every downstream collection.
+
+**Primitive:** `VersionVector.contiguous(dots, floor)` (`us.tractat.kuilt.crdt`) — the same function
+`Quilter` folds its own cut with, so there is nothing left to hand-roll. It stops at the first gap
+on purpose: a replica holding `1, 2, 4` has *not* delivered `4`, because `3` is still in flight and
+something it has not seen may depend on it.
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleVersionVectorContiguous -->
+```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+// A holds 1, 2, 4 — seq 3 is still in flight, so A has delivered 2, not 4.
+val dots = setOf(Dot(a, 1L), Dot(a, 2L), Dot(a, 4L), Dot(b, 1L))
+val frontier = VersionVector.contiguous(dots, floor = VersionVector.EMPTY)
+check(frontier[a] == 2L)
+check(frontier[b] == 1L)
+
+// After compaction swallows A's 1..2 without keeping their ids, the floor asserts they were
+// delivered and the walk starts above them — so 4 is still gapped, but 3 would now count.
+val floor = VersionVector.of(mapOf(a to 2L))
+check(VersionVector.contiguous(setOf(Dot(a, 4L)), floor)[a] == 2L)
+check(VersionVector.contiguous(setOf(Dot(a, 3L), Dot(a, 4L)), floor)[a] == 4L)
+```
+
+`floor` is deliberately not defaulted. Passing `VersionVector.EMPTY` where a real floor exists
+collapses that author's high-water to `0`, and a gossiped regression there pins every downstream
+compaction below the gap forever.
 
 **I want the edit history, not the current value — and I want it to outlive what the replica
 forgets.** A replicated list is really a log of small edits, and `dropWindow`/`compact` above throw
