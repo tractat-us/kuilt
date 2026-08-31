@@ -89,12 +89,28 @@ way up: **the narrower scope wins**, and the app-wide mapper is the widest scope
 there is — so entering a session's block corrects a stale app-wide stamp rather than
 losing to it. Outside any block, nothing changes.
 
-How far a block's context reaches depends on the platform, for the same reason a
-trace's does, and the note above applies here word for word: on JVM/Android it
-follows the work across thread hops and into child coroutines, so two sessions can
-interleave freely; on iOS, macOS and wasm it covers a line logged synchronously
-inside the block. Where it does not reach, a line is stamped with the enclosing
-block's attributes or with none — never with a *different* block's.
+**How far a block's context reaches depends on the platform, and on iOS, macOS and
+wasm it is weaker than you might assume — worth reading before you rely on it.**
+
+On JVM and Android it is airtight: the context follows the work across threads and
+into child coroutines, so two sessions can interleave as much as they like and each
+line still gets its own.
+
+On iOS, macOS and wasm it covers a line logged **synchronously inside the block** —
+the common case, and the one to design for. What it cannot do there is survive a
+pause. If a session's block stops to wait for something and picks up again while a
+*second* session is midway through its own block on the same thread, the first
+session's next line is stamped with the **second** session's id. An iPhone app
+running two sessions on the main thread is exactly that situation, so this is
+ordinary rather than obscure. There is a milder version of the same thing too: a
+block that starts while another is mid-flight inherits that other block's extra
+keys, though its own keys still win.
+
+So on those platforms this is a real improvement on the app-wide mapper — which is
+wrong for every line of every session that isn't the current one — but it is an
+improvement, not a promise. Keep a session's logging synchronous inside its block.
+Closing the gap needs something Kotlin/Native does not offer yet; it is tracked in
+[#2569](https://github.com/tractat-us/kuilt/issues/2569).
 
 ## When the line happened, and when we wrote it down
 

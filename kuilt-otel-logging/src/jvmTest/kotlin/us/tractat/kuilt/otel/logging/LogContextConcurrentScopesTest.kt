@@ -35,6 +35,12 @@ import kotlin.time.Instant
  * only a line logged synchronously within the block — exactly the reach
  * [withActiveTrace] documents for the same reason. `commonTest`'s
  * `LogContextPerScopeTest` holds the cross-session property that *is* universal.
+ *
+ * **So this file's absence from `commonTest` is a statement, not an oversight**:
+ * promoting it would red on Apple/wasmJs, because there a scope resuming beside a
+ * mid-block sibling really does read the sibling's attributes. That is the gap
+ * tracked in #2569 — when it closes, this test moves to `commonTest` unchanged, and
+ * that is the check that it closed.
  */
 class LogContextConcurrentScopesTest {
     private val fixedClock = object : Clock {

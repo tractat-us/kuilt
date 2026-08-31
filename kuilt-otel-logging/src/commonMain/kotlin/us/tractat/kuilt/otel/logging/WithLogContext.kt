@@ -43,31 +43,49 @@ import kotlinx.coroutines.CoroutineScope
  * on the drain coroutine. So a line emitted inside this block carries this block's
  * attributes however long its record then waits to be written (#1630).
  *
- * ## Platform behaviour
+ * ## Platform behaviour — the guarantee is NOT the same everywhere
  *
- * The reach of the binding differs by platform, for exactly the reason — and to
- * exactly the extent — that [withActiveTrace]'s does: only the JVM has a coroutine
- * primitive that mirrors a value across thread hops.
- * - **JVM / Android** — propagated across coroutine dispatches and inherited by child
- *   coroutines ([LogContextElement], a `ThreadContextElement`), and the prior context
- *   is restored on exit. Reliable even when [block] suspends and resumes elsewhere,
- *   and — the case this feature exists for — when two scopes are interleaved.
- * - **wasmJs** — single-threaded, so reliable for a line logged synchronously within
- *   [block].
- * - **iOS / macOS** — reliable for a line logged **synchronously within [block]** (the
- *   common case). If [block] suspends and resumes on a *different* worker thread, the
- *   context is **not** carried to that thread — no Kotlin/Native primitive can mirror
- *   a thread-local across coroutine dispatches (`kotlinx.coroutines.ThreadContextElement`
- *   is JVM-only as of coroutines 1.11.0). The restore is identity-guarded, so a hop can
- *   never overwrite an unrelated scope's context; the setting thread's slot is simply
- *   left until the next `withLogContext` on it supersedes it.
+ * The capture edge is a non-`suspend` callback, so what it reads is an
+ * execution-local slot; the whole question on any platform is who last wrote that
+ * slot. Only the JVM has a coroutine primitive that re-establishes it per dispatch,
+ * so only there is the binding airtight — the same split, for the same reason, as
+ * [withActiveTrace]'s.
  *
- * Where the binding does not reach, a line is stamped with the enclosing scope's
- * attributes or none — it is not stamped with *another* scope's. The one shape that
- * can still mis-attribute on Apple/wasmJs is two scopes interleaving on one thread;
- * prefer keeping a session's logging synchronous within its block there.
+ * - **JVM / Android — the full guarantee.** [LogContextElement] (a
+ *   `ThreadContextElement`) re-establishes the slot on *every* dispatch, so the
+ *   binding follows [block] across thread hops, is inherited by child coroutines, and
+ *   is restored on exit. Two scopes may interleave freely: whichever is running is the
+ *   one the edge reads. "Enclosing" here is the true structural parent — it is read
+ *   from the coroutine context, not from the thread.
  *
- * @param attributes the attributes to bind. Merged over any enclosing binding.
+ * - **iOS / macOS / wasmJs — reliable for a line logged *synchronously within*
+ *   [block], and no further.** `kotlinx.coroutines.ThreadContextElement` does not
+ *   exist on Kotlin/Native or wasmJs (checked against coroutines 1.11.0), so the slot
+ *   is set once on entry and nothing re-establishes it per dispatch. Two consequences,
+ *   both ordinary rather than exotic for an app running concurrent sessions on one
+ *   thread — an iOS app on `Dispatchers.Main` is exactly that:
+ *     - **A scope that suspends and resumes while a sibling scope is mid-block on the
+ *       same thread reads the *sibling's* attributes** (#2569). Its line is stamped
+ *       with the sibling's session, not its own: a genuine mis-attribution, not a
+ *       dropped stamp.
+ *     - **"Enclosing" degrades to "whatever the thread last set"**, which may be a
+ *       concurrent *sibling* rather than a lexical parent — so keys a sibling bound,
+ *       and this scope never did, can be inherited into this scope's records. Keys
+ *       this scope does set still win the collision, so its own are correct.
+ *
+ *   The identity-guarded restore bounds the damage but does not remove it: leaving a
+ *   block can never *overwrite* a different scope's binding, and the slot is simply
+ *   left until the next `withLogContext` on that thread supersedes it. Keep a
+ *   session's logging synchronous within its block on these platforms. Closing the gap
+ *   needs a per-dispatch hook Kotlin/Native does not currently offer; tracked in #2569.
+ *
+ * This remains a strict improvement everywhere over the process-global
+ * [CaptureConfig.attributeMapper] — which is wrong for *every* line of *every*
+ * non-armed session — but on Apple and wasmJs it is an improvement, not a guarantee.
+ *
+ * @param attributes the attributes to bind. Merged over the enclosing binding, this
+ *   scope's own keys winning. On Apple/wasmJs read "enclosing" as *whatever the thread
+ *   last set*, which may be a concurrent sibling — see the platform note above.
  * @sample us.tractat.kuilt.otel.logging.sampleWithLogContext
  */
 public expect suspend fun <T> withLogContext(
