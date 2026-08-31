@@ -246,10 +246,16 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      * [EntitlementLedger.holdings] therefore no longer counts.
      *
      * `transfers` is keyed by `PathKey.of(edge)` — the **generation's** id, not the child
-     * group. So when a group's inbound generation is replaced (a reshape, or a relocation
-     * re-homing the counter families onto a fresh edge), the counters travel and the
-     * transfer rows do not: the recipient's credit and the donor's debit both drop out of
-     * the derivation at once, and **the donor silently recovers what it gave away**.
+     * group. So when a group's inbound generation is replaced and the rows do not travel with
+     * it, the recipient's credit and the donor's debit drop out of the derivation at once, and
+     * **the donor silently recovers what it gave away**.
+     *
+     * A [EntitlementLedger.relocationPatch] carry moves them (#2366) — cancelling the dead key
+     * with `transferRelocOut` and re-opening the live one with `transferRelocIn` — so a move that
+     * completes leaves nothing here to report. What still reaches this report is a generation
+     * replaced **without** one: a plain reshape with no `Reconcile` behind it, a refused move, an
+     * ack that declared no row (the shape a pre-#2377 `QuiesceAck` had), or rows keyed on a
+     * generation this ledger has never seen.
      *
      * ## Why this needs its own report
      *
@@ -264,25 +270,29 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      *    released across the dead generation.
      *  - The same asymmetry is why `EntitlementLedger.relocationPatch`'s `n < 0` precondition
      *    misses it: a recipient who merely *holds* transferred credit has no counter slot on
-     *    the edge at all and is absent from every per-slot enumeration.
+     *    the edge at all and is absent from every per-slot enumeration. (It is also why the
+     *    fence enumerates transfer donors explicitly — see `EntitlementLedger.baseFinalsOn`.)
      *
      * ## What it takes to fire — all three, together
      *
      *  1. **The key is no longer read.** Its edge's child group has a live lineage whose
      *     final key is a *different* one.
-     *  2. **The live key does not already cover the rows.** Some `(donor, recipient)` cumulative
-     *     at this key exceeds the same pair's cumulative at the group's live key.
+     *  2. **The live key does not already cover the rows.** Some `(donor, recipient)` **effective**
+     *     magnitude at this key exceeds the same pair's at the group's live key. Effective on both
+     *     sides — base ± relocation — because that is what `EntitlementLedger.holdings` reads.
      *
-     *     This is a **magnitude** test and so a **necessary condition for abandonment** — *not*
-     *     evidence that a move carried the rows across, and the state cannot support that
-     *     stronger reading. `EntitlementLedger.transfer` accumulates onto the very same
-     *     `(path, donor, recipient)` slot this compares, so "the move carried these rows" and
-     *     "the same pair independently transferred at least as much again at the live key" are
-     *     *byte-identical* states. The consequence is a real, permanent blind spot: a later
-     *     ordinary transfer between those two peers at the live key **masks** a report that had
-     *     been firing, and rows are grow-only, so the live cumulative never falls back to unmask
-     *     it. If the eventual fix re-keys `transfers` by group rather than by generation, this
-     *     clause disappears along with the key it compares against.
+     *     This is a **magnitude** test, and against a *base* row it is only a **necessary condition
+     *     for abandonment**: `EntitlementLedger.transfer` accumulates onto the very same
+     *     `(path, donor, recipient)` slot, so "the pair transferred at least as much again at the
+     *     live key" is byte-identical to a carry. The consequence is a real, permanent blind spot —
+     *     a later ordinary transfer between those two peers at the live key **masks** a report that
+     *     had been firing, and rows are grow-only, so the live cumulative never falls back to
+     *     unmask it.
+     *
+     *     A real [EntitlementLedger.relocationPatch] carry does **not** rest on this clause: it
+     *     cancels the dead key with `transferRelocOut`, so clause 3 sees a settled generation and
+     *     the report clears on provenance the lattice actually carries. The blind spot survives
+     *     only for a base-row coincidence, which no code path produces.
      *  3. **It is consequential.** Some party to those rows still has a non-zero balance
      *     stranded on the dead generation — `netInflow + transferNet − effLeafSpent ≠ 0`,
      *     the inbound half of [EntitlementLedger.holdings] evaluated where it is no longer

@@ -617,23 +617,25 @@ class EntitlementLedgerReconcileTest {
     }
 
     /**
-     * The fix (#2366 option 2): a strand whose path key carries **any** transfer row is refused,
-     * widening `relocationPatch`'s documented out-of-scope case from the loud half (`n < 0`, a
-     * recipient who also spent or released across the strand) to the quiet half — a recipient who
-     * merely *holds*, has no counter slot on the strand at all, and so is invisible to every existing
-     * precondition.
+     * The ledger-level path agrees with the log-pure one: a strand whose path key carries transfer
+     * rows **moves**, and the rows move with it. This is the test #2376's blanket refusal used to
+     * own; the refusal is retired because the abandonment it was containing no longer happens.
+     *
+     * Where it earns its keep now is the *donor* side, which the log-pure arm above cannot see: the
+     * carry lands in `transferRelocIn` at the live key, and the dead key's rows are cancelled by
+     * `transferRelocOut` rather than erased — `transfers` is grow-only and no fix can remove a row.
      */
     @Test
-    fun aStrandWhosePathKeyCarriesTransferRowsIsRefused() {
+    fun aStrandWhosePathKeyCarriesTransferRowsMovesAndCarriesThem() {
         val l = transferTangledLeafStrand()
-        val refused = assertIs<Relocation.Refused>(
+        val moved = assertIs<Relocation.Moved>(
             l.relocateFromConvergedView(h),
-            "a generation move that would abandon the strand's transfer rows must refuse",
+            "a strand carrying transfer rows must move, and take them along",
         )
+        val after = l.piece(moved.patch)
         assertAll(
-            // ── the rig fired for the RIGHT reason. A bare `assertIs<Refused>` passes just as
-            // loudly when the move was refused for cover, for a net-negative slot, or because the
-            // fixture had nothing to move — so pin the row's existence and the reason's identity.
+            // ── the rig: the row really is on the dead key and not on the live one, so what the
+            // assertions below observe is a carry and not a coincidence.
             {
                 assertEquals(
                     setOf(p3),
@@ -642,28 +644,35 @@ class EntitlementLedgerReconcileTest {
                 )
             },
             {
-                assertTrue(
-                    l.baseFinalsOn(e2).values.all { it.issued >= it.returned },
-                    "rig: nobody is net-negative on the strand, so the `n < 0` guard CANNOT be what refused",
-                )
-            },
-            {
                 assertEquals(
                     emptySet(),
                     l.transferDonorsOn(e4),
-                    "rig: the live edge's path key carries no rows — the abandonment is the whole defect",
+                    "rig: …and the live edge's path key carries none of its own",
                 )
             },
-            { assertTrue(refused.reason.contains(e2.value), "the refusal names the strand: ${refused.reason}") },
-            { assertTrue(refused.reason.contains("transfer"), "…and says transfer rows are why: ${refused.reason}") },
-            { assertTrue(refused.reason.contains(p3.value), "…and names the donor whose row would be abandoned: ${refused.reason}") },
+            {
+                assertTrue(
+                    l.baseFinalsOn(e2).values.all { it.issued >= it.returned },
+                    "rig: nobody is net-negative on the strand, so the `n < 0` guard is not in play",
+                )
+            },
+            { assertEquals(20L, after.holdings(h, p3), "the donor keeps only what it kept") },
+            { assertEquals(40L, after.holdings(h, bob), "…and the recipient keeps what it was given") },
+            {
+                assertEquals(
+                    setOf(p3),
+                    after.transferDonorsOn(e2),
+                    "the dead key's rows are CANCELLED, never erased — `transfers` is grow-only",
+                )
+            },
+            { assertTrue(after.validate().isEmpty(), "…and nothing is left orphaned: ${after.validate()}") },
         )
     }
 
     /**
-     * Non-vacuity for the refusal above: the **identical** strand with the hand-off omitted still
+     * Non-vacuity for the carry above: the **identical** strand with the hand-off omitted still
      * moves, and lands the whole 60 on the donor because that is now the truth. Without this arm a
-     * guard that refused every strand would pass the test above unremarked.
+     * carry that credited the donor either way would pass the test above unremarked.
      */
     @Test
     fun aStrandWithNoTransferRowsStillMoves() {
@@ -681,35 +690,47 @@ class EntitlementLedgerReconcileTest {
     }
 
     /**
-     * The corruption itself, pinned — the motivation, and the shape option 1 has to make legal again.
+     * The **negative control** for the whole fix, and the corruption it removes: strip the rows back
+     * out of the acks — the shape a `QuiesceAck` had before #2377 gave [SlotFinals] a `transfers`
+     * field — and the abandonment returns exactly as reported.
      *
-     * It is derived the way `HeddleControlPlane.reconcile` derives it: `relocationPatch` on the
-     * control plane's own relocation accumulator (`FenceState.relocations`), which is log-pure and
-     * therefore carries **no transfer rows at all**. So this is simultaneously two statements:
+     * This is what proves the carry rides on the *ack*, not on something the deriving peer happened
+     * to hold. Everything else is identical: the same strand, the same log-pure receiver, the same
+     * derived counter families. Only the declaration is gone, and with it `bob`'s 40.
      *
-     *  1. what the move does to a transfer-tangled strand — `bob`'s 40 evaporates and the donor
-     *     silently recovers it, with conservation exactly intact, because
-     *     `Σ_r transferNet(pathKey, r) = 0` makes abandoning a whole path key sum-preserving; and
-     *  2. that the option-2 refusal does **not** reach the H5 control-plane path, whose receiver can
-     *     never carry the rows it would have to see. Containing that needs the rows to become a
-     *     consensus fact (carried in the `QuiesceAck` alongside `SlotFinals`) — option 1's job.
+     * The two properties that made this defect survive review are asserted here rather than
+     * described, because both stay true after the fix and neither can ever be the thing that
+     * catches a regression:
      *
-     * The corruption is no longer *silent*: [LedgerConflict.OrphanedTransferPath] names the dead key
-     * (#2366's diagnostic half). That assertion is the **acceptance signal for the fix** — a change
-     * that carries the rows across with the generation flips it from naming `e2` to naming nothing,
-     * with the two holdings above becoming 20 and 40 in the same PR.
+     *  - **conservation is structurally blind.** `Σ_r transferNet(k, r) = 0` on every key, so
+     *    abandoning a whole key is sum-preserving — `mintedTotal = Σ holdings + Σ effLeafSpent`
+     *    still holds exactly, and only the owner changed.
+     *  - **no pocket goes negative.** The recipient lands on `0`, not below, so
+     *    [LedgerConflict.PersistentNegativeHoldings] never fires.
+     *
+     * What does catch it is [LedgerConflict.OrphanedTransferPath], and it is asserted to be the sole
+     * report — so a future change that silences the diagnostic reds here even while the arithmetic
+     * assertions stay green.
      */
     @Test
-    fun theAbandonedRowsSilentlyReassignTheRecipientsEntitlementToTheDonor() {
+    fun anAckThatDeclaresNoTransferRowsAbandonsThemExactlyAsBefore() {
         val l = transferTangledLeafStrand()
+        val undeclared = l.baseFinalsOn(e2).mapValues { (_, f) -> f.copy(transfers = emptyMap()) }
         val move = assertIs<Relocation.Moved>(
-            EntitlementLedger.ZERO.relocationPatch(e4, mapOf(e2 to l.baseFinalsOn(e2))),
-            "the log-pure control-plane derivation still moves — it cannot see the rows",
+            EntitlementLedger.ZERO.relocationPatch(e4, mapOf(e2 to undeclared)),
+            "the log-pure derivation still moves — undeclared rows are invisible to it",
         )
         val moved = l.piece(move.patch)
         assertAll(
-            { assertEquals(60L, moved.holdings(h, p3), "the donor recovers the 40 it gave away (should be 20)") },
-            { assertEquals(0L, moved.holdings(h, bob), "…and the recipient's credit is gone (should be 40)") },
+            {
+                assertEquals(
+                    mapOf(bob to 40L),
+                    l.baseFinalsOn(e2)[p3]?.transfers,
+                    "rig: the honest ack really does declare the row this arm withholds",
+                )
+            },
+            { assertEquals(60L, moved.holdings(h, p3), "the donor recovers the 40 it gave away") },
+            { assertEquals(0L, moved.holdings(h, bob), "…and the recipient's credit is gone") },
             {
                 assertEquals(
                     listOf(LedgerConflict.OrphanedTransferPath(PathKey.of(e2))),

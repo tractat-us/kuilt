@@ -571,10 +571,15 @@ class EntitlementLedgerValidateTest {
     }
 
     /**
-     * Clause 2's control arm, and the **acceptance signal for the eventual fix** (#2366 option 1):
-     * carry the rows across with the generation and the report clears itself. Nothing else in this
-     * state changes — the same dead key still carries the same rows — so what clears it is exactly
-     * that the hand-off is readable again, which is also visible in the restored holdings.
+     * Clause 2's control arm: a live key that already covers the dead one's rows clears the report.
+     * Nothing else in this state changes — the same dead key still carries the same rows — so what
+     * clears it is exactly that the hand-off is readable again, which is also visible in the
+     * restored holdings.
+     *
+     * Modelled as a **base**-row write at the live key, which is deliberately *not* the shape the
+     * shipped carry produces (that one lands in `transferRelocIn` and cancels the dead key —
+     * [aRelocationCarryCancelsTheDeadKeyAndClearsTheReport]). Kept in that form because it is the
+     * only shape in which clause 2 is load-bearing, and clause 2's blind spot is documented below.
      */
     @Test
     fun rowsCarriedAcrossToTheLiveKeyClearTheReport() {
@@ -664,8 +669,10 @@ class EntitlementLedgerValidateTest {
      * (she has now given away 40 she never had, on top of the 40 already abandoned) and bob `80`.
      * The abandonment has been laundered into a state that reads as legitimate.
      *
-     * Closing this needs provenance the lattice does not carry. If the eventual #2366 fix re-keys
-     * `transfers` by group, the clause and its hole disappear together.
+     * Closing this needs provenance a **base** row does not carry. The shipped #2366 carry does not
+     * rest on the clause at all — it cancels the dead key with `transferRelocOut`, so clause 3 sees
+     * a settled generation — which is why this hole survives only for a base-row coincidence that
+     * no code path produces.
      */
     @Test
     fun aLaterTransferBetweenTheSamePairMasksTheReport() {
@@ -734,6 +741,46 @@ class EntitlementLedgerValidateTest {
             },
             { assertEquals(0L, drained.edge(e2)!!.outstanding, "rig: the strand drained before it died") },
             { assertTrue(drained.validate().isEmpty(), "an honestly closed strand is not an orphan: ${drained.validate()}") },
+        )
+    }
+
+    /**
+     * The shape a real [EntitlementLedger.relocationPatch] carry actually produces, at rest: the
+     * dead key's row cancelled by `transferRelocOut`, the live key's re-opened by `transferRelocIn`.
+     * The base rows are untouched on both keys — `transfers` is grow-only and no fix can erase one —
+     * so this state is byte-identical to the abandoned one apart from the relocation pair.
+     *
+     * It clears the report through **clause 3**, not clause 2: the dead generation's books now
+     * settle at zero for both parties, which is provenance the lattice carries rather than the
+     * magnitude coincidence clause 2 has to live with.
+     */
+    @Test
+    fun aRelocationCarryCancelsTheDeadKeyAndClearsTheReport() {
+        val orphaned = reHomedAwayFromTheRows()
+        val carried = orphaned.piece(
+            EntitlementLedger.of(
+                transferRelocOut = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
+                transferRelocIn = mapOf(PathKey.of(e3) to mapOf(alice to GCounter.of(bob to 40L))),
+            ),
+        )
+        assertAll(
+            {
+                assertEquals(
+                    listOf(LedgerConflict.OrphanedTransferPath(PathKey.of(e2))),
+                    orphaned.validate(),
+                    "rig: the report really was firing before the carry",
+                )
+            },
+            {
+                assertEquals(
+                    mapOf(alice to GCounter.of(bob to 40L)),
+                    carried.transfersAt(PathKey.of(e2)),
+                    "rig: the dead key's BASE row is untouched — only the relocation pair moved",
+                )
+            },
+            { assertEquals(20L, carried.holdings(g2, alice), "the donor keeps only what it kept") },
+            { assertEquals(40L, carried.holdings(g2, bob), "…and the recipient has its credit back") },
+            { assertTrue(carried.validate().isEmpty(), "a carried row is not orphaned: ${carried.validate()}") },
         )
     }
 

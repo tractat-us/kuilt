@@ -87,7 +87,7 @@ import kotlinx.serialization.Serializable
  *
  * ## The representation
  *
- * Fourteen components, each already a join-semilattice, so [piece] is just their
+ * Sixteen components, each already a join-semilattice, so [piece] is just their
  * componentwise join (the product-of-lattices idiom):
  *
  *  - [records] — the immutable topology (parent/child/weight per edge) as a
@@ -103,7 +103,8 @@ import kotlinx.serialization.Serializable
  *  - `transfers` — peer-to-peer hand-offs at a path, a per-donor-row matrix keyed
  *    by [PathKey]; the row for a donor is written only by that donor.
  *  - the **relocation counters** — `issuedRelocIn`, `leafRelocIn`/`leafRelocOut`,
- *    `rollupRelocIn`/`rollupRelocOut`, described next.
+ *    `rollupRelocIn`/`rollupRelocOut`, and the row matrices
+ *    `transferRelocIn`/`transferRelocOut`, described next.
  *  - `gauges` — the per-edge virtual-time seat register ([Gauge]), joined **componentwise**
  *    max. This is the only *multi-writer* per-edge component: unlike a counter slot, which
  *    exactly one replica writes, any peer may assert a floor for any edge. The pairing of each
@@ -132,14 +133,22 @@ import kotlinx.serialization.Serializable
  * effIssued(e)[r]      = issued(e)[r]      + issuedRelocIn(e)[r]
  * effLeafSpent(e)[r]   = leafSpent(e)[r]   + leafRelocIn(e)[r]   − leafRelocOut(e)[r]
  * effRollupSpent(e)[r] = rollupSpent(e)[r] + rollupRelocIn(e)[r] − rollupRelocOut(e)[r]
+ * effTransfer(k)[s][r]  = transfers(k)[s][r] + transferRelocIn(k)[s][r] − transferRelocOut(k)[s][r]
  * ```
  *
  * Every **stored** component still only grows; the effective value is *derived* and may fall,
  * exactly as `outstanding`/[holdings] already do. There is no `issuedRelocOut` — issuance is
- * never net-decreased. Because the five new families are ordinary [GCounter] maps joined
+ * never net-decreased. Because the new families are ordinary [GCounter] maps joined
  * componentwise, [piece] stays idempotent/commutative/associative by the **same**
- * product-of-lattices argument that already covers the other eight; adding them makes the
+ * product-of-lattices argument that already covers the base eight; adding them makes the
  * CRDT strictly larger, not structurally different.
+ *
+ * The **transfer** pair (issue #2366) exists because a hand-off is keyed by the *generation* that
+ * carried it, so a generation move has to move it too — and the pocket it belongs to is only right
+ * if all three of its terms (net inflow, charged service, hand-offs) move together. Unlike the
+ * counter pair it is symmetric in neither direction and its `Out` half is mandatory: the dead key's
+ * rows must read zero afterwards, or a second `Reconcile` carries them a second time. See
+ * [relocationPatch].
  *
  * **Slot ownership is what makes this sound.** The base counters on a *live* edge belong to
  * the data plane — replica `r` writes its own slot, and only ever a value it derived locally.
@@ -704,6 +713,7 @@ public class EntitlementLedger private constructor(
      * leafRelocOut(s)[r]    += lsp          leafRelocIn(t)[r]   += lsp
      * rollupRelocOut(s)[r]  += rsp          rollupRelocIn(t)[r] += rsp
      * issuedRelocIn(t)[r]   += n            # NEVER the live edge's base `issued` slot (#1691)
+     * transferRelocOut(key(s))[r][to] += x  transferRelocIn(key(t))[r][to] += x   # the hand-offs
      * ```
      *
      * Every move sends equal and opposite relocation credits, so `Σ effLeafSpent` — the conservation
@@ -724,35 +734,47 @@ public class EntitlementLedger private constructor(
      * removes §12.3's magnitude-freshness residual: a second move onto one live edge accumulates on
      * `this` rather than max-colliding with the first.
      *
+     * ## …and why the hand-offs are part of it (#2366 / #2377)
+     *
+     * `transfers` is keyed by `PathKey.of(edge)` — the **generation's** id, not the child group — so
+     * a move that carried only the counter families left the rows on the dead key where [holdings]
+     * no longer reads them, silently reassigning a recipient's entitlement to the donor with
+     * conservation intact and [validate] otherwise empty. The three terms of a pocket travel
+     * together or the pocket is wrong.
+     *
+     * The magnitudes arrive the same way the counters' do — **through [finals]**, in
+     * [SlotFinals.transfers], never off a gossip view. `transfers[key(s)][donor]` is single-writer
+     * at `donor` and a retired `s` is no longer any group's live inbound, so [transfer] can never
+     * write that key again: the row is frozen at barrier time at its own writer, which is exactly
+     * what makes it declarable. That is also what puts the carry on the H5 control-plane path, whose
+     * receiver ([FenceState.relocations]) is log-pure and holds no data-plane row at all.
+     *
+     * The carry is **not** a key move into `transfers[key(t)]` — that slot belongs to the donor and
+     * ordinary [transfer] writes it concurrently, so two writers on one max-joined slot would erase
+     * a side (#1691). It lands in the control-plane-owned `transferRelocIn` and is cancelled on the
+     * dead key by `transferRelocOut`, the same equal-and-opposite pair the spend families use. The
+     * `Out` half is what makes a second `Reconcile` carry **nothing**: a double-move is exactly as
+     * sum-preserving as an abandonment, so conservation can never be what rejects one.
+     *
      * ## Preconditions, checked per replica against the acked finals
      *
-     *  - `n ≥ 0` — a replica left **net-negative** on `s` (the transfer-tangle case, PR #1669
-     *    `break4`) would need its transfer rows moved too. Out of scope ⇒ [Relocation.Refused].
-     *  - `n ≥ sp` ⟺ `outstanding(s)[r] ≥ 0`. Holds for a healthy strand; refused otherwise.
+     *  - `n ≥ 0` — a replica that has **returned more than it was issued** on `s` cannot be drained,
+     *    because the drain writes `returned(s)[r] := effIssued(s)[r]` and that slot is grow-only.
+     *    Out of scope ⇒ [Relocation.Refused] (PR #1669 `break4`).
+     *  - `cover ≥ charge`, where `cover = Σ (n + tn)` and `charge = Σ sp` over this replica's fenced
+     *    edges — `tn` being its still-uncarried net transfer there. Cover counts the **whole** inbound
+     *    half deliberately: a recipient that spent transferred credit has issuance nowhere, so a
+     *    cover of `n` alone refused it for a shortfall that was never real.
      *  - `lsp ≥ 0`, `rsp ≥ 0` — an acked base below what has already been relocated out is
      *    protocol-impossible, so it fails closed rather than moving a negative quantity.
-     *
-     * ## …and one checked on the whole strand, against `this` rather than the acks (#2366)
-     *
-     * `transfers` is keyed by `PathKey.of(edge)`, so a move would leave the rows on the dead
-     * generation's key where [holdings] no longer reads them — silently reassigning a recipient's
-     * entitlement to the donor, with conservation intact and [validate] empty. The `n < 0`
-     * precondition above is the *loud* half of that tangle: it needs the recipient to have also
-     * spent or released across `s`. So a fenced edge carrying **any** transfer row is refused,
-     * which is what the first bullet's "out of scope" has always promised.
-     *
-     * This one reads `this`, and `this` is the caller's choice — so it fires wherever the receiver
-     * carries the rows and **not** on the H5 control-plane path, whose receiver ([FenceState.relocations])
-     * is log-pure and never carries a transfer at all. That path stays blind until the rows become a
-     * consensus fact carried in the [ControlCommand.QuiesceAck] (issue #2377). Determinism is
-     * untouched either way: every peer passes the same log-pure receiver, so every peer still derives
-     * the identical outcome.
      *
      * The live edge needs **no** data-plane read: the move adds `sp` to `t`'s effective spend and
      * `n ≥ sp` to its effective issuance, so per-edge safety on `t` survives by increment.
      *
-     * `Relocation.Nothing` when every fenced edge is already drained (`n = 0, sp = 0`) — the
-     * deterministic idempotence guard of §5.4 (iii): a second `Reconcile` for one child moves nothing.
+     * `Relocation.Nothing` when every fenced edge is already drained — `n = 0`, `sp = 0` **and** no
+     * row left to carry. The deterministic idempotence guard of §5.4 (iii): a second `Reconcile` for
+     * one child moves nothing. All three halves matter; a strand whose counters closed at zero can
+     * still owe a hand-off, and that is precisely the state #2366 abandoned.
      *
      * A replica that authored slots on `s` but is **absent from [finals]** (never acked) is left
      * untouched: its strand stays stranded on the same terms as a crashed peer's holdings
@@ -1314,8 +1336,8 @@ public class EntitlementLedger private constructor(
      *    is derived from the raw totals, so it still catches manufactured authority when the
      *    per-lineage derivation of [holdings] is itself the thing that regressed.
      *  - [LedgerConflict.OrphanedTransferPath] — transfer rows the topology moved out from under
-     *    (#2366): a [PathKey] no group's live lineage reads, whose rows a generation move did not
-     *    carry across, still holding a non-zero balance for one of the parties. The one fault here
+     *    (#2366): a [PathKey] no group's live lineage reads, whose rows no generation move carried
+     *    across, still holding a non-zero balance for one of the parties. The one fault here
      *    that conservation is *structurally* blind to — `Σ_r transferNet(k, r) = 0` on every key, so
      *    abandoning a whole key is sum-preserving — and that the negative-holdings check misses
      *    because the recipient lands on `0` rather than below it.
@@ -1418,7 +1440,7 @@ public class EntitlementLedger private constructor(
             // against a wrong key.
             val livePath = PathKey.of(live.last())
             if (livePath == path) continue // still the key `holdings` reads at this group
-            if (liveKeyCoversRows(rows, livePath)) continue
+            if (liveKeyCoversRows(path, rows, livePath)) continue
             if (parties.any { r -> transferNet(path, r) != 0L && strandedOn(edge, r) != 0L }) out += path
         }
         return out.sorted()
@@ -1442,14 +1464,19 @@ public class EntitlementLedger private constructor(
      *
      * Compared **per pair** rather than on the net, so a move that carried only some of the rows
      * still reports.
+     *
+     * Read at **effective** magnitudes on both sides (base ± relocation), because that is what
+     * [holdings] reads: after a [relocationPatch] carry the live key's credit is in
+     * `transferRelocIn`, and a base-only comparison would call a correctly carried row uncovered.
+     * The dead side is effective too, so a row already cancelled by `transferRelocOut` compares as
+     * the zero it now is rather than the magnitude it once was.
      */
-    private fun liveKeyCoversRows(rows: Map<ReplicaId, GCounter>, livePath: PathKey): Boolean {
-        val live = transfers[livePath] ?: emptyMap()
-        return rows.all { (donor, row) ->
-            val there = live[donor]
-            row.replicas().all { recipient -> row.count(recipient) <= (there?.count(recipient) ?: 0L) }
+    private fun liveKeyCoversRows(deadPath: PathKey, rows: Map<ReplicaId, GCounter>, livePath: PathKey): Boolean =
+        rows.all { (donor, row) ->
+            row.replicas().all { recipient ->
+                effRow(deadPath, donor, recipient) <= effRow(livePath, donor, recipient)
+            }
         }
-    }
 
     /**
      * What [r] would still hold at [edge] if it were live — the **inbound half** of the [holdings]
