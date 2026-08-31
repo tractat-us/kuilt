@@ -62,13 +62,14 @@ delivers frames in the background; you just consume them). No pump needed.
 (e.g. from an authentication layer), call `identified()` directly:
 
 ```kotlin
-// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/LinkSeam.kt:46-51
+// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/LinkSeam.kt
 public fun identified(
-    connection: Connection,
+    conn: Connection,
     selfId: PeerId,
     remoteId: PeerId,
     dispatcher: CoroutineContext,
-): Seam = LinkSeam(connection, selfId, remoteId, dispatcher)
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+): Seam = LinkSeam(conn, selfId, remoteId, dispatcher, policy)
 ```
 
 **In-band identity** — if peers must negotiate IDs over the wire, use
@@ -76,17 +77,26 @@ public fun identified(
 the peer's preamble:
 
 ```kotlin
-// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Handshaking.kt:30-38
+// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Handshaking.kt
 public suspend fun handshaking(
-    connection: Connection,
+    conn: Connection,
     selfId: PeerId,
     dispatcher: CoroutineContext,
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ): Seam {
-    connection.send(Hello.encode(selfId))
-    val remoteId = Hello.decode(connection.firstFrame())
-    return identified(PreambleStrippedConnection(connection), selfId, remoteId, dispatcher)
+    conn.send(Hello.encode(selfId))
+    val single = conn.singleCollection(dispatcher)
+    val remoteId = Hello.decode(single.firstFrame())
+    return identified(single, selfId, remoteId, dispatcher, policy)
 }
 ```
+
+Both take a `policy: DeliveryPolicy` that bounds the woven seam's inbox — capacity and
+overflow strategy. It defaults to `DeliveryPolicy.Reliable` (bounded, backpressured,
+lossless); pass `DeliveryPolicy.Lossy` for a radio-like fabric where a stale frame is
+worth less than the memory it occupies. Expose it on your `Loom` factory so a consumer
+can choose — `handshaking()` used to drop it, which is why `:kuilt-tcp` shipped without
+the knob until #2323.
 
 `Hello` encodes a `PeerId` as its UTF-8 bytes — one frame, one round-trip:
 
@@ -168,11 +178,12 @@ that single re-collectable stream. The transport just hands its raw `framed()`
 `Connection` straight in.
 
 ```kotlin
-// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Handshaking.kt:28
+// kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Handshaking.kt
 public suspend fun handshaking(
-    connection: Connection,            // a cold framed() Connection is fine — wrapped internally
+    conn: Connection,                  // a cold framed() Connection is fine — wrapped internally
     selfId: PeerId,
     dispatcher: CoroutineContext,
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ): Seam
 ```
 
@@ -246,7 +257,7 @@ Your own fabric can inline a similar type or reuse an existing address class.
 ### Step 5 — `TcpLoom.weave`: the dial/accept loop (~10 lines)
 
 ```kotlin
-// kuilt-tcp/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/tcp/TcpLoom.kt:45
+// kuilt-tcp/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/tcp/TcpLoom.kt
 override suspend fun weave(rendezvous: Rendezvous): Seam {
     // Real-IO seam: refuse to build under a virtual TestDispatcher (would deadlock silently).
     checkNotUnderTestDispatcher(
@@ -266,7 +277,7 @@ override suspend fun weave(rendezvous: Rendezvous): Seam {
             aSocket(selector).tcp().connect(address.host, address.port)
         }
     }
-    return handshaking(tcpConnection(socket, ioDispatcher), selfId, seamDispatcher)
+    return handshaking(tcpConnection(socket, ioDispatcher), selfId, seamDispatcher, policy)
 }
 ```
 
@@ -297,12 +308,15 @@ frame-delimited.
 
 ### 3. Identity — in-band vs. out-of-band
 
-- **`handshaking(connection, selfId, dispatcher)`** — negotiate over the wire. Sends
+- **`handshaking(conn, selfId, dispatcher, policy)`** — negotiate over the wire. Sends
   a `Hello` preamble as the first frame; suspends until the peer's preamble
   arrives. Use when peer IDs are not known before the connection.
-- **`identified(connection, selfId, remoteId, dispatcher)`** — skip the handshake.
+- **`identified(conn, selfId, remoteId, dispatcher, policy)`** — skip the handshake.
   Both identities are known (e.g. from TLS certificates, a session token, a
   shared discovery layer). The resulting `LinkSeam` is immediately usable.
+
+`policy` is optional on both and defaults to `DeliveryPolicy.Reliable`; it bounds the
+seam's inbox.
 
 ### 4. Lifecycle — map your transport to `Woven`/`Torn`
 

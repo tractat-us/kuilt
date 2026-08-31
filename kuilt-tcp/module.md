@@ -22,15 +22,17 @@ surface for dependency injection and tests.
 Splitting host from join at construction is irreducible here: a host needs a bound
 `ServerSocket` a joiner has no use for.
 
-Two knobs other fabrics' factories take are **deliberately absent**, because this one
-cannot honour them and an argument that is accepted and then ignored is worse than one
+One knob other fabrics' factories take is **deliberately absent**, because this one
+cannot honour it and an argument that is accepted and then ignored is worse than one
 that does not exist:
 
 - **`weaveTimeout`** — `weave` bounds neither `accept()` nor `connect()`, and a host that
   waits indefinitely for its first joiner is the intended behaviour here.
-- **`policy`** — the inbox `DeliveryPolicy` is settable on `identified`, but not on
-  `handshaking`, the identity negotiation this fabric goes through, so nothing passed in
-  could reach the seam.
+
+`policy` was a second such omission until #2323. The inbox `DeliveryPolicy` was settable
+on `identified` but not on `handshaking`, the identity negotiation this fabric goes
+through, so nothing passed in could reach the seam. `handshaking` carries one now, so the
+knob is here and honoured.
 
 `TcpAddress(host, port)` is the `Tag` a joiner resolves.
 
