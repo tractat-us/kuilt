@@ -8,9 +8,13 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.fail
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -22,14 +26,20 @@ import kotlin.time.Duration.Companion.seconds
  * [assembleVoterMesh] launches a persistent accept-pump per voter on a mesh lifecycle scope *before*
  * formation, then awaits the full K_M roster under a `formationTimeout`. If a voter never completes its
  * roster (a crashed or stalled peer), formation throws — and the caller never receives a [VoterMesh], so
- * it holds **no handle** with which to close the mesh scope. Its failure path therefore owes two things,
- * and this suite pins one per test so a red names which obligation was dropped:
+ * it holds **no handle** with which to close the mesh scope. Its failure path therefore owes three
+ * things, and this suite pins one per test so a red names which obligation was dropped:
  *
  * 1. `meshScope.cancel()` — the persistent accept-pumps are torn down, not left draining forever.
  * 2. `meshes.values.forEach { it.close() }` — the partially-formed seams are closed. Each `MeshSeam`
  *    runs on its own **unparented** `SupervisorJob` scope, so (1) provably cannot achieve this; without
  *    the explicit close the already-established inter-server sessions stay live and peers hold this
  *    voter as a zombie.
+ * 3. The dials **abandoned mid-handshake** are closed (#2587). (2) reaches only what a seam
+ *    *published*; a dial whose `MeshHello` exchange was still in flight when the timeout fired never
+ *    got that far — `addLink` suspends inside the handshake, the cancellation propagates out, and no
+ *    seam ever learned the connection exists. Those are the connections a crashed or slow voter
+ *    produces, i.e. the ordinary cause of a formation timeout, and they are the caller's to close
+ *    because nothing else can.
  *
  * ## Why this lives in commonTest rather than only over WebSockets
  *
@@ -89,6 +99,55 @@ class VoterMeshFormationTimeoutTest {
 
             dialerEnd.closed.awaitOrFail("${LOWER.value}'s seam closed its end of the $edge link")
             acceptorEnd.closed.awaitOrFail("${MIDDLE.value}'s seam closed its end of the $edge link")
+        }
+
+    /**
+     * Obligation (3): the two dials left mid-`MeshHello` are closed — and the one that *was* published
+     * is left to its seam.
+     *
+     * **Why this asserts identities rather than a close count.** Both failures move the same number.
+     * The leak leaves two ends un-closed; a teardown that closes *every* dialed connection instead of
+     * only the abandoned ones closes those two **and** re-closes the published one, so a total-close
+     * tally cannot tell the fix from the over-reach. What separates them is *which* end each close
+     * landed on, so the rig is read by role:
+     *
+     * - `answered` completed ⇒ the peer replied ⇒ that end was published into a seam. True of exactly
+     *   the [LOWER]→[MIDDLE] dialer end here.
+     * - `answered` absent ⇒ the handshake never completed ⇒ that end is one of the abandoned dials.
+     *   True of exactly the two dials aimed at [STALLED].
+     *
+     * The preconditions assert that split before anything else, so a red distinguishes "the teardown
+     * dropped an obligation" from "the rig stopped producing the three roles the test reads".
+     *
+     * The published end's `closeCalls == 1` is the over-reach arm, and it is not a formality: it is
+     * green today (the seam closes it once), stays green under the fix, and reds under the wrong fix.
+     */
+    @Test
+    fun formationTimeoutClosesTheDialsAbandonedMidHandshake() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = stallFormation()
+            val published = rig.fabric.endsOf(VoterEdge(LOWER, MIDDLE)).first
+            val abandonedFromLower = rig.fabric.endsOf(VoterEdge(LOWER, STALLED)).first
+            val abandonedFromMiddle = rig.fabric.endsOf(VoterEdge(MIDDLE, STALLED)).first
+
+            // Preconditions: the three ends really are the three roles the assertions below read them
+            // as. Formation has already failed, so `answered` is settled — no await is needed and none
+            // would be honest, since the point is that two of them never will complete.
+            assertAll(
+                { assertTrue(published.answered.isCompleted, "${LOWER.value}→${MIDDLE.value} was published") },
+                { assertFalse(abandonedFromLower.answered.isCompleted, "${LOWER.value}→${STALLED.value} stalled") },
+                { assertFalse(abandonedFromMiddle.answered.isCompleted, "${MIDDLE.value}→${STALLED.value} stalled") },
+            )
+
+            abandonedFromLower.closed.awaitOrFail("the abandoned ${LOWER.value}→${STALLED.value} dial was closed")
+            abandonedFromMiddle.closed.awaitOrFail("the abandoned ${MIDDLE.value}→${STALLED.value} dial was closed")
+
+            assertEquals(
+                1,
+                published.closeCalls,
+                "the published ${LOWER.value}→${MIDDLE.value} dial is its seam's to close, and was closed " +
+                    "once — a teardown that closes every dialed conn would have closed it twice",
+            )
         }
 
     /** What [stallFormation] hands back: the observable link ends, and the starved voter's source. */
