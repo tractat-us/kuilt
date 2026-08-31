@@ -152,7 +152,7 @@ link, something a customer insists on — and you want a kuilt room on top of it
 reconnect, shared state. You are about to write a length prefix, a read loop that
 reassembles it, and a small "who are you?" exchange so each end learns the other's name.
 
-**Intent:** turn a byte stream into a fabric.
+**Intent:** turn a byte stream you already have into a `Seam`.
 **Primitive:** `framed(source, sink)` (`:kuilt-stream`), then `handshaking(connection, selfId, dispatcher)`
 (`:kuilt-core`). Between them that is the whole bridge; the only transport-specific code left is your
 own connect/accept. `framed` wraps a kotlinx-io `Source`/`Sink` as a `Connection` with a 4-byte
@@ -571,7 +571,8 @@ internal fun sampleQuilterSetup() = runTest(
 ```
 
 See [`crdt-quilter.md`](../Writerside/topics/crdt-quilter.md) for `Quilter`'s wire protocol,
-late-joiner full-state sync, and scaling to many peers via `GossipSeam`.
+late-joiner full-state sync, and [Scaling to many peers](#scaling-to-many-peers) below for the
+`GossipSeam` pairing.
 
 **Intent:** read the shared state, decide, and *maybe* write — "claim the seat only if it's free", "publish this only if nobody already did", "apply the op if the state still allows it". The read and the decision have to be atomic with the write, and a refusal must be silent.
 **Primitive:** `Quilter.mutateOrSkip { … }`. Return `null` from the transform to decline; it returns whether anything was published. Don't return an identity patch to mean "no change" — it leaves the state alone but still burns a sequence number and broadcasts an empty delta to every peer. Don't test the condition *before* the call either: that decides against a state nothing is holding still, so another writer can make the answer wrong before you publish.
@@ -848,7 +849,8 @@ is full membership, delegated from the base seam, and is the pool anti-entropy s
 `recommendedActiveViewSize(n)` is the k the default policy draws (`max(4, ⌈ln N⌉ + 2)`, so ~4–7 for
 tens to low hundreds), which is what keeps the union of everyone's independent choices a single
 connected graph even though nobody is connected to everybody. **Seed `random` per peer** — a shared
-seed makes every peer pick the same neighbours and collapses that graph.
+seed makes every peer pick the same neighbours and collapses that graph. (`spares` is the short
+standby list a lost neighbour is replaced from; read it to inspect failover, don't drive it.)
 
 `start(scope)` once, on a scope you own. `sendTo` is deliberately **not** shaped by the overlay: it
 passes straight through to the base seam, so point-to-point still reaches any peer the transport can
@@ -1203,7 +1205,7 @@ val committed = client.committed
 
 **Ask for exactly-once or you get at-least-once.** The one-argument `propose(command)` mints a fresh
 request id per call, which survives a *failover* but not a *crash*: after a restart the retry looks
-like a brand-new command and applies twice. `propose(command, requestId)` with an id you persisted
+like a brand-new command and can apply twice. `propose(command, requestId)` with an id you persisted
 **before** calling is the cross-crash form — the server's `ClientSessionTable` recognises the replay.
 Pair it with `ClientIdentity.Durable(clientId)`, because the identity that table keys on has to
 outlive the restart too; the default `ClientIdentity.Auto` mints a new one per incarnation, which is
@@ -1219,8 +1221,9 @@ clients reattach elsewhere with the same node id and the same log position.
 
 Two boundaries worth designing around rather than discovering. **A cross-server reconnect is always a
 fresh join** — each server's reconnect-window registry is in-memory and per-room, so a token issued by
-one server can never validate at another; `ClusterClient` treats that as "re-join", and the cost is a
-re-snapshot of the client's log rather than a lost session. And `committed` keeps `RaftNode.committed`'s
+one server can never validate at another. `clusterClient` therefore does not even attempt an
+optimistic resume: every reconnect is a plain `join`, and the cost is a re-snapshot of the client's
+log rather than a lost session. And `committed` keeps `RaftNode.committed`'s
 single-collection contract: collect it once per client, `shareIn` for fan-out.
 
 ## Dealing cards nobody can peek at
