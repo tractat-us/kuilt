@@ -61,6 +61,12 @@ class EntitlementLedgerComponentCoverageTest {
      * The opt-out is **exhausted**: every name declared not-a-component must still be a declared
      * field. Without this the map is a place to park a stale name, and a real component could later
      * be silenced by a leftover entry that happens to match it.
+     *
+     * ⚠ **Vacuous today, by construction and deliberately.** [NOT_A_COMPONENT] is empty, so this
+     * loop runs zero iterations and passes trivially — it asserts nothing about the current build
+     * and must not be read as evidence for one. It exists so that the *first* opt-out entry arrives
+     * already guarded, rather than as a hole someone has to notice and close afterwards. Its
+     * positive control is adding a bogus entry (`"nosuchfield" to "why"`) and watching it red.
      */
     @Test
     fun everyOptOutStillNamesADeclaredField() {
