@@ -6392,6 +6392,22 @@ val verifyTestResultParity by tasks.registering {
                     "in src/commonTest.",
             )
         }
+        // Reporting what it compared is not the same as proving it compared anything. With no
+        // `test-results` under any module — an artifact that failed to download, a job whose
+        // upload step was skipped, a rename of the results directory — every module takes the
+        // `< 2` branch above, `comparedModules` stays 0, and this task greens while printing
+        // "0 class(es) across 0 module(s)". That is the guard being one level above the silence it
+        // exists to catch, and it reads identically to a clean repo. Scoped to `askedForByName`
+        // because that is exactly the CI job whose whole purpose is this comparison; a `check`-
+        // driven run legitimately compares nothing when only one target's tests ran.
+        if (askedForByName && comparedModules == 0) {
+            error(
+                "verifyTestResultParity: compared NOTHING — no module had results from two or more " +
+                    "targets. Invoked by name, that is a broken invocation, not a clean repo: the " +
+                    "results artifacts did not reach this checkout. Check that both test-results " +
+                    "artifacts downloaded into the repo root before this ran.",
+            )
+        }
         logger.lifecycle(
             "verifyTestResultParity: $comparedClasses class(es) across $comparedModules module(s), " +
                 "over ${comparedTargets.size} target(s): ${comparedTargets.joinToString(", ")}",
