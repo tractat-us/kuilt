@@ -57,6 +57,7 @@ class CrdtSamplesRunTest {
             "sampleHistogramMerge" to ::sampleHistogramMerge,
             "sampleLatticeProduct" to ::sampleLatticeProduct,
             "sampleEphemeralMapTrackerChannels" to ::sampleEphemeralMapTrackerChannels,
+            "sampleVersionVectorContiguous" to ::sampleVersionVectorContiguous,
         )
         us.tractat.kuilt.test.assertAll(
             *samples.map { (name, run) -> { runNamed(name, run) } }.toTypedArray(),

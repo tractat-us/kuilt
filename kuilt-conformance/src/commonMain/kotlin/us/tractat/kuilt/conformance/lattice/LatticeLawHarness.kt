@@ -6,6 +6,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Quilted
+import us.tractat.kuilt.crdt.VersionVector
 
 /** Strategy for generating an operation against a model state, producing the next state. */
 public fun interface OperationGenerator<S> {
@@ -172,6 +173,7 @@ public class LatticeLawHarness<S : Quilted<S>>(
     public val floors: VacuityFloors = VacuityFloors.DEFAULT,
     public val replicaCount: Int = 3,
     public val opsPerReplica: Int = 8,
+    public val compactor: CrdtCompactor<S>? = null,
 ) {
     /**
      * Bind a type that has not declared an alphabet yet.
@@ -231,12 +233,68 @@ public class LatticeLawHarness<S : Quilted<S>>(
      */
     private fun decoded(bytes: ByteArray): S = cbor.decodeFromByteArray(serializer, bytes)
 
-    /** Run with a single [seed]; assert convergence. Returns the converged state. */
+    /**
+     * Run with a single [seed]; assert convergence. Returns the **pre-compaction** converged state.
+     *
+     * Three phases when a [compactor] is bound, and only the first when one is not.
+     *
+     * **Phase 0 — fold every permutation, assert equal and byte-identical.** Exactly what this
+     * method has always done, preserved character for character. That is not politeness: a new gate
+     * placed ahead of an older one is how an older guard's coverage silently drops to zero, and
+     * phase 0's byte assertion is #1957's coverage for every non-compaction field in the zoo. The
+     * phases below *add* assertions over *additional* states and never replace it.
+     *
+     * **Phase A — fold every permutation, then compact to stable.** The tombstone set the
+     * compaction predicate walks was built by `Set.plus` in fold order; `gcIds` inherits that order
+     * and the minted `Compact` op's `positions` map inherits it from `gcIds`. So one `Compact` op's
+     * map order depends on the merge order, and a plain `MapSerializer` there writes two
+     * fold-equal states to different bytes (#1978).
+     *
+     * **Phase B — compact each replica alone, then fold every permutation.** Each replica mints its
+     * `Compact` from its own single-author history, in an order fixed at mint time and identical
+     * under every later fold — so phase A's axis is *gone* here, and what varies instead is the
+     * **merge of already-compacted states**: `compactedDots + other.compactedDots`, and the position
+     * of each `Compact` op within the unioned op set. Those are the #1957 and #713 axes.
+     *
+     * **Neither phase is redundant, and this is measured rather than argued.** Phase A cannot reach
+     * the merge-of-compacted-states path, because after it runs there is nothing left to merge;
+     * phase B cannot reach the fold-dependent-tombstone-set path, because each replica compacts a
+     * history only it authored. Reverting each mechanism in turn on `main`:
+     *
+     * | mechanism | phase A | phase B |
+     * |---|---|---|
+     * | `Rga`/`Fugue` `Compact.positions` map order (#1978) | **RED** | green |
+     * | `MovableTree.compactedDots` set order (#1957) | green | **RED** |
+     * | order *between* several `Compact` ops (#713) | green | **RED** |
+     *
+     * `MovableTree` is the case worth naming, because the shape recurs: its `compact` selects
+     * droppable ops by filtering a `log` kept sorted by `(ts, replicaId)`, so the freshly-minted
+     * `droppedDots` is *already* canonical and phase A's serializer has nothing to fix. Measured
+     * over seeds `0..31`, its minted-`Compact` iteration order varies across the six folds on
+     * **0** of 32 seeds — against `Rga`'s 32 and `Fugue`'s 13. **Reaching the code that writes a
+     * field is not the same as reaching the disagreement**, which is why a post-merge hook alone —
+     * what #2019 originally proposed — would report compaction reached on 24 of 32 seeds while
+     * leaving `compactedDots` exactly as unpinned as it was.
+     *
+     * **Phase B's soundness rests on the replicas' histories being disjoint**, and that is
+     * asserted, not assumed — see [assertReplicaHistoriesAreDisjoint]. Replica `Rᵢ`'s history holds
+     * only `Rᵢ`'s ops, so no peer can hold a concurrent op referencing one of them, and `Rga`'s
+     * "no surviving successor" condition (and `Fugue`'s "no surviving tree anchor") is evaluated
+     * over a set nobody can add to behind the compactor's back. A future generator that gave two
+     * replicas one author id would break that premise, so the harness reds instead.
+     */
     public fun run(seed: Long): S {
         val random = Random(seed)
         val replicas = buildReplicas(random)
+        val compactor = this.compactor
+        if (compactor != null) assertReplicaHistoriesAreDisjoint(replicas, seed)
         val canonical = mergeAll(replicas)
         assertAllPermutationsConverge(replicas, canonical)
+        if (compactor != null) {
+            runPostMergePhase(compactor, replicas, seed)
+            runPreMergePhase(compactor, replicas, seed)
+            runs++
+        }
         return canonical
     }
 
@@ -1090,6 +1148,211 @@ public class LatticeLawHarness<S : Quilted<S>>(
         }
     }
 
+    // ── Compaction phases (#2019) ─────────────────────────────────────────────────────────────
+
+    private var runs: Int = 0
+    private var postMergeRunsWithCompaction: Int = 0
+    private var postMergeMaxDroppedInOneStep: Int = 0
+    private var preMergeRunsWithTwoOrMoreCompacting: Int = 0
+
+    /**
+     * What the compaction phases reached across every [run] so far — see [CompactionCoverage].
+     *
+     * Accumulated per harness instance, and [LatticeLawSuite.newHarness] is called once per test
+     * method, so a caller reads the coverage of the seeds *it* ran and nothing else.
+     */
+    public val compactionCoverage: CompactionCoverage
+        get() = CompactionCoverage(
+            runs = runs,
+            postMergeRunsWithCompaction = postMergeRunsWithCompaction,
+            postMergeMaxDroppedInOneStep = postMergeMaxDroppedInOneStep,
+            preMergeRunsWithTwoOrMoreCompacting = preMergeRunsWithTwoOrMoreCompacting,
+        )
+
+    /** Fold every permutation, compact each fold to stable, and assert the results agree. */
+    private fun runPostMergePhase(compactor: CrdtCompactor<S>, replicas: List<S>, seed: Long) {
+        var compactedSomething = false
+        var reference: S? = null
+        var referenceBytes: ByteArray? = null
+        for (permutation in permutationsOf(replicas.indices.toList())) {
+            val folded = permutation.fold(initial) { acc, idx -> acc.piece(replicas[idx]) }
+            val stable = compactToStable(compactor, folded)
+            if (stable.steps > 0) compactedSomething = true
+            if (stable.maxDropped > postMergeMaxDroppedInOneStep) {
+                postMergeMaxDroppedInOneStep = stable.maxDropped
+            }
+            val bytes = encoded(stable.state)
+            val first = reference
+            val firstBytes = referenceBytes
+            if (first == null || firstBytes == null) {
+                reference = stable.state
+                referenceBytes = bytes
+                continue
+            }
+            check(stable.state == first) {
+                compactionConvergenceFailure("post-merge", seed, permutation, first, stable.state)
+            }
+            check(bytes.contentEquals(firstBytes)) {
+                compactionCanonicalityFailure("post-merge", seed, permutation, firstBytes, bytes, first)
+            }
+        }
+        if (compactedSomething) postMergeRunsWithCompaction++
+    }
+
+    /** Compact each replica alone to stable, then fold every permutation and assert they agree. */
+    private fun runPreMergePhase(compactor: CrdtCompactor<S>, replicas: List<S>, seed: Long) {
+        var replicasThatCompacted = 0
+        val compacted = replicas.map { replica ->
+            val stable = compactToStable(compactor, replica)
+            if (stable.steps > 0) replicasThatCompacted++
+            stable.state
+        }
+        if (replicasThatCompacted >= 2) preMergeRunsWithTwoOrMoreCompacting++
+        var reference: S? = null
+        var referenceBytes: ByteArray? = null
+        for (permutation in permutationsOf(compacted.indices.toList())) {
+            val folded = permutation.fold(initial) { acc, idx -> acc.piece(compacted[idx]) }
+            val bytes = encoded(folded)
+            val first = reference
+            val firstBytes = referenceBytes
+            if (first == null || firstBytes == null) {
+                reference = folded
+                referenceBytes = bytes
+                continue
+            }
+            check(folded == first) {
+                compactionConvergenceFailure("pre-merge", seed, permutation, first, folded)
+            }
+            check(bytes.contentEquals(firstBytes)) {
+                compactionCanonicalityFailure("pre-merge", seed, permutation, firstBytes, bytes, first)
+            }
+        }
+    }
+
+    /** One compaction chain run to a fixpoint, and what it cost. */
+    private class Stable<S>(val state: S, val steps: Int, val maxDropped: Int)
+
+    /**
+     * Compact [from] until [CrdtCompactor.compactOnce] declines — mirroring
+     * `RgaGcCoordinator.compactUntilStable`, which loops because removing one tombstone can unblock
+     * its structural predecessor. Looping is what makes a *chain* reachable rather than only its
+     * tail.
+     *
+     * [COMPACT_STEP_CAP] bounds the loop so a compactor that never reaches a fixpoint fails as a
+     * legible error rather than as a hang.
+     */
+    private fun compactToStable(compactor: CrdtCompactor<S>, from: S): Stable<S> {
+        var state = from
+        var steps = 0
+        var maxDropped = 0
+        while (true) {
+            val cut = cutOf(state)
+            val step = compactor.compactOnce(state, cut, cut, cut) ?: break
+            state = step.state
+            if (step.droppedCount > maxDropped) maxDropped = step.droppedCount
+            steps++
+            check(steps <= COMPACT_STEP_CAP) {
+                "Compaction did not reach a fixpoint within $COMPACT_STEP_CAP steps.\n" +
+                    "  state $state\n" +
+                    "  A compactor must return null once nothing qualifies; one that keeps " +
+                    "returning a step is either not applying the step it reports, or reporting a " +
+                    "drop it did not make."
+            }
+        }
+        return Stable(state, steps, maxDropped)
+    }
+
+    /**
+     * The cut the phases compact at: `stableCut = frontierMax = delivered = contiguous frontier`.
+     *
+     * Derived by the harness from the state alone, never supplied by a binding — a binding free to
+     * pass its own cut could pass one no execution reaches, which pins nothing, and that is the
+     * exact failure #2019 names.
+     *
+     * Setting all three equal is not a convenient fiction. It is what `Quilter.recomputeCut`
+     * computes in two reachable topologies, because its `rows` always contains `self`: a **fully
+     * converged room**, where every peer has gossiped a `Delivered` equal to every other's so
+     * `min == max == self` (phase A), and a **solo peer**, where `knownPeers` is empty so
+     * `rows == [self]` (phase B). The first is the modal steady state of any quiet mesh; the second
+     * is a device editing offline, which is what phase B's independent per-replica histories model.
+     *
+     * The derivation errs toward **under**-compaction, never over: [VersionVector.Companion.contiguous]
+     * stops at the first gap, so a generator quirk that leaves a hole yields a lower cut and less
+     * compaction. It cannot manufacture a cut authorising a drop a real execution would refuse — a
+     * quirk costs coverage, which the floors catch, rather than soundness.
+     */
+    private fun cutOf(state: S): VersionVector =
+        VersionVector.contiguous(state.causalDots(), state.causalFloor())
+
+    /**
+     * Assert no two replicas share an author id — the premise phase B's soundness rests on.
+     *
+     * A replica compacting alone uses its own delivered vector as the stable cut, which is only
+     * sound because its history is single-author: no peer can hold a concurrent op referencing one
+     * of its dots. Two replicas sharing an author id would break that quietly, and the resulting
+     * "convergence failure" would be the generator's fault rather than the type's — so it is named
+     * here instead.
+     *
+     * **It runs before phase 0, and that ordering was checked rather than chosen.** A gate placed
+     * ahead of an older one is normally how the older one's coverage silently drops to zero — but
+     * this gate can only fire on a generator whose replicas share an author id, and such a generator
+     * mints the same dot twice, so phase 0 is *already* red on every one of those inputs (measured:
+     * it reds with a canonical-encoding failure). No input moves from red to green; only the message
+     * changes, from a byte diff to the name of the generator fault that produced it. Placing it
+     * after phase 0 would mean the diagnosis never printed, because phase 0 raises first.
+     */
+    private fun assertReplicaHistoriesAreDisjoint(replicas: List<S>, seed: Long) {
+        val authorsPerReplica = replicas.map { r -> r.causalDots().mapTo(mutableSetOf()) { it.replica } }
+        for (i in authorsPerReplica.indices) {
+            for (j in i + 1 until authorsPerReplica.size) {
+                val shared = authorsPerReplica[i] intersect authorsPerReplica[j]
+                check(shared.isEmpty()) {
+                    "Replica histories are not disjoint at seed $seed — R$i and R$j both authored " +
+                        "dots for ${shared.joinToString()}.\n" +
+                        "  The pre-merge compaction phase compacts each replica against its own " +
+                        "delivered vector, which is sound only while each history is single-author " +
+                        "(no peer can hold a concurrent op referencing a dot this replica minted). " +
+                        "Give each replica its own `ReplicaId` — the generator receives " +
+                        "`replicaIndex` for exactly this."
+                }
+            }
+        }
+    }
+
+    private fun compactionConvergenceFailure(
+        phase: String,
+        seed: Long,
+        permutation: List<Int>,
+        expected: S,
+        actual: S,
+    ): String =
+        "Compaction convergence failure ($phase) at seed $seed under permutation $permutation — " +
+            "two fold orders compact to states that are NOT EQUAL:\n" +
+            "  expected $expected\n" +
+            "  got      $actual\n" +
+            "  Compaction must be a pure function of the state, so equal states must compact to " +
+            "equal states. A predicate reading the state's iteration order rather than its value " +
+            "is the usual cause."
+
+    @Suppress("LongParameterList")
+    private fun compactionCanonicalityFailure(
+        phase: String,
+        seed: Long,
+        permutation: List<Int>,
+        expectedBytes: ByteArray,
+        actualBytes: ByteArray,
+        state: S,
+    ): String =
+        "Compaction canonical-encoding failure ($phase) at seed $seed under permutation " +
+            "$permutation — the compacted states are EQUAL but encode to DIFFERENT bytes.\n" +
+            "  reference bytes ${expectedBytes.toHexString()}\n" +
+            "  permuted  bytes ${actualBytes.toHexString()}\n" +
+            "  state           $state\n" +
+            "  A compaction record's own collections are built by `Set.plus` in merge order, so " +
+            "they are insertion-ordered by a history the value does not carry. Encode them through " +
+            "`CanonicalMapSerializer`/`CanonicalSetSerializer`, and order several `Compact` ops " +
+            "against each other by a pure function of their contents."
+
     private fun mergeAll(states: List<S>): S = states.fold(initial) { acc, s -> acc.piece(s) }
 
     private fun <T> permutationsOf(items: List<T>): List<List<T>> {
@@ -1177,5 +1440,14 @@ public class LatticeLawHarness<S : Quilted<S>>(
          * the reported counterexample without also being told a trial number.
          */
         const val EXHAUSTIVE_SEED = 0L
+
+        /**
+         * Ceiling on [compactToStable]'s fixpoint loop.
+         *
+         * Not a tuning knob: every live binding reaches its fixpoint in a handful of steps, and the
+         * cap exists so a compactor that reports progress it never makes fails with a legible
+         * message instead of spinning.
+         */
+        const val COMPACT_STEP_CAP = 64
     }
 }
