@@ -157,7 +157,6 @@ class DelayedWovenSeamCloseOnceConcurrencyTest {
      * One closer thread: park on the round barrier, check in, spin until every sibling has checked
      * in, then close with an identity of its own and record the terminal reason it can see.
      */
-    @Suppress("LongParameterList")
     private fun runCloser(
         index: Int,
         roundStart: CyclicBarrier,
