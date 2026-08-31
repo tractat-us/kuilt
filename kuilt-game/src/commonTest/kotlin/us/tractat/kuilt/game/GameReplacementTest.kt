@@ -361,9 +361,9 @@ internal fun fastLivenessConfig(): HeartbeatConfig = HeartbeatConfig(
  * on the real post-condition (a replacement being admitted, the log replaying).
  *
  * **This answers "did the cluster reach [expectedCount] voters", never "did it settle there."** It
- * returns on the first instant the count matches, which is the right question for the three callers
- * below — each is about an *arrival* ("the leader evicts the dead voter", "the replacement takes the
- * freed seat") and each is followed by the real post-condition. It is the wrong question for any
+ * returns on the first instant the count matches, which is the right question for its three
+ * remaining callers — each is about an *arrival* ("the leader evicts the dead voter", "the
+ * replacement takes the freed seat") and each is followed by the real post-condition. It is the wrong question for any
  * claim phrased as *never* or *ends up*, because everything after the matching instant is behind the
  * point where this already returned: #1949 was exactly that, a tail `awaitVoterCount(host, 2)`
  * commented as proving a spectator never took a seat, which stayed green when the spectator was
