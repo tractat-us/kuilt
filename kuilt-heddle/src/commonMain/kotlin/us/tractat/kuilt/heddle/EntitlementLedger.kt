@@ -794,6 +794,27 @@ public class EntitlementLedger private constructor(
         val pending = ArrayList<PendingRow>()
         for ((s, perReplica) in finals.entries.sortedBy { it.key }) {
             val deadPath = PathKey.of(s)
+            // Donors are enumerated from the acks, so a donor whose *only* mark on this key is a
+            // row an EARLIER move carried there — control-plane state on `this`, present on no ack
+            // — is invisible to the loop below. Left that way it is not merely skipped: the rows
+            // that ARE carried move the recipients they credit onto the live key while this one
+            // stays behind, so the hand-off's beneficiary silently loses its credit to the donor
+            // upstream of it. That is the #2366 defect one hop up, and it survives a departure
+            // because production quantifies the fence over the enrolled roster.
+            //
+            // Carrying it anyway is not the remedy: a row is declarable final because its writer
+            // has marked the edge locally unwritable, and a peer that never acked has promised
+            // nothing. So refuse — loudly, and on a state `validate` now also reports (see
+            // [orphanedTransferPaths]) — rather than move a fraction of the key.
+            val unacked = unackedCarriedDonors(deadPath, perReplica.keys)
+            if (unacked.isNotEmpty()) {
+                return Relocation.Refused(
+                    "relocate refused: ${unacked.joinToString { it.value }} still carr" +
+                        "${if (unacked.size == 1) "ies" else "y"} an uncancelled hand-off at " +
+                        "${deadPath.value} from an earlier move but did not ack the fence there — " +
+                        "moving the rest of the key would reassign the recipients' credit",
+                )
+            }
             for ((donor, acked) in perReplica.entries.sortedBy { it.key }) {
                 // §12.1 again, for rows: the ack declares what the DATA plane wrote, but `s` may
                 // itself have received an earlier carry, and that credit lives in `transferRelocIn`
@@ -971,6 +992,25 @@ public class EntitlementLedger private constructor(
         }
         return Relocation.Moved(drain.build())
     }
+
+    /**
+     * The donors holding a **still-uncancelled** carried row at [deadPath] that are absent from
+     * [acked] — the fence's blind spot, and a refusal condition for [relocationPatch].
+     *
+     * Scoped to a *residual* (`transferRelocIn − transferRelocOut > 0`) on purpose: a donor whose
+     * carried rows a previous move already cancelled owes nothing here, and refusing on its mere
+     * presence in `transferRelocIn` would wedge the second `Reconcile` of every strand that has
+     * ever been re-homed — turning §5.4 (iii)'s "a second move carries nothing" into a permanent
+     * refusal. The base matrix is deliberately not consulted: an unacked donor's *base* row is the
+     * documented left-untouched case, and it is already reported by
+     * [LedgerConflict.OrphanedTransferPath] because the key it sits on is in `transfers`.
+     */
+    private fun unackedCarriedDonors(deadPath: PathKey, acked: Set<ReplicaId>): List<ReplicaId> =
+        transferRelocIn[deadPath]?.keys.orEmpty()
+            .filter { donor ->
+                donor !in acked && recipientsOf(deadPath, donor).any { to -> effRow(deadPath, donor, to) > 0L }
+            }
+            .sortedBy { it.value }
 
     /**
      * The **base** slots of [edge], by replica — the shape a [ControlCommand.QuiesceAck]
@@ -1408,16 +1448,27 @@ public class EntitlementLedger private constructor(
      * of the defect is a recipient who *only* holds transferred credit: it has no slot on the edge,
      * so [replicasOnEdge] — which walks the counter families — does not contain it, and an
      * enumeration built from that set would silently drop exactly the party the report exists for.
+     *
+     * **…and over `transferRelocIn`'s keys as well as `transfers`'.** After a move, a carried row
+     * lives at the live key in `transferRelocIn` and *nowhere* in `transfers` — the carry
+     * deliberately never writes the donor-owned base slot (#1691). So once that key is itself
+     * retired, a key whose entire credit arrived by carry is invisible to an enumeration over the
+     * base matrix alone, and the second-hop abandonment goes unreported. `donorsAt` /
+     * `recipientsOf` / `effRow` already read all three matrices, so the parties and the magnitudes
+     * come out right once the key is a candidate. `transferRelocOut`'s keys are deliberately *not*
+     * candidates: that matrix only ever cancels, so a key it alone names holds no credit to strand
+     * and would only manufacture a negative-`effRow` transient under partial delivery.
      */
     private fun orphanedTransferPaths(): List<PathKey> {
-        if (transfers.isEmpty()) return emptyList()
+        val candidates = transfers.keys + transferRelocIn.keys
+        if (candidates.isEmpty()) return emptyList()
         val edgeByPath = allEdges().associateBy { PathKey.of(it) }
         val out = ArrayList<PathKey>()
-        for ((path, rows) in transfers) {
+        for (path in candidates) {
             // The root path has no final edge, so no reshape can move it: it is live on every state.
             if (path == PathKey.ROOT) continue
             val parties = HashSet<ReplicaId>()
-            for ((donor, row) in rows) { parties += donor; parties += row.replicas() }
+            for (donor in donorsAt(path)) { parties += donor; parties += recipientsOf(path, donor) }
             val edge = edgeByPath[path]
             if (edge == null) {
                 // Names no generation this ledger knows: unreadable by construction, so clause 1 has
@@ -1440,14 +1491,15 @@ public class EntitlementLedger private constructor(
             // against a wrong key.
             val livePath = PathKey.of(live.last())
             if (livePath == path) continue // still the key `holdings` reads at this group
-            if (liveKeyCoversRows(path, rows, livePath)) continue
+            if (liveKeyCoversRows(path, livePath)) continue
             if (parties.any { r -> transferNet(path, r) != 0L && strandedOn(edge, r) != 0L }) out += path
         }
         return out.sorted()
     }
 
     /**
-     * True when every `(donor, recipient)` cumulative in [rows] is matched or exceeded at [livePath].
+     * True when every `(donor, recipient)` cumulative at [deadPath] is matched or exceeded at
+     * [livePath].
      *
      * **This is a magnitude test, not a provenance test, and the state cannot support a provenance
      * test.** [transfer] accumulates onto the very same `(path, donor, recipient)` slot this compares,
@@ -1471,9 +1523,9 @@ public class EntitlementLedger private constructor(
      * The dead side is effective too, so a row already cancelled by `transferRelocOut` compares as
      * the zero it now is rather than the magnitude it once was.
      */
-    private fun liveKeyCoversRows(deadPath: PathKey, rows: Map<ReplicaId, GCounter>, livePath: PathKey): Boolean =
-        rows.all { (donor, row) ->
-            row.replicas().all { recipient ->
+    private fun liveKeyCoversRows(deadPath: PathKey, livePath: PathKey): Boolean =
+        donorsAt(deadPath).all { donor ->
+            recipientsOf(deadPath, donor).all { recipient ->
                 effRow(deadPath, donor, recipient) <= effRow(livePath, donor, recipient)
             }
         }

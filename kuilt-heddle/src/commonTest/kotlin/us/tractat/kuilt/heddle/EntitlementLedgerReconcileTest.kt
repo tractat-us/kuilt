@@ -38,6 +38,11 @@ class EntitlementLedgerReconcileTest {
     private val bob = ReplicaId("bob") // the transfer RECIPIENT; p3 is the donor
     private val e4 = AttachmentId("e4") // g → h, the legal reparent generation for `h`
 
+    // #2366 second hop — a hand-off CHAIN across two consecutive moves, with the middle peer gone.
+    private val carol = ReplicaId("carol") // the original holder: mints, delegates, hands off to alice
+    private val alice = ReplicaId("alice") // the middle of the chain; departs the roster after move 1
+    private val e8 = AttachmentId("e8") // g → h, the SECOND legal reparent generation for `h`
+
     // #1916 — the cross-parent reparent: `g` moves out from under `a` and in under `b`.
     private val a = GroupId("a")
     private val b = GroupId("b")
@@ -794,6 +799,173 @@ class EntitlementLedgerReconcileTest {
                 assertIs<Relocation.Nothing>(
                     move.patch.relocationPatch(e4, mapOf(e2 to moved.baseFinalsOn(e2))),
                     "a second move off the drained strand must carry nothing",
+                )
+            },
+        )
+    }
+
+    // ── #2366 second hop — a carried row whose donor is no longer on the roster ───────────────────
+
+    /**
+     * A hand-off **chain** carried across two consecutive generation moves, with the middle peer
+     * gone by the second.
+     *
+     * `carol` mints 100, delegates it down to `h`, and hands the whole 100 to `alice`; `alice`
+     * hands 40 of it to `bob`. Both rows sit on `PathKey.of(e2)`. The advisory-retire race then
+     * re-homes `h` onto `e4`, and the move carries both rows — into `transferRelocIn`, because the
+     * carry may never write the donor-owned base slot (#1691). So after move 1 the key
+     * `holdings` reads carries its entire credit in the **relocation** matrix and nothing at all in
+     * `transfers`.
+     *
+     * Returns the state as it stands after move 1 with `e4` still live (where the chain's pockets
+     * are readable), the staged ledger with `e4` retired and `e8` live, and the first move's patch
+     * — the control plane's own relocation state, which is `this` for the second derivation exactly
+     * as `FenceState.relocations` is in production.
+     */
+    private class ChainAcrossTwoMoves(
+        val afterMove1: EntitlementLedger,
+        val staged: EntitlementLedger,
+        val move1: Relocation.Moved,
+    )
+
+    private fun handOffChainAcrossTwoMoves(): ChainAcrossTwoMoves {
+        var l = EntitlementLedger.ZERO.piece(
+            EntitlementLedger.bootstrap(root, mapOf(carol to 100L), nonce = "genesis"),
+        )
+        l = l.piece(l.prepare(rec(e1, root, g))!!.delta)
+        l = l.piece(l.activate(e1)!!.delta)
+        l = l.piece(l.prepare(rec(e2, g, h))!!.delta)
+        l = l.piece(l.activate(e2)!!.delta)
+        l = l.piece(l.delegate(carol, e1, 100L)!!.delta)
+        l = l.piece(l.delegate(carol, e2, 100L)!!.delta)
+        l = l.piece(l.transfer(h, carol, alice, 100L)!!.delta) // hop 1
+        l = l.piece(l.transfer(h, alice, bob, 40L)!!.delta) // hop 2
+        // Race 1: retire `e2` with the chain still outstanding, reparent `h` onto `e4`.
+        l = l.piece(l.close(e2)!!.delta)
+        l = l.piece(EntitlementLedger.of(lifecycle = mapOf(e2 to Lifecycle.RETIRED)))
+        l = l.piece(l.prepare(rec(e4, g, h))!!.delta)
+        l = l.piece(l.activate(e4)!!.delta)
+        val move1 = assertIs<Relocation.Moved>(
+            EntitlementLedger.ZERO.relocationPatch(e4, mapOf(e2 to l.baseFinalsOn(e2))),
+            "fixture: the first move must carry the chain onto e4",
+        )
+        val afterMove1 = l.piece(move1.patch)
+        // Race 2: the same thing again, one generation on.
+        var staged = afterMove1.piece(afterMove1.close(e4)!!.delta)
+        staged = staged.piece(EntitlementLedger.of(lifecycle = mapOf(e4 to Lifecycle.RETIRED)))
+        staged = staged.piece(staged.prepare(rec(e8, g, h))!!.delta)
+        staged = staged.piece(staged.activate(e8)!!.delta)
+        return ChainAcrossTwoMoves(afterMove1, staged, move1)
+    }
+
+    /**
+     * **The defect, and the reason `Refused` is the right answer.** Donors are enumerated out of the
+     * acks, so a donor whose only mark on the dead key is a row an *earlier* move carried there is
+     * invisible to the derivation. Left that way it is not merely skipped: `carol`'s row moves onto
+     * the live key while `alice`'s stays behind, so `alice` — who has **departed** — is credited the
+     * 100 she was handed and `bob`'s 40 evaporates. Measured before the fix: `carol=0, alice=100,
+     * bob=0`, `validate() == []`. Conservation is intact and nothing goes negative, exactly as in
+     * the single-hop case; only the owner changed, and this time in favour of a peer that is gone.
+     *
+     * Carrying the row anyway would be worse than refusing. A row is declarable final because its
+     * writer marked the edge locally unwritable at barrier time; a peer that never acked has
+     * promised nothing, and moving on its behalf is the fabricate-beyond-owner violation the fence
+     * exists to prevent. So the derivation refuses, names the donor, and leaves a state that
+     * [LedgerConflict.OrphanedTransferPath] now reports.
+     */
+    @Test
+    fun aCarriedRowWhoseDonorNeverAckedRefusesInsteadOfReassigningItsRecipient() {
+        val chain = handOffChainAcrossTwoMoves()
+        val staged = chain.staged
+        val fullAcks = staged.baseFinalsOn(e4)
+        val departedAcks = fullAcks.filterKeys { it != alice }
+        val refused = chain.move1.patch.relocationPatch(e8, mapOf(e4 to departedAcks))
+        assertAll(
+            // ── the rig: the credit under test really does live where only the widened
+            // enumeration can see it, and it really is live at the key about to be retired.
+            {
+                assertEquals(
+                    emptySet(),
+                    staged.transferDonorsOn(e4),
+                    "rig: the dead key carries NO base transfer row — its whole credit arrived by " +
+                        "carry, so an enumeration over `transfers` alone cannot reach it",
+                )
+            },
+            {
+                assertEquals(
+                    40L,
+                    chain.afterMove1.holdings(h, bob),
+                    "rig: bob's hand-off survived move 1 and is live at the key about to be retired",
+                )
+            },
+            {
+                assertEquals(
+                    60L,
+                    chain.afterMove1.holdings(h, alice),
+                    "rig: …and alice still holds the rest of the chain there",
+                )
+            },
+            {
+                assertTrue(
+                    alice in fullAcks.keys,
+                    "rig: alice IS reachable from the honest fence — the arm withholds her, the ledger does not",
+                )
+            },
+            // ── the fix.
+            {
+                val reason = assertIs<Relocation.Refused>(
+                    refused,
+                    "a carried row whose donor never acked must refuse, not move the rest of the key",
+                ).reason
+                assertTrue(
+                    "alice" in reason && "e4" in reason,
+                    "the refusal must name the donor and the key so it is actionable: $reason",
+                )
+            },
+            // ── and the state the refusal leaves is diagnosable rather than silent.
+            {
+                assertTrue(
+                    LedgerConflict.OrphanedTransferPath(PathKey.of(e4)) in staged.validate(),
+                    "the un-reconciled key must be reported — it holds credit no group's live " +
+                        "lineage reads: ${staged.validate()}",
+                )
+            },
+        )
+    }
+
+    /**
+     * The **control arm**, and the non-vacuity of the refusal above: the identical chain with
+     * `alice` still on the roster moves, and every pocket survives both hops. Without this arm
+     * "refuse whenever `transferRelocIn` names a donor" — which would wedge the second `Reconcile`
+     * of every strand that has ever been re-homed — passes the test above unremarked.
+     */
+    @Test
+    fun theSameChainMovesWhenEveryCarriedDonorStillAcks() {
+        val chain = handOffChainAcrossTwoMoves()
+        val staged = chain.staged
+        val move2 = assertIs<Relocation.Moved>(
+            chain.move1.patch.relocationPatch(e8, mapOf(e4 to staged.baseFinalsOn(e4))),
+            "with every carried donor acking, the second hop must move",
+        )
+        val moved = staged.piece(move2.patch)
+        assertAll(
+            { assertEquals(0L, moved.holdings(h, carol), "carol handed the whole 100 away, twice re-homed") },
+            { assertEquals(60L, moved.holdings(h, alice), "alice keeps 100 − 40 across the second move") },
+            { assertEquals(40L, moved.holdings(h, bob), "…and the end of the chain keeps its hand-off") },
+            { assertTrue(moved.validate().isEmpty(), "a fully carried chain leaves no conflict: ${moved.validate()}") },
+            // The carried credit is real, not merely reported: bob spends all of it.
+            {
+                val spent = moved.spend(bob, h, 40L)?.let { moved.piece(it.delta) }
+                assertNotNull(spent, "the twice-carried credit must be spendable")
+                assertEquals(0L, spent.holdings(h, bob), "…and spending it lands bob on zero")
+            },
+            // §5.4 (iii) idempotence survives the new refusal: a drained carried row must not
+            // re-refuse merely because its donor appears in `transferRelocIn`.
+            {
+                assertIs<Relocation.Nothing>(
+                    chain.move1.patch.piece(move2.patch)
+                        .relocationPatch(e8, mapOf(e4 to moved.baseFinalsOn(e4))),
+                    "a second move off the drained key must carry nothing, not refuse",
                 )
             },
         )
