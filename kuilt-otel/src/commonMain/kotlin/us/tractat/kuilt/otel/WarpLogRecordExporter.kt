@@ -8,6 +8,7 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -397,16 +398,22 @@ public class WarpLogRecordExporter(
      *
      * Exists so [lastDropReport]'s `-1` seed is *pinned* rather than merely argued for. The seed
      * is the difference between reporting the first drop and reporting nothing until drop
-     * [DROP_REPORT_INTERVAL] — but it is invisible to every assertion on exporter output, and
-     * the line itself goes to the logger, which this module cannot capture (`:kuilt-otel` does
-     * not depend on `:kuilt-otel-logging`, and its self-capture exclusion would drop the line
-     * anyway). Counting emissions is what makes a `-1` → `0` mutation go red.
+     * [DROP_REPORT_INTERVAL], and it is invisible to every assertion on exporter output.
+     * Counting emissions is what makes a `-1` → `0` mutation go red.
      *
      * Note that observing the *seed* is not enough: `lastDropReport == 0` holds after one drop
      * under **both** seeds. The count is the discriminator.
      *
      * `internal` for test verification only, following [Rga.insertsById]'s precedent; nothing in
      * production reads it.
+     *
+     * **This is not the precedent to copy for a new claim about log volume.** An earlier version of
+     * this KDoc said the module "cannot capture its own logger output"; that is false, and the
+     * counter is weaker than what it stands in for — it witnesses the *decision to report*, so it
+     * keeps reading `1` after somebody deletes the line it exists to prove was emitted. A jvmTest
+     * attaching a logback `ListAppender` to this file's logger asserts the emission itself; see
+     * `WarpLogRecordExporterFailureReportingTest`, and `:kuilt-otel-tap`'s `JoinCodeNotLoggedTest`
+     * before it. Nothing here is JVM-specific — the code under test is `commonMain` (#2237).
      */
     internal var dropSummariesEmitted: Int = 0
         private set
@@ -457,6 +464,17 @@ public class WarpLogRecordExporter(
      * yet confirmed deleted. Mirrors [LogSegmentIndex.retired]; see it for the crash argument.
      */
     private val retiringSegments: MutableList<Int> = mutableListOf()
+
+    /**
+     * Segment numbers whose refused delete has already been reported — see [sweep], which both
+     * reads and writes this to decide whether a failure is news. Guarded by [lock].
+     *
+     * Bounded by [retiringSegments]: a number is added only while it is on the ledger and removed
+     * the moment its delete succeeds, so this cannot outgrow the ledger it shadows. It is
+     * deliberately **not** persisted — a restart is a change of circumstance, and re-reporting once
+     * per process start is the behaviour a reader of the log wants.
+     */
+    private val reportedSweepFailures: MutableSet<Int> = mutableSetOf()
     private var activeSegment: Rga<LogRecord> = Rga.empty()
     private var activeNumber: Int = 0
     private var activeOpCount: Int = 0
@@ -1515,8 +1533,9 @@ public class WarpLogRecordExporter(
                 // A half-applied turn can have left the index naming segments that
                 // were never written. Rewriting it on the next attempt re-converges.
                 lock.withLock { ledgerSwept(swept, turnFailed = true) }
-                logFailure(cause)
-                failure(cause)
+                // Through `failure`, not beside it: the outage streak it maintains is what decides
+                // whether this is news or a repeat — see its KDoc.
+                failure(cause, logFailure)
             },
         )
     }
@@ -1557,15 +1576,32 @@ public class WarpLogRecordExporter(
      * (`IndexedDbDurableStore` can) must not turn every export after the first retirement into a
      * failure. The number stays in [retiringSegments] and so stays named by
      * [LogSegmentIndex.retired], which is the only record that the key exists at all.
+     *
+     * **Reported once per number, not once per attempt** (#2237). Every outstanding ledger entry is
+     * re-swept on every window pass — see [retireSupersededSegments], where that is deliberate — so
+     * a store that stays broken would otherwise report one unchanging condition Θ(passes × ledger)
+     * times. Measured on `WarpLogRecordExporterRetirementTest`: 841 lines over 57 segments.
+     *
+     * The cause is interpolated rather than attached, which is the narrow case CLAUDE.md permits:
+     * the failure is routine (the KDoc above names the store that does it), it is retried, and the
+     * throwable's type and message are the whole diagnosis. The trace is what it cost — on Apple
+     * targets each one materialises a symbolicated stack, which is how a `runTest` body doing no
+     * real I/O at all came to burn 11 s of wall clock, and on wasm it is what pushed the class past
+     * the harness's 1 MB-per-message ceiling and silently dropped its results (#2185).
      */
-    private suspend fun sweep(number: Int): Boolean =
-        runCatchingCancellable {
-            store.delete(segmentKey(number))
-            true
-        }.getOrElse { cause ->
-            logger.warn(cause) { "otel.logs: retired segment $number could not be deleted; retrying" }
-            false
+    private suspend fun sweep(number: Int): Boolean {
+        val cause = runCatchingCancellable { store.delete(segmentKey(number)) }.exceptionOrNull()
+        if (cause == null) {
+            // The condition changed. A later failure on this number is fresh news, not a repeat —
+            // which is what keeps "report the outage" from collapsing into "report once, ever".
+            lock.withLock { reportedSweepFailures.remove(number) }
+            return true
         }
+        if (lock.withLock { reportedSweepFailures.add(number) }) {
+            logger.warn { "otel.logs: retired segment $number could not be deleted; retrying: $cause" }
+        }
+        return false
+    }
 
     /**
      * The store mutations one [export] owes: a leading index write when the layout has moved,
@@ -1916,15 +1952,33 @@ public class WarpLogRecordExporter(
         return ExportResult.Success
     }
 
-    /** Record a failed durable write and return [ExportResult.Failure]. */
-    private fun failure(cause: Throwable): ExportResult {
-        healthState.update {
+    /**
+     * Record a failed durable write and return [ExportResult.Failure], calling [report] only when
+     * this failure **opens** an outage rather than continuing one.
+     *
+     * The dedup key is [ExporterHealth.consecutiveFailures] — production state, on a public
+     * surface, that this function already maintains — rather than a counter kept beside the log
+     * for a test's benefit. `success`/[storeSucceeded] reset the streak, so a store that comes back
+     * and breaks again is news a second time; nothing else re-arms it.
+     *
+     * Why it needs deduplicating at all: a refused write is retried by the next export, so a store
+     * that stays broken reports one unchanging condition once per export, each line carrying a
+     * throwable — 300 of them over a 300-export outage, measured (#2237). Reported once, the
+     * throwable is affordable and is kept: unlike a refused sweep of superseded garbage, a refused
+     * durable write is the store rejecting the application's own data.
+     *
+     * [getAndUpdate] rather than a read-then-`update`, so the decision and the increment are one
+     * CAS and two threads failing at once cannot both see a clean streak.
+     */
+    private fun failure(cause: Throwable, report: (Throwable) -> Unit = {}): ExportResult {
+        val before = healthState.getAndUpdate {
             it.copy(
                 failed = it.failed + 1,
                 consecutiveFailures = it.consecutiveFailures + 1,
                 lastFailure = cause,
             )
         }
+        if (before.consecutiveFailures == 0) report(cause)
         return ExportResult.Failure(cause)
     }
 
