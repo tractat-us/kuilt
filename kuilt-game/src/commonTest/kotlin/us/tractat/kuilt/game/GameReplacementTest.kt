@@ -18,13 +18,17 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.raft.Committed
+import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 
@@ -281,13 +285,49 @@ class GameReplacementTest {
         val host = hostDeferred.await()
         j1Deferred.await()
         val spectator = spectateDeferred.await()
+        val spectatorId = NodeId(spectateRaw.selfId.value)
 
-        // Spectator's role must be permanently Learner.
+        // On return from gameSpectate the role is already Learner — the arrival property.
         assertIs<RaftRole.Learner>(spectator.node.role.value)
 
-        // Voter count must be exactly 2 (host + j1): the final Simple config entry
-        // commits host+j1 as voters. Await it to confirm the spectator never took a seat.
-        awaitVoterCount(host.node, expectedCount = 2)
+        // "Never takes a seat" is a claim about the whole remaining trajectory, so it is asserted
+        // on a membership that has STOPPED MOVING — not on the first instant the count equals 2.
+        // The old tail was `awaitVoterCount(host.node, expectedCount = 2)`, which returned on the
+        // instant j1 was admitted, before the spectator had even declared: every later promotion
+        // was behind the point where the await had already resolved. Mutating
+        // launchSpectatorManagement to promote the spectator to a voter left that version green
+        // (#1949).
+        val settled = settledMembership(host.node)
+
+        assertAll(
+            // Precondition, so the two "never a voter" assertions below cannot pass merely because
+            // the spectator never joined at all.
+            {
+                assertTrue(
+                    spectatorId in settled.learners,
+                    "the spectator must be seated as a learner — settled config was $settled",
+                )
+            },
+            {
+                assertFalse(
+                    spectatorId in settled.voters,
+                    "the spectator must never hold a voter seat — settled config was $settled",
+                )
+            },
+            {
+                assertEquals(
+                    2,
+                    settled.voters.size,
+                    "voter seats must settle at exactly host + j1 — settled config was $settled",
+                )
+            },
+            {
+                assertIs<RaftRole.Learner>(
+                    spectator.node.role.value,
+                    "the spectator's role must still be Learner once the cluster has settled",
+                )
+            },
+        )
     }
 }
 
@@ -319,6 +359,15 @@ internal fun fastLivenessConfig(): HeartbeatConfig = HeartbeatConfig(
  * always supposed to read; the difference is that this resolves on adoption rather than on the
  * Simple entry's commit, which only makes the wait shorter — every assertion after it still blocks
  * on the real post-condition (a replacement being admitted, the log replaying).
+ *
+ * **This answers "did the cluster reach [expectedCount] voters", never "did it settle there."** It
+ * returns on the first instant the count matches, which is the right question for its three
+ * remaining callers — each is about an *arrival* ("the leader evicts the dead voter", "the
+ * replacement takes the freed seat") and each is followed by the real post-condition. It is the wrong question for any
+ * claim phrased as *never* or *ends up*, because everything after the matching instant is behind the
+ * point where this already returned: #1949 was exactly that, a tail `awaitVoterCount(host, 2)`
+ * commented as proving a spectator never took a seat, which stayed green when the spectator was
+ * mutated into a voter 2 virtual-ms later. Use [settledMembership] for those.
  */
 private suspend fun awaitVoterCount(node: RaftNode, expectedCount: Int) {
     node.membership.first { it.voters.size == expectedCount }
