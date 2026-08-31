@@ -1199,27 +1199,15 @@ public class Quilter<S : Quilted<S>>(
  * [floor] is deliberately **not** defaulted. `VersionVector.EMPTY` is exactly the pre-#2127
  * behaviour, so a default would let a future call site silently reintroduce the frontier
  * collapse this parameter exists to prevent.
+ *
+ * **The implementation lives in `:kuilt-crdt` as [VersionVector.Companion.contiguous]** (#2019).
+ * It moved there because `:kuilt-conformance`'s lattice-law generator has to derive the *same*
+ * quantity to reach `compact()`, and cannot see this module. Two copies would make that sameness
+ * a coincidence a golden test could pin only against today's behaviour, not against future drift
+ * in what the frontier is *meant* to be. This name stays as the reading `Quilter` is written in.
  */
-internal fun contiguousFrontier(dots: Set<Dot>, floor: VersionVector): VersionVector {
-    val seqsByAuthor: Map<ReplicaId, Set<Long>> = dots
-        .groupBy(keySelector = { it.replica }, valueTransform = { it.seq })
-        .mapValues { (_, seqs) -> seqs.toSet() }
-    val authors = seqsByAuthor.keys + floor.entries.keys
-    val highWaters = authors.associateWith { author ->
-        contiguousHighWater(seqsByAuthor[author].orEmpty(), from = floor[author])
-    }
-    return VersionVector.of(highWaters)
-}
-
-/**
- * The highest `n >= from` such that every seq in `from + 1 .. n` is in [seqs]; [from] itself
- * if `from + 1` is absent. O(n - from) — never O(from), which is what keeps a deep floor free.
- */
-private fun contiguousHighWater(seqs: Set<Long>, from: Long): Long {
-    var n = from
-    while ((n + 1L) in seqs) n++
-    return n
-}
+internal fun contiguousFrontier(dots: Set<Dot>, floor: VersionVector): VersionVector =
+    VersionVector.contiguous(dots, floor)
 
 /**
  * Convenience factory for [Quilter] that derives the message serializer internally.

@@ -67,5 +67,53 @@ public data class VersionVector(
         /** A vector from [raw], dropping non-positive high-waters so equality stays canonical. */
         public fun of(raw: Map<ReplicaId, Long>): VersionVector =
             VersionVector(raw.filterValues { it > 0L })
+
+        /**
+         * The **delivered** vector a replica holding [dots] above [floor] can honestly claim: per
+         * author, the highest seq reachable from [floor] without a gap.
+         *
+         * This is the quantity every causal-stability decision is expressed in — the `delivered`
+         * argument of `Rga.compact` / `Fugue.compact` / `MovableTree.compact`, and the row a peer
+         * gossips so the group can agree a stable cut. It stops at the first gap on purpose: a
+         * replica that holds `1, 2, 4` has **not** delivered `4`, because `3` is still in flight and
+         * something it has not seen may depend on it. Claiming `4` would authorise the group to drop
+         * history `3` still refers to.
+         *
+         * @param dots the identities the state still carries — [Quilted.causalDots].
+         * @param floor the dots it delivered and has since purged *without* retaining their
+         *   identities — [Quilted.causalFloor]. The two are read as a **union, not a partition**: a
+         *   dot at or below [floor] may also be in [dots], which is harmless because the walk only
+         *   ever reads seqs strictly above the floor.
+         *
+         * [floor] is deliberately **not** defaulted. Passing [EMPTY] where a real floor exists
+         * collapses that author's high-water to `0` — a floor is downward-closed, so the walk from
+         * `0` stops at the first swallowed seq, which is `1` — and a gossiped regression there pins
+         * every downstream compaction below the gap **forever**. A default would let a call site
+         * reintroduce that silently, so it has to be written down at each one.
+         *
+         * `O(dots)` plus `O(n − floor)` per author — never `O(floor)`, so a deep floor is free.
+         *
+         * @sample us.tractat.kuilt.crdt.sampleVersionVectorContiguous
+         */
+        public fun contiguous(dots: Set<Dot>, floor: VersionVector): VersionVector {
+            val seqsByAuthor: Map<ReplicaId, Set<Long>> = dots
+                .groupBy(keySelector = { it.replica }, valueTransform = { it.seq })
+                .mapValues { (_, seqs) -> seqs.toSet() }
+            val authors = seqsByAuthor.keys + floor.entries.keys
+            val highWaters = authors.associateWith { author ->
+                contiguousHighWater(seqsByAuthor[author].orEmpty(), from = floor[author])
+            }
+            return of(highWaters)
+        }
+
+        /**
+         * The highest `n >= from` such that every seq in `from + 1 .. n` is in [seqs]; [from] itself
+         * if `from + 1` is absent.
+         */
+        private fun contiguousHighWater(seqs: Set<Long>, from: Long): Long {
+            var n = from
+            while ((n + 1L) in seqs) n++
+            return n
+        }
     }
 }

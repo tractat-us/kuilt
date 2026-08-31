@@ -10,6 +10,25 @@ import kotlin.test.assertEquals
  * change will break the build, not silently produce stale documentation.
  */
 
+/** The delivered frontier stops at the first gap, and resumes above a compaction floor. */
+@Suppress("unused")
+internal fun sampleVersionVectorContiguous() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    // A holds 1, 2, 4 — seq 3 is still in flight, so A has delivered 2, not 4.
+    val dots = setOf(Dot(a, 1L), Dot(a, 2L), Dot(a, 4L), Dot(b, 1L))
+    val frontier = VersionVector.contiguous(dots, floor = VersionVector.EMPTY)
+    check(frontier[a] == 2L)
+    check(frontier[b] == 1L)
+
+    // After compaction swallows A's 1..2 without keeping their ids, the floor asserts they were
+    // delivered and the walk starts above them — so 4 is still gapped, but 3 would now count.
+    val floor = VersionVector.of(mapOf(a to 2L))
+    check(VersionVector.contiguous(setOf(Dot(a, 4L)), floor)[a] == 2L)
+    check(VersionVector.contiguous(setOf(Dot(a, 3L), Dot(a, 4L)), floor)[a] == 4L)
+}
+
 // ── GCounter ────────────────────────────────────────────────────────────────
 
 /** Two replicas increment independently; the merge sums correctly. */
