@@ -237,11 +237,13 @@ class EntitlementLedgerConservationTest {
         /**
          * How many under-acked runs saw `PerEdgeSafety(e1)` — the strand's strict prefix — fire.
          *
-         * [assertUnderAckIsAttributed] pins that the residue never rolls up that far, and the pin is
-         * a claim about a *count of zero*. A zero is the one value an arm that never ran also
-         * reports, so the pin needs a witness that the arm ran at all: [underAcks] is that witness
-         * and this is the reading it qualifies. Kept as a number rather than as a comment, because a
-         * comment recording this particular measurement is exactly what went stale here once.
+         * Reported, never asserted on — deliberately. `e1` is in [assertUnderAckIsAttributed]'s
+         * tolerated set, and the natural way to keep such a tolerance honest is a frequency floor
+         * ("it must fire at least once"). That is not available here: the run's trajectory depends
+         * on `Set` iteration order, which JVM and Kotlin/Native do not agree on, so this reads 0 on
+         * one target and non-zero on the other from the same seed. The tolerance is kept honest by a
+         * **bound** on the breach instead. This counter is what makes that split legible in a
+         * failure message rather than something the next reader has to rediscover.
          */
         var prefixSafety = 0
 
@@ -535,26 +537,53 @@ class EntitlementLedgerConservationTest {
             },
             {
                 // Nothing beyond the #1783 shape may move: per-edge safety and the closure violation
-                // on the STRANDS themselves, plus the global backstop once the residue is large
-                // enough to show in the totals. In particular no negative holdings, no dual inbound,
-                // no negative effective spend, no orphaned transfer path — and no per-edge report on
-                // an edge that was never under-acked, including the prefix `e1`, which the residue's
-                // spendable credit could in principle roll up through and measurably does not.
+                // on the STRANDS themselves, the strand's strict prefix `e1` (below), plus the global
+                // backstop once the residue is large enough to show in the totals. In particular no
+                // negative holdings, no dual inbound, no negative effective spend, and no orphaned
+                // transfer path — seven of the nine kinds stay pinned exactly.
                 //
-                // **`e1` was briefly tolerated here on this branch, and the tolerance was inert.**
-                // The reasoning was sound in shape — a strand carrying transfer rows now moves
-                // instead of being refused, so more under-acked moves land and the residue could
-                // grow past `e1`'s cover — but the reach was assumed rather than measured, and a
-                // tolerated conflict reads identically whether it fires once or never. The
-                // `prefixSafety` counter settles it: 0 across 80 seeded runs and 76 under-acks,
-                // with and without the #2366 carry. So the original pin stands, and the counter now
-                // holds it as a number instead of as a comment.
+                // **`e1` is in the tolerated set, and was not before (#2366).** It is the unique
+                // strict prefix of every path ending at `g3`, so a spend of the residue's phantom
+                // credit charges `rollupSpent(e1)` with no matching `issued(e1)` behind it. What
+                // changed is reach, not soundness: a strand carrying transfer rows can now move
+                // instead of being refused, so more under-acked moves land and the residue grows
+                // past `e1`'s cover.
+                //
+                // **The reach is platform-dependent, which is why the bound below exists rather than
+                // a frequency floor.** `Random(seed)` is portable but the trajectory is not: the run
+                // walks `allEdges()`/`allReplicas()`, which are `Set`s, and JVM and Kotlin/Native do
+                // not agree on their iteration order. Measured — `prefixSafety` is 0 on JVM across
+                // 80 seeded runs and 76 under-acks, and non-zero on `iosSimulatorArm64`, where the
+                // breach reads 17 against a residue of 36. So neither "it always fires" nor "it
+                // never fires" is assertable, and a bare tolerance would be green on both whether or
+                // not the report is explained.
+                //
+                // What IS assertable on every target is the soundness claim itself: when `e1` does
+                // break, the breach must be no larger than the lie that was fed. That bounds the
+                // tolerance to what the residue can account for instead of waving the edge through.
                 val stray = conflicts.filterNot {
-                    it is LedgerConflict.PerEdgeSafety && it.edge in strands ||
+                    it is LedgerConflict.PerEdgeSafety && (it.edge in strands || it.edge == e1) ||
                         it is LedgerConflict.ClosureViolation && it.edge in strands ||
                         it is LedgerConflict.ConservationViolation
                 }
                 assertTrue(stray.isEmpty(), "an under-acked run disturbed something outside the #1783 shape: $stray")
+            },
+            {
+                // The bound the tolerance above rests on, and the whole of what makes it a check
+                // rather than a pass. Vacuous where `e1` does not break (JVM, today) and live where
+                // it does (Kotlin/Native) — which is the point: it fires on whichever target reaches
+                // the state, so neither target has to be the one that happens to.
+                if (LedgerConflict.PerEdgeSafety(e1) in conflicts) {
+                    val summary = checkNotNull(l.edge(e1)) { "the prefix edge must be known" }
+                    val breach = summary.spent + summary.returned - summary.issued
+                    val residual = underAcked.sumOf { it.delta }
+                    assertTrue(
+                        breach in 1..residual,
+                        "the prefix edge's per-edge breach ($breach) is not explained by the " +
+                            "under-acked residue ($residual) — the residue is the only thing that " +
+                            "may reach `e1`, so a larger breach is a real regression in the move",
+                    )
+                }
             },
         )
     }
@@ -589,21 +618,6 @@ class EntitlementLedgerConservationTest {
             { assertTrue(rig.underAcks >= 25, "the under-ack rig fired too rarely — $rig") },
             { assertTrue(rig.moved >= 250, "too few generations actually moved — $rig") },
             { assertTrue(rig.accumulated >= 50, "the §12.3 accumulation arm fired too rarely — $rig") },
-            {
-                // The measurement behind the `e1` note in [assertUnderAckIsAttributed]: over 80
-                // seeded runs and 76 under-acks the residue's spendable credit never rolls up far
-                // enough to break per-edge safety on the strand's strict prefix. Recorded as a
-                // counter rather than left to the `stray.isEmpty()` pin alone, because the claim a
-                // reader has to trust is a *count of zero* — and a count of zero is exactly what an
-                // arm that never ran also reports. `underAcks` above proves the arm ran.
-                assertEquals(
-                    0,
-                    rig.prefixSafety,
-                    "PerEdgeSafety(e1) fired — the residue now reaches the strand's strict prefix. " +
-                        "That may be legitimate, but it is a change in reach and must be re-argued, " +
-                        "not tolerated — $rig",
-                )
-            },
         )
     }
 
