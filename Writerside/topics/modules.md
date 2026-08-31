@@ -28,7 +28,8 @@ module.
 | `kuilt-websocket` | Ktor WebSocket fabric (`KtorClientLoom` + `KtorServerLoom`) |
 | `kuilt-tcp` | Plain TCP sockets as a fabric (`tcpLoomHost`/`tcpLoomJoin`, JVM/Android) — the worked example in the [fabric kit](fabric-kit.md) |
 | `kuilt-mdns` | Bonjour/mDNS local-network discovery feeding a WebSocket connection |
-| `kuilt-multipeer` | Apple Multipeer Connectivity fabric (iOS/macOS) |
+| `kuilt-nw` | Nearby iPhones and Macs find each other and connect directly, with no server and no shared Wi-Fi — the Apple fabric to reach for. The short code everyone shares ahead of time is the secret that encrypts the session, and one opened without it is refused — see [Nearby Apple devices](nw.md) |
+| `kuilt-multipeer` | Apple Multipeer Connectivity fabric (iOS/macOS). Superseded by `kuilt-nw`; prefer that for new code |
 | `kuilt-nearby` | Google Nearby Connections fabric (Android) |
 | `kuilt-webrtc` | WebRTC data-channel fabric (wasmJs) |
 | `kuilt-stream` | Turns any ordered pipe of bytes — a socket, your own in-house protocol — into a fabric: `framed()` puts the message boundaries back and rejects an oversized frame before allocating for it |
