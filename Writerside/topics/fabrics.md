@@ -85,7 +85,7 @@ mesh).
   fabric to reach for. Every peer advertises, browses, and dials, and the
   redundant double-dial is folded into one link. It needs a `Pattern.roomKey`:
   the key becomes the shared secret that encrypts the link, and a session
-  opened without one is refused.
+  opened without one is refused. → [Nearby Apple devices](nw.md)
 - **`kuilt-nearby`** (Android) — Google Nearby Connections.
 - **`kuilt-multipeer`** (iOS/macOS) — Apple Multipeer Connectivity. Superseded
   by `kuilt-nw`; prefer that for new code.

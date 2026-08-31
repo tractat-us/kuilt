@@ -51,7 +51,7 @@ Every peer in a session uses the same `Seam` interface — there is no client/se
 | `kuilt-websocket` | Ktor WebSocket fabric (`KtorClientLoom` + `KtorServerLoom`) |
 | `kuilt-otel` | Offline-first telemetry: record logs, metrics, and traces on any device; they sync up when the network returns, with no duplicates |
 
-→ [All modules](modules.md) — the wider list, including the other fabrics (mDNS, Network.framework, Nearby, WebRTC), gossip, dealing, clustering, liveness, and sessions.
+→ [All modules](modules.md) — the wider list, including the other fabrics (mDNS, [nearby Apple devices](nw.md), Nearby, WebRTC), gossip, dealing, clustering, liveness, and sessions.
 
 **Beyond the core:** the [Observability](observability.md) page walks the whole
 telemetry path — record on any device, survive being offline, and deliver to your

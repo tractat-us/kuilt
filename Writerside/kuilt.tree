@@ -18,6 +18,7 @@
     <toc-element toc-title="Network Fabric">
         <toc-element topic="contract.md"/>
         <toc-element topic="fabrics.md"/>
+        <toc-element topic="nw.md"/>
         <toc-element topic="fabric-kit.md"/>
         <toc-element topic="multipath.md"/>
         <toc-element topic="composing-a-seam.md"/>
