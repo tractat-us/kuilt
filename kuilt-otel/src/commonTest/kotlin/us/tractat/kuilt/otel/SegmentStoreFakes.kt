@@ -11,7 +11,9 @@ import us.tractat.kuilt.store.StoreKey
 
 /**
  * [DurableStore] fakes shared by the tests that exercise [WarpLogRecordExporter]'s segmented
- * layout — the byte accounting of #1860, and the windowing and segment retirement of #2127.
+ * layout — the byte accounting of #1860, and the windowing and segment retirement of #2127 —
+ * plus the refusing store every exporter's `clear` failure contract is pinned against
+ * (#2249, #2251).
  *
  * They live here rather than nested inside one test class because two suites need the same
  * failure injection, and a second hand-rolled copy is how two suites quietly stop testing the
@@ -73,6 +75,52 @@ internal class RecordingStore : DurableStore {
     fun putRaw(key: StoreKey, bytes: ByteArray): Unit = lock.withLock { backing[key] = bytes.copyOf() }
 
     fun resetWriteLog(): Unit = lock.withLock { payloadSizes.clear() }
+}
+
+/**
+ * Delegates to [backing], but while refusal is armed throws on every write whose key satisfies
+ * [refuses] — by default, every write.
+ *
+ * The predicate is what lets one fake serve both shapes a clear has to survive, and the second
+ * one is not optional. A store that can only refuse *everything* leaves
+ * [WarpTelemetry.clear]'s best-effort fan-out untestable: all three signals fail, so "did it
+ * keep going past the first failure?" is answered by nothing. Selective refusal is what makes
+ * that question have two different answers.
+ *
+ * Arming is deliberately separate from construction: a fixture has to load through this store
+ * before the refusal starts, or the state under test was never persisted in the first place.
+ *
+ * [refusedWrites] is a precondition guard, never an assertion — a test whose rig never fired is
+ * green by absence, and that is indistinguishable from a green earned by the code under test.
+ */
+internal class WriteRefusingStore(
+    private val backing: DurableStore,
+    private val refuses: (StoreKey) -> Boolean = { true },
+) : DurableStore {
+    private val lock = reentrantLock()
+    private var refusing = false
+    private var refused = 0
+
+    fun refuseWrites(): Unit = lock.withLock { refusing = true }
+
+    fun allowWrites(): Unit = lock.withLock { refusing = false }
+
+    /** How many writes have been refused so far. */
+    fun refusedWrites(): Int = lock.withLock { refused }
+
+    override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+
+    override suspend fun write(key: StoreKey, bytes: ByteArray) {
+        val deny = lock.withLock {
+            val deny = refusing && refuses(key)
+            if (deny) refused++
+            deny
+        }
+        if (deny) throw IllegalStateException("store refused ${key.name}")
+        backing.write(key, bytes)
+    }
+
+    override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
 }
 
 /** Delegates to [backing], but throws on reading [poisoned]. */
@@ -185,6 +233,18 @@ internal class RefuseSegmentWritesStore(private val backing: DurableStore) : Dur
 
 /** The exporter's index key, duplicated here because the production constant is private. */
 internal val INDEX_KEY_FOR_TEST: StoreKey = StoreKey("otel.logs.idx")
+
+/**
+ * The prefix every key the log exporter owns shares — index, segments and the legacy single key.
+ *
+ * A test that wants to fail *the logs signal* refuses on this rather than on [INDEX_KEY_FOR_TEST]:
+ * the index write is emitted only when the in-memory index is dirty (`pendingWrites` gates it on
+ * `indexPersisted`), so a clear of an exporter that never rolled or retired a segment writes its
+ * active segment and no index at all. Keying a refusal to the index alone is silently a no-op
+ * there — the store accepts every write, the clear succeeds, and the test passes for the wrong
+ * reason.
+ */
+internal const val LOG_KEY_PREFIX_FOR_TEST: String = "otel.logs"
 
 /** The exporter's segment-key prefix, duplicated here because the production constant is private. */
 internal const val SEGMENT_KEY_PREFIX_FOR_TEST: String = "otel.logs.seg."
