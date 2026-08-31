@@ -8,6 +8,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import org.slf4j.LoggerFactory
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.Rga
+import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -224,9 +226,12 @@ class WarpLogRecordExporterFailureReportingTest {
     }
 
     /**
-     * The durable-write twin. Health already carries the streak this dedups on
-     * ([ExporterHealth.consecutiveFailures]), so the state the report reads is production state on
-     * a public surface — not a counter kept alongside it for a test's benefit.
+     * The durable-write twin: one outage is one line, and a store that comes back and breaks again
+     * is news a second time.
+     *
+     * The latch is `WarpLogRecordExporter.durableWriteOutage`, owned by `commit` — see
+     * [anUnrelatedBufferUpdateFailureDoesNotSwallowTheDurableWriteReport] for the population
+     * argument, and for why the earlier key ([ExporterHealth.consecutiveFailures]) was wrong.
      */
     @Test
     fun aStoreRefusingEveryWriteIsReportedOncePerOutageNotOncePerExport() = runTest {
@@ -305,6 +310,136 @@ class WarpLogRecordExporterFailureReportingTest {
         )
     }
 
+    /**
+     * A remote whose CRDT join succeeds and whose **persistence** throws — the buffer-update
+     * failure `mergeTurn` is written to survive.
+     *
+     * `merge` is the realistic vector: the remote arrives over the wire from another device, so
+     * `mergeTurn`'s turn-building block is the one that handles a shape this replica did not
+     * produce. `loadPersistedState` already treats a throwing `Rga.piece` as reachable ("a segment
+     * whose `absorb` threw"), and `adoptRemoteSegment` CBOR-encodes the remote verbatim.
+     *
+     * The rig is an unchecked cast: an [Rga] carrying a `String` where a [LogRecord] is expected.
+     * The element is **tombstoned**, and that is load-bearing rather than incidental —
+     * `Rga.entries` filters tombstones, so `rebuildDerivedState` walks past it and leaves this
+     * exporter's `log` usable afterwards, while `adoptRemoteSegment`'s encode still serializes the
+     * `Insert` op *including its value* through `LogRecord.serializer()` and throws. Poisoning
+     * `entries` instead would fail every later export at the same buffer-update step, and the
+     * outage the test is about would never be reached.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun remoteThatFailsToPersist(): Rga<LogRecord> {
+        val (inserted, _) = Rga.empty<String>().insertAfter(ReplicaId("B"), RgaId.HEAD, "not-a-LogRecord")
+        val (tombstoned, _) = requireNotNull(inserted.removeAt(0)) { "the rig never inserted anything to tombstone" }
+        return tombstoned as Rga<LogRecord>
+    }
+
+    /**
+     * **A failure the store had nothing to do with must not swallow the store's own report** — the
+     * defect this arm exists for (#2237).
+     *
+     * The line is deduplicated, and what it is deduplicated *against* decides whether it is ever
+     * emitted. Keyed on [ExporterHealth.consecutiveFailures] it was not: that counter moves on
+     * every failed turn, while only `commit` reports one, so any member of the difference —
+     * a buffer-update failure, which logs its own unrelated line — opens the streak first. The
+     * store then refuses writes, every later export sees a non-zero streak, and nothing ever
+     * resets it because nothing succeeds. The result is **zero** `"durable write failed"` lines
+     * for the whole outage, with `health.lastFailure` quietly holding the store's exception and
+     * the log pointing at the merge.
+     *
+     * That is strictly worse than the noise the dedup replaced, which is why it is asserted here
+     * rather than left to the arm above: that arm opens its outage from a clean streak, so it is
+     * green under both the broken key and the correct one and cannot see this at all.
+     *
+     * The order matters and is the whole test: unrelated failure **first**, store outage
+     * **second**.
+     */
+    @Test
+    fun anUnrelatedBufferUpdateFailureDoesNotSwallowTheDurableWriteReport() = runTest {
+        val store = WriteRefusingStore(RecordingStore())
+        var mergeResult: ExportResult = ExportResult.Success
+        var afterMerge = 0
+        var mergeLines = 0
+        var failuresAfterMerge = 0L
+        var failuresAfterOutage = 0L
+        var refused = 0
+        lateinit var lines: List<ILoggingEvent>
+
+        capturingExporterLogs { captured ->
+            val exporter = exporterFor(store)
+            exporter.export(record(0))
+
+            // An export failure the store had no part in, and which reports through its own line.
+            mergeResult = exporter.merge(remoteThatFailsToPersist())
+            mergeLines = captured.naming(MERGE_BUFFER_FRAGMENT).size
+            afterMerge = captured.naming(WRITE_FRAGMENT).size
+            failuresAfterMerge = exporter.health.value.failed
+
+            // Only now does the store break. Under the pre-emptable key this export sees the
+            // streak the merge opened and says nothing.
+            store.refuseWrites()
+            exporter.export(record(1))
+            failuresAfterOutage = exporter.health.value.failed
+            refused = store.refusedWrites()
+            lines = captured.naming(WRITE_FRAGMENT).toList()
+        }
+
+        assertAll(
+            {
+                assertEquals(
+                    1L,
+                    failuresAfterMerge,
+                    "precondition: the merge rig never fired, so nothing pre-empted anything and " +
+                        "this test cannot distinguish the two keys",
+                )
+            },
+            {
+                assertTrue(
+                    mergeResult is ExportResult.Failure,
+                    "precondition: the merge succeeded, so the rig fired on some other path: $mergeResult",
+                )
+            },
+            {
+                assertEquals(
+                    1,
+                    mergeLines,
+                    "precondition: the merge did not report through its own buffer-update line, so " +
+                        "the failure it opened is not the unrelated one this test is about",
+                )
+            },
+            {
+                assertEquals(
+                    0,
+                    afterMerge,
+                    "precondition: a durable-write line was already emitted before the store broke, " +
+                        "so the assertion below would pass on the pre-emption it exists to catch",
+                )
+            },
+            {
+                assertTrue(
+                    refused > 0,
+                    "precondition: the store refused nothing, so there was no outage to report",
+                )
+            },
+            {
+                assertEquals(
+                    2L,
+                    failuresAfterOutage,
+                    "precondition: the armed export did not actually fail, so the count below is " +
+                        "not over the population this claims to be about",
+                )
+            },
+            {
+                assertEquals(
+                    1,
+                    lines.size,
+                    "an outage opened behind an unrelated failure went unreported for its whole " +
+                        "duration — the dedup key counts failures the line is not about",
+                )
+            },
+        )
+    }
+
     private companion object {
         /** The exporter's logger name, spelled out because the production constant is private. */
         const val EXPORTER_LOGGER = "us.tractat.kuilt.otel.WarpLogRecordExporter"
@@ -320,6 +455,15 @@ class WarpLogRecordExporterFailureReportingTest {
 
         /** Distinguishing fragment of the durable-write-failure line. */
         const val WRITE_FRAGMENT = "durable write failed"
+
+        /**
+         * Distinguishing fragment of the **merge** buffer-update line.
+         *
+         * Deliberately not a prefix of [WRITE_FRAGMENT]: the point of the pre-emption arm is that
+         * the two lines come from different populations, so a test that could not tell them apart
+         * would be asserting nothing.
+         */
+        const val MERGE_BUFFER_FRAGMENT = "buffer update failed during merge"
 
         /**
          * Exports per phase. Only has to be comfortably more than one window's worth: the claim is
