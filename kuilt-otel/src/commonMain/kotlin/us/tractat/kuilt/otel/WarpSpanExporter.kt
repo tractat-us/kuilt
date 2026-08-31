@@ -254,8 +254,11 @@ public class WarpSpanExporter(
      * **Never throws**, on the same terms as [export]: a refused durable write is reported as
      * [ExportResult.Failure] carrying the store's cause, never propagated. Retrying a failed
      * clear re-converges — [ORSet.removeAll] over an already-emptied set is the lattice
-     * identity, emptying an already-empty frontier is too, and both writes are unconditional,
-     * so the retry rewrites the same bytes it would have written the first time.
+     * identity, emptying an already-empty frontier is too, and neither write is gated on the
+     * drop having moved anything, so the retry writes the same bytes the first attempt would
+     * have. Gating them on that is the obvious optimisation and it silently breaks the retry:
+     * a failed clear has already emptied memory, so a gated retry would find nothing to drop,
+     * write nothing, and report [ExportResult.Success] over a store that still holds every span.
      *
      * **On failure, [snapshot] already reads empty while the store still holds every span**, and
      * a configured clock's [WarpCausalClock.frontier] likewise reads empty while the persisted
