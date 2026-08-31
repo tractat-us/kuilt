@@ -139,10 +139,12 @@ internal data class RgaCache<V>(
      *    enough: with a trailing tombstone the new op becomes a **sibling** of it and its higher
      *    Lamport sorts it *ahead*, so the true order interleaves where a suffix would not.
      * 2. **Producing one must never force the cold lazy.** [Rga.insertAfter] /
-     *    [Rga.insertAllAfter] / [Rga.applyRemove] thread only a sequence that is *already* in
-     *    hand; a `sequence.last()` probe would re-introduce the very `computeSequence()` this
-     *    exists to remove, on the fill path that today never pays it. Warmth enters the chain at
-     *    [Rga.removeAt] / [Rga.removeFirst] / [Rga.insertAt], which force the lazy anyway.
+     *    [Rga.insertAllAfter] / [Rga.applyRemove] draw from `Rga.materializedSequence`, which is
+     *    a sequence *already* in hand — threaded here, or forced by an earlier read — and never
+     *    computes: a `sequence.last()` probe would re-introduce the very `computeSequence()`
+     *    this exists to remove, on the fill path that today never pays it. Warmth enters the
+     *    chain either at [Rga.removeAt] / [Rga.removeFirst] / [Rga.insertAt], which force the
+     *    lazy anyway and thread the result here, or at any plain read of [Rga.sequence] (#2225).
      */
     val sequence: List<RgaId>?,
 ) {
@@ -155,7 +157,7 @@ internal data class RgaCache<V>(
             compactPositions = emptyMap(),
             // Not `emptyList()`: seeding it would thread from birth, and then every append on
             // the fill path would pay an O(N) list copy on a path that reads the sequence not
-            // at all. Warmth arrives at the first eviction instead — see rule 2 above.
+            // at all. Warmth arrives at the first eviction or the first read — see rule 2 above.
             sequence = null,
         )
     }
@@ -307,25 +309,55 @@ public class Rga<V> private constructor(
      * [RgaCache.sequence] (#2193), so a chain of appends pays one `computeSequence()` rather
      * than one per turn. Every other path leaves it `null` and this recomputes once.
      *
-     * **Only a *threaded* order propagates, not merely a materialized one.** The chain is armed
-     * by [removeAt] / [removeFirst] / [insertAt], which force this lazy and thread the result on;
-     * an instance whose [sequence] was forced by a **plain read** carries nothing in
-     * [RgaCache.sequence], so `insertAfter` on it threads nothing and the next read recomputes.
-     * An append-then-read loop therefore still pays one `computeSequence()` per turn. That is
-     * unclaimed value rather than a correctness problem — the guard's premise holds equally for a
-     * forced lazy — and closing it is tracked by #2225.
+     * **Any order this instance already holds propagates, threaded or merely forced** (#2225).
+     * [removeAt] / [removeFirst] / [insertAt] force this lazy and thread the result on through
+     * [RgaCache.sequence]; an instance whose [sequence] a **plain read** forced carries nothing
+     * there, but [materializedSequence] reads the forced lazy directly, so an append on it
+     * threads too. An append-then-read loop therefore pays one `computeSequence()` in total
+     * rather than one per turn. Both supplies are sound for the same reason: the guard's
+     * premise is that its base equals `computeSequence()` of the current state, and a forced
+     * lazy satisfies that exactly as a threaded one does.
      */
-    public val sequence: List<RgaId> by lazy { cache?.sequence ?: computeSequence() }
+    public val sequence: List<RgaId> get() = sequenceLazy.value
 
     /**
-     * The materialized [sequence] this instance **already holds**, or `null` when reading
-     * [sequence] would have to compute it. Never forces the lazy — that is the whole point.
+     * The backing store for [sequence], held explicitly rather than through `by lazy` so that
+     * [materializedSequence] can ask [Lazy.isInitialized] whether it has been forced. A
+     * delegated property hides its `Lazy` behind a synthetic field reachable only by
+     * reflection, which is neither cheap nor uniformly available across this module's targets.
+     */
+    private val sequenceLazy: Lazy<List<RgaId>> = lazy { cache?.sequence ?: computeSequence() }
+
+    /**
+     * The [sequence] this instance **already holds** — threaded into [RgaCache.sequence] by its
+     * producer, or forced by an earlier read — and `null` when reading [sequence] would have to
+     * compute it. Never forces the lazy; [Lazy.isInitialized] cannot, and that is rule 2 of
+     * [RgaCache.sequence]. This is the supply every threading site draws from.
+     *
+     * Safe to read concurrently. [sequenceLazy] is the default synchronized [Lazy], so a racing
+     * [Lazy.isInitialized] either observes the fully-published list or does not observe it yet —
+     * there is no half-built list to see. Losing the race costs a threading opportunity, never
+     * correctness, and the *wrong* list is the only outcome that could diverge two replicas
+     * silently (see [RgaCache.sequence]).
+     */
+    private val materializedSequence: List<RgaId>?
+        get() = cache?.sequence ?: sequenceLazy.takeIf { it.isInitialized() }?.value
+
+    /**
+     * The [sequence] this instance carries in its **cache** — the strictly narrower half of
+     * [materializedSequence], blind to a forced lazy.
      *
      * `internal` for `RgaSequenceThreadingTest`, whose "never recomputes" assertions are
      * `assertSame(state.threadedSequence, state.sequence)`: a threaded list that [sequence]
      * hands straight back is proof no `computeSequence()` ran, with no counter, no global
      * state and no wall-clock. `insertsById` and `maxSeqByReplica` are `internal` for the
      * same reason.
+     *
+     * **Deliberately not widened to [materializedSequence]** (#2225). Those tests read it on a
+     * state they have *just read the order of*, so a widened accessor would report `non-null`
+     * for a state that threaded nothing and every one of them — including the
+     * `recomputedOnTurn` counter that is the only pin on the optimisation firing at all —
+     * would go partly vacuous. The narrow meaning is what makes it a probe.
      */
     internal val threadedSequence: List<RgaId>? get() = cache?.sequence
 
@@ -454,7 +486,7 @@ public class Rga<V> private constructor(
         replica: ReplicaId,
         after: RgaId,
         value: V,
-    ): Pair<Rga<V>, RgaOp.Insert<V>> = mintInsert(replica, after, value, base = threadedSequence)
+    ): Pair<Rga<V>, RgaOp.Insert<V>> = mintInsert(replica, after, value, base = materializedSequence)
 
     /**
      * [insertAfter], with the caller's view of an already-materialized [sequence].
@@ -562,13 +594,13 @@ public class Rga<V> private constructor(
      * remove the Θ(N) term — one `ops` copy per run remains, which is #2193's Phase 3A.
      *
      * When this really is an append — `after` is the last element of the **full**
-     * [sequence] — and this instance is carrying a *threaded* order, that order is extended
-     * instead of being recomputed (#2193's Phase 3B). Any other `after`, or an instance not
-     * carrying one, passes nothing on and the next read rebuilds once.
+     * [sequence] — and this instance is already **holding** that order, the order is extended
+     * instead of being recomputed (#2193's Phase 3B). Any other `after`, or an instance holding
+     * no order, passes nothing on and the next read rebuilds once.
      *
-     * "Carrying a threaded order" is narrower than "has a materialized [sequence]": an instance
-     * whose lazy was forced by a plain read does **not** qualify today, so an append after a read
-     * threads nothing even though the guard's premise holds. Tracked by #2225; see [sequence].
+     * "Already holding" means either half: an order threaded in from the producing mutation, or
+     * one an earlier plain read forced (#2225). What it never means is *computing* one — see
+     * rule 2 of [RgaCache.sequence].
      *
      * An empty [values] returns `this` — the same instance, not a copy.
      *
@@ -597,7 +629,7 @@ public class Rga<V> private constructor(
             tombstones = tombstones,
             compactedIds = compactedIds,
             compactPositions = compactPositions,
-            sequence = appendedSequence(threadedSequence, after) { minted.map { it.id } },
+            sequence = appendedSequence(materializedSequence, after) { minted.map { it.id } },
         )
         return Rga(ops + minted, newLamport, compactedBelow, newCache) to minted
     }
@@ -855,7 +887,7 @@ public class Rga<V> private constructor(
             // never reads [sequence] today, so it propagates an already-present list and never
             // forces one: threading unconditionally would put a full `computeSequence()` on
             // every remote `Remove`, a new per-op Theta(N) on the gossip path (rule 2).
-            sequence = threadedSequence,
+            sequence = materializedSequence,
         )
         return Rga(newOps, lamport, compactedBelow, newCache)
     }
