@@ -464,8 +464,13 @@ jobs:
         # whole 16 GB to itself. Same --max-workers=2 + 3 GB daemon caps as build-jvm
         # for parity and conservative headroom; this job has no JVM forks, so the
         # caps can likely relax once the split is proven, but stay conservative now.
+        #
+        # verifyTestResultParity rides along here rather than only on `check` (which this job never
+        # invokes): it compares the class sets those three targets produced against each other, and
+        # a class present on macOS but silently gone on wasm is exactly #2185. Ordering is handled
+        # by its own `mustRunAfter`, so it lands after all three.
         run: >-
-          ./gradlew wasmJsTest macosArm64Test iosSimulatorArm64Test --max-workers=2
+          ./gradlew wasmJsTest macosArm64Test iosSimulatorArm64Test verifyTestResultParity --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 

@@ -6233,9 +6233,160 @@ val verifySeamHarnessCoverage by tasks.registering {
     }
 }
 
+/**
+ * Every `commonTest` class that produced results on one target must have produced results on every
+ * other target that ran (#2185).
+ *
+ * ## The failure it exists for
+ *
+ * A `:kuilt-otel` class drove enough log volume to push one teamcity service message past the wasm
+ * harness's 1 MB ceiling. Past that, the harness reports `testFailed name='overflow-message'` and
+ * **the task exits 0** — the class's results are simply gone, the suite reads green on every target,
+ * and nothing anywhere says one target's verdict was dropped. The tests it silently stopped running
+ * were the refusal guards on the path that DELETES a user's persisted telemetry. Its loud twin
+ * (#2183) fails the task with a misleading "did not discover any tests"; this is the quiet form, and
+ * only the quiet form needs a guard.
+ *
+ * ## Why the expected set comes from the XML rather than from the sources
+ *
+ * The obvious design — scan `src/commonTest` for `class …Test` and require each one everywhere —
+ * has a large false-red surface: a class with no `@Test`, an `@Ignore`d one, an abstract suite, a
+ * helper that merely ends in `Test`. Taking the expected set as the **union of what actually ran**
+ * removes all of it: a class is only ever demanded from a target because a sibling target already
+ * produced it. That is exactly #2185's shape, and it cannot invent an expectation of its own.
+ *
+ * The source scan survives only as the *classifier*: a class missing from one target fails only if
+ * `src/commonTest` declares it. Anything else is a legitimately target-specific test — the four
+ * `src/jvmTest` concurrency harnesses in `:kuilt-otel`, an `appleTest`-only fabric test.
+ *
+ * ## It compares whatever ONE invocation produced, which is why CI's job split matters
+ *
+ * `ci.yml` runs the matrix in two jobs on two machines: `build-jvm` is `./gradlew build` with the
+ * wasm and native test tasks excluded, and `build-native` is `wasmJsTest macosArm64Test
+ * iosSimulatorArm64Test` — which does not invoke `check` at all. So neither job can compare a JVM
+ * result against a wasm one, and a guard wired only into `check` would be **structurally vacuous**
+ * in CI while looking green. It is therefore named explicitly in the `build-native` step as well,
+ * where wasm, macOS and iOS-simulator cross-check each other — and that pairing is the one #2185
+ * actually needs, since the class it lost was present on macOS and gone on wasm.
+ *
+ * ## Why it only runs under `CI` (or when invoked by name)
+ *
+ * A `--tests`-filtered local run prunes one target's results directory to the filtered class, which
+ * is indistinguishable here from a silent drop — and `CLAUDE.md` recommends `--tests` for exactly
+ * the single-test loop. Rather than guess, it stands down unless `CI` is set or somebody asked for
+ * it by name. A full local `CI=1 ./gradlew build` reproduces what CI checks.
+ *
+ * ## What a green here does NOT mean
+ *
+ * It does not mean every target ran. A target whose task never ran leaves no results directory and
+ * is skipped, so this cannot catch "the whole target silently produced nothing" — that shape fails
+ * loudly today (#2183) and is a different guard if it ever stops doing so. It also says nothing
+ * about a class that lost *some* of its cases on one target while keeping others; the unit here is
+ * the class, because that is the unit the harness drops.
+ */
+val verifyTestResultParity by tasks.registering {
+    group = "verification"
+    description = "Fails if a commonTest class produced results on one target and silently none on another (#2185)."
+
+    // Configuration-time capture into plain serializable values — module path, results root, and
+    // the class names `src/commonTest` declares. A `data class` declared here would capture the
+    // script object and the configuration cache refuses to serialize that.
+    val classDeclaration = Regex(
+        """(?m)^(?:@\w+(?:\([^)]*\))?\s*)*(?:public\s+|internal\s+|private\s+|open\s+|final\s+|data\s+)*class\s+(\w+)""",
+    )
+    val surfaces = subprojects.mapNotNull { module ->
+        val commonTest = module.projectDir.resolve("src/commonTest/kotlin")
+        if (!commonTest.isDirectory) return@mapNotNull null
+        val declared = commonTest.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { file -> classDeclaration.findAll(file.readText()).map { it.groupValues[1] } }
+            .toSet()
+        Triple(module.path, module.layout.buildDirectory.get().asFile.resolve("test-results"), declared)
+    }
+
+    // Ordering only, never a dependency: this task must not drag the whole multi-target test matrix
+    // into a build that did not ask for it. `check` already pulls `allTests`; when it does, this
+    // runs after them, and when it does not, it reads whatever the last run left and skips the rest.
+    mustRunAfter(allprojects.map { it.tasks.withType(AbstractTestTask::class.java) })
+
+    // Test results are build outputs, not sources, so a content fingerprint would be a fingerprint
+    // of the very thing under inspection. The scan is a few hundred XML headers — cheaper than
+    // deciding whether it can be skipped.
+    outputs.upToDateWhen { false }
+
+    val suiteName = Regex("""<testsuite\s+name="([^"]+)"""")
+    // Bytes of each results XML scanned for its `<testsuite name=…>` header. It is the second line.
+    val suiteHeaderScan = 2048
+    val ci = providers.environmentVariable("CI")
+    val askedForByName = gradle.startParameter.taskNames.any { it.substringAfterLast(':') == name }
+    doLast {
+        if (ci.orNull.isNullOrBlank() && !askedForByName) {
+            logger.lifecycle(
+                "verifyTestResultParity: stood down — a --tests-filtered run prunes one target's " +
+                    "results and reads as a silent drop. Set CI=1, or run the task by name.",
+            )
+            return@doLast
+        }
+        val failures = mutableListOf<String>()
+        var comparedModules = 0
+        var comparedClasses = 0
+
+        surfaces.forEach { (modulePath, resultsRoot, commonTestClasses) ->
+            val taskDirs = (resultsRoot.listFiles() ?: emptyArray())
+                .filter { it.isDirectory }
+                .associateWith { dir -> dir.listFiles { f -> f.name.startsWith("TEST-") && f.extension == "xml" }.orEmpty() }
+                .filterValues { it.isNotEmpty() }
+            if (taskDirs.size < 2) return@forEach
+            comparedModules++
+
+            // The identifier is spelled differently on every target — `FooTest[jvm]` on the JVM,
+            // `macosArm64Test.us.tractat.kuilt.otel.FooTest` on Kotlin/Native and wasm — so it is
+            // normalised to the SIMPLE class name: drop a leading task-name segment, drop a
+            // trailing `[variant]`, keep what is after the last dot. Two same-named classes in
+            // different packages of one module would merge; that makes this weaker, never louder.
+            val ran = taskDirs.mapValues { (dir, files) ->
+                files.mapNotNull { file ->
+                    suiteName.find(file.readText(Charsets.UTF_8).take(suiteHeaderScan))?.groupValues?.get(1)
+                }.map { it.removePrefix("${dir.name}.").substringBefore('[').substringAfterLast('.') }.toSet()
+            }
+            val union = ran.values.flatten().toSet()
+            comparedClasses += union.size
+
+            ran.forEach { (dir, present) ->
+                val missing = (union - present).filter { it in commonTestClasses }.sorted()
+                if (missing.isNotEmpty()) {
+                    val sawItRun = missing.associateWith { cls ->
+                        ran.filterValues { cls in it }.keys.map { it.name }.sorted()
+                    }
+                    failures += "$modulePath: ${dir.name} produced NO results for " +
+                        "${missing.size} commonTest class(es) that other targets ran:" +
+                        missing.joinToString("") { "\n    $it  (ran on ${sawItRun.getValue(it).joinToString(", ")})" }
+                }
+            }
+        }
+
+        if (failures.isNotEmpty()) {
+            error(
+                failures.joinToString("\n\n") + "\n\nA target that drops a class's results and still " +
+                    "exits 0 is the silent form of #2183's message-size ceiling (#2185): the suite " +
+                    "reads green everywhere while one target's verdict has been thrown away. The " +
+                    "usual cause is log volume — one test emitting more than the harness will carry " +
+                    "in a single service message. Cut what the code under test logs, or split the " +
+                    "class. If a class is deliberately absent from one target, it does not belong " +
+                    "in src/commonTest.",
+            )
+        }
+        logger.lifecycle(
+            "verifyTestResultParity: $comparedClasses class(es) across $comparedModules module(s) " +
+                "with more than one target's results present",
+        )
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
+        dependsOn(rootProject.tasks.named("verifyTestResultParity"))
         dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
         dependsOn(rootProject.tasks.named("forbidBoltRejoiningTheLattice"))
         dependsOn(rootProject.tasks.named("forbidUnlintedModule"))
