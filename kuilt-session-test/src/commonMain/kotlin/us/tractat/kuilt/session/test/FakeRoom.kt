@@ -170,7 +170,13 @@ public class FakeRoom(
 
     private val _broadcasts = mutableListOf<ByteArray>()
     private val _directed = mutableListOf<Pair<PeerId, ByteArray>>()
-    private var left = false
+    /**
+     * The leave-once latch. Atomic rather than a plain `var` (#2328): a fake is what a consumer's
+     * own concurrency is measured against, so a permissive one is how a defect stops being visible
+     * to every suite built on it. `compareAndSet` in [leave] also stops two callers both closing
+     * the channels and both running the body.
+     */
+    private val left = atomic(false)
 
     /** Channel views keyed by channel id. Created on demand and cached via [channel]. */
     private val channelViews = mutableMapOf<String, Seam>()
@@ -200,21 +206,20 @@ public class FakeRoom(
     // ── Room interface ────────────────────────────────────────────────────────
 
     override suspend fun broadcast(bytes: ByteArray) {
-        if (left) return
+        if (left.value) return
         _broadcasts.add(bytes)
         onBroadcast?.invoke(bytes)
     }
 
     override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
-        if (left) return
+        if (left.value) return
         _directed.add(peer to bytes)
     }
 
     override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome = resumeResult
 
     override suspend fun leave(reason: LeaveReason) {
-        if (left) return
-        left = true
+        if (!left.compareAndSet(expect = false, update = true)) return
         eventsChannel.close()
         incomingChannel.close()
     }
@@ -303,7 +308,7 @@ public class FakeRoom(
      * about the host) by calling [setLocalFabric] with [FabricAvailability.Unavailable] first.
      */
     public suspend fun hostLost(at: Instant, reason: FailureReason = FailureReason.WindowExpired) {
-        left = true
+        left.value = true
         eventsChannel.send(MembershipEvent.HostLost(at, reason, localFabric = _localFabric.value))
     }
 

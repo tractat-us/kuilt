@@ -70,11 +70,13 @@ public class HeartbeatPartitionDetector(
     // inequality against a snapshot, so a lost concurrent increment cannot make it read backwards.
     private val inboundCount = atomic(0L)
 
-    // Set by onBackpressure; cleared at the next evaluation cycle.
-    private var backpressurePending: Boolean = false
-
-    // True once stop() is called or PeerLost is emitted; guards against double-close.
-    private var stopped: Boolean = false
+    // Set by onBackpressure; consumed at the next evaluation cycle. Atomic for the reason
+    // [inboundCount] above is: onBackpressure is called by the consumer on whatever thread its own
+    // fabric callback runs on, while the consumer is the heartbeat loop — a plain `var` gives the
+    // loop no guarantee of ever observing the write, and the read-then-clear is a check-then-set
+    // with no primitive under it (#2328). `compareAndSet(true, false)` makes "consume the signal"
+    // one step, so a second backpressure raised mid-consume is not silently swallowed.
+    private val backpressurePending = atomic(false)
 
     private var heartbeatJob: Job? = null
     private var incomingJob: Job? = null
@@ -110,7 +112,7 @@ public class HeartbeatPartitionDetector(
 
     override fun onBackpressure(peerId: PeerId) {
         if (peerId == this.peerId) {
-            backpressurePending = true
+            backpressurePending.value = true
         }
     }
 
@@ -160,8 +162,7 @@ public class HeartbeatPartitionDetector(
                 continue
             }
 
-            if (backpressurePending) {
-                backpressurePending = false
+            if (backpressurePending.compareAndSet(expect = true, update = false)) {
                 if (!handleUnresponsive(PartitionEvent.Reason.Backpressure)) return
                 continue
             }
@@ -276,16 +277,33 @@ public class HeartbeatPartitionDetector(
 
     // ── Channel helpers ───────────────────────────────────────────────────────
 
+    /**
+     * Closes [eventChannel]. [Channel.close] is itself atomic and idempotent, so this needs no
+     * `stopped` flag beside it — the flag it used to keep was a plain `var` shadow of state the
+     * channel already holds correctly, and shadowing it was the defect rather than an optimisation
+     * (#2328). Reachable concurrently from [stop] (the caller's thread) and from
+     * [awaitRecoveryOrLoss] (the heartbeat loop).
+     */
     private fun closeChannel() {
-        if (!stopped) {
-            stopped = true
-            eventChannel.close()
-        }
+        eventChannel.close()
     }
 
-    private suspend fun emitIfOpen(event: PartitionEvent) {
-        // Channel.UNLIMITED capacity means trySend never suspends, but use send for correctness.
-        if (!stopped) eventChannel.send(event)
+    /**
+     * Offers [event] to [eventChannel], dropping it if the channel has already closed.
+     *
+     * [Channel.trySend] rather than a `stopped` check around [Channel.send]: that check was a
+     * check-then-act on a flag the *other* coroutine could flip in between, and losing that race
+     * threw [kotlinx.coroutines.channels.ClosedSendChannelException] out of whichever coroutine was
+     * mid-emit — reachable for real, because [collectIncoming]'s link-closed emission runs on
+     * `incomingJob` while [awaitRecoveryOrLoss] closes the channel on `heartbeatJob` (#2328). The
+     * throw is not observable as a failure either: it kills that loop while the detector still
+     * looks healthy.
+     *
+     * Dropping is the behaviour the old flag was reaching for, and [Channel.UNLIMITED] means a drop
+     * can only ever mean "closed", never "full".
+     */
+    private fun emitIfOpen(event: PartitionEvent) {
+        eventChannel.trySend(event)
     }
 
     // ── Ping / pong frame encoding ────────────────────────────────────────────

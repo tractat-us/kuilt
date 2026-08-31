@@ -1,5 +1,6 @@
 package us.tractat.kuilt.raft.test
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -138,7 +139,14 @@ public class FakeRaftNode(
     override val trace: Flow<RaftTraceEvent> = traceChannel.receiveAsFlow()
 
     private val _proposals = mutableListOf<ByteArray>()
-    private var _closed = false
+
+    /**
+     * The close-once latch. Atomic rather than a plain `var` (#2328): a fake is what a consumer's
+     * own concurrency is measured against, so a permissive one is how a defect stops being visible
+     * to every suite built on it. `compareAndSet` in [close] also stops two callers both running
+     * the body, and gives [closed] a defined value when read from a thread other than the closer's.
+     */
+    private val _closed = atomic(false)
     private var _nextIndex = initialCommitIndex + 1L
 
     /** Dedup key the in-flight [propose] wants stamped onto its committed entry; null outside a propose. */
@@ -158,7 +166,7 @@ public class FakeRaftNode(
     public val proposals: List<ByteArray> get() = _proposals.toList()
 
     /** Whether [close] has been called. */
-    public val closed: Boolean get() = _closed
+    public val closed: Boolean get() = _closed.value
 
     /**
      * Behavior of [propose]. Defaults to contract-faithful: throws [NotLeaderException]
@@ -218,8 +226,7 @@ public class FakeRaftNode(
     }
 
     override suspend fun close() {
-        if (_closed) return
-        _closed = true
+        if (!_closed.compareAndSet(expect = false, update = true)) return
         committedChannel.close()
         traceChannel.close()
     }

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -116,7 +117,15 @@ public class DelayedWovenSeam internal constructor(
     override val incoming: Flow<Swatch> = spool.incoming
 
     private var sequenceCounter = 0L
-    private var closed = false
+
+    /**
+     * The close-once latch. Atomic, not a plain `var`: [close] is reachable from any coroutine on
+     * any dispatcher, and a check-then-set guard lets two callers both observe `false` and both run
+     * the body — which then calls [DelayedWovenLoom.remove] twice, mutating the loom's plain map
+     * concurrently. A plain `var` also has no visibility guarantee at all, so a close on one thread
+     * need never become observable to [deliver] on another (#2328).
+     */
+    private val closed = atomic(false)
 
     /** Transition this seam from [SeamState.Weaving] to [SeamState.Woven]. */
     public fun markWoven() {
@@ -136,15 +145,14 @@ public class DelayedWovenSeam internal constructor(
     }
 
     override suspend fun close(reason: CloseReason) {
-        if (closed) return
-        closed = true
+        if (!closed.compareAndSet(expect = false, update = true)) return
         _state.value = SeamState.Torn(reason)
         loom.remove(selfId)
         spool.close()
     }
 
     internal suspend fun deliver(swatch: Swatch) {
-        if (!closed) spool.deliver(swatch.copy(sequence = ++sequenceCounter))
+        if (!closed.value) spool.deliver(swatch.copy(sequence = ++sequenceCounter))
     }
 
     private fun checkNotClosed() {
