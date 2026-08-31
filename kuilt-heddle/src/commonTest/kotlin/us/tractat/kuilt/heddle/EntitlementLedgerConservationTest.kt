@@ -521,13 +521,26 @@ class EntitlementLedgerConservationTest {
             },
             {
                 // Nothing beyond the #1783 shape may move: per-edge safety and the closure violation
-                // on the STRANDS themselves, plus the global backstop once the residue is large
-                // enough to show in the totals. In particular no negative holdings, no dual inbound,
-                // no negative effective spend, and no per-edge report on an edge that was never
-                // under-acked — including the prefix `e1`, which the residue's spendable credit
-                // could in principle roll up through and measurably does not.
+                // on the STRANDS themselves, the strand's strict prefix `e1` (below), plus the global
+                // backstop once the residue is large enough to show in the totals. In particular no
+                // negative holdings, no dual inbound, no negative effective spend, and no orphaned
+                // transfer path — seven of the nine kinds stay pinned exactly.
+                //
+                // **`e1` is in the tolerated set, and was not before (#2366).** It is the unique
+                // strict prefix of every path ending at `g3`, so a spend of the residue's phantom
+                // credit charges `rollupSpent(e1)` with no matching `issued(e1)` behind it. The
+                // comment this replaces said as much — "could in principle roll up through" — and
+                // pinned the observation that it did not. What changed is reach, not soundness:
+                // a strand carrying transfer rows can now move instead of being refused, so more
+                // under-acked moves land and the residue grows past `e1`'s cover. The soundness
+                // claim is asserted elsewhere and still holds exactly —
+                // `assertConservationWithRelocation` runs after EVERY step and pins
+                // `Σ holdings + Σ effLeafSpent == minted + residual` for the accumulated under-acked
+                // amount, so no value is created beyond the lie that was fed. The honest arm, which
+                // admits no lie, still asserts `validate()` is EMPTY and is where a real regression
+                // in the move would surface.
                 val stray = conflicts.filterNot {
-                    it is LedgerConflict.PerEdgeSafety && it.edge in strands ||
+                    it is LedgerConflict.PerEdgeSafety && (it.edge in strands || it.edge == e1) ||
                         it is LedgerConflict.ClosureViolation && it.edge in strands ||
                         it is LedgerConflict.ConservationViolation
                 }
