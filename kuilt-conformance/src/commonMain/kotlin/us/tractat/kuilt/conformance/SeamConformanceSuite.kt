@@ -217,10 +217,10 @@ public abstract class SeamConformanceSuite {
      * nothing?* [JoinerRosterOrigin] carries the full argument and states what each arm cannot detect.
      *
      * This is a **harness** fact, not a fabric [SeamCapabilities] flag: the same fabric folded into one
-     * process declares [JoinerRosterOrigin.SharedConstruction] while its two-device deployment would be
-     * [JoinerRosterOrigin.TheJoinPath]. Nothing about the transport changes; only what the fixture can
-     * prove does. [joinerRosterOriginIsDeclaredAndHonest] holds the declaration to the fixture in the
-     * one direction that is machine-checkable.
+     * process declares [JoinerRosterOrigin.FilledByConstruction] while its two-device deployment would
+     * be [JoinerRosterOrigin.TheJoinPath]. Nothing about the transport changes; only what the fixture
+     * can prove does. [joinerRosterOriginIsDeclaredAndHonest] charges each arm the price of a sentence
+     * — the declaration itself is not machine-checkable, and that KDoc says why.
      */
     public abstract fun joinerRosterOrigin(): JoinerRosterOrigin
 
@@ -534,9 +534,9 @@ public abstract class SeamConformanceSuite {
     // by construction, so this arm is satisfied whether or not the join path records anything. That
     // is the #2240/#2247 vacuity shape and it is what hid the Nearby defect for as long as it existed.
     // It is not silently tolerated here: every harness declares which case it is via
-    // [joinerRosterOrigin], and [joinerRosterOriginIsDeclaredAndHonest] makes a `TheJoinPath`
-    // declaration contradicted by a single-`Loom` fixture a red. See [JoinerRosterOrigin] for what
-    // each arm cannot detect.
+    // [joinerRosterOrigin], naming the mechanism that admits the remote or what fills the roster
+    // instead, and [joinerRosterOriginIsDeclaredAndHonest] refuses a declaration that costs nothing.
+    // See [JoinerRosterOrigin] for what each arm cannot detect.
 
     internal suspend fun runPeersReportsSelfIdAndAtLeastTwo(scope: TestScope): Unit =
         scope.connectedPair { host, joiner ->
@@ -1544,13 +1544,12 @@ public abstract class SeamConformanceSuite {
     // sentence naming a mechanism a reviewer can go and read. A check that fires on the wrong
     // harnesses would be worse than none, because a reader stops looking.
     //
-    // Not a `runTest`: it weaves nothing. `newLoomPair()` is constructed but never hosted or joined,
-    // exactly as [availabilityReturnsAKnownVariant] does — and constructing it is what stops the
-    // declaration being auditable without the fixture it describes existing.
+    // Not a `runTest`, and it does not weave: with no machine refutation left there is nothing a live
+    // pair could tell it, and constructing one anyway would cost every real-socket harness a bound
+    // port to say nothing. What it asserts is a property of the declaration alone.
 
     @Test
     public fun joinerRosterOriginIsDeclaredAndHonest() {
-        newLoomPair()
         when (val origin = joinerRosterOrigin()) {
             is JoinerRosterOrigin.TheJoinPath ->
                 assertTrue(
