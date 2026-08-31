@@ -4,18 +4,36 @@ import kotlinx.serialization.Serializable
 import us.tractat.kuilt.crdt.ReplicaId
 
 /**
- * One replica's **final** authored values in the four base counter families of a fenced edge —
- * the promise a [ControlCommand.QuiesceAck] carries (`docs/heddle-ledger-relocation-design.md`
- * §6.2 step 2).
+ * One replica's **final** authored values on a fenced edge — its four base counter slots and its
+ * own transfer row at the edge's [PathKey] — the promise a [ControlCommand.QuiesceAck] carries
+ * (`docs/heddle-ledger-relocation-design.md` §6.2 step 2).
  *
  * Every `(edge, counter, replica)` slot is single-writer, so when replica `r` has marked an edge
- * locally unwritable it can read its own four slots and declare them **final**: nobody else ever
+ * locally unwritable it can read its own slots and declare them **final**: nobody else ever
  * writes them, and `r` has just sworn off. That declaration, recorded in the log, is what turns
  * the relocation magnitude from a gossip-view read into a deterministic function of the log prefix.
  *
+ * ## Why the transfer row belongs here (issue #2377)
+ *
+ * `EntitlementLedger.relocationPatch`'s receiver on the production path is
+ * [FenceState.relocations], which accumulates only the relocation patches the control plane itself
+ * authored — so it carries no `transfers` rows, ever. A move derived there could neither *see* the
+ * strand's hand-offs (to refuse) nor *carry* them (to conserve), and the rows were abandoned on the
+ * dead generation's key (#2366).
+ *
+ * The row is declarable on exactly the argument that makes the four counters declarable, and one
+ * more: `transfers[path][donor]` is written only by `donor`, and once the edge is retired it is no
+ * longer any group's live inbound, so [EntitlementLedger.transfer] can never write that key again.
+ * The row is frozen at barrier time, at its own writer.
+ *
  * Re-acks are legal (a restarted peer re-applies the barrier and acks again) and **join by
  * per-slot max** — [join] — so a late anti-entropy recovery can only ever *raise* a recorded final,
- * never lower it. Every field is grow-only in time at its writer, so max is the correct join.
+ * never lower it. Every field is grow-only in time at its writer, so max is the correct join, and
+ * [transfers] joins per recipient by the same rule.
+ *
+ * @property transfers this replica's own hand-offs at the fenced edge's path key, recipient →
+ *   cumulative. Empty for a replica that never handed entitlement to anyone there — which is most
+ *   of them, and is why the field defaults.
  */
 @Serializable
 internal data class SlotFinals(
@@ -23,6 +41,7 @@ internal data class SlotFinals(
     val returned: Long,
     val leafSpent: Long,
     val rollupSpent: Long,
+    val transfers: Map<ReplicaId, Long> = emptyMap(),
 ) {
     /** The per-slot max of two acks for the same `(edge, replica)` — a re-ack never lowers a final. */
     fun join(other: SlotFinals): SlotFinals = SlotFinals(
@@ -30,6 +49,12 @@ internal data class SlotFinals(
         returned = maxOf(returned, other.returned),
         leafSpent = maxOf(leafSpent, other.leafSpent),
         rollupSpent = maxOf(rollupSpent, other.rollupSpent),
+        // The union, per recipient by max: a re-ack may name a recipient the first one did not
+        // (an anti-entropy recovery landing a row the acking peer had not yet merged back), and
+        // dropping either side would lower a final the join contract forbids to lower.
+        transfers = (transfers.keys + other.transfers.keys).associateWith { to ->
+            maxOf(transfers[to] ?: 0L, other.transfers[to] ?: 0L)
+        },
     )
 
     companion object {

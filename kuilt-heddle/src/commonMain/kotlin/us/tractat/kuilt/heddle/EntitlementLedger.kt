@@ -174,6 +174,8 @@ public class EntitlementLedger private constructor(
     private val rollupRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
     private val rollupRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
     private val gauges: Map<AttachmentId, Gauge> = emptyMap(),
+    private val transferRelocIn: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
+    private val transferRelocOut: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
 ) : Quilted<EntitlementLedger> {
 
     /** The join: the componentwise least-upper-bound of `this` and [other]. */
@@ -202,6 +204,14 @@ public class EntitlementLedger private constructor(
             // fold) — never lexicographically by floor, which would keep a stale writer's pair
             // whole and reintroduce the double count (#1752, see [Gauge]).
             gauges = gauges.mergeValues(other.gauges) { mine, theirs -> mine.join(theirs) },
+            // The transfer relocation pair: the same per-donor-row matrix `transfers` is, joined by
+            // the same rule, so the product-of-lattices argument covers them unchanged.
+            transferRelocIn = transferRelocIn.mergeValues(other.transferRelocIn) { mine, theirs ->
+                mine.mergeRows(theirs)
+            },
+            transferRelocOut = transferRelocOut.mergeValues(other.transferRelocOut) { mine, theirs ->
+                mine.mergeRows(theirs)
+            },
         )
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -502,14 +512,46 @@ public class EntitlementLedger private constructor(
             if (m.holder == r && m.root == root) checkedAdd(acc, m.amount) else acc
         }
 
-    /** `Σ_s transfers[pathKey][s][r] − Σ_t transfers[pathKey][r][t]` — [r]'s net transfer at a path. */
+    /**
+     * `Σ_s effRow(pathKey, s, r) − Σ_t effRow(pathKey, r, t)` — [r]'s **effective** net transfer at
+     * a path, base ± relocation exactly as the counter families read (see the class KDoc).
+     */
     private fun transferNet(pathKey: PathKey, r: ReplicaId): Long {
-        val rows = transfers[pathKey] ?: return 0L
         var inflow = 0L
-        for ((_, row) in rows) inflow = checkedAdd(inflow, row.count(r))
-        val outflow = rows[r]?.let(::checkedCounterValue) ?: 0L
+        for (donor in donorsAt(pathKey)) inflow = checkedAdd(inflow, effRow(pathKey, donor, r))
+        var outflow = 0L
+        for (to in recipientsOf(pathKey, r)) outflow = checkedAdd(outflow, effRow(pathKey, r, to))
         return checkedSub(inflow, outflow)
     }
+
+    /**
+     * `transfers + transferRelocIn − transferRelocOut` at one `(path, donor, recipient)` cell — the
+     * hand-off's effective magnitude. The stored components stay grow-only; only this falls, exactly
+     * as `effLeafSpentSlot` does for spend.
+     */
+    private fun effRow(path: PathKey, donor: ReplicaId, recipient: ReplicaId): Long = checkedSub(
+        checkedAdd(row(transfers, path, donor, recipient), row(transferRelocIn, path, donor, recipient)),
+        row(transferRelocOut, path, donor, recipient),
+    )
+
+    private fun row(
+        matrix: Map<PathKey, Map<ReplicaId, GCounter>>,
+        path: PathKey,
+        donor: ReplicaId,
+        recipient: ReplicaId,
+    ): Long = matrix[path]?.get(donor)?.count(recipient) ?: 0L
+
+    /** Every replica holding a row at [path] in any of the three transfer matrices. */
+    private fun donorsAt(path: PathKey): Set<ReplicaId> =
+        transferMatrices().flatMapTo(HashSet()) { it[path]?.keys.orEmpty() }
+
+    /** Every replica [donor] has ever credited at [path], across all three transfer matrices. */
+    private fun recipientsOf(path: PathKey, donor: ReplicaId): Set<ReplicaId> =
+        transferMatrices().flatMapTo(HashSet()) { it[path]?.get(donor)?.replicas().orEmpty() }
+
+    /** The base matrix and its relocation pair, in one list. */
+    private fun transferMatrices(): List<Map<PathKey, Map<ReplicaId, GCounter>>> =
+        listOf(transfers, transferRelocIn, transferRelocOut)
 
     // ─────────────────────────────────────────────────────────────────────────
     // Mutators — house idiom: check feasibility on `this`, return Patch?/null. The
@@ -723,6 +765,39 @@ public class EntitlementLedger private constructor(
         liveEdge: AttachmentId,
         finals: Map<AttachmentId, Map<ReplicaId, SlotFinals>>,
     ): Relocation {
+        // ── pass 0: what each fenced edge's hand-offs still owe. A row is declared by its own donor
+        // in that donor's ack (`SlotFinals.transfers`, #2377) and cancelled on the dead key by
+        // `transferRelocOut`, so what is left to carry is `declared − alreadyOut` — the exact shape
+        // `lsp`/`rsp` take below, and what makes a second Reconcile carry nothing (§5.4 iii).
+        val pending = ArrayList<PendingRow>()
+        for ((s, perReplica) in finals.entries.sortedBy { it.key }) {
+            val deadPath = PathKey.of(s)
+            for ((donor, acked) in perReplica.entries.sortedBy { it.key }) {
+                // §12.1 again, for rows: the ack declares what the DATA plane wrote, but `s` may
+                // itself have received an earlier carry, and that credit lives in `transferRelocIn`
+                // — control-plane-authored, so it is on `this` and on no ack. Reading the base alone
+                // under-declares it and strands the row one generation back, exactly as reading
+                // `acked.issued` instead of `effIssued(s)` would under-drain the counter.
+                val recipients = (acked.transfers.keys + transferRelocIn[deadPath]?.get(donor)?.replicas().orEmpty())
+                for (to in recipients.sortedBy { it.value }) {
+                    val declared = checkedAdd(
+                        acked.transfers[to] ?: 0L,
+                        row(transferRelocIn, deadPath, donor, to),
+                    )
+                    val move = checkedSub(declared, row(transferRelocOut, deadPath, donor, to))
+                    // `≤ 0` is the drained case, not an error: a re-ack may only ever raise a
+                    // declared final (SlotFinals.join), so an already-carried row reads exactly 0.
+                    if (move > 0L) pending += PendingRow(s, donor, to, move)
+                }
+            }
+        }
+        val transferNetOnStrand = HashMap<Pair<AttachmentId, ReplicaId>, Long>()
+        for (p in pending) {
+            transferNetOnStrand[p.edge to p.to] = checkedAdd(transferNetOnStrand[p.edge to p.to] ?: 0L, p.amount)
+            transferNetOnStrand[p.edge to p.donor] =
+                checkedSub(transferNetOnStrand[p.edge to p.donor] ?: 0L, p.amount)
+        }
+
         // ── pass 1: derive every fenced slot, and total each replica's cover and charge.
         val drainable = ArrayList<DrainedSlot>()
         val coverByReplica = HashMap<ReplicaId, Long>()
@@ -730,6 +805,7 @@ public class EntitlementLedger private constructor(
 
         for ((s, perReplica) in finals.entries.sortedBy { it.key }) {
             for ((r, acked) in perReplica.entries.sortedBy { it.key }) {
+                val tn = transferNetOnStrand[s to r] ?: 0L
                 val relIssIn = slot(issuedRelocIn, s, r)
                 val relLeafIn = slot(leafRelocIn, s, r)
                 val relLeafOut = slot(leafRelocOut, s, r)
@@ -752,13 +828,17 @@ public class EntitlementLedger private constructor(
                 val sp = checkedAdd(lsp, rsp)
                 if (n < 0L) {
                     return Relocation.Refused(
-                        "relocate refused: ${r.value} is net-negative on ${s.value} (n=$n) — a " +
-                            "transfer-tangled strand needs its transfer rows moved too (out of scope)",
+                        "relocate refused: ${r.value} is net-negative on ${s.value} (n=$n) — it returned " +
+                            "more than it was issued, so the drain would have to LOWER a grow-only " +
+                            "`returned` slot (out of scope)",
                     )
                 }
-                if (n == 0L && sp == 0L) continue // already drained: contribute nothing
-                coverByReplica[r] = checkedAdd(coverByReplica[r] ?: 0L, n)
+                // Cover is the WHOLE inbound half — net inflow plus the hand-offs the strand still
+                // carries — because that is what the move re-homes. Counting `n` alone refused every
+                // recipient who spent transferred credit: it has issuance nowhere, by construction.
+                coverByReplica[r] = checkedAdd(coverByReplica[r] ?: 0L, checkedAdd(n, tn))
                 chargeByReplica[r] = checkedAdd(chargeByReplica[r] ?: 0L, sp)
+                if (n == 0L && sp == 0L) continue // no counter slot to drain (a pure recipient)
                 drainable += DrainedSlot(
                     edge = s,
                     replica = r,
@@ -775,36 +855,10 @@ public class EntitlementLedger private constructor(
                 )
             }
         }
-        if (drainable.isEmpty()) return Relocation.Nothing
-
-        // ── the transfer-row precondition (#2366), checked once the move is known to be non-empty.
-        //
-        // `transfers` is keyed by `PathKey.of(edge)` — the GENERATION's id, not the child group — so a
-        // move re-homes the counter families onto `t` and leaves the rows on `s`, where `holdings` no
-        // longer reads them. The recipient's credit and the donor's debit both vanish and the donor
-        // silently recovers what it gave away, with NOTHING objecting: `Σ_r transferNet(pathKey, r) = 0`,
-        // so abandoning a whole path key is sum-preserving and conservation is structurally blind;
-        // `validate()` is silent because the recipient lands on 0, not below.
-        //
-        // The `n < 0` guard above is the same tangle's LOUD half — it needs the recipient to have also
-        // spent or released across `s`. A recipient who merely HOLDS transferred credit has no slot on
-        // the edge at all, is absent from `replicasOnEdge`/`baseFinalsOn`, and reaches here unseen. So
-        // this widens the refusal the KDoc already promises rather than adding a new one.
-        //
-        // Checked AFTER the per-slot preconditions so each keeps its own pin: an edge that is both
-        // net-negative and transfer-tangled still refuses on `n < 0`, the guard that owns that case.
-        // Checked after the `drainable.isEmpty()` return so an already-drained strand still reads
-        // `Nothing` — nothing moves there, so there is no abandonment to prevent.
-        for (s in finals.keys.sorted()) {
-            val donors = transfers[PathKey.of(s)]?.keys.orEmpty()
-            if (donors.isNotEmpty()) {
-                return Relocation.Refused(
-                    "relocate refused: ${s.value} carries transfer rows (donors " +
-                        "${donors.map { it.value }.sorted()}) that the move would abandon on its path key — " +
-                        "a transfer-tangled strand needs its transfer rows moved too (out of scope)",
-                )
-            }
-        }
+        // A strand with nothing left in its counters AND nothing left in its rows is already drained
+        // (§5.4 iii). Both halves matter: a strand whose counters closed at zero can still owe a
+        // hand-off, and that is exactly the state #2366 used to abandon.
+        if (drainable.isEmpty() && pending.isEmpty()) return Relocation.Nothing
 
         // ── the `n ≥ sp` precondition, quantified per (child, replica) over the WHOLE derivation
         // rather than per edge (#1895). The re-home lands a charge on the live edge at charge time
@@ -864,32 +918,86 @@ public class EntitlementLedger private constructor(
         for ((r, add) in creditRollup) {
             drain.put(CounterFamily.ROLLUP_RELOC_IN, liveEdge, r, checkedAdd(slot(rollupRelocIn, liveEdge, r), add))
         }
+
+        // ── the hand-offs: cancel each row on the dead key and re-open it on the live one, the same
+        // equal-and-opposite pair the spend families use. NOT a key move into `transfers[t]` — that
+        // slot is the donor's own, written concurrently by ordinary `transfer`, and two writers on one
+        // max-joined slot silently erase a side (#1691). `transferRelocIn` is control-plane-owned, so
+        // the carry accumulates onto the standing total instead of colliding with a data-plane write.
+        val carried = HashMap<Pair<ReplicaId, ReplicaId>, Long>()
+        for (p in pending) {
+            val deadPath = PathKey.of(p.edge)
+            drain.putRow(
+                TRANSFER_RELOC_OUT,
+                deadPath,
+                p.donor,
+                p.to,
+                checkedAdd(row(transferRelocOut, deadPath, p.donor, p.to), p.amount),
+            )
+            carried[p.donor to p.to] = checkedAdd(carried[p.donor to p.to] ?: 0L, p.amount)
+        }
+        val livePath = PathKey.of(liveEdge)
+        for ((pair, add) in carried) {
+            val (donor, to) = pair
+            drain.putRow(
+                TRANSFER_RELOC_IN,
+                livePath,
+                donor,
+                to,
+                checkedAdd(row(transferRelocIn, livePath, donor, to), add),
+            )
+        }
         return Relocation.Moved(drain.build())
     }
 
     /**
-     * The **base** counter slots of [edge], by replica — the shape a [ControlCommand.QuiesceAck]
+     * The **base** slots of [edge], by replica — the shape a [ControlCommand.QuiesceAck]
      * declares. Read on the acking peer's own complete state (for its own slot) at the moment it
      * marks [edge] locally unwritable, or over every replica for a test that models a converged view.
      * `internal` — barrier + test support.
+     *
+     * Production quantifies the fence over the **enrolled roster**, not over this set, so a donor
+     * whose only mark on the strand is a transfer row still acks there. This converged-view spelling
+     * enumerates transfer donors explicitly for the same reason (see [replicasOnEdge]): a model of
+     * the fence that dropped them would under-declare exactly the rows #2366 is about.
      */
     internal fun baseFinalsOn(edge: AttachmentId): Map<ReplicaId, SlotFinals> =
         replicasOnEdge(edge).associateWith { r -> baseFinalsOn(edge, r) }
 
-    /** [r]'s own base counter slots on [edge] — its [ControlCommand.QuiesceAck] payload. */
+    /** [r]'s own base slots on [edge] — its [ControlCommand.QuiesceAck] payload. */
     internal fun baseFinalsOn(edge: AttachmentId, r: ReplicaId): SlotFinals = SlotFinals(
         issued = slot(issued, edge, r),
         returned = slot(returned, edge, r),
         leafSpent = slot(leafSpent, edge, r),
         rollupSpent = slot(rollupSpent, edge, r),
+        // The BASE row only: `transferRelocIn`/`Out` are control-plane-authored, and the ack declares
+        // what the DATA plane wrote. Folding a relocation back in here would re-declare the control
+        // plane's own carry as a fresh data-plane fact and move it a second time.
+        transfers = transfers[PathKey.of(edge)]?.get(r)
+            ?.let { row -> row.replicas().associateWith { to -> row.count(to) } }
+            .orEmpty(),
     )
 
-    /** The replicas that authored any counter slot on [edge] — base or relocation. */
+    /**
+     * The replicas that authored any counter slot on [edge] — base or relocation — **plus** the
+     * donors holding a transfer row at its path key.
+     *
+     * The second half is not a nicety: a peer whose entire stake in the strand is a hand-off it
+     * *made* has authored no counter slot there at all (its own funding may itself have arrived by
+     * transfer), so a purely slot-walking enumeration cannot see it. That is the same blind spot
+     * `LedgerConflict.OrphanedTransferPath` had to enumerate around, reached from the other side.
+     */
     private fun replicasOnEdge(edge: AttachmentId): Set<ReplicaId> {
         val out = HashSet<ReplicaId>()
         for (counters in allEdgeCounters()) {
             counters[edge]?.let { out += it.replicas() }
         }
+        out += transfers[PathKey.of(edge)]?.keys.orEmpty()
+        // …and a donor whose row at this key arrived by an EARLIER carry, which is in the relocation
+        // matrix rather than the base one. Production quantifies the fence over the enrolled roster
+        // and so reaches it anyway; this spelling has to reach it explicitly or a second hop drops
+        // the row one generation back.
+        out += transferRelocIn[PathKey.of(edge)]?.keys.orEmpty()
         return out
     }
 
@@ -1497,6 +1605,8 @@ public class EntitlementLedger private constructor(
         leafSpent = leafSpent[id]?.let { mapOf(id to it) } ?: emptyMap(),
         rollupSpent = rollupSpent[id]?.let { mapOf(id to it) } ?: emptyMap(),
         transfers = transfers[PathKey.of(id)]?.let { mapOf(PathKey.of(id) to it) } ?: emptyMap(),
+        transferRelocIn = transferRelocIn[PathKey.of(id)]?.let { mapOf(PathKey.of(id) to it) } ?: emptyMap(),
+        transferRelocOut = transferRelocOut[PathKey.of(id)]?.let { mapOf(PathKey.of(id) to it) } ?: emptyMap(),
         lifecycle = lifecycle[id]?.let { mapOf(id to it) } ?: emptyMap(),
         issuedRelocIn = issuedRelocIn[id]?.let { mapOf(id to it) } ?: emptyMap(),
         leafRelocIn = leafRelocIn[id]?.let { mapOf(id to it) } ?: emptyMap(),
@@ -1507,7 +1617,7 @@ public class EntitlementLedger private constructor(
     )
 
     /**
-     * This state with every [Gauge] entry removed and all thirteen other components untouched.
+     * This state with every [Gauge] entry removed and all fifteen other components untouched.
      *
      * `internal` — and it exists for exactly one caller: the **negative control** that splits a
      * [delegate] patch so its counters travel without their checkpoint, and thereby demonstrates
@@ -1521,6 +1631,7 @@ public class EntitlementLedger private constructor(
     internal fun withoutGauges(): EntitlementLedger = EntitlementLedger(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
         issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges = emptyMap(),
+        transferRelocIn = transferRelocIn, transferRelocOut = transferRelocOut,
     )
 
     override fun equals(other: Any?): Boolean =
@@ -1626,10 +1737,13 @@ public class EntitlementLedger private constructor(
             rollupRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
             rollupRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
             gauges: Map<AttachmentId, Gauge> = emptyMap(),
+            transferRelocIn: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
+            transferRelocOut: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
         ): EntitlementLedger =
             EntitlementLedger(
                 records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
                 issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
+                transferRelocIn, transferRelocOut,
             )
     }
 }
@@ -1738,13 +1852,23 @@ private data class DrainedSlot(
  */
 private class EdgePatchBuilder {
     private val families = HashMap<CounterFamily, HashMap<AttachmentId, GCounter>>()
+    private val rows = HashMap<Boolean, HashMap<PathKey, MutableMap<ReplicaId, GCounter>>>()
 
     fun put(family: CounterFamily, edge: AttachmentId, r: ReplicaId, value: Long) {
         if (value <= 0L) return
         addSlot(families.getOrPut(family) { HashMap() }, edge, r, value)
     }
 
+    /** One `(path, donor, recipient)` cell of a transfer relocation matrix, at its absolute value. */
+    fun putRow(relocIn: Boolean, path: PathKey, donor: ReplicaId, to: ReplicaId, value: Long) {
+        if (value <= 0L) return
+        val matrix = rows.getOrPut(relocIn) { HashMap() }.getOrPut(path) { HashMap() }
+        matrix[donor] = (matrix[donor] ?: GCounter.ZERO).piece(GCounter.of(to to value))
+    }
+
     private fun of(family: CounterFamily): Map<AttachmentId, GCounter> = families[family] ?: emptyMap()
+
+    private fun rowsOf(relocIn: Boolean): Map<PathKey, Map<ReplicaId, GCounter>> = rows[relocIn] ?: emptyMap()
 
     fun build(): EntitlementLedger = EntitlementLedger.of(
         issued = of(CounterFamily.ISSUED),
@@ -1756,8 +1880,28 @@ private class EdgePatchBuilder {
         leafRelocOut = of(CounterFamily.LEAF_RELOC_OUT),
         rollupRelocIn = of(CounterFamily.ROLLUP_RELOC_IN),
         rollupRelocOut = of(CounterFamily.ROLLUP_RELOC_OUT),
+        transferRelocIn = rowsOf(TRANSFER_RELOC_IN),
+        transferRelocOut = rowsOf(TRANSFER_RELOC_OUT),
     )
 }
+
+/** [EdgePatchBuilder.putRow]'s matrix selector — the live key's credit. */
+private const val TRANSFER_RELOC_IN = true
+
+/** [EdgePatchBuilder.putRow]'s matrix selector — the dead key's cancellation. */
+private const val TRANSFER_RELOC_OUT = false
+
+/**
+ * One hand-off a generation move still owes: [amount] of `donor → to` declared final on [edge] and
+ * not yet cancelled there by `transferRelocOut`. `private` — [EntitlementLedger.relocationPatch]'s
+ * pass-0 scratch, the transfer analogue of `DrainedSlot`.
+ */
+private class PendingRow(
+    val edge: AttachmentId,
+    val donor: ReplicaId,
+    val to: ReplicaId,
+    val amount: Long,
+)
 
 private fun Map<AttachmentId, GCounter>.mergeEdgeCounters(
     other: Map<AttachmentId, GCounter>,
