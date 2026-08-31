@@ -60,6 +60,11 @@ import kotlin.test.fail
  * Role-split fabrics (websocket, mdns, webrtc, multipeer) return **distinct**
  * host/joiner Looms wired to reach each other.
  *
+ * **That difference is load-bearing, not incidental, so it is declared** — via [joinerRosterOrigin]
+ * (#2591). When both ends read one backend's roster, the joiner is holding the host's id because the
+ * fixture put it there, and every joiner-side obligation is satisfied by construction; the arm a
+ * harness names is what tells a reader whether a green meant anything. See [JoinerRosterOrigin].
+ *
  * ## Capabilities & gaps
  *
  * Not every fabric can honor every corner of the contract — a browser WebRTC data
@@ -199,6 +204,25 @@ public abstract class SeamConformanceSuite {
      * time from `testScope.testScheduler`.
      */
     public open fun newLoomPair(testScope: TestScope): Pair<Loom, Loom> = newLoomPair()
+
+    /**
+     * Where this harness's **joiner** gets the remote peer in its `Seam.peers` — i.e. whether the
+     * joiner half of [peersReportsSelfIdAndAtLeastTwoAfterJoin] can fail here at all.
+     *
+     * **Abstract on purpose, and non-nullable — there is no default arm.** A default would be an
+     * "I cannot reach this state" opt-out, and an opt-out moves the vacuity one level up where it is
+     * harder to see: the next fabric added would inherit whichever arm the base picked without anyone
+     * deciding, which is precisely how #2591 stayed invisible. Two arms, no default, forces the one
+     * sentence of thought that catches it — *would this obligation still be green if my join path did
+     * nothing?* [JoinerRosterOrigin] carries the full argument and states what each arm cannot detect.
+     *
+     * This is a **harness** fact, not a fabric [SeamCapabilities] flag: the same fabric folded into one
+     * process declares [JoinerRosterOrigin.SharedConstruction] while its two-device deployment would be
+     * [JoinerRosterOrigin.TheJoinPath]. Nothing about the transport changes; only what the fixture can
+     * prove does. [joinerRosterOriginIsDeclaredAndHonest] holds the declaration to the fixture in the
+     * one direction that is machine-checkable.
+     */
+    public abstract fun joinerRosterOrigin(): JoinerRosterOrigin
 
     /** The advertisement the joiner uses. Defaults to the in-memory tag. */
     public open fun joinTag(): Tag = InMemoryTag("joiner")
@@ -480,13 +504,66 @@ public abstract class SeamConformanceSuite {
     public fun incomingPreservesSendOrderToSingleCollector(): TestResult =
         runTest { runIncomingPreservesSendOrder(this) }
 
-    // ── (4) peers reports selfId and ≥2 after a join ────────────────────────
+    // ── (4) peers reports selfId and ≥2 after a join — on BOTH ends ─────────
+    //
+    // `Seam.peers` is symmetric by contract: a `Seam` is "one peer's *symmetric* view of a session",
+    // there is no client/server split at this layer, and `peers`' own KDoc makes `size > 1` the
+    // reliable sentinel for "at least one remote peer is connected" without qualifying which end is
+    // asking. Until #2591 the `≥ 2` half was asserted on the **host only** — the joiner was checked
+    // for its own `selfId`, which a roster of exactly `{ selfId }` passes trivially. So a fabric whose
+    // joiner never learns its counterparty *at all* was conformant.
+    //
+    // That is not hypothetical. A `:kuilt-nearby` joiner did exactly this on real hardware: `join()`
+    // recorded its own id and the endpoint→peer binding but never put the **host's** `PeerId` into any
+    // roster flow, so on two devices it reported `peers == { selfId }` forever, never left `Weaving`,
+    // and could never complete `incoming` on a remote disconnect (`disconnectLoop`'s tear is gated on
+    // `Woven`). Three shipped symptoms, and this suite was green throughout.
+    //
+    // **The obligation is "at least one REMOTE", not "the counterparty by id", and the weaker
+    // statement is deliberate.** #2591 asked for the stronger one — each end contains the *other's*
+    // `selfId` — and it is wrong as stated: a fabric may label a peer provisionally and reconcile the
+    // real id asynchronously, so `joiner.selfId in host.peers` is simply false at the instant the pair
+    // connects. `WebRTC`'s host is that fabric (it advertises a locally-minted `peer-…` until the ID
+    // exchange completes), measured under #2304 and recorded on `survivorStopsAdvertisingADepartedPeer`
+    // below. Given the `selfId ∈ peers` assertion alongside it, "advertises a non-self peer" is exactly
+    // as strong as `size >= 2` and says what it means; the id-level statement belongs to an obligation
+    // that can await reconciliation, not to this snapshot.
+    //
+    // **Where the joiner arm can and cannot fail — read `joinerRosterOrigin()` before trusting a
+    // green.** On a harness whose two ends share one in-process backend the joiner's roster is filled
+    // by construction, so this arm is satisfied whether or not the join path records anything. That
+    // is the #2240/#2247 vacuity shape and it is what hid the Nearby defect for as long as it existed.
+    // It is not silently tolerated here: every harness declares which case it is via
+    // [joinerRosterOrigin], and [joinerRosterOriginIsDeclaredAndHonest] makes a `TheJoinPath`
+    // declaration contradicted by a single-`Loom` fixture a red. See [JoinerRosterOrigin] for what
+    // each arm cannot detect.
 
     internal suspend fun runPeersReportsSelfIdAndAtLeastTwo(scope: TestScope): Unit =
         scope.connectedPair { host, joiner ->
-            assertTrue(host.selfId in host.peers.value, "host peers must include its own selfId")
-            assertTrue(joiner.selfId in joiner.peers.value, "joiner peers must include its own selfId")
-            assertTrue(host.peers.value.size >= 2, "peer set must have ≥2 after join")
+            // Batched, because the four are independent facts about two different seams and a
+            // sequential run would cost a reader three quarters of the diagnosis: a fabric failing on
+            // the host never reaches the joiner assertions that are the point of this obligation.
+            assertAll(
+                { assertTrue(host.selfId in host.peers.value, "host peers must include its own selfId") },
+                { assertTrue(joiner.selfId in joiner.peers.value, "joiner peers must include its own selfId") },
+                {
+                    assertTrue(
+                        (host.peers.value - host.selfId).isNotEmpty(),
+                        "the HOST must advertise at least one remote peer after a join (peers ≥ 2); got " +
+                            "${host.peers.value.map { it.value }}, selfId ${host.selfId.value}",
+                    )
+                },
+                {
+                    assertTrue(
+                        (joiner.peers.value - joiner.selfId).isNotEmpty(),
+                        "the JOINER must advertise at least one remote peer after a join (peers ≥ 2) — " +
+                            "Seam.peers is symmetric, so a joiner stuck at { selfId } has not joined " +
+                            "anything it can name, however well the host sees it (#2591). It also never " +
+                            "leaves Weaving and never completes incoming on a remote disconnect. Got " +
+                            "${joiner.peers.value.map { it.value }}, selfId ${joiner.selfId.value}",
+                    )
+                },
+            )
         }
 
     @Test
@@ -1445,6 +1522,49 @@ public abstract class SeamConformanceSuite {
             undeclared.isEmpty(),
             "every false capability must declare a non-blank gap URL in capabilityGaps(); undeclared: $undeclared",
         )
+    }
+
+    // ── (15b) the joiner-roster fixture is declared, and the declaration is not contradicted ──
+    //
+    // The accountability half of #2591, and the analog of [everyFalseCapabilityDeclaresAGap] for a
+    // fixture fact rather than a capability flag. Adding `joiner.peers ≥ 2` to the core obligation
+    // closes the hole only where the assertion can fail; on a harness whose two ends share one backend
+    // it is satisfied by construction, and a suite that did not say so would have swapped an invisible
+    // gap for an invisible green. So each harness names its arm and this test audits the naming.
+    //
+    // **It checks the one direction that is decidable, and does not pretend to the other.** One `Loom`
+    // instance handed back twice is proof the joiner's roster is shared, so
+    // [JoinerRosterOrigin.TheJoinPath] is refutable there and is refuted. Two *distinct* `Loom` objects
+    // prove nothing in return — they may still close over one radio, registry or server — so that
+    // direction rests on the declaration, and the [JoinerRosterOrigin.SharedConstruction.why] string
+    // is what a reader auditing it gets to read. Requiring `why` non-blank is the same toll
+    // [everyFalseCapabilityDeclaresAGap] charges: the cheap arm must still cost a sentence.
+    //
+    // Not a `runTest`: it weaves nothing. `newLoomPair()` is constructed but never hosted or joined,
+    // exactly as [availabilityReturnsAKnownVariant] does.
+
+    @Test
+    public fun joinerRosterOriginIsDeclaredAndHonest() {
+        val (hostLoom, joinerLoom) = newLoomPair()
+        when (val origin = joinerRosterOrigin()) {
+            is JoinerRosterOrigin.TheJoinPath ->
+                assertFalse(
+                    hostLoom === joinerLoom,
+                    "this harness declares JoinerRosterOrigin.TheJoinPath but newLoomPair() returns ONE " +
+                        "Loom instance twice, so both ends read one backend's roster and the joiner half " +
+                        "of peersReportsSelfIdAndAtLeastTwoAfterJoin cannot fail — declare " +
+                        "SharedConstruction(why) instead, or split the fixture into two wired Looms",
+                )
+
+            is JoinerRosterOrigin.SharedConstruction ->
+                assertTrue(
+                    origin.why.isNotBlank(),
+                    "JoinerRosterOrigin.SharedConstruction must say WHAT the two ends share (and, where " +
+                        "the harness folds a role-split fabric into one process, link the issue for " +
+                        "splitting it) — a bare declaration tells a reader auditing a green joiner " +
+                        "assertion nothing about why it could not have failed",
+                )
+        }
     }
 
     // ── (16) an un-proven mesh-death obligation must be tracked, not silently skipped ──
