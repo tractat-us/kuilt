@@ -112,6 +112,13 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
         "reportsPeerLoss" to "https://github.com/tractat-us/kuilt/issues/2372",
     )
 
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "the mux hub's mesh Hello: the client seam's roster opens without the host and is grown by the " +
+            "handshake the client itself performed over the shared in-memory room fabric.",
+        )
+
     /**
      * Drain the client from the hub without tearing the hub: closing the client's **underlying
      * connection seam** (not the channel view) completes the server's per-connection read loop,

@@ -1532,37 +1532,44 @@ public abstract class SeamConformanceSuite {
     // it is satisfied by construction, and a suite that did not say so would have swapped an invisible
     // gap for an invisible green. So each harness names its arm and this test audits the naming.
     //
-    // **It checks the one direction that is decidable, and does not pretend to the other.** One `Loom`
-    // instance handed back twice is proof the joiner's roster is shared, so
-    // [JoinerRosterOrigin.TheJoinPath] is refutable there and is refuted. Two *distinct* `Loom` objects
-    // prove nothing in return — they may still close over one radio, registry or server — so that
-    // direction rests on the declaration, and the [JoinerRosterOrigin.SharedConstruction.why] string
-    // is what a reader auditing it gets to read. Requiring `why` non-blank is the same toll
-    // [everyFalseCapabilityDeclaresAGap] charges: the cheap arm must still cost a sentence.
+    // **There is deliberately no machine refutation, and the obvious one is unsound.** Refusing
+    // [JoinerRosterOrigin.TheJoinPath] from a harness whose `newLoomPair()` returns one `Loom` twice
+    // is wrong in both directions, at the two harnesses that matter most: `NearbyConformanceTest` is
+    // `loom to loom` and REAL (since #1878 the roster belongs to the weave, so one loom owns two
+    // independent rosters), while `IdentifiedConformanceTest` and `WebRTCConformanceTest` return
+    // DISTINCT looms and are maximally vacuous (`setOf(selfId, remoteId)` is a constructor literal, and
+    // no identity test sees an id passed as an argument). What decides reachability is who owns the
+    // roster, which is not observable from outside a `Seam` — so this charges the same toll
+    // [everyFalseCapabilityDeclaresAGap] charges instead: whichever arm a harness picks costs a
+    // sentence naming a mechanism a reviewer can go and read. A check that fires on the wrong
+    // harnesses would be worse than none, because a reader stops looking.
     //
     // Not a `runTest`: it weaves nothing. `newLoomPair()` is constructed but never hosted or joined,
-    // exactly as [availabilityReturnsAKnownVariant] does.
+    // exactly as [availabilityReturnsAKnownVariant] does — and constructing it is what stops the
+    // declaration being auditable without the fixture it describes existing.
 
     @Test
     public fun joinerRosterOriginIsDeclaredAndHonest() {
-        val (hostLoom, joinerLoom) = newLoomPair()
+        newLoomPair()
         when (val origin = joinerRosterOrigin()) {
             is JoinerRosterOrigin.TheJoinPath ->
-                assertFalse(
-                    hostLoom === joinerLoom,
-                    "this harness declares JoinerRosterOrigin.TheJoinPath but newLoomPair() returns ONE " +
-                        "Loom instance twice, so both ends read one backend's roster and the joiner half " +
-                        "of peersReportsSelfIdAndAtLeastTwoAfterJoin cannot fail — declare " +
-                        "SharedConstruction(why) instead, or split the fixture into two wired Looms",
+                assertTrue(
+                    origin.how.isNotBlank(),
+                    "JoinerRosterOrigin.TheJoinPath must NAME the mechanism that admits the remote — " +
+                        "the seam method, handshake or frame a reviewer can go and read — because " +
+                        "nothing here can check the claim for them. \"The two Looms are distinct\" is " +
+                        "not a mechanism: LinkSeam is handed its counterparty's id as a constructor " +
+                        "argument and is filled by construction on two distinct Looms",
                 )
 
-            is JoinerRosterOrigin.SharedConstruction ->
+            is JoinerRosterOrigin.FilledByConstruction ->
                 assertTrue(
                     origin.why.isNotBlank(),
-                    "JoinerRosterOrigin.SharedConstruction must say WHAT the two ends share (and, where " +
-                        "the harness folds a role-split fabric into one process, link the issue for " +
-                        "splitting it) — a bare declaration tells a reader auditing a green joiner " +
-                        "assertion nothing about why it could not have failed",
+                    "JoinerRosterOrigin.FilledByConstruction must say WHAT fills the joiner's roster — " +
+                        "a shared registry or a seeded constructor argument — and, where the harness " +
+                        "folds a role-split fabric into one process, link the issue for splitting it. " +
+                        "A bare declaration tells a reader auditing a green joiner assertion nothing " +
+                        "about why it could not have failed",
                 )
         }
     }

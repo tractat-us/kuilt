@@ -4,6 +4,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryLoom
@@ -57,6 +58,13 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
         "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
+
+    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.FilledByConstruction(
+            "a shared roster, twice over: one GossipLoom over one InMemoryLoom, and GossipSeam.peers " +
+            "delegates straight to its base seam - so the joiner reads the same registry the host does.",
+        )
 }
 
 /**

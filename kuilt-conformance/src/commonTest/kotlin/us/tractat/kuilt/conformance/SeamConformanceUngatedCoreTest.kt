@@ -47,6 +47,7 @@ class SeamConformanceUngatedCoreTest {
         override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
         override fun capabilities(): SeamCapabilities = ALL_FALSE
         override fun capabilityGaps(): Map<String, String> = ALL_FALSE.falseFlags().associateWith { GAP_URL }
+        override fun joinerRosterOrigin(): JoinerRosterOrigin = SHARED_IN_MEMORY_ROSTER
     }
 
     private fun hostileHarness(): SeamConformanceSuite = object : SeamConformanceSuite() {
@@ -56,6 +57,13 @@ class SeamConformanceUngatedCoreTest {
             throw AssertionError("a core (ungated) obligation must never read capabilities()")
         override fun capabilityGaps(): Map<String, String> =
             throw AssertionError("a core (ungated) obligation must never read capabilityGaps()")
+
+        // Deliberately NOT hostile. `joinerRosterOrigin()` is a fixture declaration a core obligation
+        // has no business consulting either — but making it throw would test nothing this file does not
+        // already test, and would break the harness for any FUTURE non-core property that legitimately
+        // reads it. The guarantee under test here is about `capabilities()`; keeping the hostility to
+        // the two flag accessors keeps that statement exact.
+        override fun joinerRosterOrigin(): JoinerRosterOrigin = SHARED_IN_MEMORY_ROSTER
     }
 
     @Test
@@ -108,5 +116,11 @@ class SeamConformanceUngatedCoreTest {
             collapsesPeersOnTear = false,
         )
         private const val GAP_URL = "https://github.com/tractat-us/kuilt/issues/1404"
+
+        /** Both harnesses are one [InMemoryLoom] driven as both ends — see [JoinerRosterOrigin]. */
+        private val SHARED_IN_MEMORY_ROSTER = JoinerRosterOrigin.FilledByConstruction(
+            "a shared roster: one InMemoryLoom driven as both ends, so weaving the joiner fills the " +
+                "host's registry and the joiner's roster at once",
+        )
     }
 }

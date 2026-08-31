@@ -9,6 +9,7 @@ import io.ktor.network.sockets.aSocket
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback conformance harness — a TCP socket needs a real IO dispatcher
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -73,6 +74,15 @@ class TcpConformanceTest : SeamConformanceSuite() {
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
+
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "handshaking()'s Hello preamble over a real loopback socket: the joiner learns the host's PeerId " +
+            "off the wire before its LinkSeam exists. Honest weakness: that exchange is a PRECONDITION of " +
+            "weave() returning, so a join path that stopped recording the peer would wedge the weave rather " +
+            "than red this arm.",
+        )
 
     /**
      * No gap: TCP is the one in-tree fabric that **publishes** a frame ceiling. `framed()` names its

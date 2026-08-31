@@ -6,6 +6,7 @@ import com.sun.jna.Pointer
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback conformance harness — a real Network.framework socket driven through the dylib needs a real IO dispatcher; there is no virtual-time option here
 import org.junit.AssumptionViolatedException
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
@@ -134,6 +135,13 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
 
     override fun capabilityGaps(): Map<String, String> =
         mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
+
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "the same NwSeam roster growth as the native loopback harness, driven through libkuilt.dylib: " +
+            "opens at { selfId }, grows only from a connection resolved over a real loopback socket.",
+        )
 
     /**
      * No gap: [NwSeam] publishes its 16 MiB frame ceiling as of #2134, so this harness is held to the

@@ -34,6 +34,15 @@ class IdentifiedConformanceTest : SeamConformanceSuite() {
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 
+    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.FilledByConstruction(
+            "a seeded roster: identifiedLoomPair hands each end the other's PeerId as a constructor argument " +
+            "and LinkSeam opens at MutableStateFlow(setOf(selfId, remoteId)), so the joiner's roster is a " +
+            "literal before a byte moves. Splitting the fixture would not help - the seam would have to learn " +
+            "the id rather than be handed it, which is what the handshaking/peerMesh harnesses cover.",
+        )
+
     override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean =
         dropBothEnds(link, host, joiner)
 

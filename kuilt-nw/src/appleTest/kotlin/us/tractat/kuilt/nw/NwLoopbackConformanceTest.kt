@@ -4,6 +4,7 @@ package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback conformance harness — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
 import kotlinx.coroutines.runBlocking
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
@@ -101,6 +102,13 @@ class NwLoopbackConformanceTest : SeamConformanceSuite() {
 
     /** No gaps — this test IS the proof that closed the `securesTransport` gap for kuilt-nw. */
     override fun capabilityGaps(): Map<String, String> = emptyMap()
+
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "NwSeam._peers opens at { selfId } and grows only from a resolved connection - here a real " +
+            "Network.framework TLS-PSK socket over 127.0.0.1. The two looms share only a port number.",
+        )
 
     /**
      * No gap: [NwSeam] publishes its 16 MiB frame ceiling as of #2134, so this harness is held to the

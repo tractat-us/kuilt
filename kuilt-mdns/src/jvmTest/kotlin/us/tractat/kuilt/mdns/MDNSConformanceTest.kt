@@ -8,6 +8,7 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.CloseReason
@@ -198,6 +199,14 @@ class MDNSConformanceTest : SeamConformanceSuite() {
         "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
+
+    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.FilledByConstruction(
+            "a seeded roster: joinTag() is built from hostFactory.selfPeerId read off the shared host factory, " +
+            "and the joiner's seam is LinkSeam-backed, so it opens at setOf(selfId, remoteId). Discovery is " +
+            "what this harness proves; the joiner's roster is handed to it.",
+        )
 
     // ── Private helpers ──────────────────────────────────────────────────────
 

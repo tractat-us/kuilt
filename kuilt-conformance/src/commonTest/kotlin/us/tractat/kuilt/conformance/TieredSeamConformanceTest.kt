@@ -81,6 +81,14 @@ class TieredSeamConformanceTest : SeamConformanceSuite() {
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 
+    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.FilledByConstruction(
+            "a shared roster: the joiner side is a plain InMemoryLoom member weaving on the SAME roomLoom the " +
+            "host's tiered union folds, so the joiner arm asserts a property of InMemoryLoom's shared registry " +
+            "rather than of TieredSeam.",
+        )
+
     /**
      * Drain the joiner from the local tier: closing the joiner's [InMemoryLoom] seam removes it
      * from that loom's shared roster, so the union pump republishes a smaller `peers` while the

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.nearby
 
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -74,4 +75,14 @@ class NearbyConformanceTest : SeamConformanceSuite() {
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
 
     override fun capabilityGaps(): Map<String, String> = emptyMap()
+
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "NearbySeam.admitRemote, from the handshake the joiner itself completed. Since #1878 the roster " +
+            "belongs to the WEAVE, not the loom: each weave mints its own flow seeded with its own id, so " +
+            "this loom-to-loom harness owns two independent rosters and the joiner arm genuinely reds. That " +
+            "is the whole of #2591 - the joiner reported { selfId } forever on two real devices while the " +
+            "pre-#1878 loom-wide flow covered for it here.",
+        )
 }

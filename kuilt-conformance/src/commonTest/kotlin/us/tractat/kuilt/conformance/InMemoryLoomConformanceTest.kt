@@ -38,6 +38,14 @@ class InMemoryLoomConformanceTest : SeamConformanceSuite() {
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 
+    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.FilledByConstruction(
+            "a shared roster: one InMemoryLoom, whose registry every seam observes, so weaving the joiner " +
+            "fills both ends. This is the reference implementation, and it is exactly why #2591's defect was " +
+            "structurally unreachable here - see JoinerRosterOrigin.",
+        )
+
     /**
      * Drain the joiner from the shared roster: closing the joiner seam removes it from the loom's
      * `peers` (which every seam observes) while the host seam is never closed — so the host observes

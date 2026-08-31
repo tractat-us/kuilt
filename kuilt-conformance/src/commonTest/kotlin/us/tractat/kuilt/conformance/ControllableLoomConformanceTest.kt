@@ -69,6 +69,13 @@ class ControllableLoomConformanceTest : SeamConformanceSuite() {
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 
+    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.FilledByConstruction(
+            "a shared roster: one ControllableLoom, and every ControllableSeam's peers IS the loom-wide " +
+            "registry both ends observe, so registering the second seam fills the first's roster too.",
+        )
+
     /**
      * Drain the joiner from the shared roster: closing the joiner seam removes it from the loom's
      * registry (which every seam observes) while the host seam is never closed — so the host sees

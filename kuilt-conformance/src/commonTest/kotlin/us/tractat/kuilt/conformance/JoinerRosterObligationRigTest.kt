@@ -90,35 +90,37 @@ class JoinerRosterObligationRigTest {
     // ── half 2: the fixture declaration is refuted when a single Loom is handed back twice ──
 
     @Test
-    fun claimingTheJoinPathWhileSharingOneLoomIsRefused() {
-        val failure = assertFailsWith<AssertionError>(
-            "a harness returning ONE Loom instance twice cannot have filled the joiner's roster " +
-                "through the join path, so declaring TheJoinPath must be refused",
+    fun aBlankJoinPathMechanismIsRefused() {
+        // `how` is the WHOLE of TheJoinPath's accountability — there is no sound machine refutation
+        // (see joinerRosterOriginIsDeclaredAndHonest), so an empty string would buy back exactly the
+        // silence JoinerRosterOrigin exists to remove.
+        assertFailsWith<AssertionError>(
+            "TheJoinPath must name the mechanism that admits the remote",
         ) {
-            sharedLoomHarness(claiming = JoinerRosterOrigin.TheJoinPath)
-                .joinerRosterOriginIsDeclaredAndHonest()
+            declaring(JoinerRosterOrigin.TheJoinPath(" ")).joinerRosterOriginIsDeclaredAndHonest()
         }
-        assertTrue(
-            "newLoomPair() returns ONE Loom instance twice" in failure.message.orEmpty(),
-            "the red must name the contradiction it found; got: ${failure.message}",
-        )
     }
 
     @Test
-    fun aBlankSharedConstructionReasonIsRefused() {
+    fun anHonestJoinPathDeclarationPasses() {
+        declaring(JoinerRosterOrigin.TheJoinPath("NearbySeam.admitRemote, from the joiner's own handshake"))
+            .joinerRosterOriginIsDeclaredAndHonest()
+    }
+
+    @Test
+    fun aBlankFilledByConstructionReasonIsRefused() {
         assertFailsWith<AssertionError>(
-            "SharedConstruction must cost a sentence — a blank reason tells a reader auditing a " +
+            "FilledByConstruction must cost a sentence — a blank reason tells a reader auditing a " +
                 "green joiner assertion nothing",
         ) {
-            sharedLoomHarness(claiming = JoinerRosterOrigin.SharedConstruction("  "))
-                .joinerRosterOriginIsDeclaredAndHonest()
+            declaring(JoinerRosterOrigin.FilledByConstruction("  ")).joinerRosterOriginIsDeclaredAndHonest()
         }
     }
 
     @Test
-    fun anHonestSharedConstructionDeclarationPasses() {
-        // Control arm for half 2, and the shape every in-process harness in tree actually declares.
-        sharedLoomHarness(claiming = JoinerRosterOrigin.SharedConstruction("one InMemoryLoom, both ends"))
+    fun anHonestFilledByConstructionDeclarationPasses() {
+        // Control arm, and the shape every in-process harness in tree actually declares.
+        declaring(JoinerRosterOrigin.FilledByConstruction("one InMemoryLoom registry, read by both ends"))
             .joinerRosterOriginIsDeclaredAndHonest()
     }
 
@@ -138,16 +140,16 @@ class JoinerRosterObligationRigTest {
         override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
         override fun capabilityGaps(): Map<String, String> = emptyMap()
         override fun joinerRosterOrigin(): JoinerRosterOrigin =
-            JoinerRosterOrigin.SharedConstruction("a rig over one InMemoryLoom (#2591 positive control)")
+            JoinerRosterOrigin.FilledByConstruction("a rig over one InMemoryLoom (#2591 positive control)")
     }
 
-    private fun sharedLoomHarness(claiming: JoinerRosterOrigin): SeamConformanceSuite =
+    private fun declaring(origin: JoinerRosterOrigin): SeamConformanceSuite =
         object : SeamConformanceSuite() {
             private val loom = InMemoryLoom()
             override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
             override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
             override fun capabilityGaps(): Map<String, String> = emptyMap()
-            override fun joinerRosterOrigin(): JoinerRosterOrigin = claiming
+            override fun joinerRosterOrigin(): JoinerRosterOrigin = origin
         }
 
     /**
