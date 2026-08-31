@@ -160,61 +160,57 @@ class WarpLogRecordExporterFailureReportingTest {
     }
 
     /**
-     * The control arm that separates "report a state change" from "report once, ever". A store that
-     * comes back and then breaks again is news a second time — without this, a fix that simply
-     * remembered "already reported" forever would pass the test above and silence a real second
-     * outage.
+     * The control arm that separates "report once per process" from "report once, ever" — the
+     * mistake the fix above is one line away from, and the one that would silence a real outage.
+     *
+     * **A restart, deliberately, and not "the store came back and broke again".** For a *given*
+     * segment number the second failure is unreachable: a number leaves [LogSegmentIndex.retired]
+     * the moment its delete succeeds and no number ever re-enters it, so a store that recovers and
+     * breaks again always fails on *fresh* numbers — which report anyway, under a correct fix and
+     * under a broken one alike. That arm was written first, and a mutation deleting the re-arm
+     * entirely passed it. The reachable re-arm is a new exporter over the same store: it starts
+     * with an empty memory, and `recover` sweeps the ledger before it reads anything.
      */
     @Test
-    fun aDeleteThatFailsAgainAfterRecoveringIsReportedAgain() = runTest {
-        val store = FailDeleteStore(RecordingStore())
-        var duringFirstOutage = 0
-        var afterRecovery = 0
-        var afterSecondOutage = 0
-        var sweptBetween = 0
+    fun aStillBrokenStoreIsReportedAgainAfterARestart() = runTest {
+        val backing = RecordingStore()
+        val store = FailDeleteStore(backing)
+        var duringFirstRun = 0
+        var afterRestart = 0
+        var ledger = emptyList<Int>()
 
         capturingExporterLogs { captured ->
             val exporter = exporterFor(store)
             repeat(EXPORTS) { i -> exporter.export(record(i)) }
-            duringFirstOutage = captured.naming(SWEEP_FRAGMENT).size
+            duringFirstRun = captured.naming(SWEEP_FRAGMENT).size
+            ledger = decodeIndexForTest(requireNotNull(backing.read(INDEX_KEY_FOR_TEST))).retired
 
-            // The store comes back. The next pass sweeps the backlog successfully, which is what
-            // has to re-arm the report.
-            store.allowDeletes()
-            repeat(EXPORTS) { i -> exporter.export(record(1_000 + i)) }
-            sweptBetween = store.deleteTargets().size
-            afterRecovery = captured.naming(SWEEP_FRAGMENT).size
-
-            store.refuseDeletes()
-            repeat(EXPORTS) { i -> exporter.export(record(2_000 + i)) }
-            afterSecondOutage = captured.naming(SWEEP_FRAGMENT).size
+            // A second process over the same store, still broken. `loadPersistedState` re-sweeps
+            // `retired` before it reads a thing, so every ledger entry is attempted again.
+            exporterFor(store).recover()
+            afterRestart = captured.naming(SWEEP_FRAGMENT).size
         }
 
         assertAll(
             {
                 assertTrue(
-                    duringFirstOutage > 0,
-                    "precondition: the first outage was never reported, so the arms below compare nothing",
+                    ledger.isNotEmpty(),
+                    "precondition: the crash left no ledger, so the restart had nothing to re-sweep",
+                )
+            },
+            {
+                assertTrue(
+                    duringFirstRun > 0,
+                    "precondition: the first run reported nothing, so the arm below compares nothing",
                 )
             },
             {
                 assertEquals(
-                    duringFirstOutage,
-                    afterRecovery,
-                    "a store that came back kept being reported as broken",
-                )
-            },
-            {
-                assertTrue(
-                    sweptBetween > 0,
-                    "precondition: nothing was ever swept successfully, so the recovery arm is vacuous",
-                )
-            },
-            {
-                assertTrue(
-                    afterSecondOutage > afterRecovery,
-                    "a fresh outage after the store recovered was swallowed as a repeat " +
-                        "($afterRecovery lines before it, $afterSecondOutage after)",
+                    duringFirstRun + ledger.size,
+                    afterRestart,
+                    "a restart against a store that is still broken re-reported ${afterRestart - duringFirstRun} " +
+                        "of its ${ledger.size} outstanding ledger entries — 'once per segment' had " +
+                        "become 'once, ever'",
                 )
             },
         )
@@ -306,8 +302,14 @@ class WarpLogRecordExporterFailureReportingTest {
         /** The exporter's logger name, spelled out because the production constant is private. */
         const val EXPORTER_LOGGER = "us.tractat.kuilt.otel.WarpLogRecordExporter"
 
-        /** Distinguishing fragment of the sweep-failure line. */
-        const val SWEEP_FRAGMENT = "could not be deleted"
+        /**
+         * Distinguishing fragment of the **segment** sweep-failure line.
+         *
+         * Not the more obvious `"could not be deleted"`: `sweepLegacyKey` says that too, and it
+         * fires once per `recover()` against a store that refuses deletes — which silently added
+         * one to the restart arm's count and read as an off-by-one in the dedup.
+         */
+        const val SWEEP_FRAGMENT = "retired segment"
 
         /** Distinguishing fragment of the durable-write-failure line. */
         const val WRITE_FRAGMENT = "durable write failed"

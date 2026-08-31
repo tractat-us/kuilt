@@ -472,7 +472,8 @@ public class WarpLogRecordExporter(
      * Bounded by [retiringSegments]: a number is added only while it is on the ledger and removed
      * the moment its delete succeeds, so this cannot outgrow the ledger it shadows. It is
      * deliberately **not** persisted — a restart is a change of circumstance, and re-reporting once
-     * per process start is the behaviour a reader of the log wants.
+     * per exporter instance is the behaviour a reader of the log wants, pinned by
+     * `WarpLogRecordExporterFailureReportingTest`.
      */
     private val reportedSweepFailures: MutableSet<Int> = mutableSetOf()
     private var activeSegment: Rga<LogRecord> = Rga.empty()
@@ -1588,12 +1589,23 @@ public class WarpLogRecordExporter(
      * targets each one materialises a symbolicated stack, which is how a `runTest` body doing no
      * real I/O at all came to burn 11 s of wall clock, and on wasm it is what pushed the class past
      * the harness's 1 MB-per-message ceiling and silently dropped its results (#2185).
+     *
+     * ## What "once" is scoped to, and what that leaves unpinned
+     *
+     * Once per number **per exporter instance**. A restart re-reports every outstanding entry, which
+     * is the behaviour a reader of the log wants and is what
+     * `WarpLogRecordExporterFailureReportingTest` pins as the control arm — it is also the *only*
+     * reachable re-arm. Forgetting a number whose delete succeeded cannot re-arm a report, because a
+     * number leaves [LogSegmentIndex.retired] the moment its delete lands and no number ever
+     * re-enters it; what that forgetting buys is a bound on [reportedSweepFailures], and **that** is
+     * unpinned by any test — a leak of one `Int` per ever-failed-then-succeeded segment would be
+     * silent. It is bounded by the ledger either way, so the cost of the gap is small.
      */
     private suspend fun sweep(number: Int): Boolean {
         val cause = runCatchingCancellable { store.delete(segmentKey(number)) }.exceptionOrNull()
         if (cause == null) {
-            // The condition changed. A later failure on this number is fresh news, not a repeat —
-            // which is what keeps "report the outage" from collapsing into "report once, ever".
+            // Keeps the memory bounded by the LEDGER rather than by "every segment whose delete ever
+            // failed" — not a re-arm; see the KDoc for why one is unreachable here.
             lock.withLock { reportedSweepFailures.remove(number) }
             return true
         }
