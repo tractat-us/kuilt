@@ -526,6 +526,10 @@ public class EntitlementLedger private constructor(
      * a path, base ± relocation exactly as the counter families read (see the class KDoc).
      */
     private fun transferNet(pathKey: PathKey, r: ReplicaId): Long {
+        // `donorsAt`/`recipientsOf` each allocate a list and a set, and this runs O(groups ×
+        // replicas) inside `holdings`. A key absent from all three matrices has neither donors nor
+        // recipients, so the whole derivation below is zero by construction.
+        if (transferMatrices().none { pathKey in it }) return 0L
         var inflow = 0L
         for (donor in donorsAt(pathKey)) inflow = checkedAdd(inflow, effRow(pathKey, donor, r))
         var outflow = 0L
@@ -981,7 +985,7 @@ public class EntitlementLedger private constructor(
         for (p in pending) {
             val deadPath = PathKey.of(p.edge)
             drain.putRow(
-                TRANSFER_RELOC_OUT,
+                TransferRelocation.OUT,
                 deadPath,
                 p.donor,
                 p.to,
@@ -993,7 +997,7 @@ public class EntitlementLedger private constructor(
         for ((pair, add) in carried) {
             val (donor, to) = pair
             drain.putRow(
-                TRANSFER_RELOC_IN,
+                TransferRelocation.IN,
                 livePath,
                 donor,
                 to,
@@ -1961,7 +1965,7 @@ private data class DrainedSlot(
  */
 private class EdgePatchBuilder {
     private val families = HashMap<CounterFamily, HashMap<AttachmentId, GCounter>>()
-    private val rows = HashMap<Boolean, HashMap<PathKey, MutableMap<ReplicaId, GCounter>>>()
+    private val rows = HashMap<TransferRelocation, HashMap<PathKey, MutableMap<ReplicaId, GCounter>>>()
 
     fun put(family: CounterFamily, edge: AttachmentId, r: ReplicaId, value: Long) {
         if (value <= 0L) return
@@ -1969,15 +1973,16 @@ private class EdgePatchBuilder {
     }
 
     /** One `(path, donor, recipient)` cell of a transfer relocation matrix, at its absolute value. */
-    fun putRow(relocIn: Boolean, path: PathKey, donor: ReplicaId, to: ReplicaId, value: Long) {
+    fun putRow(half: TransferRelocation, path: PathKey, donor: ReplicaId, to: ReplicaId, value: Long) {
         if (value <= 0L) return
-        val matrix = rows.getOrPut(relocIn) { HashMap() }.getOrPut(path) { HashMap() }
+        val matrix = rows.getOrPut(half) { HashMap() }.getOrPut(path) { HashMap() }
         matrix[donor] = (matrix[donor] ?: GCounter.ZERO).piece(GCounter.of(to to value))
     }
 
     private fun of(family: CounterFamily): Map<AttachmentId, GCounter> = families[family] ?: emptyMap()
 
-    private fun rowsOf(relocIn: Boolean): Map<PathKey, Map<ReplicaId, GCounter>> = rows[relocIn] ?: emptyMap()
+    private fun rowsOf(half: TransferRelocation): Map<PathKey, Map<ReplicaId, GCounter>> =
+        rows[half] ?: emptyMap()
 
     fun build(): EntitlementLedger = EntitlementLedger.of(
         issued = of(CounterFamily.ISSUED),
@@ -1989,16 +1994,25 @@ private class EdgePatchBuilder {
         leafRelocOut = of(CounterFamily.LEAF_RELOC_OUT),
         rollupRelocIn = of(CounterFamily.ROLLUP_RELOC_IN),
         rollupRelocOut = of(CounterFamily.ROLLUP_RELOC_OUT),
-        transferRelocIn = rowsOf(TRANSFER_RELOC_IN),
-        transferRelocOut = rowsOf(TRANSFER_RELOC_OUT),
+        transferRelocIn = rowsOf(TransferRelocation.IN),
+        transferRelocOut = rowsOf(TransferRelocation.OUT),
     )
 }
 
-/** [EdgePatchBuilder.putRow]'s matrix selector — the live key's credit. */
-private const val TRANSFER_RELOC_IN = true
+/**
+ * The two transfer **relocation** matrices of [EntitlementLedger], as [EdgePatchBuilder.putRow]'s
+ * selector. Named rather than a `Boolean`, for the same reason [CounterFamily] is: the two halves
+ * are equal and opposite, so a transposed selector produces a perfectly well-formed patch that
+ * cancels the live key and credits the dead one — silent, sum-preserving, and exactly the class of
+ * defect this pair exists to make impossible.
+ */
+private enum class TransferRelocation {
+    /** The live key's credit. */
+    IN,
 
-/** [EdgePatchBuilder.putRow]'s matrix selector — the dead key's cancellation. */
-private const val TRANSFER_RELOC_OUT = false
+    /** The dead key's cancellation. */
+    OUT,
+}
 
 /**
  * One hand-off a generation move still owes: [amount] of `donor → to` declared final on [edge] and

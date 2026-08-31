@@ -235,6 +235,17 @@ class EntitlementLedgerConservationTest {
         var underAcks = 0
 
         /**
+         * How many under-acked runs saw `PerEdgeSafety(e1)` — the strand's strict prefix — fire.
+         *
+         * [assertUnderAckIsAttributed] pins that the residue never rolls up that far, and the pin is
+         * a claim about a *count of zero*. A zero is the one value an arm that never ran also
+         * reports, so the pin needs a witness that the arm ran at all: [underAcks] is that witness
+         * and this is the reading it qualifies. Kept as a number rather than as a comment, because a
+         * comment recording this particular measurement is exactly what went stale here once.
+         */
+        var prefixSafety = 0
+
+        /**
          * Every draw's outcome, carried in each floor's failure message. A floor that reds then says
          * *where* the draws went rather than only that too few arrived — the non-moving outcomes are
          * how this fixture goes quietly vacuous, and diagnosing that from a bare count already cost
@@ -242,7 +253,8 @@ class EntitlementLedgerConservationTest {
          */
         override fun toString(): String =
             "moved=$moved refused=$refused nothingToMove=$nothingToMove unfunded=$unfunded " +
-                "nested=$nested accumulated=$accumulated underAcks=$underAcks"
+                "nested=$nested accumulated=$accumulated underAcks=$underAcks " +
+                "prefixSafety=$prefixSafety"
     }
 
     private fun EntitlementLedger.applying(patch: Patch<EntitlementLedger>?): EntitlementLedger =
@@ -482,7 +494,7 @@ class EntitlementLedgerConservationTest {
                 { assertTrue(conflicts.isEmpty(), "an honest relocation run flagged a conflict: $conflicts") },
             )
         } else {
-            assertUnderAckIsAttributed(ledger, conflicts, underAcked)
+            assertUnderAckIsAttributed(ledger, conflicts, underAcked, rig)
         }
     }
 
@@ -499,8 +511,10 @@ class EntitlementLedgerConservationTest {
         l: EntitlementLedger,
         conflicts: List<LedgerConflict>,
         underAcked: List<UnderAck>,
+        rig: RelocationRig,
     ) {
         val strands = underAcked.map { it.strand }.toSet()
+        if (LedgerConflict.PerEdgeSafety(e1) in conflicts) rig.prefixSafety++
         assertAll(
             {
                 for (u in underAcked) {
@@ -521,26 +535,22 @@ class EntitlementLedgerConservationTest {
             },
             {
                 // Nothing beyond the #1783 shape may move: per-edge safety and the closure violation
-                // on the STRANDS themselves, the strand's strict prefix `e1` (below), plus the global
-                // backstop once the residue is large enough to show in the totals. In particular no
-                // negative holdings, no dual inbound, no negative effective spend, and no orphaned
-                // transfer path — seven of the nine kinds stay pinned exactly.
+                // on the STRANDS themselves, plus the global backstop once the residue is large
+                // enough to show in the totals. In particular no negative holdings, no dual inbound,
+                // no negative effective spend, no orphaned transfer path — and no per-edge report on
+                // an edge that was never under-acked, including the prefix `e1`, which the residue's
+                // spendable credit could in principle roll up through and measurably does not.
                 //
-                // **`e1` is in the tolerated set, and was not before (#2366).** It is the unique
-                // strict prefix of every path ending at `g3`, so a spend of the residue's phantom
-                // credit charges `rollupSpent(e1)` with no matching `issued(e1)` behind it. The
-                // comment this replaces said as much — "could in principle roll up through" — and
-                // pinned the observation that it did not. What changed is reach, not soundness:
-                // a strand carrying transfer rows can now move instead of being refused, so more
-                // under-acked moves land and the residue grows past `e1`'s cover. The soundness
-                // claim is asserted elsewhere and still holds exactly —
-                // `assertConservationWithRelocation` runs after EVERY step and pins
-                // `Σ holdings + Σ effLeafSpent == minted + residual` for the accumulated under-acked
-                // amount, so no value is created beyond the lie that was fed. The honest arm, which
-                // admits no lie, still asserts `validate()` is EMPTY and is where a real regression
-                // in the move would surface.
+                // **`e1` was briefly tolerated here on this branch, and the tolerance was inert.**
+                // The reasoning was sound in shape — a strand carrying transfer rows now moves
+                // instead of being refused, so more under-acked moves land and the residue could
+                // grow past `e1`'s cover — but the reach was assumed rather than measured, and a
+                // tolerated conflict reads identically whether it fires once or never. The
+                // `prefixSafety` counter settles it: 0 across 80 seeded runs and 76 under-acks,
+                // with and without the #2366 carry. So the original pin stands, and the counter now
+                // holds it as a number instead of as a comment.
                 val stray = conflicts.filterNot {
-                    it is LedgerConflict.PerEdgeSafety && (it.edge in strands || it.edge == e1) ||
+                    it is LedgerConflict.PerEdgeSafety && it.edge in strands ||
                         it is LedgerConflict.ClosureViolation && it.edge in strands ||
                         it is LedgerConflict.ConservationViolation
                 }
@@ -579,6 +589,21 @@ class EntitlementLedgerConservationTest {
             { assertTrue(rig.underAcks >= 25, "the under-ack rig fired too rarely — $rig") },
             { assertTrue(rig.moved >= 250, "too few generations actually moved — $rig") },
             { assertTrue(rig.accumulated >= 50, "the §12.3 accumulation arm fired too rarely — $rig") },
+            {
+                // The measurement behind the `e1` note in [assertUnderAckIsAttributed]: over 80
+                // seeded runs and 76 under-acks the residue's spendable credit never rolls up far
+                // enough to break per-edge safety on the strand's strict prefix. Recorded as a
+                // counter rather than left to the `stray.isEmpty()` pin alone, because the claim a
+                // reader has to trust is a *count of zero* — and a count of zero is exactly what an
+                // arm that never ran also reports. `underAcks` above proves the arm ran.
+                assertEquals(
+                    0,
+                    rig.prefixSafety,
+                    "PerEdgeSafety(e1) fired — the residue now reaches the strand's strict prefix. " +
+                        "That may be legitimate, but it is a change in reach and must be re-argued, " +
+                        "not tolerated — $rig",
+                )
+            },
         )
     }
 
