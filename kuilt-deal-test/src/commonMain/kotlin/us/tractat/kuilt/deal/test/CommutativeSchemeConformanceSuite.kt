@@ -112,7 +112,22 @@ public abstract class CommutativeSchemeConformanceSuite {
      */
     public abstract fun proofStrength(): ProofStrength
 
-    /** Sample messages guaranteed to lie in the scheme's valid input domain. */
+    /**
+     * Sample messages guaranteed to lie in the scheme's valid input domain.
+     *
+     * **Must be non-empty, and every property below asserts that before using it.** This is the
+     * suite's one free knob, and empty is the setting at which it stops testing: a property that
+     * loops over the domain passes green over an empty list, having asserted nothing, and one that
+     * takes `.first()` dies inside the standard library on `NoSuchElementException: List is empty.`
+     * — a red, but one that names the collection rather than the fixture setting that emptied it,
+     * and that aborts before the property's own diagnostics run. Neither shape is acceptable, so
+     * both get the same explicit check (#2347).
+     *
+     * Nobody has overridden this to empty. The point is that a downstream scheme whose valid domain
+     * is expressed by an override that *happens* to compute empty would lose the properties with no
+     * signal; `CommutativeSchemeConformanceSuiteEmptyDomainRigTest` is what holds every property to
+     * failing loudly instead.
+     */
     public open fun validPlaintexts(): List<ByteArray> = listOf(
         "card:ACE_OF_SPADES".encodeToByteArray(),
         "card:KING_OF_HEARTS".encodeToByteArray(),
@@ -176,7 +191,11 @@ public abstract class CommutativeSchemeConformanceSuite {
         val scheme = newScheme()
         val a = scheme.generateKey()
         val b = scheme.generateKey()
-        for (m in validPlaintexts()) {
+        val messages = validPlaintexts()
+        // The one property in this suite whose empty-domain setting was a green rather than a red:
+        // the whole body is this loop, so an empty list satisfied it by arithmetic. See #2347.
+        assertTrue(messages.isNotEmpty(), "validPlaintexts() is empty, so this property asserts nothing")
+        for (m in messages) {
             val ab = scheme.encrypt(scheme.encrypt(m, a.encryptKey).first, b.encryptKey).first
             val ba = scheme.encrypt(scheme.encrypt(m, b.encryptKey).first, a.encryptKey).first
             assertEquals(ab.toList(), ba.toList(), "commutativity failed for ${m.toList()}")
@@ -286,7 +305,9 @@ public abstract class CommutativeSchemeConformanceSuite {
         // strip order is what proves order-independence — extra plaintexts add cost
         // without strengthening the law (and overrun the wasmJs 2s test budget, since
         // a heavyweight scheme like SRA-2048 does real big-integer work per layer).
-        val m = validPlaintexts().first()
+        val messages = validPlaintexts()
+        assertTrue(messages.isNotEmpty(), "validPlaintexts() is empty, so this property asserts nothing")
+        val m = messages.first()
         // Layer all three encryptions (order k0, k1, k2).
         var cipher = m
         val underCover = mutableListOf<ByteArray>()
@@ -362,7 +383,9 @@ public abstract class CommutativeSchemeConformanceSuite {
     @Test
     public fun multiLayerDealAcrossPeerInstancesRecoversPlaintextRegardlessOfStripOrder() {
         val peers = listOf(SchemePeer(newScheme()), SchemePeer(newPeerScheme()), SchemePeer(newPeerScheme()))
-        val m = validPlaintexts().first()
+        val messages = validPlaintexts()
+        assertTrue(messages.isNotEmpty(), "validPlaintexts() is empty, so this property asserts nothing")
+        val m = messages.first()
         independentSingleLayers(peers, m)
         // Layer all three encryptions (order peer0, peer1, peer2), each applied by its own instance.
         var cipher = m
@@ -397,7 +420,9 @@ public abstract class CommutativeSchemeConformanceSuite {
         val scheme = newScheme()
         val a = scheme.generateKey()
         val b = scheme.generateKey()
-        val m = validPlaintexts().first()
+        val messages = validPlaintexts()
+        assertTrue(messages.isNotEmpty(), "validPlaintexts() is empty, so this property asserts nothing")
+        val m = messages.first()
         assertNotEquals(
             scheme.encrypt(m, a.encryptKey).first.toList(),
             scheme.encrypt(m, b.encryptKey).first.toList(),
@@ -438,9 +463,11 @@ public abstract class CommutativeSchemeConformanceSuite {
         // Two independently generated pairs — enough to show generateKey() yields
         // usable, distinct pairs. (Kept low so a heavyweight scheme's key generation
         // stays within the wasmJs 2s test budget.)
+        val messages = validPlaintexts()
+        assertTrue(messages.isNotEmpty(), "validPlaintexts() is empty, so this property asserts nothing")
         repeat(2) { draw ->
             val key = scheme.generateKey()
-            val m = validPlaintexts().first()
+            val m = messages.first()
             val (cipher, _) = scheme.encrypt(m, key.encryptKey)
             val (recovered, _) = scheme.strip(cipher, key.stripKey)
             assertAll(
@@ -472,7 +499,9 @@ public abstract class CommutativeSchemeConformanceSuite {
     public fun verifyAcceptsHonestTransitions() {
         val scheme = newScheme()
         val key = scheme.generateKey()
-        val m = validPlaintexts().first()
+        val messages = validPlaintexts()
+        assertTrue(messages.isNotEmpty(), "validPlaintexts() is empty, so this property asserts nothing")
+        val m = messages.first()
         val (cipher, encryptProof) = scheme.encrypt(m, key.encryptKey)
         assertTrue(
             scheme.verifyEncrypt(m, cipher, encryptProof, key.encryptKey),

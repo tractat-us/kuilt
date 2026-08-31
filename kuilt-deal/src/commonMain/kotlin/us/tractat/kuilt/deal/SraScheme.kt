@@ -58,10 +58,25 @@ public class SraScheme : CommutativeScheme {
         )
     }
 
+    /**
+     * Refuses anything outside `[2, p-2]` — the values that actually hide something.
+     *
+     * The excluded ends are not arbitrary: `0`, `1` and `p-1` are fixed by **every** key this
+     * scheme generates, so a card encoding to one of them is layered by every player and still
+     * readable by all of them. `p-1 = -1 (mod p)`, [generateKey] forces the exponent `e` odd, and
+     * `d*e = 1 (mod p-1)` with `p-1` even forces `d` odd too, so both layers compute
+     * `(-1)^odd = -1`. Those three are the whole set: `PRIME` is a safe prime, so the subgroup
+     * orders are `1, 2, q, 2q` and `p-1` is the unique element of order 2.
+     *
+     * `p-1` is not reachable through [encodePlaintext] — its `0x01` marker makes the high byte
+     * `0x01` where `p-1`'s is `0xFF` — nor plausibly as an intermediate ciphertext (~`1/p`). It is
+     * reachable through [encrypt]/[strip], which are `public` and take any in-domain [ByteArray],
+     * and this check is the only thing between a consumer and a value that hides nothing (#2363).
+     */
     private fun requireInDomain(bytes: ByteArray) {
         val value = BigInteger.fromByteArray(bytes, Sign.POSITIVE)
-        require(value >= BigInteger.TWO && value < PRIME) {
-            "SRA plaintext/ciphertext out of domain [2, p-1]: a card must encode to an integer >= 2 and < the 2048-bit modulus (max ~255 bytes). Use encodePlaintext() to map card bytes into this domain."
+        require(value >= BigInteger.TWO && value < PRIME - BigInteger.ONE) {
+            "SRA plaintext/ciphertext out of domain [2, p-2]: a card must encode to an integer >= 2 and < p-1, one below the 2048-bit modulus (max ~255 bytes). 0, 1 and p-1 are excluded because every key this scheme generates leaves them unchanged. Use encodePlaintext() to map card bytes into this domain."
         }
     }
 
@@ -100,7 +115,9 @@ public class SraScheme : CommutativeScheme {
  *
  * Prepends a 0x01 marker byte. This guarantees the encoded value is:
  *  - >= 2 (the marker makes the high byte nonzero; for non-empty input the
- *    value is >= 256), so it is never the 0 or 1 encryption fixed point; and
+ *    value is >= 256) and <= p-2 (the marker makes the high byte 0x01, where
+ *    p-1's is 0xFF), so it is never `0`, `1` or `p-1` — which are **all** of
+ *    the values every generated key leaves unchanged; and
  *  - canonically encoded (nonzero high byte), so BigInteger round-trips it
  *    without dropping leading zeros.
  *
