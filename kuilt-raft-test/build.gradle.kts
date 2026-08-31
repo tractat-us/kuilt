@@ -10,6 +10,8 @@ kotlin {
             // separate deps. Pattern mirrors kuilt-deal-test's CommutativeSchemeConformanceSuite.
             api(libs.kotlinx.coroutines.test)
             api(kotlin("test"))
+            // FakeRaftNode's close-once latch (#2328). `implementation`: the atomic is private.
+            implementation(libs.kotlinx.atomicfu)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))

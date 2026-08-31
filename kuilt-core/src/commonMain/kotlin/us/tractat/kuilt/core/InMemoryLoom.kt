@@ -37,8 +37,11 @@ import us.tractat.kuilt.core.SeamState.Woven
  * two *live* hosts, never a sequential re-weave. [Rendezvous.Existing] (joiners)
  * stays unlimited and never touches the guard.
  *
- * Thread-safe: the shared mesh state is protected by a [Mutex]. Frame
- * delivery is bounded and backpressured via one [Spool] per link, with
+ * Thread-safe, from two separate mechanisms — worth naming apart, because the [Mutex] is the
+ * *factory's* and does not reach inside a seam. The shared mesh state (the link registry, the peer
+ * roster, sequence assignment) is protected by that [Mutex]; a seam's own close-once latch is
+ * outside it and is atomic in its own right, since `close` is reachable concurrently from any
+ * dispatcher (#2328). Frame delivery is bounded and backpressured via one [Spool] per link, with
  * overflow behaviour chosen by [DeliveryPolicy].
  *
  * The suspending [deliver] call happens **outside** the factory mutex —
