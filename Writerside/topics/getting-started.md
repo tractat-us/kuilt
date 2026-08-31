@@ -101,13 +101,17 @@ the code unchanged:
 
 ```kotlin
 val loom: Loom = when {
-    isApple   -> MultipeerPeerLinkFactory(displayName = "alice", serviceType = "com.example.app")
+    isApple   -> appleNwLoom(serviceType = "_myapp._tcp", roomKey = code)
     isAndroid -> nearbyLoom(context, serviceId = "com.example.app")
     isBrowser -> WebRTCPeerLinkFactory(signaling = WebSocketSignalingChannel(wsUrl), room = "myroom")
     else      -> KtorClientLoom(httpClient)
 }
 val seam: Seam = loom.join(tag)
 ```
+
+On iPhone and Mac that `code` is not a label — it is the shared password that
+encrypts the session, and it is required. See
+[Nearby Apple devices](nw.md).
 
 → [Connections](fabrics.md)
 

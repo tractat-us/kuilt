@@ -594,6 +594,81 @@ deduplicates retries transparently.
 See `docs/architecture.md#server-cluster-topology` for the topology design and
 safety rationale.
 
+## Consuming kuilt from Swift
+
+If your iPhone or Mac app is written in Swift, you can call kuilt from it today.
+Nothing special is needed to get started: your build turns kuilt into a framework
+your Swift code links against, and the calls come out looking like ordinary Swift.
+
+```swift
+// Illustrative — Swift is not compiled by this repository.
+let seam = try await loom.host(pattern: pattern)
+try await seam.broadcast(payload: bytes)
+```
+
+There is one thing you do **not** get for free, and it is worth knowing before
+you build much on top: **stopping work part-way through.** In Swift, cancelling a
+task normally unwinds everything it started. By default that stops at the
+boundary — the Swift side gives up waiting, but the work still running inside
+kuilt is never told. Much of what `Loom` and `Seam` promise is about what happens
+when you stop early, so this is the substantive gap, not a matter of syntax.
+
+The fix is one plugin in **your** app's build, not in kuilt. kuilt publishes klibs
+and never builds a framework itself, so the framework your Swift code links is
+produced by your own module — and that is where the Swift-interop layer belongs.
+Applying it there covers everything kuilt exports, and kuilt adopting it would
+change nothing about what you receive.
+
+```kotlin
+// The APP's build.gradle.kts — the module that produces the framework.
+plugins {
+    id("co.touchlab.skie")
+}
+```
+
+Everything below was measured against a real `Seam` in the spike on #1418.
+
+### What changes once it is applied
+
+- **Cancellation propagates.** A cancelled Swift task now cancels the underlying
+  Kotlin coroutine, so `close`, `weave`, and every `suspend` call on the contract
+  behave the way their KDoc describes.
+- **Flows become `for await` loops.** `Seam.incoming` arrives as a typed sequence
+  of `Swatch` instead of an untyped `Flow` you have to hand a collector object to.
+- **`StateFlow` keeps its element type.** `seam.peers.value` comes back as a set
+  rather than as `Any?` you have to cast.
+- **Sealed types get compiler-checked switches.** `CloseReason`, `SeamState` and
+  `Rendezvous` can be switched over exhaustively with `onEnum(of:)`, so adding a
+  case upstream becomes a compile error in your app rather than a silent
+  fall-through:
+
+```swift
+// Illustrative — Swift is not compiled by this repository.
+switch onEnum(of: seamState) {
+case .weaving: return "weaving"
+case .woven:   return "woven"
+case .torn(let t): return "torn: \(t.reason)"
+}
+```
+
+### What still leaks
+
+Two things survive the interop layer, so plan around them rather than expecting
+them to be fixed by a build setting:
+
+- **Default arguments do not bridge for interface methods**, and kuilt's contract
+  is interfaces all the way down. So a call that reads `seam.close()` in Kotlin
+  needs its argument spelled out from Swift — `try await seam.close(reason: …)`.
+- **Identity types erase.** `PeerId`, `PlyId` and `Principal` are Kotlin value
+  classes and arrive on the Swift side untyped, with or without the interop
+  layer. That is a kuilt-side gap no consumer tooling can close; it is tracked in
+  #2273.
+
+One operational note: the interop plugin refuses to build against a Kotlin
+version it has not yet added support for, and that support lands some weeks
+behind each Kotlin release. That is a cost your app absorbs on its own schedule,
+which is another reason it belongs in your module rather than in kuilt's.
+
 ## On iPhone and Mac: keeping the first error log cheap
 
 The first time your app logs an error with a stack trace attached, something has
