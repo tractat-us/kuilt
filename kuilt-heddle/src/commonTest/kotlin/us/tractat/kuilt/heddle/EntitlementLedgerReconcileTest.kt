@@ -726,4 +726,55 @@ class EntitlementLedgerReconcileTest {
             },
         )
     }
+
+    /**
+     * The fix: the **whole inbound half** travels with the generation — net inflow, already-charged
+     * service, *and* the hand-offs — so the recipient's credit survives the move it never authored a
+     * slot on.
+     *
+     * Derived the production way, on `EntitlementLedger.ZERO`: the rows reach the derivation through
+     * the acked [SlotFinals] (a donor's row at a fenced edge's path key is single-writer at that
+     * donor, so it is declarable final on exactly the argument that makes the four base counters
+     * declarable), never off the deriving peer's gossip view. That is what lets the carry land on the
+     * H5 control-plane path, whose receiver is log-pure.
+     *
+     * The arms deliberately outlive the move itself. A merge-based structure heals a dropped row on
+     * the next write, so "correct immediately after the patch" is not the property — the property is
+     * that the credit survives re-delivery in any order and is genuinely **spendable** afterwards.
+     */
+    @Test
+    fun aGenerationMoveCarriesTheStrandsTransferRowsOntoTheLiveKey() {
+        val l = transferTangledLeafStrand()
+        val move = assertIs<Relocation.Moved>(
+            EntitlementLedger.ZERO.relocationPatch(e4, mapOf(e2 to l.baseFinalsOn(e2))),
+            "the log-pure control-plane derivation must still move the strand",
+        )
+        val moved = l.piece(move.patch)
+        val remerged = moved.piece(move.patch) // idempotence: re-delivery of the same patch
+        val reordered = move.patch.piece(l) // commutativity: the patch merged the other way round
+        val spent = moved.spend(bob, h, 40L)?.let { moved.piece(it.delta) }
+        assertAll(
+            { assertEquals(20L, moved.holdings(h, p3), "the donor keeps only the 20 it did not hand over") },
+            { assertEquals(40L, moved.holdings(h, bob), "…and the recipient's hand-off survives the move") },
+            { assertEquals(20L, remerged.holdings(h, p3), "re-delivering the patch changes nothing") },
+            { assertEquals(40L, remerged.holdings(h, bob), "…for either party") },
+            { assertEquals(20L, reordered.holdings(h, p3), "nor does the merge order") },
+            { assertEquals(40L, reordered.holdings(h, bob), "…for either party") },
+            { assertTrue(moved.validate().isEmpty(), "a carried strand leaves no conflict: ${moved.validate()}") },
+            // ── the recovery: the credit is real, not merely reported. bob spends the whole 40.
+            { assertNotNull(spent, "the carried credit must be spendable") },
+            { assertEquals(0L, spent?.holdings(h, bob), "the recipient spends what it was carried") },
+            { assertEquals(20L, spent?.holdings(h, p3), "…and the donor is untouched by it") },
+            { assertTrue(spent != null && spent.validate().isEmpty(), "…leaving a clean ledger: ${spent?.validate()}") },
+            // ── and the move is not repeatable: a second Reconcile off the same strand carries
+            // nothing more. A double-move is exactly as sum-preserving as an abandonment, so
+            // conservation cannot be what rejects it.
+            {
+                assertIs<Relocation.Nothing>(
+                    move.patch.relocationPatch(e4, mapOf(e2 to moved.baseFinalsOn(e2))),
+                    "a second move off the drained strand must carry nothing",
+                )
+            },
+        )
+    }
 }
