@@ -1,12 +1,10 @@
-@file:Suppress("ForbiddenImport") // deliberate real-threading test: clear() is fenced against a concurrent mutation by writeMutex, and a stale encoded snapshot landing after the clear is only observable on a genuine multi-threaded dispatcher, which virtual-time runTest cannot provide.
-
 package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.newFixedThreadPoolContext
+import kotlinx.coroutines.newFixedThreadPoolContext // ALLOW-realDispatcher: the race under test (#2232) is a mutation that encodes the whole metric map, suspends, and lands its stale bytes after a `clear()` has already deleted the keys — a permanent resurrection, since nothing rewrites that key afterwards. Both arms need the mutation and the clear in flight at once: the gated arm parks a real thread inside `store.write` while `clear()` runs on another, and the stochastic arm needs genuine overlap across metric kinds.
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
