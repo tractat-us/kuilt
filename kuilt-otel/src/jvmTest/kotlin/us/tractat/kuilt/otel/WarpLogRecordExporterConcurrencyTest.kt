@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // deliberate real-threading regression test: WarpLogRecordExporter threads mutable derived state (tail id, visible count, dedup map) forward across export() calls under an explicit lock, and a lost update there is only observable on a genuine multi-threaded dispatcher, which virtual-time runTest cannot provide — the production-dispatcher-in-tests ban is exempted here per the module's coroutine-determinism policy.
-
 package us.tractat.kuilt.otel
 
 import kotlinx.atomicfu.locks.reentrantLock
@@ -9,7 +7,7 @@ import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.newFixedThreadPoolContext
+import kotlinx.coroutines.newFixedThreadPoolContext // ALLOW-realDispatcher: `WarpLogRecordExporter` carries mutable derived state — tail `RgaId`, visible-record count, `recordId`→`RgaId` dedup map — forward across `export()` calls under an `atomicfu` `reentrantLock`. A lock only excludes what genuinely contends, so a lost update there is unreachable on a single-threaded dispatcher; the last test additionally parks one turn inside a real `store.write` while a second turn runs, which needs a second OS thread to run on.
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield

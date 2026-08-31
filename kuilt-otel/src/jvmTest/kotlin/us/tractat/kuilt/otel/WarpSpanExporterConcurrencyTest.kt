@@ -1,11 +1,9 @@
-@file:Suppress("ForbiddenImport") // deliberate real-threading regression test: the concurrent-export re-mint + spans lost-update races are only observable on a genuine multi-threaded dispatcher, which virtual-time runTest cannot provide — the production-dispatcher-in-tests ban is exempted here per the module's coroutine-determinism policy.
-
 package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.newFixedThreadPoolContext
+import kotlinx.coroutines.newFixedThreadPoolContext // ALLOW-realDispatcher: `WarpSpanExporter` advertises correctness under a real multi-threaded dispatcher, and #1053 is two concurrent `export()`s whose durable-write sections interleave so an older clock snapshot lands last (re-minted dot on recover) or a stale encoded spans snapshot drops a span. Both are properties OF overlapping calls; serialise them onto one thread and the ordering `Mutex` this pins becomes unobservable.
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.io.bytestring.ByteString

@@ -1,11 +1,9 @@
-@file:Suppress("ForbiddenImport") // deliberate real-threading test: clear() is fenced against a concurrent export by writeMutex, and an unfenced write landing after the clear is only observable on a genuine multi-threaded dispatcher, which virtual-time runTest cannot provide.
-
 package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.newFixedThreadPoolContext
+import kotlinx.coroutines.newFixedThreadPoolContext // ALLOW-realDispatcher: `clear()` is fenced against a concurrent `export()` by `writeMutex`, and an export that encoded the pre-clear state landing its bytes AFTER the clear is only reachable when the two genuinely overlap on separate OS threads — under a virtual-time dispatcher the clear and the exports interleave only at suspension points, which is the interleaving `writeMutex` already excludes.
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.io.bytestring.ByteString

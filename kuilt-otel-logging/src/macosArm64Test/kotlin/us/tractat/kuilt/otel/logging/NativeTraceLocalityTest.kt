@@ -1,12 +1,10 @@
-@file:Suppress("ForbiddenImport") // deliberate real-threading regression test: the Apple identity guard is only observable across genuine OS threads (the slot is a Kotlin/Native `@ThreadLocal`), which virtual-time `runTest` cannot provide — the production-dispatcher-in-tests ban is exempted here per the module's coroutine-determinism policy.
-
 package us.tractat.kuilt.otel.logging
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.newSingleThreadContext
+import kotlinx.coroutines.newSingleThreadContext // ALLOW-realDispatcher: the active-trace slot is a Kotlin/Native `@ThreadLocal`, so the scenario the identity guard defends against — scope A's `finally` running on a thread whose slot a still-active scope B owns — does not EXIST with fewer than two OS threads: one thread is one slot, and A's `finally` always finds its own stamp. Two `newSingleThreadContext`s are what make the threads distinct and named; the interleaving itself is still deterministic, driven by `CompletableDeferred` rendezvous rather than raced.
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.io.bytestring.ByteString
