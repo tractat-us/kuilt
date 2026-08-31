@@ -6290,20 +6290,18 @@ val verifyTestResultParity by tasks.registering {
     group = "verification"
     description = "Fails if a commonTest class produced results on one target and silently none on another (#2185)."
 
-    // Configuration-time capture into plain serializable values — module path, results root, and
-    // the class names `src/commonTest` declares. A `data class` declared here would capture the
-    // script object and the configuration cache refuses to serialize that.
+    // Configuration-time capture of plain serializable values only — module path, commonTest root,
+    // results root. The source READ happens in `doLast`: it is ~800 files, and a guard has no
+    // business doing that much I/O while the build is being configured. (A `data class` declared
+    // here would also capture the script object, which the configuration cache refuses to
+    // serialize — hence the Triple.)
     val classDeclaration = Regex(
         """(?m)^(?:@\w+(?:\([^)]*\))?\s*)*(?:public\s+|internal\s+|private\s+|open\s+|final\s+|data\s+)*class\s+(\w+)""",
     )
     val surfaces = subprojects.mapNotNull { module ->
         val commonTest = module.projectDir.resolve("src/commonTest/kotlin")
         if (!commonTest.isDirectory) return@mapNotNull null
-        val declared = commonTest.walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
-            .flatMap { file -> classDeclaration.findAll(file.readText()).map { it.groupValues[1] } }
-            .toSet()
-        Triple(module.path, module.layout.buildDirectory.get().asFile.resolve("test-results"), declared)
+        Triple(module.path, commonTest, module.layout.buildDirectory.get().asFile.resolve("test-results"))
     }
 
     // Ordering only, never a dependency: this task must not drag the whole multi-target test matrix
@@ -6333,7 +6331,7 @@ val verifyTestResultParity by tasks.registering {
         var comparedModules = 0
         var comparedClasses = 0
 
-        surfaces.forEach { (modulePath, resultsRoot, commonTestClasses) ->
+        surfaces.forEach { (modulePath, commonTestRoot, resultsRoot) ->
             val taskDirs = (resultsRoot.listFiles() ?: emptyArray())
                 .filter { it.isDirectory }
                 .associateWith { dir -> dir.listFiles { f -> f.name.startsWith("TEST-") && f.extension == "xml" }.orEmpty() }
@@ -6353,6 +6351,13 @@ val verifyTestResultParity by tasks.registering {
             }
             val union = ran.values.flatten().toSet()
             comparedClasses += union.size
+
+            // Read only once a module has something to compare — most of the repo's ~800 commonTest
+            // files never reach this line in a build that ran one module's tests.
+            val commonTestClasses = commonTestRoot.walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .flatMap { file -> classDeclaration.findAll(file.readText()).map { it.groupValues[1] } }
+                .toSet()
 
             ran.forEach { (dir, present) ->
                 val missing = (union - present).filter { it in commonTestClasses }.sorted()
