@@ -8,7 +8,6 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -490,6 +489,50 @@ public class WarpLogRecordExporter(
     private var indexPersisted: Boolean = false
 
     private val healthState = MutableStateFlow(ExporterHealth())
+
+    /**
+     * Whether a durable-write outage is currently **open** — i.e. a refused store write has already
+     * been reported and the store has not taken a write since. Set by [commit]'s failure arm and
+     * cleared by its success arm; nothing else touches it.
+     *
+     * ## Why this is not [ExporterHealth.consecutiveFailures]
+     *
+     * It was, and that was wrong (#2237). [failure] counts **every** export failure, but only
+     * [commit] reports one: the three buffer-update sites ([exportTurn], [mergeTurn], [clearTurn])
+     * fail before any store call and log their own line. So the counted population is strictly
+     * larger than the reported one, and keying the report on the streak lets a member of the
+     * difference *pre-empt* it. A gossiped remote whose CRDT join throws opens a streak of 1; the
+     * store then starts refusing writes; every later export sees a non-zero streak and the
+     * `"durable write failed"` line is never emitted **at all** for that outage, because nothing
+     * succeeds to reset the streak. Not "once per outage" but zero per outage — worse than the
+     * per-attempt noise the fix replaced, because the log then points at the wrong subsystem
+     * while `health.lastFailure` quietly carries the store's exception.
+     *
+     * A latch owned by the one function that performs durable writes makes the two populations the
+     * same set by construction. That is the property; nothing re-derives it from a counter whose
+     * scope can drift again.
+     *
+     * ## Concurrency
+     *
+     * A [MutableStateFlow], not an `atomicfu` `atomic()`: the atomicfu **Gradle plugin** is not
+     * applied in this build (the dependency is present for the multiplatform `locks` API only), so
+     * an atomic *field* would be untransformed. [MutableStateFlow.compareAndSet] is a real
+     * lock-free CAS on every target, and it is already this file's primitive for [healthState] —
+     * never dispatcher confinement, per repo policy.
+     *
+     * [writeMutex] serializes whole turns, so today two [commit]s cannot overlap; the CAS is what
+     * keeps this correct without depending on that. **Exactly one racing thread reports**: the
+     * failure arm reports only when it wins `false → true`, and a loser is by definition looking at
+     * an outage someone has already announced.
+     *
+     * The reset is a plain unconditional write rather than a CAS, and the asymmetry is deliberate.
+     * The only interleaving it admits is a success landing between a failure's CAS and the next
+     * failure's, which costs **one duplicate line** for a store that really did take a write in
+     * between — a repeat is honest there. The shape that must not happen is the reverse: a latch
+     * left `true` against a healthy store, which would silence the *next* outage entirely. An
+     * unconditional write cannot lose, so it cannot leave the latch open.
+     */
+    private val durableWriteOutage = MutableStateFlow(false)
 
     /**
      * Out-of-band health for this exporter — see [ExporterHealth].
@@ -1507,6 +1550,15 @@ public class WarpLogRecordExporter(
      * and reporting [ExportResult.Failure] because a delete of superseded garbage was refused
      * would make [ExporterHealth.failed] stop meaning "the store is rejecting writes". So sweeps
      * are best-effort ([sweep]) and an unswept number simply stays in the ledger.
+     *
+     * **[logFailure] runs once per outage, not once per refused write** (#2237): a refused write is
+     * retried by the next turn, so a store that stays broken would otherwise report one unchanging
+     * condition once per export — 300 lines over a 300-export outage, measured, each carrying a
+     * throwable. The latch is [durableWriteOutage] and it belongs to this function, because this
+     * function is the whole population the line is about; see its KDoc for what went wrong when the
+     * key was shared with [failure]'s streak. The throwable is **kept**: unlike a refused sweep of
+     * superseded garbage, a refused durable write is the store rejecting the application's own
+     * data, and at one line per outage the trace is affordable.
      */
     private suspend fun commit(actions: List<StoreAction>, logFailure: (Throwable) -> Unit): ExportResult {
         val swept = mutableListOf<Int>()
@@ -1528,15 +1580,19 @@ public class WarpLogRecordExporter(
         }.fold(
             onSuccess = {
                 lock.withLock { ledgerSwept(swept, turnFailed = false) }
+                // The store took what it was given, so the next refusal is a new outage.
+                durableWriteOutage.value = false
                 ExportResult.Success
             },
             onFailure = { cause ->
                 // A half-applied turn can have left the index naming segments that
                 // were never written. Rewriting it on the next attempt re-converges.
                 lock.withLock { ledgerSwept(swept, turnFailed = true) }
-                // Through `failure`, not beside it: the outage streak it maintains is what decides
-                // whether this is news or a repeat — see its KDoc.
-                failure(cause, logFailure)
+                val result = failure(cause)
+                // Latched HERE rather than inside `failure` — see [durableWriteOutage] for why the
+                // streak `failure` maintains is the wrong key for this decision.
+                if (durableWriteOutage.compareAndSet(expect = false, update = true)) logFailure(cause)
+                result
             },
         )
     }
@@ -1965,32 +2021,35 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * Record a failed durable write and return [ExportResult.Failure], calling [report] only when
-     * this failure **opens** an outage rather than continuing one.
+     * Record a failed export turn and return [ExportResult.Failure].
      *
-     * The dedup key is [ExporterHealth.consecutiveFailures] — production state, on a public
-     * surface, that this function already maintains — rather than a counter kept beside the log
-     * for a test's benefit. `success`/[storeSucceeded] reset the streak, so a store that comes back
-     * and breaks again is news a second time; nothing else re-arms it.
+     * **Bookkeeping only — this function reports nothing.** All four call sites reach it: the
+     * three buffer-update failures ([exportTurn], [mergeTurn], [clearTurn]), which log their own
+     * line unconditionally because each is a distinct, non-retried event, and [commit], whose
+     * refused durable write *is* retried and is therefore deduplicated — against
+     * [durableWriteOutage], at the call site, over exactly the population that path reports on.
      *
-     * Why it needs deduplicating at all: a refused write is retried by the next export, so a store
-     * that stays broken reports one unchanging condition once per export, each line carrying a
-     * throwable — 300 of them over a 300-export outage, measured (#2237). Reported once, the
-     * throwable is affordable and is kept: unlike a refused sweep of superseded garbage, a refused
-     * durable write is the store rejecting the application's own data.
+     * It used to dedup here, keyed on [ExporterHealth.consecutiveFailures], which this function
+     * still maintains. That was wrong and is the subject of #2237: the streak counts every failure
+     * above, so an unrelated buffer-update failure opened it and silenced the store's report for
+     * a whole outage. [durableWriteOutage] carries the argument in full; do not merge the two back
+     * together.
      *
-     * [getAndUpdate] rather than a read-then-`update`, so the decision and the increment are one
-     * CAS and two threads failing at once cannot both see a clean streak.
+     * [ExporterHealth.consecutiveFailures] remains what its own KDoc says — the count of turns
+     * failed back-to-back, reset by `success`/[storeSucceeded]. It is a health signal for a
+     * programmatic reader, not a log-dedup key.
+     *
+     * [update] rather than a read-then-write, so the three fields move as one CAS and two threads
+     * failing at once cannot lose an increment.
      */
-    private fun failure(cause: Throwable, report: (Throwable) -> Unit = {}): ExportResult {
-        val before = healthState.getAndUpdate {
+    private fun failure(cause: Throwable): ExportResult {
+        healthState.update {
             it.copy(
                 failed = it.failed + 1,
                 consecutiveFailures = it.consecutiveFailures + 1,
                 lastFailure = cause,
             )
         }
-        if (before.consecutiveFailures == 0) report(cause)
         return ExportResult.Failure(cause)
     }
 
