@@ -10,7 +10,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -262,7 +264,15 @@ class MeshSeamConcurrencyTest {
         }
     }
 
-    /** Run [add]; fail loudly on a CME, accept the clean closed-seam signal. Returns true iff admitted. */
+    /**
+     * Run [add]; fail loudly on a CME, accept the clean closed-seam signal. Returns true iff admitted.
+     *
+     * `ensureActive()` is load-bearing here in a way the sibling helpers' is not: `CancellationException`
+     * extends `IllegalStateException` (#2535), so without it a cancelled probe **returns `false`** — it
+     * reports "the link was not admitted" about a link whose fate it never learned. The caller then skips
+     * `markAdmitted()`, so the leak assertion downstream stops covering that connection and the iteration
+     * passes vacuously. Measured: unguarded, a cancelled `add` returned `admitted=false`.
+     */
     private suspend fun runCatchingAddLink(add: suspend () -> Unit): Boolean =
         try {
             add()
@@ -270,6 +280,7 @@ class MeshSeamConcurrencyTest {
         } catch (e: ConcurrentModificationException) {
             throw AssertionError("addLink leaked a ConcurrentModificationException; the links map is not thread-safe", e)
         } catch (e: IllegalStateException) {
+            currentCoroutineContext().ensureActive()
             false // clean closed-seam signal once torn — the link was not admitted.
         }
 
@@ -280,6 +291,8 @@ class MeshSeamConcurrencyTest {
         } catch (e: ConcurrentModificationException) {
             throw AssertionError("addLink leaked a ConcurrentModificationException; the links map is not thread-safe", e)
         } catch (e: IllegalStateException) {
+            // `CancellationException` extends `IllegalStateException` (#2535) — see [runCatchingAddLink].
+            currentCoroutineContext().ensureActive()
             // Clean closed-seam signal — acceptable once the seam is torn.
         }
     }
@@ -297,6 +310,8 @@ class MeshSeamConcurrencyTest {
         } catch (e: ClosedSendChannelException) {
             throw AssertionError("broadcast leaked a raw ClosedSendChannelException; expected a clean closed-seam IllegalStateException", e)
         } catch (e: IllegalStateException) {
+            // `CancellationException` extends `IllegalStateException` (#2535) — see [runCatchingAddLink].
+            currentCoroutineContext().ensureActive()
             // Clean closed-seam signal — acceptable.
         }
     }

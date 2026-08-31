@@ -1358,6 +1358,14 @@ public class WarpNode(
      * now in the registry. If a concurrent fetch-load on another coroutine won the register race
      * ([OpRegistry.register] throws [IllegalStateException] on a duplicate), the winner's [Op] is
      * resolved and used instead.
+     *
+     * **The [IllegalStateException] arm below is safe only because this function does not suspend.**
+     * `CancellationException` extends [IllegalStateException] (#2535), so an arm like this one is a
+     * cancellation swallow anywhere a suspension point sits inside the `try`. There is none here —
+     * `registerOrResolve`, [OpRegistry.register] and [OpRegistry.resolve] are all non-`suspend`, so no
+     * `CancellationException` can arise. Making any of the three `suspend` later silently converts this
+     * into a swallow; add `currentCoroutineContext().ensureActive()` as the arm's first statement if
+     * that ever happens.
      */
     private fun registerOrResolve(op: OpId, loaded: Op): Op =
         try {

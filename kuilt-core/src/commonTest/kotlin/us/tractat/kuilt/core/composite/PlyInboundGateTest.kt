@@ -21,6 +21,11 @@ class PlyInboundGateTest {
      * here would catch **any** [Throwable] — including the [OutOfMemoryError] a pre-fix
      * 4096-origin flood can raise, which is the very defect #1814 describes — end the loop, and
      * report a bogus cap, turning the bug under test into a green probe.
+     *
+     * Narrow is not automatically safe: `CancellationException` extends [IllegalStateException]
+     * (#2535), so this arm would swallow a cancellation if anything inside the `try` could suspend.
+     * Nothing can — this function and [PlyInboundGate.accept] are both non-`suspend` — so the arm is
+     * sound as written and needs no `ensureActive()`. Make either one `suspend` and it stops being.
      */
     private fun fillOriginTable(gate: PlyInboundGate): Int {
         var admitted = 0
