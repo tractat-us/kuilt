@@ -1,13 +1,15 @@
 package us.tractat.kuilt.core
 
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 
 /**
  * Which half of a [pumpIn] pump failed — and, decisively, whether the pump is still running.
@@ -97,12 +99,31 @@ public enum class PumpFailure {
  * `onEach { … }.launchIn(scope)`; that is a separate, lexical guard ("no bare `launchIn` outside a pump
  * helper"), sized in #1803 at 26 production sites and not yet written.
  *
+ * ### A pump also has to be nameable, or a wedge cannot be attributed to one
+ * The failure this guards against is permanent, so the next question after "a pump is stuck" is always
+ * *which* pump — and by default that question has no answer. `launchIn` keeps the `onEach` lambda out of
+ * the suspended continuation chain, so every pump of this shape parks at the same frame
+ * (`StateFlowImpl.collect`, `ChannelCoroutine.receive`) with **no kuilt frame in its stack at all**. A
+ * grouped coroutine census then renders a peer's whole per-ply pump set as one indistinguishable blob,
+ * which is the healthy resting state *and* the wedged one (#1811).
+ *
+ * [name] is therefore attached as a [CoroutineName] on the launch, where anything walking a coroutine's
+ * context — `DebugProbes.dumpCoroutinesInfo()`, a `CoroutineInfo.context` lookup — reads it straight
+ * off, with no dependence on the `kotlinx.coroutines.debug` flag being set. It is **required for the
+ * same reason [onFailure] is**: an anonymous pump is a pump whose death cannot be attributed, this exists
+ * precisely so the discipline is a property of *how a pump is launched* rather than a convention each
+ * site remembers, and a default would hand every site the anonymous case back.
+ *
  * @param scope the scope the pump runs in. Cancelling it still cancels the pump: a genuine cancellation
  *   of *this* job propagates through both guards untouched.
  * @param onFailure invoked with which half failed and the throwable. Required, not defaulted — a pump
  *   that absorbs in silence is what this class of defect is made of, and every caller should have to
  *   decide what to do about a dead pump. `:kuilt-core` is logger-free by contract, so this is the only
  *   signal there is. Best-effort and non-suspending.
+ * @param name what this pump is called in a coroutine dump or census — see the section above. Make it
+ *   **distinct per pump instance**, not per call site: where several pumps of one kind run side by side,
+ *   qualify it with whatever tells them apart (`"composite-ply-peers[$plyId]"`), so a census can
+ *   group by kind *and* still name the instance.
  * @param body the per-item work.
  * @return the pump's [Job]. After [PumpFailure.UPSTREAM] it completes **normally** — the pump is over,
  *   but it ended with a diagnosis rather than a `SIGABRT`.
@@ -110,9 +131,10 @@ public enum class PumpFailure {
 public fun <T> Flow<T>.pumpIn(
     scope: CoroutineScope,
     onFailure: (PumpFailure, Throwable) -> Unit,
+    name: String,
     body: suspend (T) -> Unit,
-): Job =
-    onEach { value ->
+): Job {
+    val guarded = onEach { value ->
         try {
             body(value)
         } catch (failure: Throwable) {
@@ -127,7 +149,13 @@ public fun <T> Flow<T>.pumpIn(
         // downstream of it, and therefore sees the flow's own failures — the guard above has already
         // absorbed everything [body] can raise.
         .catch { failure -> reportPumpFailure(onFailure, PumpFailure.UPSTREAM, failure) }
-        .launchIn(scope)
+
+    // `launchIn(scope)` is exactly `scope.launch { collect() }` — with no context parameter, which is
+    // why the launch is spelled out here instead: [name] has to land on the launched coroutine's OWN
+    // context, the only place a dump or census can read it back from (#1811). Nothing else about the
+    // launch changes.
+    return scope.launch(CoroutineName(name)) { guarded.collect() }
+}
 
 /**
  * Hand a pump failure to a consumer callback, absorbing whatever the callback throws — see [pumpIn]'s

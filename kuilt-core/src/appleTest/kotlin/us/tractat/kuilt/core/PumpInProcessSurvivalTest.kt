@@ -60,7 +60,11 @@ class PumpInProcessSurvivalTest {
             flow {
                 emit(1)
                 error(BOOM)
-            }.pumpIn(scope, onFailure = { half, thrown -> reported.complete(half to thrown) }) { /* no-op */ }
+            }.pumpIn(
+                scope,
+                onFailure = { half, thrown -> reported.complete(half to thrown) },
+                name = "process-survival-probe",
+            ) { /* no-op */ }
 
             // Getting a value out of here at all IS the assertion. Without the upstream guard the process
             // is gone before this line: the runner prints "Test running process exited unexpectedly" with
