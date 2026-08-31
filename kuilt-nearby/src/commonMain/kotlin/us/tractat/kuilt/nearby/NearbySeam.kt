@@ -51,20 +51,24 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbySeam")
  * @param registry            The weave's peer-identity authority (#1821), keyed by endpoint ID and
  *                            shared with the [ConnectStateMachine] that admitted each id. It is what
  *                            makes an eviction identity-scoped: [disconnectLoop] evicts a peer from
- *                            [sharedPeers] only when the departing endpoint is the one that actually
+ *                            [weavePeers] only when the departing endpoint is the one that actually
  *                            holds that id, so a departure can never take a different endpoint's peer
  *                            with it. [endpointPeers] stays as the derived reassembly/send index and
  *                            is only ever written where the registry has already said yes.
  * @param api                 The [NearbyApi] instance.
- * @param sharedPeers         The shared [MutableStateFlow] of the whole session's peer set
- *                            (owned by [NearbyLoom]). It is the same instance every seam this loom
- *                            weaves observes, so a write here lands in every sibling seam's roster.
- *                            **Never written on the tear/close path** for that reason — [peers] is
- *                            a per-seam *mirror* collapsed locally instead (see [collapseRoster]).
- *                            The one remaining write is [disconnectLoop]'s eviction of a departed
- *                            remote, which is load-bearing *because* it is session-wide: it is how
- *                            the counterparty's own seam learns of this peer after [close]
- *                            disconnects the endpoints.
+ * @param weavePeers          The roster of **this weave** — a [MutableStateFlow] created per
+ *                            `weave` by [NearbyLoom] and seeded with [selfId], written by the
+ *                            handshake as remotes join and by [disconnectLoop] as they leave.
+ *                            Scoped to one weave rather than to the loom (#1878): a loom-wide flow
+ *                            is never pruned of a finished weave's ids — [close] cannot write it
+ *                            (that write was the #1850 cross-peer edit) and [disconnectLoop], the
+ *                            only eviction, is cancelled by the very tear that would need it — so
+ *                            the residue seeded the *next* weave, whose fresh seam then reported a
+ *                            phantom roster and false-latched [SeamState.Woven] with zero
+ *                            connections. Per-weave also makes the #1850 hazard unrepresentable
+ *                            rather than merely avoided: there is no sibling seam on the other end
+ *                            of this flow to edit. [peers] remains a per-seam *mirror* of it, so
+ *                            the tear-time collapse stays local (see [collapseRoster]).
  * @param scope               Coroutine scope for the receive loop; cancelled on [close].
  * @param maxChunkPayload     Per-chunk payload cap forwarded to [ChunkCodec].
  * @param msgIdCounter        Shared monotonic counter for message IDs (use one per seam).
@@ -83,7 +87,7 @@ internal class NearbySeam(
     private val endpointPeersMutex: Mutex,
     private val registry: PeerIdentityRegistry<String>,
     private val api: NearbyApi,
-    private val sharedPeers: MutableStateFlow<Set<PeerId>>,
+    private val weavePeers: MutableStateFlow<Set<PeerId>>,
     private val scope: CoroutineScope,
     private val maxChunkPayload: Int = ChunkCodec.MAX_CHUNK_PAYLOAD,
     private val msgIdCounter: MsgIdCounter,
@@ -105,16 +109,18 @@ internal class NearbySeam(
     // rather than narrow — check-and-write are one atomic step.
     private var collapsed = false
 
-    // This seam's OWN view of the session roster. NOT [sharedPeers] itself: that flow is loom-wide,
-    // so publishing this seam's tear-time collapse into it would rewrite every sibling seam's roster
-    // — which is exactly how `close()` used to drop `selfId` from the counterparty's view (#1850).
-    // Mirrored from [sharedPeers] until the collapse, then frozen at { selfId }.
+    // This seam's OWN view of the weave roster. NOT [weavePeers] itself: the collapse must be a
+    // local edit, so that publishing a tear can never rewrite a roster anyone else reads — the shape
+    // of the #1850 bug, in which `close()` dropped `selfId` from the counterparty's view. Since
+    // #1878 the flow is per-weave, so there is no sibling reader left to damage; the mirror stays
+    // because the collapse is still this seam's own terminal state, not a fact about the weave.
+    // Mirrored from [weavePeers] until the collapse, then frozen at { selfId }.
     //
     // `+ selfId` is unconditional because [Seam.peers] is: "always including this peer's own id".
-    // The loom adds this seam to [sharedPeers] only *after* construction, and a sibling seam's
-    // disconnect handler can drop this peer's id from the loom-wide flow — neither may be observable
-    // as a roster this seam has evicted itself from.
-    private val _peers = MutableStateFlow(sharedPeers.value + selfId)
+    // [NearbyLoom] seeds [weavePeers] with this seam's id before construction, but a departure
+    // handler can still drop an id from the flow, and no such write may be observable as a roster
+    // this seam has evicted itself from.
+    private val _peers = MutableStateFlow(weavePeers.value + selfId)
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     // Starts Weaving; transitions to Woven when the first remote peer joins.
@@ -159,12 +165,82 @@ internal class NearbySeam(
     // the first remote peer appears. UNDISPATCHED so the mirror is subscribed (and StateFlow's
     // current value already applied) before construction returns.
     private val rosterWatcher: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-        sharedPeers.collect { session ->
+        weavePeers.collect { session ->
             peersLock.withReentrantLock { if (!collapsed) _peers.value = session + selfId }
-            if (_state.value is SeamState.Weaving && session.any { it != selfId }) {
-                _state.value = SeamState.Woven
+            promoteWovenIfAnyRemoteIn(session)
+        }
+    }
+
+    /**
+     * Move `Weaving → Woven` if [session] carries anybody but this peer. A no-op from any other
+     * state, so it can never revive a seam.
+     *
+     * **`update`, NOT `if (_state.value is Weaving) _state.value = Woven` (#1879).** The promotion is
+     * a read-modify-write, and spelled as a check-then-act it can lose a terminal write: [latchTorn]
+     * publishes `Torn` with a plain set, and *cancelling the caller does not stop a promotion already
+     * in flight* — cancellation is cooperative and there is no suspension point between the read and
+     * the write, so a cancelled-but-not-yet-suspended pump still completes it. The `Woven` would then
+     * stand forever over a seam whose spool is closed and whose roster has collapsed, with the
+     * watcher gone and no later emission able to correct it, and every consumer waiting on
+     * `state.first { it is Torn }` would hang.
+     *
+     * [MutableStateFlow] is itself the mutual exclusion here, so this needs no lock: `update` retries
+     * via `compareAndSet`, so a tear landing inside the window fails the CAS, and the retry re-reads
+     * `Torn` and drops the promotion on the `is Weaving` guard. The retry terminates because `Torn`
+     * is terminal — nothing ever writes the state back to `Weaving`.
+     *
+     * **[closed] is read inside the lambda, not just [SeamState.Weaving].** The `is Weaving` guard
+     * alone leaves a narrower but real window *inside* [latchTorn]: it CASes [closed] and then
+     * *blocks* on [peersLock] in [collapseRoster] before publishing `Torn`, so a promotion running in
+     * that gap sees a state that is still `Weaving` and publishes `Woven` while `closed == true`. The
+     * terminal `Torn` still lands immediately after — the seam does not wedge — but a consumer woken
+     * by `state.first { it is Woven }` would call [broadcast] on a closed seam and get the
+     * [checkNotClosed] `IllegalStateException`. Keying on the latch as well as the value makes the
+     * "never revive a seam" promise true of the *decision* to tear, not merely of the published
+     * state, and costs one volatile read. `closed` only ever moves `false → true`, so re-reading it
+     * on each CAS retry is monotonic.
+     */
+    private fun promoteWovenIfAnyRemoteIn(session: Set<PeerId>) {
+        _state.update { current ->
+            if (!closed.value && current is SeamState.Weaving && session.any { it != selfId }) {
+                SeamState.Woven
+            } else {
+                current
             }
         }
+    }
+
+    /**
+     * Record a remote the handshake has just admitted — the roster write and this seam's [peers]
+     * mirror as **one** step.
+     *
+     * [rosterWatcher] would reach the same value on its own, but only after a dispatch, and
+     * [NearbyLoom.joinSession] returns as soon as the handshake completes: `join` promises a seam
+     * that already reflects the connection it just made, so the mirror cannot be left owing a turn.
+     * Before #1878 that held by accident — the host wrote the loom-wide flow *before* the joiner's
+     * seam was constructed, so the value was folded in by the constructor and no dispatch was
+     * needed. A per-weave roster necessarily learns its remote after construction, which is what
+     * turns an accident into an obligation worth naming.
+     *
+     * **The roster mirror write** — and only that write — is guarded by [peersLock] and [collapsed],
+     * exactly as [rosterWatcher]'s is, so an admit racing a tear cannot resurrect a collapsed roster
+     * (#1816). The other two steps are deliberately outside that critical section: the [weavePeers]
+     * write is a separate flow with its own atomicity, and [promoteWovenIfAnyRemoteIn] carries its
+     * own latch check, so holding [peersLock] across either would buy nothing and would widen a lock
+     * across a `StateFlow` write that can resume consumer code inline.
+     *
+     * **Callers hold [endpointPeersMutex] across this, which is load-bearing.** [disconnectLoop]
+     * makes its last-endpoint tear decision (`endpointPeers.isEmpty() && _state.value is Woven`)
+     * under that same mutex, so the promotion published here cannot interleave with it: the
+     * "the last endpoint leaves while a promotion is in flight, and the seam is left `Woven` with no
+     * endpoints and no tear" ordering is unrepresentable rather than merely unlikely. That is a
+     * property of *where this is called from*, so a future caller that admits outside the mutex
+     * would give it up silently.
+     */
+    internal fun admitRemote(peer: PeerId) {
+        weavePeers.update { it + peer }
+        peersLock.withReentrantLock { if (!collapsed) _peers.update { it + peer } }
+        promoteWovenIfAnyRemoteIn(setOf(peer))
     }
 
     // ── receive ───────────────────────────────────────────────────────────────
@@ -217,7 +293,7 @@ internal class NearbySeam(
                 // eviction; what it removes is the possibility of them disagreeing later, when a
                 // second endpoint on this weave holds an id the departing one merely announced.
                 if (registry.unbind(peerId, event.endpointId)) {
-                    sharedPeers.update { it - peerId }
+                    weavePeers.update { it - peerId }
                 }
                 // Honour the Seam contract: `incoming` completes on a remote disconnect too.
                 // The session is genuinely over only when a peer that had CONNECTED (state Woven)
@@ -319,11 +395,13 @@ internal class NearbySeam(
         // The roster collapse rides inside latchTorn, ahead of the `Torn` write — see there.
         if (!latchTorn(reason)) return
         // Local close additionally tears the wire down; a remote-driven latch skips this (its
-        // endpoints are already gone). Dropping this peer from [sharedPeers] is deliberately NOT
-        // done: that flow is loom-wide, so the write landed in every sibling seam's roster — the
-        // counterparty learns of this departure from its own transport (its `endpointDisconnected`
-        // fires from the disconnects below and its [disconnectLoop] evicts us), not from a peer
-        // reaching across and editing its membership (#1850).
+        // endpoints are already gone). Dropping this peer from [weavePeers] is deliberately NOT
+        // done, and stays that way now the flow is per-weave (#1878): the counterparty learns of
+        // this departure from its own transport — its `endpointDisconnected` fires from the
+        // disconnects below and its own [disconnectLoop] evicts us — never from a peer reaching
+        // across and editing its membership (#1850). What per-weave changes is that the reaching
+        // across is no longer *possible*; what it does not change is that this seam's terminal
+        // roster is [collapseRoster]'s local business.
         val endpoints = endpointPeersMutex.withLock { endpointPeers.keys.toList() }
         for (endpointId in endpoints) {
             api.disconnect(endpointId)

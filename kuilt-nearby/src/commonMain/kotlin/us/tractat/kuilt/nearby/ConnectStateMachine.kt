@@ -52,7 +52,7 @@ import kotlin.time.Duration
  *    two links are held to, rather than a third hand-rolled approximation of them.
  *
  * A refusal completes the handshake exceptionally with [PeerIdentityRejectedException]: the
- * endpoint never becomes a peer, so nothing downstream — [NearbyLoom]'s `sharedPeers`, the seam's
+ * endpoint never becomes a peer, so nothing downstream — [NearbyLoom]'s `weavePeers`, the seam's
  * `endpointPeers`, a `sendTo` target — can ever name it.
  *
  * ## Endpoint filtering

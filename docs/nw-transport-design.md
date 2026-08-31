@@ -348,7 +348,11 @@ Multipeer types so the migration is mechanical.
 1. **`commonTest` (JVM, CI):** `FakeNwApi` → the full capability TCK, including the
    3-peer obligation. **The fake wires N *distinct* `NwLoom` instances** (role-split,
    the fake radio routing between them) — **never** the same-loom-twice pattern, which
-   would let the in-process `sharedPeers` crutch mask cross-device roster/identity bugs.
+   would let an in-process shared-roster crutch mask cross-device roster/identity bugs.
+   That hazard was not hypothetical: `:kuilt-nearby` had exactly such a loom-wide flow,
+   its fake did drive one loom as both ends, and it hid a joiner that reported
+   `peers == { selfId }` and never left `Weaving` on two real devices (#1878). Its roster
+   is per-weave now and the symbol this line used to name is gone.
    This is where mesh correctness (sender attribution, roster convergence, dedup,
    spoke-free directed send) is actually proven.
 2. **`appleTest` (CI macOS runner):** the **real** `RealNwApi` over **loopback TCP**

@@ -66,7 +66,7 @@ class NearbySeamCapabilityTest {
             endpointPeersMutex = Mutex(),
             registry = registryOver(PeerId("self"), emptyMap()),
             api = api,
-            sharedPeers = MutableStateFlow(emptySet()),
+            weavePeers = MutableStateFlow(emptySet()),
             scope = seamScope(),
             msgIdCounter = MsgIdCounter(),
         )
@@ -132,7 +132,7 @@ class NearbySeamCapabilityTest {
             endpointPeersMutex = Mutex(),
             registry = registryOver(PeerId("self"), emptyMap()),
             api = inheriting,
-            sharedPeers = MutableStateFlow(emptySet()),
+            weavePeers = MutableStateFlow(emptySet()),
             scope = seamScope(),
             msgIdCounter = MsgIdCounter(),
         )

@@ -216,7 +216,7 @@ internal class FakeNearbyApi(radio: FakeNearbyRadio) : NearbyApi {
  * `endpointPeers` that the registry has not already admitted. A hand-built fixture can break that
  * by populating one and not the other, and the resulting seam would answer the eviction question
  * from an empty registry: `disconnectLoop` would find nothing to unbind and quietly skip the
- * `sharedPeers` write, so a test about disconnection would pass or fail for a reason that has
+ * `weavePeers` write, so a test about disconnection would pass or fail for a reason that has
  * nothing to do with the seam. Deriving both from the *same* map at the call site is what keeps a
  * fixture honest.
  */

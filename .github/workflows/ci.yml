@@ -807,6 +807,18 @@ jobs:
           ./gradlew :kuilt-core:jvmTest -Pconcurrency.stress.tests=true
           --tests "*ConcurrencyTest"
 
+      # `:kuilt-nearby`'s probe (#1879). A separate step rather than a second module on the line
+      # above, so that a red in one module does not hide the other's result; sequential on this same
+      # isolated runner, so neither co-schedules with the other's test JVM.
+      - name: Run :kuilt-nearby concurrency probes (isolated runner, NON-BLOCKING)
+        # Gated identically in kuilt-nearby/build.gradle.kts. `if: always()` so a :kuilt-core red
+        # above still lets this run — otherwise one module's failure silently stops reporting the
+        # other's, which is the shape that lets a probe rot unnoticed.
+        if: always()
+        run: >-
+          ./gradlew :kuilt-nearby:jvmTest -Pconcurrency.stress.tests=true
+          --tests "*ConcurrencyTest"
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -815,6 +827,8 @@ jobs:
           path: |
             kuilt-core/build/reports/tests/
             kuilt-core/build/test-results/
+            kuilt-nearby/build/reports/tests/
+            kuilt-nearby/build/test-results/
 
   # ── nw-concurrency-probes ───────────────────────────────────────────────────
   # `:kuilt-nw`'s real-threaded probes (#2481). Same shape as concurrency-probes

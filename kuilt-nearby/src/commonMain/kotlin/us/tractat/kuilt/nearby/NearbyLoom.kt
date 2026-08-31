@@ -7,7 +7,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 import kotlinx.coroutines.sync.Mutex
@@ -45,10 +44,25 @@ import kotlin.time.Duration.Companion.seconds
  *
  * ## Single-loom symmetric topology
  * One [NearbyLoom] handles both the advertiser role ([open]) and the discoverer
- * role ([join]) through the same [NearbyApi]. Both seams share a single
- * [sharedPeers] StateFlow. This matches the [us.tractat.kuilt.core.InMemoryLoom]
- * pattern and lets the conformance suite run a "one loom, one host, one joiner"
- * scenario.
+ * role ([join]) through the same [NearbyApi]. This matches the
+ * [us.tractat.kuilt.core.InMemoryLoom] pattern and lets the conformance suite run
+ * a "one loom, one host, one joiner" scenario.
+ *
+ * ## The roster belongs to the WEAVE, not to the loom (#1878)
+ * Each [weave] mints its own peer-set [MutableStateFlow], seeded with that weave's
+ * [us.tractat.kuilt.core.freshPeerId] and thereafter written only by that weave's own handshake
+ * and departures. A single loom-wide flow — what this loom used to keep — is never pruned of a
+ * finished weave's ids: [NearbySeam.close] must not write it (that write was the #1850 cross-peer
+ * edit) and `disconnectLoop`, the only eviction, is cancelled by the very tear that would need it
+ * to run. So a closed weave's id lingered forever and seeded the *next* weave, whose fresh seam
+ * reported a roster containing a peer it had never met and latched
+ * [us.tractat.kuilt.core.SeamState.Woven] with zero connections.
+ *
+ * Both ends of one session still converge, because each learns the other from the handshake it
+ * already completed ([ConnectedLink.remotePeerId]) rather than by reading a flow the counterparty
+ * wrote. That was always the honest channel — the loom-wide flow was a single-process convenience
+ * of the fake harness, and on real hardware the two peers are on different devices with different
+ * looms and have never shared one.
  *
  * ## No loom-level `selfId` — identity is minted per weave
  * Because one loom weaves *both* ends of a session (above), a loom-level identity would
@@ -76,8 +90,7 @@ public class NearbyLoom(
     private val maxChunkPayload: Int = ChunkCodec.MAX_CHUNK_PAYLOAD,
 ) : Loom {
 
-    // Shared peer set — all seams on this loom observe the same StateFlow.
-    private val sharedPeers = MutableStateFlow<Set<PeerId>>(emptySet())
+    // No loom-level peer set: each weave owns its own (#1878) — see the class KDoc.
 
     // Guards loom-level state: hostLinkDeferred.
     private val loomMutex = Mutex()
@@ -98,7 +111,7 @@ public class NearbyLoom(
      * Start advertising and return a [Seam] immediately.
      *
      * A background coroutine watches for the first incoming connection. Once the
-     * joiner's handshake completes, the host seam's endpointPeers and sharedPeers
+     * joiner's handshake completes, the host seam's endpointPeers and weavePeers
      * are updated and [hostLinkDeferred] resolves so [join] can return.
      *
      * The background scope is derived from the caller's coroutine context so it
@@ -115,6 +128,11 @@ public class NearbyLoom(
         // Single mutex shared with the seam — all endpointPeers access on both sides
         // serialises on this one lock, eliminating the two-mutex race.
         val endpointPeersMutex = Mutex()
+        // This weave's roster (#1878), seeded with its own id so the seam starts at { selfId } and
+        // Weaving no matter what earlier weaves on this loom did. Seeding BEFORE construction (the
+        // loom used to add the id after) also removes a transient in which the seam existed while
+        // its own roster did not yet contain it.
+        val weavePeers = MutableStateFlow(setOf(peerId))
         // Derive from caller so background work runs on the test dispatcher.
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
 
@@ -124,7 +142,7 @@ public class NearbyLoom(
             endpointPeersMutex = endpointPeersMutex,
             registry = registry,
             api = api,
-            sharedPeers = sharedPeers,
+            weavePeers = weavePeers,
             scope = seamScope,
             maxChunkPayload = maxChunkPayload,
             msgIdCounter = MsgIdCounter(),
@@ -134,8 +152,6 @@ public class NearbyLoom(
         loomMutex.withLock {
             hostLinkDeferred = linkDeferred
         }
-
-        sharedPeers.update { it + peerId }
 
         api.startAdvertising(config.sessionName, serviceId)
 
@@ -156,7 +172,7 @@ public class NearbyLoom(
                 val link = machine.run(this) {}
                 endpointPeersMutex.withLock {
                     endpointPeers[link.endpointId] = link.remotePeerId
-                    sharedPeers.update { it + link.remotePeerId }
+                    seam.admitRemote(link.remotePeerId)
                 }
                 linkDeferred.complete(link)
             }.onFailure { linkDeferred.completeExceptionally(it) }
@@ -179,6 +195,8 @@ public class NearbyLoom(
         val registry = PeerIdentityRegistry<String>(joinerPeerId)
         // Single mutex shared with the seam — same pattern as openSession.
         val endpointPeersMutex = Mutex()
+        // This weave's roster — see openSession.
+        val weavePeers = MutableStateFlow(setOf(joinerPeerId))
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
 
         val seam = NearbySeam(
@@ -187,13 +205,12 @@ public class NearbyLoom(
             endpointPeersMutex = endpointPeersMutex,
             registry = registry,
             api = api,
-            sharedPeers = sharedPeers,
+            weavePeers = weavePeers,
             scope = seamScope,
             maxChunkPayload = maxChunkPayload,
             msgIdCounter = MsgIdCounter(),
             policy = policy,
         )
-        sharedPeers.update { it + joinerPeerId }
 
         // Subscribe BEFORE starting discovery to avoid the emit-before-subscribe race.
         // (The fake emits EndpointFound synchronously from startDiscovery on shared flow.)
@@ -216,6 +233,13 @@ public class NearbyLoom(
         }
         endpointPeersMutex.withLock {
             endpointPeers[joinLink.endpointId] = joinLink.remotePeerId
+            // The joiner records the host from its OWN completed handshake. It used to learn the
+            // host's id by reading the loom-wide flow the host had written — which worked only
+            // because the fake harness puts both ends in one process, and is the coupling #1878
+            // removes. `admitRemote` rather than a bare flow write because `join` returns right
+            // after this: the seam it hands back must already carry the peer and already be Woven,
+            // and a flow write alone leaves both owing a dispatch (see NearbySeam.admitRemote).
+            seam.admitRemote(joinLink.remotePeerId)
         }
 
         // Wait for the host side to complete — ensures host.peers is populated.

@@ -44,10 +44,16 @@ import kotlin.test.assertTrue
  *    [theCollapsedRosterIsAlreadyPublishedWhenTornBecomesObservable] collects on an
  *    [UnconfinedTestDispatcher] so it resumes **inline** inside the `_state` write, reading `peers`
  *    at exactly the instant `Torn` became observable.
- *  - **Blast radius.** [NearbyLoom] hands the *same* `sharedPeers` [MutableStateFlow] to every seam
- *    it weaves, so a seam that "collapses" by writing that flow edits its counterparty's roster
- *    too. The TCK drives one loom and can only look at the seam it closed;
+ *  - **Blast radius.** A seam that "collapses" by writing the roster flow it was handed edits every
+ *    other reader of that flow. The TCK drives one loom and can only look at the seam it closed;
  *    [closingOneSeamDoesNotEvictItFromAnotherSeamsRoster] looks at the other one.
+ *
+ *    Since #1878 [NearbyLoom] mints a roster **per weave**, so it no longer hands one flow to two
+ *    seams and the production topology that made this reachable is gone. The test is kept, and
+ *    still hands one flow to two seams by hand, because the property it pins is [NearbySeam]'s
+ *    own — `close()` collapses [NearbySeam.peers] and writes the roster flow *not at all* — and
+ *    that obligation is what a future change would break first. Read it as defence in depth on a
+ *    seam-level contract, not as a model of what the loom now builds.
  */
 class NearbySeamTearDownTest {
 
@@ -79,18 +85,19 @@ class NearbySeamTearDownTest {
 
     /**
      * Build a seam that is already [SeamState.Woven]: [endpoints] are pre-populated and
-     * [sharedPeers] already carries a remote peer, so [NearbySeam]'s roster watcher latches
+     * [weavePeers] already carries a remote peer, so [NearbySeam]'s roster watcher latches
      * Woven synchronously at construction.
      *
-     * [sharedPeers] is a parameter because it is the *loom-wide* flow in production — pass one
-     * instance to two seams to reproduce the topology [NearbyLoom] actually builds.
+     * [weavePeers] is a parameter so a test can hand the *same* flow to two seams — a topology
+     * [NearbyLoom] no longer builds (#1878 made the roster per-weave), kept reachable here because
+     * the seam-level obligation it probes still stands. See the class KDoc.
      */
     private fun wovenSeam(
         api: NearbyApi,
         scope: CoroutineScope,
         endpoints: Map<String, PeerId>,
         selfId: PeerId = self,
-        sharedPeers: MutableStateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId) + endpoints.values),
+        weavePeers: MutableStateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId) + endpoints.values),
     ): NearbySeam =
         NearbySeam(
             selfId = selfId,
@@ -99,7 +106,7 @@ class NearbySeamTearDownTest {
             // Derived from the SAME map as endpointPeers — see registryOver.
             registry = registryOver(selfId, endpoints),
             api = api,
-            sharedPeers = sharedPeers,
+            weavePeers = weavePeers,
             scope = scope,
             msgIdCounter = MsgIdCounter(),
         )
@@ -212,11 +219,12 @@ class NearbySeamTearDownTest {
         val closingScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
         val otherScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
         val remote = PeerId("remote")
-        // ONE loom-wide roster handed to both seams — exactly what NearbyLoom.openSession and
-        // joinSession do with their single `sharedPeers` field.
+        // ONE roster flow handed to both seams. Since #1878 the loom does not build this — it mints
+        // a flow per weave — so this is constructed by hand to keep the seam-level obligation
+        // reachable: `close()` must collapse its own view and write the flow not at all.
         val sessionRoster = MutableStateFlow(setOf(self, remote))
-        val closing = wovenSeam(api, closingScope, mapOf("ep-remote" to remote), sharedPeers = sessionRoster)
-        val other = wovenSeam(api, otherScope, mapOf("ep-self" to self), selfId = remote, sharedPeers = sessionRoster)
+        val closing = wovenSeam(api, closingScope, mapOf("ep-remote" to remote), weavePeers = sessionRoster)
+        val other = wovenSeam(api, otherScope, mapOf("ep-self" to self), selfId = remote, weavePeers = sessionRoster)
 
         // ControllableNearbyApi.disconnect is a no-op, so `other` learns nothing over the wire:
         // anything that changes its roster here got there by a direct write to the shared flow.
