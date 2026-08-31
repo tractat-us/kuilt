@@ -188,10 +188,25 @@ internal class NearbySeam(
      * via `compareAndSet`, so a tear landing inside the window fails the CAS, and the retry re-reads
      * `Torn` and drops the promotion on the `is Weaving` guard. The retry terminates because `Torn`
      * is terminal — nothing ever writes the state back to `Weaving`.
+     *
+     * **[closed] is read inside the lambda, not just [SeamState.Weaving].** The `is Weaving` guard
+     * alone leaves a narrower but real window *inside* [latchTorn]: it CASes [closed] and then
+     * *blocks* on [peersLock] in [collapseRoster] before publishing `Torn`, so a promotion running in
+     * that gap sees a state that is still `Weaving` and publishes `Woven` while `closed == true`. The
+     * terminal `Torn` still lands immediately after — the seam does not wedge — but a consumer woken
+     * by `state.first { it is Woven }` would call [broadcast] on a closed seam and get the
+     * [checkNotClosed] `IllegalStateException`. Keying on the latch as well as the value makes the
+     * "never revive a seam" promise true of the *decision* to tear, not merely of the published
+     * state, and costs one volatile read. `closed` only ever moves `false → true`, so re-reading it
+     * on each CAS retry is monotonic.
      */
     private fun promoteWovenIfAnyRemoteIn(session: Set<PeerId>) {
         _state.update { current ->
-            if (current is SeamState.Weaving && session.any { it != selfId }) SeamState.Woven else current
+            if (!closed.value && current is SeamState.Weaving && session.any { it != selfId }) {
+                SeamState.Woven
+            } else {
+                current
+            }
         }
     }
 
@@ -207,10 +222,20 @@ internal class NearbySeam(
      * needed. A per-weave roster necessarily learns its remote after construction, which is what
      * turns an accident into an obligation worth naming.
      *
-     * Guarded by [peersLock] and [collapsed] exactly as the watcher is, so an admit racing a tear
-     * cannot resurrect a collapsed roster (#1816). The [weavePeers] write stays outside that
-     * critical section — it is a separate flow with its own atomicity, and holding a lock across it
-     * would buy nothing.
+     * **The roster mirror write** — and only that write — is guarded by [peersLock] and [collapsed],
+     * exactly as [rosterWatcher]'s is, so an admit racing a tear cannot resurrect a collapsed roster
+     * (#1816). The other two steps are deliberately outside that critical section: the [weavePeers]
+     * write is a separate flow with its own atomicity, and [promoteWovenIfAnyRemoteIn] carries its
+     * own latch check, so holding [peersLock] across either would buy nothing and would widen a lock
+     * across a `StateFlow` write that can resume consumer code inline.
+     *
+     * **Callers hold [endpointPeersMutex] across this, which is load-bearing.** [disconnectLoop]
+     * makes its last-endpoint tear decision (`endpointPeers.isEmpty() && _state.value is Woven`)
+     * under that same mutex, so the promotion published here cannot interleave with it: the
+     * "the last endpoint leaves while a promotion is in flight, and the seam is left `Woven` with no
+     * endpoints and no tear" ordering is unrepresentable rather than merely unlikely. That is a
+     * property of *where this is called from*, so a future caller that admits outside the mutex
+     * would give it up silently.
      */
     internal fun admitRemote(peer: PeerId) {
         weavePeers.update { it + peer }

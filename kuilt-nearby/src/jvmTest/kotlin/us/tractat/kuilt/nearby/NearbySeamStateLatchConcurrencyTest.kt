@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
@@ -23,6 +24,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The terminal-`Torn` latch against an in-flight roster promotion (#1879).
@@ -58,6 +60,21 @@ import kotlin.test.assertTrue
  * emission (once building the roster mirror, once in `any`), and the trap tells the two apart by a
  * signal production already publishes between them — the mirror. So it fires on exactly the second
  * touch, which is exactly the window, and the probe reproduces the race in one iteration.
+ *
+ * ## Why this is still gated behind `-Pconcurrency.stress.tests=true`
+ *
+ * Determinism removes the *iteration count*, not the *dependency on the OS scheduler*. The probe
+ * still needs a `Dispatchers.Default` worker to be scheduled so the watcher can reach the trap, and
+ * on a saturated runner that dispatch can be delayed past any budget set here — which would red the
+ * merge gate for a reason unrelated to [NearbySeam] (#1135 / #1158). So this class takes the
+ * repo-wide `*ConcurrencyTest` contract: excluded from the normal run by `kuilt-nearby/
+ * build.gradle.kts`, run by the `concurrency-probes` CI job on an isolated runner.
+ *
+ * The honest consequence: that job is non-blocking, so **`ci-required` does not pin #1879.** The
+ * alternative was to rename off the contract and co-schedule, which trades a silent regression risk
+ * for a flaky-gate risk. It was rejected because nothing here is special enough to justify being the
+ * one exception to a contract two other modules keep — and because every wait below already fails
+ * with a named rig diagnosis, so running it on the isolated runner loses no diagnostic power.
  *
  * ## What this covers, and what it does not
  *
@@ -180,13 +197,24 @@ class NearbySeamStateLatchConcurrencyTest {
         )
 
         // The whole tear runs while the watcher sits mid-promotion — the interleaving under test.
-        runBlocking { seam.close(CloseReason.Normal) }
+        //
+        // Bounded, because an UNBOUNDED wait here degrades a rig failure into a Gradle-level hang
+        // with no test XML — the #1135 shape. If the trap ever fired at touch 1 (the roster mirror,
+        // inside `peersLock`) instead of touch 2, `close()` would block on that lock behind a
+        // watcher that is itself waiting on `tornPublished`, and the two would deadlock. That is a
+        // rig bug, and it should present as a named red, not as a build that never finishes.
+        runBlocking {
+            withTimeout(RENDEZVOUS_BACKSTOP_SECONDS.seconds) { seam.close(CloseReason.Normal) }
+        }
         tornPublished.countDown()
 
         // close() cancelled the scope, so joining it is how we know the watcher has finished its
         // in-flight write (if any) before the terminal state is sampled. Without this the probe
-        // could read `state` before the clobber lands and pass by racing the race.
-        runBlocking { scope.coroutineContext[Job]?.join() }
+        // could read `state` before the clobber lands and pass by racing the race. Bounded for the
+        // same reason as the close above.
+        runBlocking {
+            withTimeout(RENDEZVOUS_BACKSTOP_SECONDS.seconds) { scope.coroutineContext[Job]?.join() }
+        }
 
         assertAll(
             {
