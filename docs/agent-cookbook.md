@@ -48,6 +48,12 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | running code that arrived from another peer — a plugin loader, an `eval`, a bespoke sandbox or timeout-and-kill wrapper | `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch` | [Code mobility](#code-mobility) |
 | a `try`/`catch` inside an `onEach { … }.launchIn(scope)` so one bad item cannot kill a long-lived collector — or a fix for "the pump stopped and nothing said so", a `Seam`/`Room` that goes deaf after one throw, an iOS crash traced to an unhandled coroutine exception | `Flow.pumpIn(scope, onFailure, name) { … }` — it owns the upstream half your `try` structurally cannot see | [Long-lived pumps](#long-lived-pumps) |
 | turning a peer-supplied id into a roster entry while writing a fabric — `PeerId(bytes.decodeToString())`, a `Set<PeerId>` a callback adds to and removes from, `peers == setOf(selfId)` meaning "the session is over" | `PeerIdentityRegistry` | [A peer id off the wire](#a-peer-id-off-the-wire-straight-into-a-setpeerid) |
+| a 4-byte length prefix and a reassembly loop over a socket or in-house RPC — "I have a byte stream, kuilt wants a fabric" | `framed()` → `handshaking()` | [Your own transport](#your-own-transport) |
+| that same plumbing when the transport really is just TCP | `TcpLoom.host` / `TcpLoom.join` | [Plain TCP is already assembled](#plain-tcp-is-already-assembled) |
+| dealing cards nobody can peek at — a shuffle on one device, "the dealer could cheat", hiding a card from the player holding it | `DealSession` | [Dealing cards nobody can peek at](#dealing-cards-nobody-can-peek-at) |
+| a shared random seed nobody could steer — one peer picks a number and broadcasts it | `FairRandom.roll()` | [Nobody chose that number](#nobody-chose-that-number) |
+| a server holding the authoritative log while many clients propose into it, and a client that must survive losing its server | `ClusterClient` + `ServerCluster` | [When one of the peers is a server](#when-one-of-the-peers-is-a-server) |
+| a session too big for everyone-talks-to-everyone — N² links, a broadcast sent N times, memory that grows with the room | `GossipSeam` + `deltaTargets = { gossip.activePeers.value }` | [Scaling to many peers](#scaling-to-many-peers) |
 
 ## Discovery
 
@@ -138,6 +144,82 @@ class ReferenceDiscoverySourceConformanceTest : DiscoverySourceConformanceSuite(
 Two traps that shipped here, and that the suite exists to catch. **Emitting *something* is not enough** — the roster removes by exact key, so a departure carrying a display name, a socket address, or another transport's handle leaves precisely the same ghost while looking correct in a log. And **a leave signal that only works while somebody is watching arrivals is not a leave signal** — `discoveryRoster` merges the two feeds, and `merge` subscribes to inner flows in separately launched coroutines, so a departure feed fed off the `discoveries()` session can lose the event to its own sibling.
 
 The reason this is more than a missing `override`: on every mDNS platform the goodbye carries only the service **name**, never the TXT map the peer id lives in. Read the id off the removal event and you get null, on all three backends. The peer id has to be remembered at resolution time and looked up when the name goes away — which also means a service that never resolved emits nothing, exactly as it emitted nothing on arrival.
+
+## Your own transport
+
+You already have a way for two machines to talk — a TCP socket, an in-house RPC, a serial
+link, something a customer insists on — and you want a kuilt room on top of it: a roster,
+reconnect, shared state. You are about to write a length prefix, a read loop that
+reassembles it, and a small "who are you?" exchange so each end learns the other's name.
+
+**Intent:** turn a byte stream into a fabric.
+**Primitive:** `framed(source, sink)` (`:kuilt-stream`), then `handshaking(connection, selfId, dispatcher)`
+(`:kuilt-core`). Between them that is the whole bridge; the only transport-specific code left is your
+own connect/accept. `framed` wraps a kotlinx-io `Source`/`Sink` as a `Connection` with a 4-byte
+big-endian length prefix per frame, and `handshaking` negotiates identity in-band and hands back a
+2-peer `Seam` — after which `Room`, `Quilter` and `GameSession` all work unchanged, because they only
+ever knew about `Seam`.
+
+<!-- verbatim from kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/ProprietaryRpcExampleTest.kt#ProprietaryRpcExampleTest -->
+```kotlin
+private fun rpcConnection(socket: Socket): Connection =
+    framed(
+        source = socket.getInputStream().asSource().buffered(),
+        sink = socket.getOutputStream().asSink().buffered(),
+    )
+
+/** Wrap a connected socket as a 2-peer kuilt [Seam], identity negotiated in-band. */
+private suspend fun weaveSeam(socket: Socket, selfId: PeerId): Seam =
+    handshaking(rpcConnection(socket), selfId, Dispatchers.IO)
+```
+
+**The size ceiling is symmetric, and publishing it matters as much as enforcing it.**
+`maxFrameSize` (default `DEFAULT_MAX_FRAME_SIZE`, 16 MiB) is checked in both directions: an oversize
+`send` throws `FrameTooLargeException` before writing a byte, and a hostile length prefix on the wire
+throws *before anything is allocated for it*. The same number then travels upward as
+`Connection.maxFrameBytes` and surfaces as `Seam.maxPayloadBytes` — the budget
+[Payload limits](#payload-limits) tells callers to chunk to. A fabric that leaves it unset leaves
+that whole mechanism inert, which is why TCP is the in-tree fabric held to the number rather than
+declaring the gap away.
+
+<!-- verbatim from kuilt-stream/src/commonTest/kotlin/us/tractat/kuilt/stream/FramedTest.kt#rejectsOversizePrefixWithoutAllocating -->
+```kotlin
+val wire = Buffer()
+wire.writeInt(Int.MAX_VALUE)        // hostile length prefix — validates before allocating
+val conn = framed(source = wire, sink = wire, maxFrameSize = 16)
+assertFailsWith<FrameTooLargeException> { conn.incoming.toList() }
+```
+
+Two assumptions to hold on to. Reading uses `Source.readByteArray`, which **blocks the collecting
+coroutine** until the bytes arrive — so collect on a real IO dispatcher, never under a virtual-time
+test scheduler, where a blocking read never advances and the test hangs rather than fails. And a
+clean EOF *at a frame boundary* completes `incoming` normally, while an EOF *mid-frame* propagates as
+an `EOFException`: a truncated frame is an error, not a tidy end of stream.
+
+### Plain TCP is already assembled
+
+**Intent:** the transport really is just TCP and you are about to do the plumbing above by hand.
+**Primitive:** `TcpLoom.host(serverSocket, selfId, selector)` and `TcpLoom.join(selfId, selector)`
+(`:kuilt-tcp`, JVM/Android), joining a `TcpAddress`. It is `framed()` + `handshaking()` already
+wired, and it is held to the same `SeamConformanceSuite` as every other fabric.
+
+<!-- verbatim from kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpConformanceTest.kt#TcpConformanceTest -->
+```kotlin
+override fun newLoomPair(): Pair<Loom, Loom> {
+    val hostLoom = TcpLoom.host(serverSocket, PeerId("tcp-host"), selector)
+    val joinerLoom = TcpLoom.join(PeerId("tcp-joiner"), selector)
+    return hostLoom to joinerLoom
+}
+
+override fun joinTag(): Tag = TcpAddress(host = "127.0.0.1", port = port)
+```
+
+Bind the `ServerSocket` yourself before calling `host` — `aSocket(selector).tcp().bind(host, 0)`, then
+read the port back off the socket you are holding. Probing for a free port and re-binding the number
+is a TOCTOU another process can win in the window between the probe closing and the real bind. And
+`weave` refuses outright to build under a `TestDispatcher`: this is real socket IO, and under virtual
+time it would deadlock silently instead of failing. Test the layers above it over an in-memory
+`Connection` pair instead.
 
 ## Rejoin & reconnect
 
@@ -712,6 +794,74 @@ polymorphic element type under CBOR, putting your bytes outside the golden vecto
 format across versions. It is on the interface, and on the `Rga`/`Fugue` companions for a decoder
 that has bytes but no replica.
 
+## Scaling to many peers
+
+Everyone-talks-to-everyone is fine for a card game and stops working for a room of a hundred:
+each device ends up holding a hundred links, every change goes out a hundred times, and the
+bookkeeping each peer keeps about the others grows with the size of the room rather than with
+how much of it that peer actually talks to.
+
+**Intent:** make a large session practical without changing anything above the fabric.
+**Primitive:** `GossipSeam` (`:kuilt-gossip`) wrapped around the seam you already have, paired with
+`deltaTargets = { gossip.activePeers.value }` on your `Quilter`. A `GossipSeam` **is** a `Seam`, so
+`Room`, `Quilter` and everything downstream are untouched: `broadcast` floods to a handful of
+neighbours who re-flood to *their* handful, duplicates are recognised and dropped, and `Quilter`'s
+anti-entropy reconcile is the backstop that makes "usually connected" good enough.
+
+<!-- verbatim from kuilt-scale/src/test/kotlin/us/tractat/kuilt/scale/GossipQuilterConvergenceTest.kt#quilterOverGossipSeamConverges -->
+```kotlin
+val gossips = mesh.seams.mapIndexed { i, base ->
+    GossipSeam(base = base, random = Random(1 + i), clock = clock, config = noHeartbeat, jitter = ZERO..ZERO)
+}
+gossips.forEach { it.start(backgroundScope) }
+flush()
+
+// The overlay holds a k-regular active view, strictly smaller than full membership —
+// the ack-set every replicator GCs against.
+val k = recommendedActiveViewSize(n)
+gossips.forEach { g ->
+    assertEquals(k, g.activePeers.value.size, "each node holds k=$k active neighbours")
+}
+assertTrue(k < n - 1, "k=$k must be a strict subset of the N-1=${n - 1} full membership")
+
+// One Quilter per node, GCing only against that node's active neighbours.
+val quilters = gossips.mapIndexed { i, gossip ->
+    Quilter(
+        seam = gossip,
+        initial = GCounter.ZERO,
+        valueSerializer = GCounter.serializer(),
+        scope = backgroundScope,
+        config = quilterCfg,
+        deltaTargets = { gossip.activePeers.value },
+        random = Random(100 + i),
+    )
+}
+```
+
+(`mesh.seams` there is just the seams you already have; the zeroed jitter and hour-scale heartbeats
+are what make that test deterministic — production takes the defaults.)
+
+**Two views, answering different questions.** `activePeers` is the ~k neighbours this peer exchanges
+updates with, and is what `deltaTargets` should point at so the GC watermark tracks *those* acks
+rather than the whole room's — that is the scaling win, and it is the line people leave out. `peers`
+is full membership, delegated from the base seam, and is the pool anti-entropy samples from.
+`recommendedActiveViewSize(n)` is the k the default policy draws (`max(4, ⌈ln N⌉ + 2)`, so ~4–7 for
+tens to low hundreds), which is what keeps the union of everyone's independent choices a single
+connected graph even though nobody is connected to everybody. **Seed `random` per peer** — a shared
+seed makes every peer pick the same neighbours and collapses that graph.
+
+`start(scope)` once, on a scope you own. `sendTo` is deliberately **not** shaped by the overlay: it
+passes straight through to the base seam, so point-to-point still reaches any peer the transport can
+address. `incoming` keeps the single-collection contract, and `GossipSeam` is itself the sole
+collector of the base seam's — ping/pong frames are consumed by the per-neighbour detectors and never
+surface to you.
+
+Reach for it by size, not by reflex: at a handful of peers a partial mesh buys nothing and costs a
+hop, and adding it later is a one-line change where the seam is built. The other shipped
+`TopologyPolicy` is `FullFanout`, where one hub re-floods every broadcast to all its spokes;
+`CoroutineScope.hostedOverlay(selfId, source, dispatcher, …)` is that hub already assembled over a
+`ConnectionSource`.
+
 ## Liveness & presence
 
 People close laptops, step into lifts, and lose Wi-Fi. When that happens your app has to say
@@ -1015,6 +1165,154 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
     joiner.close()
 }
 ```
+
+## When one of the peers is a server
+
+Sometimes the peers are not symmetric. A handful of machines hold the authoritative record
+and a much larger number of clients connect in, ask for something to be written, and read
+back what was agreed — and a client whose machine goes away has to come back on another one
+without losing its place in the queue.
+
+**Intent:** exactly that shape — a small core of servers that agree among themselves, many
+clients attached to the edge, proposals forwarded to whichever server is currently in charge.
+**Primitive:** `ClusterClient` on the client side (`:kuilt-cluster`, every target) and
+`ServerCluster` on the server side (JVM/Android). Don't hand-roll the forwarding hop, the
+endpoint rotation, or the "which server is the leader now" bookkeeping.
+
+Client side: `CoroutineScope.clusterClient(loom, clusterEndpoints, clientNodeId, clusterConfig, raftConfig, clock)`
+owns the whole connect → use → reconnect lifecycle, rotating through `ClusterEndpoints` on a tear and
+swapping the transport underneath one long-lived node rather than rebuilding it.
+`clusterClientWithNode(raftNode)` is the plainer entry point when you manage the transport yourself.
+
+<!-- verbatim from kuilt-cluster/src/commonSamples/kotlin/us/tractat/kuilt/cluster/samples/ClusterClientSample.kt#connectAndPropose -->
+```kotlin
+val client: ClusterClient = clusterClientWithNode(fakeNode)
+
+// Propose with an auto-minted requestId — at-least-once but survives failover.
+val entry = client.propose("set x=1".encodeToByteArray())
+
+// Propose with a caller-pinned requestId for cross-crash exactly-once semantics.
+val dedupEntry = client.propose("set y=2".encodeToByteArray(), requestId = 42L)
+
+// Collect the committed stream and apply through ClientSessionTable for dedup.
+val table = ClientSessionTable()
+val committed = client.committed
+    .filterIsInstance<Committed.Entry>()
+    .first { table.shouldApply(it.entry.dedupKey) }
+```
+
+**Ask for exactly-once or you get at-least-once.** The one-argument `propose(command)` mints a fresh
+request id per call, which survives a *failover* but not a *crash*: after a restart the retry looks
+like a brand-new command and applies twice. `propose(command, requestId)` with an id you persisted
+**before** calling is the cross-crash form — the server's `ClientSessionTable` recognises the replay.
+Pair it with `ClientIdentity.Durable(clientId)`, because the identity that table keys on has to
+outlive the restart too; the default `ClientIdentity.Auto` mints a new one per incarnation, which is
+right only where at-least-once genuinely is.
+
+Server side: `CoroutineScope.serverCluster(host, voterIds, raftConfig)` stands the voter mesh up and
+mounts a `RoomHost` — a `KtorRoomHost` on a WebSocket path, in practice — as the relay clients attach
+to. `start()` runs the accept loop (launch it; it suspends until the scope is cancelled), `committed`
+is the stream of agreed entries to apply, and `awaitLeader()` waits for the mesh to elect one.
+`runRelay(anotherHost)` mounts a second endpoint onto the *same* mesh, which is the server half of
+cross-relay failover: cancelling one relay's coroutine tears just that endpoint's rooms, and its
+clients reattach elsewhere with the same node id and the same log position.
+
+Two boundaries worth designing around rather than discovering. **A cross-server reconnect is always a
+fresh join** — each server's reconnect-window registry is in-memory and per-room, so a token issued by
+one server can never validate at another; `ClusterClient` treats that as "re-join", and the cost is a
+re-snapshot of the client's log rather than a lost session. And `committed` keeps `RaftNode.committed`'s
+single-collection contract: collect it once per client, `shareIn` for fan-out.
+
+## Dealing cards nobody can peek at
+
+You want to deal a hand where nobody — not even whoever is running the app — can see a card
+they were not dealt, and nobody can arrange which card they get. There is no trusted dealer
+and no server holding the deck. The obvious thing, shuffling an array on one device and
+sending each player their slice, asks every player to trust that device completely.
+
+**Intent:** a fair deal with no dealer.
+**Primitive:** `DealSession` (`:kuilt-deal`) over any `Seam`. Every player encrypts the whole deck
+with their own key; because the cipher **commutes**, those layers peel off in any order, so a card is
+readable by exactly the players who still hold an unstripped layer of it. `assignQuorums` says who
+those players are, per card; `strip()` removes the layers that are not protecting anybody's secrecy;
+`decrypt(index)` reads a card once it is `CardPhase.REVEALED`.
+
+<!-- verbatim from kuilt-deal-test/src/commonTest/kotlin/us/tractat/kuilt/deal/test/DealSessionTest.kt#twoPlayerPokerDeal_aliceSeesHerCard_bobCannotRead -->
+```kotlin
+val alice = PeerId("alice")
+val bob = PeerId("bob")
+val (aliceSession, bobSession) =
+    fakeDealSessionPair(alice, bob, seededXorSchemes(), CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+val originalCard = "ACE_OF_SPADES".encodeToByteArray()
+val deck = listOf(originalCard)
+
+// Shuffle: both players encrypt the deck (alice first, then bob builds on it)
+aliceSession.shuffle(deck)
+bobSession.shuffle(deck)
+
+// Deal: alice's hand — only alice can see card 0
+val quorumAlice = mapOf(0 to setOf(alice))
+aliceSession.assignQuorums(quorumAlice)
+bobSession.assignQuorums(quorumAlice)
+
+// Reveal: non-quorum players (bob) strip their layers
+bobSession.strip()
+
+// Alice decrypts her own layer
+val revealed = aliceSession.decrypt(0)
+assertEquals(originalCard.toList(), revealed.toList())
+
+// Secrecy: bob is not in the quorum — he cannot recover the plaintext.
+val bobAttempt = runCatchingCancellable { bobSession.decrypt(0) }.getOrNull()
+assertNotEquals(originalCard.toList(), bobAttempt?.toList())
+```
+
+That test drives the session with a fast XOR stand-in for the cipher; in production the
+`CommutativeScheme` is `SraScheme()`. Pass a **factory**, not one instance — every player mints their
+own key in their own process, and a harness that hands one object to both sides is testing the single
+arrangement that cannot expose a cross-instance disagreement. For your own tests,
+`fakeDealSessionPair` / `fakeDealSessionGroup` (`:kuilt-deal-test`) wire a group of sessions over fake
+seams, and `CommutativeSchemeConformanceSuite` is how a scheme of your own earns the round-trip,
+commutativity and strip-order-independence properties the whole deal rests on.
+
+Three things to know before building on it. **Assign every quorum on every peer before any peer
+strips** — quorum membership is what decides whether a strip is accepted, so one that arrives before
+the local assignment is dropped and never retried. **A partial quorum takes more than one pass**:
+where three or more players share sight of one card, members strip each other's reveal tracks in a
+canonical order, so call `strip()` again as remote ops arrive until the card reads `REVEALED`. And a
+card *index* is not a secret — the deal hides values; which slot went to whom is your protocol's
+business.
+
+### Nobody chose that number
+
+**Intent:** a shared random value — a seed, a first player, a die roll — that every peer agrees on and
+no peer could steer. You are about to have one peer pick it and broadcast it.
+**Primitive:** `FairRandom(seam, peers).roll()` (`:kuilt-deal`). Two phases: everyone publishes a hash
+of their secret, then the secret itself, and the seed is derived from all of them — so one honest
+contributor is enough to make the result unpredictable to everybody, including that contributor.
+
+<!-- verbatim from kuilt-deal/src/commonTest/kotlin/us/tractat/kuilt/deal/FairRandomTest.kt#twoPeers_agreeOnIdenticalSeed -->
+```kotlin
+val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+val peers = setOf(alice, bob)
+val (aliceSeam, bobSeam) = fakeSeamPair(alice, bob)
+
+val aliceDef = scope.async { FairRandom(aliceSeam, peers).roll() }
+val bobDef = scope.async { FairRandom(bobSeam, peers).roll() }
+
+val aliceSeed = aliceDef.await()
+val bobSeed = bobDef.await()
+
+assertEquals(aliceSeed, bobSeed, "Both peers must derive the same seed")
+```
+
+`roll()` is one round — build a fresh `FairRandom` per roll. It **throws rather than hangs** when the
+seam tears, or when a required participant leaves the live peer set mid-round: the missing
+commit or reveal is never coming, so it raises `SeamCollapsedException` within a bound and you need no
+outer timeout of your own. The one thing it cannot defend against is stated plainly in its own KDoc.
+A last mover sees every other reveal before deciding whether to send its own, so **withholding is a
+game-layer concern** — forfeit the peer that goes quiet; commit-reveal cannot.
 
 ## Fair share & placement
 
