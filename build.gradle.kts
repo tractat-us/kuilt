@@ -6330,14 +6330,23 @@ val verifyTestResultParity by tasks.registering {
         val failures = mutableListOf<String>()
         var comparedModules = 0
         var comparedClasses = 0
+        // Which targets actually took part. Reported on SUCCESS, because a guard against silence
+        // whose green does not say what it compared is one absent artifact away from being
+        // vacuous and unfalsifiable — and it would read exactly the same either way.
+        val comparedTargets = sortedSetOf<String>()
+        val skippedForOneTarget = sortedMapOf<String, String>()
 
         surfaces.forEach { (modulePath, commonTestRoot, resultsRoot) ->
             val taskDirs = (resultsRoot.listFiles() ?: emptyArray())
                 .filter { it.isDirectory }
                 .associateWith { dir -> dir.listFiles { f -> f.name.startsWith("TEST-") && f.extension == "xml" }.orEmpty() }
                 .filterValues { it.isNotEmpty() }
-            if (taskDirs.size < 2) return@forEach
+            if (taskDirs.size < 2) {
+                taskDirs.keys.singleOrNull()?.let { skippedForOneTarget[modulePath] = it.name }
+                return@forEach
+            }
             comparedModules++
+            comparedTargets += taskDirs.keys.map { it.name }
 
             // The identifier is spelled differently on every target — `FooTest[jvm]` on the JVM,
             // `macosArm64Test.us.tractat.kuilt.otel.FooTest` on Kotlin/Native and wasm — so it is
@@ -6384,9 +6393,19 @@ val verifyTestResultParity by tasks.registering {
             )
         }
         logger.lifecycle(
-            "verifyTestResultParity: $comparedClasses class(es) across $comparedModules module(s) " +
-                "with more than one target's results present",
+            "verifyTestResultParity: $comparedClasses class(es) across $comparedModules module(s), " +
+                "over ${comparedTargets.size} target(s): ${comparedTargets.joinToString(", ")}",
         )
+        // A module reduced to ONE target is invisible to this check. Named rather than counted, so
+        // "wasm results never reached this job" cannot hide behind a green — it is the difference
+        // between the guard passing and the guard not running.
+        if (skippedForOneTarget.isNotEmpty()) {
+            logger.lifecycle(
+                "verifyTestResultParity: ${skippedForOneTarget.size} module(s) had only one target's " +
+                    "results and were NOT compared: " +
+                    skippedForOneTarget.entries.joinToString(", ") { "${it.key} (${it.value})" },
+            )
+        }
     }
 }
 
