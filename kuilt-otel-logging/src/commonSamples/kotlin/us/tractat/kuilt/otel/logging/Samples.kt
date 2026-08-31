@@ -62,3 +62,28 @@ internal suspend fun sampleWithActiveTrace() {
     // (default) or dropped, per CaptureConfig.untracedPolicy.
     log.info { "background heartbeat" }
 }
+
+/** @suppress — sample only */
+internal suspend fun sampleWithLogContext() {
+    val log = KotlinLogging.logger("com.example.Session")
+
+    // This process runs two sessions at once. A CaptureConfig.attributeMapper is
+    // installed on the whole process, so it could only ever stamp whichever session
+    // is "current" — and would stamp the other session's lines with it too. Binding
+    // the id to the scope that emits makes it per-emitter instead.
+    withLogContext("session.id" to "server-game-42") {
+        log.info { "dealt the opening hand" } // session.id = server-game-42
+    }
+
+    // Concurrently, on another scope, with its own binding. Neither borrows the
+    // other's id, however they interleave.
+    withLogContext("session.id" to "mesh-7") {
+        // Nesting merges, and the inner scope wins a collision — narrower scope wins.
+        withLogContext("turn" to "3") {
+            log.info { "peer joined" } // session.id = mesh-7, turn = 3
+        }
+    }
+
+    // Outside any scope, capture is exactly what it was before.
+    log.info { "background heartbeat" }
+}

@@ -28,4 +28,7 @@ class OtelLoggingSamplesRunTest {
 
     @Test
     fun withActiveTraceHolds(): TestResult = runTest { sampleWithActiveTrace() }
+
+    @Test
+    fun withLogContextHolds(): TestResult = runTest { sampleWithLogContext() }
 }

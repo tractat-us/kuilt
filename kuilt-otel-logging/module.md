@@ -62,6 +62,56 @@ kuilt's own exporter loggers, or a line the sampling gate throws away. And it sh
 not throw — a mapper that throws loses that one record rather than surfacing an
 error inside your `log` call.
 
+## When your app is doing two things at once
+
+The mapper above is installed once, for the whole app. That is the right shape for
+facts that really are app-wide — the device, the build, the logger's name. It is the
+wrong shape the moment your app runs **two things at the same time**.
+
+Say a game is running against a server while a second, offline game runs over the
+local mesh. The mapper has only one answer to "which game is this?", so whichever
+game is *current* gets its id stamped on the other game's lines too. Later, reading
+the logs, there is no way to tell them apart — and a search for the server game's id
+hands back lines that never belonged to it.
+
+So bind the id to the work instead of to the app:
+
+```kotlin
+withLogContext("session.id" to session.id) {
+    runSession()
+}
+```
+
+Every line logged inside that block carries `session.id`, whatever else the app is
+doing alongside it. Nesting adds to the enclosing block rather than replacing it,
+and the innermost wins where they set the same key. The rule is the same one all the
+way up: **the narrower scope wins**, and the app-wide mapper is the widest scope
+there is — so entering a session's block corrects a stale app-wide stamp rather than
+losing to it. Outside any block, nothing changes.
+
+**How far a block's context reaches depends on the platform, and on iOS, macOS and
+wasm it is weaker than you might assume — worth reading before you rely on it.**
+
+On JVM and Android it is airtight: the context follows the work across threads and
+into child coroutines, so two sessions can interleave as much as they like and each
+line still gets its own.
+
+On iOS, macOS and wasm it covers a line logged **synchronously inside the block** —
+the common case, and the one to design for. What it cannot do there is survive a
+pause. If a session's block stops to wait for something and picks up again while a
+*second* session is midway through its own block on the same thread, the first
+session's next line is stamped with the **second** session's id. An iPhone app
+running two sessions on the main thread is exactly that situation, so this is
+ordinary rather than obscure. There is a milder version of the same thing too: a
+block that starts while another is mid-flight inherits that other block's extra
+keys, though its own keys still win.
+
+So on those platforms this is a real improvement on the app-wide mapper — which is
+wrong for every line of every session that isn't the current one — but it is an
+improvement, not a promise. Keep a session's logging synchronous inside its block.
+Closing the gap needs something Kotlin/Native does not offer yet; it is tracked in
+[#2569](https://github.com/tractat-us/kuilt/issues/2569).
+
 ## When the line happened, and when we wrote it down
 
 Your `log.info { … }` call does not write the record — it hands the line off and a
