@@ -6259,15 +6259,17 @@ val verifySeamHarnessCoverage by tasks.registering {
  * `src/commonTest` declares it. Anything else is a legitimately target-specific test — the four
  * `src/jvmTest` concurrency harnesses in `:kuilt-otel`, an `appleTest`-only fabric test.
  *
- * ## It compares whatever ONE invocation produced, which is why CI's job split matters
+ * ## It compares whatever ONE invocation produced, which is why CI needs a job of its own
  *
- * `ci.yml` runs the matrix in two jobs on two machines: `build-jvm` is `./gradlew build` with the
- * wasm and native test tasks excluded, and `build-native` is `wasmJsTest macosArm64Test
- * iosSimulatorArm64Test` — which does not invoke `check` at all. So neither job can compare a JVM
- * result against a wasm one, and a guard wired only into `check` would be **structurally vacuous**
- * in CI while looking green. It is therefore named explicitly in the `build-native` step as well,
- * where wasm, macOS and iOS-simulator cross-check each other — and that pairing is the one #2185
- * actually needs, since the class it lost was present on macOS and gone on wasm.
+ * `ci.yml` splits the matrix across two runners: `build-jvm` is `./gradlew build` with every
+ * wasm/native test execution excluded, and `build-native` runs only those and never invokes
+ * `check`. So `check`-wiring alone leaves this comparing JVM against Android in one job and
+ * nothing at all in the other — **structurally vacuous on the very pairing #2185 is about**, and
+ * green by construction. The `test-result-parity` job exists to fix that: both jobs already
+ * upload every module's `build/test-results/` with paths preserved, so it downloads both artifacts
+ * over a fresh checkout and runs this task against the reconstituted tree. The `check` wiring stays, and
+ * earns its keep locally (a full `CI=1 ./gradlew build` sees every target at once) and in
+ * `build-jvm` (JVM against both Android variants).
  *
  * ## Why it only runs under `CI` (or when invoked by name)
  *

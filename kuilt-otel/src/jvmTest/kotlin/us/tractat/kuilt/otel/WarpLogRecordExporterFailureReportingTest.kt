@@ -108,7 +108,11 @@ class WarpLogRecordExporterFailureReportingTest {
         capturingExporterLogs { captured ->
             val exporter = exporterFor(store)
             repeat(EXPORTS) { i -> exporter.export(record(i)) }
-            targets = store.deleteTargets().map { it.name }.toSet()
+            // Segment keys only: `sweepLegacyKey` refuses on a different key and reports through a
+            // different line, so counting it here would compare 58 refusals against 57 reports.
+            targets = store.deleteTargets().map { it.name }
+                .filter { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }
+                .toSet()
             attempts = store.deleteAttempts()
             lines = captured.naming(SWEEP_FRAGMENT).toList()
         }
