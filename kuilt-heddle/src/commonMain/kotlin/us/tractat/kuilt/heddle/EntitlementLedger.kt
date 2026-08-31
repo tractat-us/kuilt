@@ -767,6 +767,16 @@ public class EntitlementLedger private constructor(
      *    cover of `n` alone refused it for a shortfall that was never real.
      *  - `lsp ≥ 0`, `rsp ≥ 0` — an acked base below what has already been relocated out is
      *    protocol-impossible, so it fails closed rather than moving a negative quantity.
+     *  - **every donor of a still-uncancelled carried row acked.** A row an earlier move carried
+     *    onto this key lives in `transferRelocIn` — control-plane state on `this`, on no ack — so
+     *    a donor whose only mark here is such a row is invisible to the enumeration above. Moving
+     *    the rest of the key while it stays behind reassigns its recipients' credit to the donor
+     *    upstream of it, which is #2366 one hop up, and it survives a departure because the fence
+     *    quantifies over the enrolled roster. Carrying it instead is not open: a row is declarable
+     *    final because its writer marked the edge locally unwritable, and a peer that never acked
+     *    has promised nothing. ⇒ [Relocation.Refused], on a state [validate] now also reports as
+     *    [LedgerConflict.OrphanedTransferPath]. Scoped to a *residual* so a drained carried row
+     *    does not re-refuse and break §5.4 (iii) — see [unackedCarriedDonors].
      *
      * The live edge needs **no** data-plane read: the move adds `sp` to `t`'s effective spend and
      * `n ≥ sp` to its effective issuance, so per-edge safety on `t` survives by increment.

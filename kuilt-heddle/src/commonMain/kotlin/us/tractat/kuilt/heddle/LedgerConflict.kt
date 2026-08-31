@@ -253,9 +253,22 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      * A [EntitlementLedger.relocationPatch] carry moves them (#2366) — cancelling the dead key
      * with `transferRelocOut` and re-opening the live one with `transferRelocIn` — so a move that
      * completes leaves nothing here to report. What still reaches this report is a generation
-     * replaced **without** one: a plain reshape with no `Reconcile` behind it, a refused move, an
-     * ack that declared no row (the shape a pre-#2377 `QuiesceAck` had), or rows keyed on a
+     * replaced **without** one: a plain reshape with no `Reconcile` behind it, a refused move —
+     * including the refusal for a carried hand-off whose donor left the roster before it could ack
+     * — an ack that declared no row (the shape a pre-#2377 `QuiesceAck` had), or rows keyed on a
      * generation this ledger has never seen.
+     *
+     * ## Candidates come from `transfers` **and** `transferRelocIn`
+     *
+     * A carry never writes the donor-owned base slot at the live key (#1691) — it lands in
+     * `transferRelocIn` and cancels the dead key with `transferRelocOut`. So one move on, a key
+     * whose entire credit arrived by carry appears in **no** `transfers` entry at all, and an
+     * enumeration over the base matrix could not reach it however loud the abandonment. That is
+     * the second hop of the same defect: `carol → alice → bob`, carried once onto a fresh
+     * generation, and then abandoned there when the next move cannot enumerate the departed
+     * `alice`. `transferRelocOut`'s keys are deliberately **not** candidates — that matrix only
+     * ever cancels, so a key it alone names holds no credit to strand and would contribute only a
+     * negative-`effRow` transient under partial delivery.
      *
      * ## Why this needs its own report
      *

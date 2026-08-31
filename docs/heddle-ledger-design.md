@@ -276,10 +276,15 @@ list a false conflict that self-heals on anti-entropy. The checks:
 - **`RecordDivergence(id)`** — two distinct immutable records under one `AttachmentId`.
 - **`DualActiveInbound(group)`** / **`ClosureViolation(e)`** — H2 (lifecycle); shipped.
 - **`OrphanedTransferPath(path)`** — transfer rows the topology moved out from under (#2366):
-  `transfers` is keyed by `PathKey.of(edge)` — the *generation's* id — so replacing a group's
-  inbound generation carries the counter families across and leaves the hand-offs behind, where
-  `holdings` no longer reads them. The donor silently recovers what it gave away. **No other check
-  can see it:** `Σ_r transferNet(k, r) = 0` on every key identically, so abandoning a key is
+  `transfers` is keyed by `PathKey.of(edge)` — the *generation's* id — so a move that carried only
+  the counter families left the hand-offs behind, where `holdings` no longer reads them, and the
+  donor silently recovered what it gave away. **A generation move now carries the rows too**, so
+  the reconcile path no longer produces that state; what remains for this check are the states no
+  carry can reach — an ack that declared no rows, a move refused before it ran, or a key whose
+  donor left the roster before it could ack. Candidates are enumerated over `transfers` **and**
+  `transferRelocIn`: after a carry the credit lives in the relocation matrix and nowhere in the
+  base one, so a key whose whole credit arrived by carry is invisible to a base-only enumeration.
+  **No other check can see it:** `Σ_r transferNet(k, r) = 0` on every key identically, so abandoning a key is
   sum-preserving and conservation is *structurally* blind, and the recipient lands on `0` rather
   than below it, so `PersistentNegativeHoldings` stays silent. Fires only when all three hold — the
   key is no longer read, the group's live key does not already cover its rows, and some party still
