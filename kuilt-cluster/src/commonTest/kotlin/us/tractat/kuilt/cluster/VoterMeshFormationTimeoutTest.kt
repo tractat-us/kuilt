@@ -66,9 +66,10 @@ class VoterMeshFormationTimeoutTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val rig = stallFormation()
 
-            // Precondition: the pump must actually have been running. Without this a green would be
-            // indistinguishable from a rig that never fired — `cancelled` is reachable only from inside
-            // the `accept()` the pump never entered, so both would simply be absent.
+            // Precondition, asserted first so the red distinguishes the two ways this can fail. A pump
+            // that never started leaves `cancelled` absent as well, so the assertion below would red
+            // either way — but it would red on "the teardown didn't happen" when the truth was "the rig
+            // never fired", which is the misdiagnosis this whole suite exists to stop making.
             rig.stalledSource.accepting.awaitOrFail("the starved voter's accept-pump entered accept()")
             rig.stalledSource.cancelled.awaitOrFail("the starved voter's accept-pump was cancelled")
         }
