@@ -302,10 +302,21 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      *     had been firing, and rows are grow-only, so the live cumulative never falls back to
      *     unmask it.
      *
-     *     A real [EntitlementLedger.relocationPatch] carry does **not** rest on this clause: it
-     *     cancels the dead key with `transferRelocOut`, so clause 3 sees a settled generation and
-     *     the report clears on provenance the lattice actually carries. The blind spot survives
-     *     only for a base-row coincidence, which no code path produces.
+     *     A real [EntitlementLedger.relocationPatch] carry clears the report **through this very
+     *     clause** — it never reaches clause 3, and saying otherwise would have retired the blind
+     *     spot on an argument about a clause that does not run. The carry cancels the dead key with
+     *     `transferRelocOut`, so every `(donor, recipient)` **effective** magnitude there is `0` by
+     *     construction and `0 ≤ effRow(livePath, …)` holds unconditionally: the comparison
+     *     short-circuits here and returns before the consequence test is asked.
+     *
+     *     That is still not the coincidence this clause is otherwise vulnerable to, and the
+     *     difference is what makes the retirement sound. The blind spot is that a *base* pair total
+     *     at the live key can match the dead one **by accident** — an unrelated later [transfer]
+     *     between the same two peers — so a covered comparison says nothing about whether a carry
+     *     happened. A cancelled dead side is the opposite: `transferRelocOut` is written by nothing
+     *     but a carry, so `effRow(deadPath) == 0` *is* provenance the lattice carries, read through
+     *     a magnitude comparison. The blind spot survives only for the base-row coincidence, which
+     *     no code path produces.
      *  3. **It is consequential.** Some party to those rows still has a non-zero balance
      *     stranded on the dead generation — `netInflow + transferNet − effLeafSpent ≠ 0`,
      *     the inbound half of [EntitlementLedger.holdings] evaluated where it is no longer

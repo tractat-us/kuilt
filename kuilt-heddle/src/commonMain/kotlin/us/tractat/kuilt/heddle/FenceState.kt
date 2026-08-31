@@ -31,9 +31,56 @@ import us.tractat.kuilt.crdt.ReplicaId
  * never lower it. Every field is grow-only in time at its writer, so max is the correct join, and
  * [transfers] joins per recipient by the same rule.
  *
+ * ## ⚠ [transfers] is a wire-schema evolution, ahead of #1738 — a stated decision
+ *
+ * This is a `@Serializable` type carried inside a `ControlCommand.QuiesceAck`, i.e. **on the
+ * control log**, and `HeddleControlPlane.applyEntry`'s KDoc says in as many words: *"Settle them
+ * before any schema evolution of the wire types."* #1738 is open. Adding [transfers] evolves the
+ * type anyway, so the exposure is written down here rather than left to be rediscovered.
+ *
+ * The mechanism, exactly. `applyEntry` decodes with the default `Cbor`, which is
+ * `encodeDefaults = false` and `ignoreUnknownKeys = false`. The first half is why this is not a
+ * blanket break: an ack whose [transfers] is the default `emptyMap()` emits **no** field, so an
+ * older binary decodes it byte-for-byte as before. The second half is why the remainder is
+ * unrecoverable: an ack that actually carries a row emits the key, an older binary throws on it,
+ * `applyEntry` takes its `envelope == null` branch — which logs at `warn`, **advances the roster's
+ * applied index anyway**, and returns. The ack is then permanently absent from that peer's
+ * [FenceState] while its log prefix reads fully applied. `FenceState` is a log-pure derivation
+ * precisely so that every peer holds an equal value; this is a permanent local divergence in it,
+ * and the affected acks are exactly the ones #2366 exists for.
+ *
+ * Two concrete cases, since "upgrade together" is the pre-1.0 posture and the posture is what makes
+ * this acceptable rather than the code:
+ *
+ *  - **A downgrade.** Rolling one peer back to a pre-#2377 binary after a fenced edge has acked a
+ *    row. It replays the log, drops that ack, and derives a `FenceState` no other peer holds.
+ *  - **An offline node.** A peer that was away while newer peers fenced a strand, and boots on its
+ *    old binary. Governed nodes replay from index 1 on every boot, so this is not a narrow window —
+ *    the stale entry is re-encountered on every start until the binary is updated.
+ *
+ * Neither is recoverable by anti-entropy: the divergence is in the log-pure derivation, not in the
+ * gossip-merged data plane. The remedy is #1738's — tag heddle entries so *"not a heddle entry"* is
+ * a positive determination and fail closed on a tagged-but-undecodable one — and it is not taken
+ * here.
+ *
  * @property transfers this replica's own hand-offs at the fenced edge's path key, recipient →
  *   cumulative. Empty for a replica that never handed entitlement to anyone there — which is most
  *   of them, and is why the field defaults.
+ *
+ *   ⚠ **An amnesiac rejoiner declares `emptyMap()` here, and that is a lie the ledger cannot
+ *   detect.** The row is read off the replica's own state
+ *   (`EntitlementLedger.baseFinalsOn(edge, r)`), so a peer that rejoins with a **fresh durable
+ *   store** — reinstalled, storage cleared, a new device restoring an identity but not a ledger —
+ *   honestly reports no hand-offs, because it has none to report. The join cannot help: max over
+ *   `{}` and a prior ack keeps the prior one, but on a *first* ack there is nothing to keep, and on
+ *   the receiver's side the declaration is simply believed.
+ *
+ *   The consequence is the specific one worth naming: such an ack **clears** the
+ *   `unackedCarriedDonors` refusal (the donor is now in the ack set) while under-declaring the base
+ *   row the refusal was protecting. The loud, recoverable outcome — a refused move naming the donor
+ *   — becomes the silent one, which is exactly the abandonment #2366 is about, reached by a
+ *   different road. Nothing in this module detects it; a rejoiner's identity is not evidence about
+ *   its state.
  */
 @Serializable
 internal data class SlotFinals(

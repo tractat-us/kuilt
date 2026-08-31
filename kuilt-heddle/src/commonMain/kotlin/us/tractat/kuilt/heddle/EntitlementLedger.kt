@@ -776,11 +776,21 @@ public class EntitlementLedger private constructor(
      *    a donor whose only mark here is such a row is invisible to the enumeration above. Moving
      *    the rest of the key while it stays behind reassigns its recipients' credit to the donor
      *    upstream of it, which is #2366 one hop up, and it survives a departure because the fence
-     *    quantifies over the enrolled roster. Carrying it instead is not open: a row is declarable
-     *    final because its writer marked the edge locally unwritable, and a peer that never acked
-     *    has promised nothing. ⇒ [Relocation.Refused], on a state [validate] now also reports as
-     *    [LedgerConflict.OrphanedTransferPath]. Scoped to a *residual* so a drained carried row
-     *    does not re-refuse and break §5.4 (iii) — see [unackedCarriedDonors].
+     *    quantifies over the enrolled roster.
+     *
+     *    Carrying it instead is not open, and **not** because "a peer that never acked has promised
+     *    nothing" — that is true of a *base* row and false of this one, which is
+     *    control-plane-authored and already committed to the log. It is this PR's own thesis one
+     *    hop over: a pocket is `netInflow + transferNet − effLeafSpent`, and the covering
+     *    `netInflow`/spend terms of *this* donor arrive only in *this* donor's ack, which is
+     *    absent. Carrying the transfer term alone would move the hand-off onto the live key while
+     *    the funding that makes it legitimate stays on the dead one — one pocket split across two
+     *    generations, which is exactly the failure the whole carry exists to prevent. Three terms
+     *    together or none; the transfer term is not exempt from the rule it motivated.
+     *    ⇒ [Relocation.Refused], on a state [validate] now also reports as
+     *    [LedgerConflict.OrphanedTransferPath]. Scoped to the **carried** residual
+     *    (`transferRelocIn − transferRelocOut > 0`) so a drained carried row does not re-refuse —
+     *    see [unackedCarriedDonors] for why §5.4 (iii) does not actually rest on that scoping.
      *
      * The live edge needs **no** data-plane read: the move adds `sp` to `t`'s effective spend and
      * `n ≥ sp` to its effective issuance, so per-edge safety on `t` survives by increment.
@@ -816,9 +826,13 @@ public class EntitlementLedger private constructor(
             // upstream of it. That is the #2366 defect one hop up, and it survives a departure
             // because production quantifies the fence over the enrolled roster.
             //
-            // Carrying it anyway is not the remedy: a row is declarable final because its writer
-            // has marked the edge locally unwritable, and a peer that never acked has promised
-            // nothing. So refuse — loudly, and on a state `validate` now also reports (see
+            // Carrying it anyway is not the remedy, and the reason is NOT "an unacked peer promised
+            // nothing" — this row is control-plane-authored and already committed, so the promise
+            // was made. It is that a pocket is three terms, and only one of them is here: the
+            // donor's covering `netInflow` and already-charged spend on this edge travel in the
+            // donor's own ack, which is missing. Move the hand-off alone and the pocket is split
+            // across two generations — the credit on the live key, the funding on the dead one.
+            // So refuse — loudly, and on a state `validate` now also reports (see
             // [orphanedTransferPaths]) — rather than move a fraction of the key.
             val unacked = unackedCarriedDonors(deadPath, perReplica.keys)
             if (unacked.isNotEmpty()) {
@@ -1011,20 +1025,56 @@ public class EntitlementLedger private constructor(
      * The donors holding a **still-uncancelled** carried row at [deadPath] that are absent from
      * [acked] — the fence's blind spot, and a refusal condition for [relocationPatch].
      *
-     * Scoped to a *residual* (`transferRelocIn − transferRelocOut > 0`) on purpose: a donor whose
-     * carried rows a previous move already cancelled owes nothing here, and refusing on its mere
-     * presence in `transferRelocIn` would wedge the second `Reconcile` of every strand that has
-     * ever been re-homed — turning §5.4 (iii)'s "a second move carries nothing" into a permanent
-     * refusal. The base matrix is deliberately not consulted: an unacked donor's *base* row is the
-     * documented left-untouched case, and it is already reported by
-     * [LedgerConflict.OrphanedTransferPath] because the key it sits on is in `transfers`.
+     * Scoped to the **carried** residual, `transferRelocIn − transferRelocOut`, and to that alone:
+     * a donor whose carried rows a previous move already cancelled owes nothing here. The base
+     * matrix is deliberately not consulted — an unacked donor's *base* row is the documented
+     * left-untouched case, already reported by [LedgerConflict.OrphanedTransferPath] because the
+     * key it sits on is in `transfers`. Reading it here instead ([effRow], which is
+     * `transfers + In − Out`) would spell a rule nobody would write down: *refuse on an unacked
+     * base row iff this donor once held a carried row at this key.*
+     *
+     * ## What actually protects §5.4 (iii) is ack monotonicity, not this residual
+     *
+     * Stated plainly because the earlier spelling credited the residual for it, and a future reader
+     * would have preserved the clause for a reason that was never true. On the **production**
+     * receiver the residual is inert — provably, twice over:
+     *
+     *  - `FenceState.acks` only ever grows (`FenceState.acked` adds and joins; nothing removes), and
+     *    a non-zero `transferRelocOut` at `(deadPath, donor)` can only have been written by an
+     *    earlier [relocationPatch] whose `finals[deadPath]` contained `donor`. So `Out > 0` implies
+     *    the donor acked, and acked-ness is forever: `donor !in acked` already implies `Out == 0`,
+     *    which makes `In − Out > 0` true for every donor the enumeration reaches.
+     *  - The production receiver is `FenceState.relocations`, which accumulates only control-plane
+     *    patches, so its `transfers` is empty there in any case.
+     *
+     * So the second `Reconcile` of a re-homed strand cannot re-refuse whatever this clause says, and
+     * the arm's non-vacuity has to be pinned on an arm where exactly one of the two predicates is
+     * false — see `EntitlementLedgerReconcileTest`.
+     *
+     * The residual is nonetheless **kept** rather than deleted, for a reason that survives that
+     * proof: it makes the refusal a statement about the state on this receiver, decidable from the
+     * three matrices in this file, instead of resting on a monotonicity invariant of a collaborator
+     * (`FenceState`) that nothing here reds on. [relocationPatch] is `internal` and its [acked] set
+     * is supplied by the caller, so a receiver that is not a monotone `FenceState` — every direct
+     * caller in the suite, and any future one — still gets the narrow rule rather than a refusal on
+     * a row that owes nothing.
      */
     private fun unackedCarriedDonors(deadPath: PathKey, acked: Set<ReplicaId>): List<ReplicaId> =
         transferRelocIn[deadPath]?.keys.orEmpty()
             .filter { donor ->
-                donor !in acked && recipientsOf(deadPath, donor).any { to -> effRow(deadPath, donor, to) > 0L }
+                donor !in acked && recipientsOf(deadPath, donor).any { to -> carriedResidual(deadPath, donor, to) > 0L }
             }
             .sortedBy { it.value }
+
+    /**
+     * `transferRelocIn − transferRelocOut` at one `(path, donor, recipient)` cell — what an earlier
+     * move carried onto this key and a later one has not yet cancelled. Deliberately **not**
+     * [effRow]: the base row is not part of this question (see [unackedCarriedDonors]).
+     */
+    private fun carriedResidual(path: PathKey, donor: ReplicaId, recipient: ReplicaId): Long = checkedSub(
+        row(transferRelocIn, path, donor, recipient),
+        row(transferRelocOut, path, donor, recipient),
+    )
 
     /**
      * The **base** slots of [edge], by replica — the shape a [ControlCommand.QuiesceAck]
@@ -1625,6 +1675,22 @@ public class EntitlementLedger private constructor(
 
     /** The donor rows recorded at [path] (empty if none) — `internal`, test support. */
     internal fun transfersAt(path: PathKey): Map<ReplicaId, GCounter> = transfers[path] ?: emptyMap()
+
+    /**
+     * The donors an earlier move carried a row *onto* [edge] for — exactly the set
+     * [unackedCarriedDonors] enumerates, before either of its filters. `internal`, test support: an
+     * arm asserting that a donor was or was not *refused* has to establish first that the
+     * enumeration reaches it at all, or it proves nothing about the filters.
+     */
+    internal fun carriedDonorsOn(edge: AttachmentId): Set<ReplicaId> =
+        transferRelocIn[PathKey.of(edge)]?.keys ?: emptySet()
+
+    /**
+     * `transferRelocIn − transferRelocOut` for one hand-off at [edge] — the residual
+     * [unackedCarriedDonors] filters on. `internal`, test support.
+     */
+    internal fun carriedResidualOn(edge: AttachmentId, donor: ReplicaId, to: ReplicaId): Long =
+        carriedResidual(PathKey.of(edge), donor, to)
 
     /** Every group named as a parent or child by any (singleton or divergent) record. */
     internal fun allGroups(): Set<GroupId> =

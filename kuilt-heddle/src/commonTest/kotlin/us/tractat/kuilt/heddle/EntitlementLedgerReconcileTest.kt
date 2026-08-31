@@ -961,11 +961,76 @@ class EntitlementLedgerReconcileTest {
             },
             // §5.4 (iii) idempotence survives the new refusal: a drained carried row must not
             // re-refuse merely because its donor appears in `transferRelocIn`.
+            //
+            // NOTE this arm alone is green by construction — the fixture drives BOTH predicates
+            // false at once (alice acks AND her residual is zero), so dropping either filter on its
+            // own leaves it green. `aDrainedCarriedRowDoesNotReRefuseWhenItsDonorIsGone` below is
+            // the arm where exactly one is false; keep them as a pair.
             {
                 assertIs<Relocation.Nothing>(
                     chain.move1.patch.piece(move2.patch)
                         .relocationPatch(e8, mapOf(e4 to moved.baseFinalsOn(e4))),
                     "a second move off the drained key must carry nothing, not refuse",
+                )
+            },
+        )
+    }
+
+    /**
+     * The arm where **exactly one** of the refusal's two predicates is false, and the reason the
+     * pair above is not enough. `alice` departs *after* the second move has already cancelled her
+     * carried row: she is absent from the acks (predicate one true) while her carried residual at
+     * the dead key is zero (predicate two false). Nothing is owed there, so nothing may be refused.
+     *
+     * Without this arm the refusal's mutation table is degenerate — dropping the ack filter alone,
+     * or the residual filter alone, both stay green, and only dropping *both* reds. With it,
+     * dropping the residual filter reds here and dropping the ack filter reds in
+     * [theSameChainMovesWhenEveryCarriedDonorStillAcks], so each filter is pinned on its own.
+     *
+     * The state is unreachable on the **production** receiver — `FenceState.acks` never shrinks, so
+     * a donor whose row was cancelled by a move it acked stays acked forever (see
+     * `EntitlementLedger.unackedCarriedDonors`). That is the point: [EntitlementLedger.relocationPatch]
+     * is `internal` and takes its ack set from the caller, so the narrow rule has to hold on the
+     * argument it is handed, not on an invariant of a class it never reads.
+     */
+    @Test
+    fun aDrainedCarriedRowDoesNotReRefuseWhenItsDonorIsGone() {
+        val chain = handOffChainAcrossTwoMoves()
+        val staged = chain.staged
+        val move2 = assertIs<Relocation.Moved>(
+            chain.move1.patch.relocationPatch(e8, mapOf(e4 to staged.baseFinalsOn(e4))),
+            "fixture: the second hop must move so there is a drained row to re-offer",
+        )
+        val moved = staged.piece(move2.patch)
+        val drained = chain.move1.patch.piece(move2.patch)
+        val departedAcks = moved.baseFinalsOn(e4).filterKeys { it != alice }
+        assertAll(
+            // ── the rig: exactly one predicate is false, and the arm says which.
+            {
+                assertTrue(
+                    alice !in departedAcks.keys,
+                    "rig: alice must be absent from the acks, or the ack predicate is not exercised",
+                )
+            },
+            {
+                assertTrue(
+                    alice in drained.carriedDonorsOn(e4),
+                    "rig: alice must still NAME a carried row at the dead key — a donor the " +
+                        "enumeration never reaches cannot be refused for any reason",
+                )
+            },
+            {
+                assertEquals(
+                    0L,
+                    drained.carriedResidualOn(e4, alice, bob),
+                    "rig: …and that row must be fully cancelled, so the residual predicate is false",
+                )
+            },
+            // ── the property.
+            {
+                assertIs<Relocation.Nothing>(
+                    drained.relocationPatch(e8, mapOf(e4 to departedAcks)),
+                    "a drained carried row must not re-refuse when its donor is gone",
                 )
             },
         )

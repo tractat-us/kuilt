@@ -750,9 +750,18 @@ class EntitlementLedgerValidateTest {
      * The base rows are untouched on both keys — `transfers` is grow-only and no fix can erase one —
      * so this state is byte-identical to the abandoned one apart from the relocation pair.
      *
-     * It clears the report through **clause 3**, not clause 2: the dead generation's books now
-     * settle at zero for both parties, which is provenance the lattice carries rather than the
-     * magnitude coincidence clause 2 has to live with.
+     * It clears the report through **clause 2** — `liveKeyCoversRows` — and clause 3 is never
+     * reached: `transferRelocOut` drives the dead key's effective magnitude to `0`, and
+     * `0 ≤ effRow(livePath, …)` holds for every pair unconditionally, so the walk short-circuits
+     * there. This test does **not** exercise the consequence clause, and an earlier KDoc here said
+     * it did.
+     *
+     * Clearing through clause 2 is nevertheless not the magnitude *coincidence* that clause is
+     * otherwise vulnerable to. The coincidence is a later ordinary [EntitlementLedger.transfer]
+     * between the same pair raising the live key's base total until it happens to cover the dead
+     * one; `transferRelocOut` is written by a carry and by nothing else, so a zeroed dead side is
+     * real provenance read through a magnitude comparison. `aLaterTransferBetweenTheSamePairMasksTheReport`
+     * is the arm that pins the coincidence; this one pins the carry.
      */
     @Test
     fun aRelocationCarryCancelsTheDeadKeyAndClearsTheReport() {
