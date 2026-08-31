@@ -51,18 +51,31 @@ internal class CloseRecordingVoterFabric(voters: List<NodeId>) : InMemoryVoterFa
 }
 
 /**
- * One link end that records what was done to it: [closed] completes when someone called [close], and
- * [answered] completes on the first frame the *peer* sent back.
+ * One link end that records what was done to it: [closed] completes when someone called [close],
+ * [closeCalls] counts **how many times** they did, and [answered] completes on the first frame the
+ * *peer* sent back.
  *
  * [answered] is the fixture's precondition probe. A dialed-but-unanswered edge (the stall this suite is
  * built on) also ends up un-closed, so "not closed" alone cannot distinguish *the seam failed to close a
  * live link* from *there was never a live link here*. A frame arriving means the peer completed its side
  * of the `MeshHello` exchange, i.e. this end really was published into a mesh.
+ *
+ * [closeCalls] exists for the opposite direction: an end that *was* published is the mesh's to close, and
+ * a teardown that closes it a second time on its own account has over-reached rather than under-reached.
+ * [closed] cannot see that — a [CompletableDeferred] latches on the first completion — so the count is
+ * what separates "closed once, by its seam" from "closed again, by a teardown that could not tell a
+ * published dial from an abandoned one".
  */
 internal class CloseRecordingConnection(private val raw: Connection) : Connection {
 
+    private val lock = reentrantLock()
+    private var closeCallCount = 0
+
     /** Completes when [close] is **called** — the production obligation being pinned. */
     val closed: CompletableDeferred<Unit> = CompletableDeferred()
+
+    /** How many times [close] has been called on this end. */
+    val closeCalls: Int get() = lock.withLock { closeCallCount }
 
     /** Completes on the first inbound frame — i.e. the peer handshaked, so this link went live. */
     val answered: CompletableDeferred<Unit> = CompletableDeferred()
@@ -78,6 +91,7 @@ internal class CloseRecordingConnection(private val raw: Connection) : Connectio
     /** Records the call **before** delegating: the obligation is that the seam closed us, not that the
      * underlying spool accepted it (`closeBestEffort` swallows a refusal, and so would this). */
     override suspend fun close() {
+        lock.withLock { closeCallCount++ }
         closed.complete(Unit)
         raw.close()
     }

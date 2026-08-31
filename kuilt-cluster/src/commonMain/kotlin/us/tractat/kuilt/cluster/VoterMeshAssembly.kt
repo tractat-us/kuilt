@@ -1,5 +1,7 @@
 package us.tractat.kuilt.cluster
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -103,7 +105,8 @@ import kotlin.time.Duration
  * @param formationTimeout Hard bound on initial mesh formation — the initial dials plus awaiting the
  *   full K_M roster on every voter. A stalled handshake or a crashed voter fails formation fast rather
  *   than hanging — and on that failure this function tears down everything it started (cancels the
- *   accept-pumps and closes the partially-formed seams) before rethrowing, since the caller receives no
+ *   accept-pumps, closes the partially-formed seams, and closes the dials abandoned mid-handshake, which
+ *   no seam ever published and so cannot reach) before rethrowing, since the caller receives no
  *   [VoterMesh] handle to close. (Post-formation reconnection is unbounded by design.)
  * @param backoffBase Base delay for the reconnect backoff (full jitter, per [ExponentialBackoff]).
  * @param backoffCap Cap on the reconnect backoff — a long-partitioned peer is re-dialed at most this often.
@@ -151,6 +154,18 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
     val meshScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
     val fullPeerIdSet: Set<PeerId> = ordered.map { PeerId(it.value) }.toSet()
 
+    // Formation dials this function has opened that no seam has taken ownership of YET. Joined
+    // immediately after `dial` returns and left the instant `addLink` returns, so membership means
+    // exactly "the MeshHello exchange is still running" — which on the failure path below means
+    // "abandoned mid-handshake, and nothing but this function can close it" (#2587).
+    //
+    // Neither boundary can be skipped by a cancellation: no suspension point separates `dial`
+    // returning from the join, or `addLink` returning from the leave, and a coroutine is only
+    // cancellable at a suspension point. The dial coroutines run concurrently (one per voter, on a
+    // production dispatcher), so the list is lock-guarded rather than resting on where they schedule.
+    val unpublishedDialsLock = reentrantLock()
+    val unpublishedDials = mutableListOf<Connection>()
+
     try {
         // (a) Persistent accept-pump per voter, from t0. Drains each voter's inbound route forever, so a
         // peer that re-dials after a drop is admitted just like an initial joiner — not merely the fixed
@@ -175,7 +190,17 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
                     // Dial every higher-ranked voter once (lower id dials higher).
                     launch {
                         ordered.drop(index + 1).forEach { higher ->
-                            mesh.addLink(dial(voter, PeerId(higher.value)))
+                            val conn = dial(voter, PeerId(higher.value))
+                            unpublishedDialsLock.withLock { unpublishedDials += conn }
+                            mesh.addLink(conn)
+                            // addLink returned, so the mesh has taken the conn off our hands on every
+                            // arm it has: it published the link, registered it as draining, or already
+                            // closed it itself. Deregister BY IDENTITY — a Connection is free to define
+                            // equals, and two distinct links must never be conflated into one entry.
+                            unpublishedDialsLock.withLock {
+                                val at = unpublishedDials.indexOfFirst { it === conn }
+                                if (at >= 0) unpublishedDials.removeAt(at)
+                            }
                         }
                     }
                     launch { mesh.peers.first { it.containsAll(fullPeerIdSet) } }
@@ -234,6 +259,34 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
                     it.close()
                 } catch (_: Throwable) {
                     // Best-effort: one seam refusing to close must not strand its siblings open.
+                }
+            }
+            // And the dials no seam ever learned about (#2587). The loop above closes every link a seam
+            // PUBLISHED; a dial still exchanging its MeshHello when the timeout fired never got that far
+            // — `addLink` suspends inside the handshake and the cancellation propagates out of it — so
+            // the seam close provably cannot reach it, and neither can `meshScope.cancel()`: the conn
+            // belongs to the caller's transport, not to any scope this function owns. Left open it is a
+            // live session per stalled dial (over WebSockets, one held until the caller-owned HttpClient
+            // is closed, with the peer seeing an ESTABLISHED session from a voter that has given up) —
+            // the same zombie shape the seam close prevents, one layer down. A stalled dial is not an
+            // edge case: it is what a crashed or slow voter produces, i.e. the ordinary formation
+            // timeout.
+            //
+            // ONLY the abandoned ones. A conn leaves the register the instant `addLink` returns, so a
+            // published link is never in it. That boundary is the point, not an optimisation: closing a
+            // conn the mesh owns would close it a second time behind the back of the seam that owns its
+            // lifecycle — an over-reach worse than the leak, and one no close COUNT can tell apart from
+            // this fix (VoterMeshFormationTimeoutTest splits them by identity for exactly that reason).
+            //
+            // Read under the lock, closed outside it: `close` suspends, and a suspend call inside a lock
+            // is the repo's standing no. Per-conn `try`/`catch (Throwable)` for the same reason the seam
+            // loop above has one — inside this shield a CancellationException can only be one the conn's
+            // own `close` minted, and rethrowing it would skip every remaining conn (#1803, #1824).
+            unpublishedDialsLock.withLock { unpublishedDials.toList() }.forEach {
+                try {
+                    it.close()
+                } catch (_: Throwable) {
+                    // Best-effort, per conn: one refusing to close must not strand its siblings open.
                 }
             }
         }
