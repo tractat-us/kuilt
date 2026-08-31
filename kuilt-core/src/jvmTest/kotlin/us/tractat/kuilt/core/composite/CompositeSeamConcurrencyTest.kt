@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real OS-thread co
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.InMemoryLoom
@@ -127,6 +129,18 @@ class CompositeSeamConcurrencyTest {
     /**
      * Run [op]; fail loudly the instant a race exception escapes. A clean closed-seam /
      * not-connected [IllegalStateException] is acceptable once the seam is torn.
+     *
+     * `ensureActive()` is load-bearing, and the arm below is NOT the narrow catch it looks like:
+     * `TimeoutCancellationException` extends `CancellationException` extends **`IllegalStateException`**
+     * (#2535), so without it the arm swallows [runConcurrencyStress]'s own cap firing. The cap's
+     * cancellation is then re-raised by the `awaitAll` below and the hang report still survives — but
+     * the swallow spins this `repeat` loop to completion on an already-cancelled job, which is exactly
+     * what the harness's `dispatcherVerdict()` reads as CPU-BOUND on a quiescent hang. It is also one
+     * added assertion away from #2528's measured failure, where an arm that asserted on `e.message`
+     * threw an `AssertionError` *instead of* the `TimeoutCancellationException` the harness watches
+     * for, destroying the whole report. `ensureActive()` rethrows only when THIS job is cancelled, and
+     * it rethrows the original `TimeoutCancellationException` — so the harness's by-type watch still
+     * matches.
      */
     private suspend fun runCatchingBroadcast(op: suspend () -> Unit) {
         try {
@@ -134,6 +148,7 @@ class CompositeSeamConcurrencyTest {
         } catch (e: ConcurrentModificationException) {
             throw AssertionError("a send leaked a ConcurrentModificationException; composite state is not thread-safe", e)
         } catch (e: IllegalStateException) {
+            currentCoroutineContext().ensureActive()
             // Clean closed-seam signal — acceptable.
         }
     }

@@ -63,6 +63,13 @@ class RaftSimWedgeDumpTest {
      * Only cancellation is a wedge. An ordinary assertion/logic failure inside the body — including
      * the [AssertionError] the bounded `await*` helpers already throw *with* their own dump — must
      * propagate untouched and must not emit a second, redundant dump.
+     *
+     * The `catch (e: IllegalStateException)` below is the exact shape #2535 is about —
+     * `CancellationException` extends [IllegalStateException], so such an arm normally swallows the
+     * very cancellation this file is a self-test for. It is sound **here** only because the guarded
+     * body cannot suspend: `error("boom")` throws synchronously, so [dumpOnWedge] returns without
+     * reaching a suspension point and no cancellation can be delivered inside the `try`. Give the body
+     * anything that suspends and this arm must gain `currentCoroutineContext().ensureActive()`.
      */
     @Test
     fun ordinaryFailureIsNotTreatedAsAWedge() = raftSimTest(n = 3) { sim ->

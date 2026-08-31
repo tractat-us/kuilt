@@ -9,6 +9,8 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
@@ -126,6 +128,16 @@ class CompositeSeamCloseTornConcurrencyTest {
             try {
                 withTimeout(3.seconds) { host.state.first { it is SeamState.Torn } }
             } catch (e: TimeoutCancellationException) {
+                // The bound above is nested inside `runConcurrencyStress`'s own cap, and BOTH expiries
+                // arrive here as a `TimeoutCancellationException` — type cannot tell them apart (#2535).
+                // Without this discriminator the outer cap's cancellation is converted into the bogus
+                // lost-Torn AssertionError below, which reaches the harness *instead of* the
+                // `TimeoutCancellationException` it watches for: the entire hang report (stage, progress,
+                // dispatcher verdict, coroutine census) is never produced. Measured: unguarded, the cap
+                // surfaced as this assertion; guarded, the hang report is produced. `ensureActive()` is
+                // inert when this bound genuinely expires on a live job, so the invariant below still
+                // reports normally — also measured.
+                currentCoroutineContext().ensureActive()
                 throw AssertionError(
                     "iter=$iter: close() returned but state never reached the terminal Torn — a rollup " +
                         "write clobbered close()'s Torn. Observed " +
@@ -153,11 +165,19 @@ class CompositeSeamCloseTornConcurrencyTest {
         }
     }
 
-    /** Run [op]; a clean closed-seam [IllegalStateException] is acceptable once the seam is torn. */
+    /**
+     * Run [op]; a clean closed-seam [IllegalStateException] is acceptable once the seam is torn.
+     *
+     * The arm is not as narrow as it looks: `CancellationException` extends `IllegalStateException`
+     * (#2535), so it also catches [runConcurrencyStress]'s cap. `ensureActive()` rethrows only a
+     * cancellation of THIS job — `CompositeSeamConcurrencyTest.runCatchingBroadcast` carries the full
+     * argument.
+     */
     private suspend fun runCatchingClosed(op: suspend () -> Unit) {
         try {
             op()
         } catch (_: IllegalStateException) {
+            currentCoroutineContext().ensureActive()
             // Clean closed-seam signal — acceptable.
         }
     }

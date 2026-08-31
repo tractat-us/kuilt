@@ -9,6 +9,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -114,6 +116,10 @@ class LinkSeamConcurrencyTest {
         } catch (e: ClosedSendChannelException) {
             throw AssertionError("broadcast leaked a raw ClosedSendChannelException; expected a clean closed-seam IllegalStateException", e)
         } catch (e: IllegalStateException) {
+            // `CancellationException` extends `IllegalStateException` (#2535), so this arm also catches
+            // `runConcurrencyStress`'s cap. `ensureActive()` rethrows only a cancellation of THIS job —
+            // `CompositeSeamConcurrencyTest.runCatchingBroadcast` carries the full argument.
+            currentCoroutineContext().ensureActive()
             // Clean closed-seam signal — acceptable.
         }
     }
