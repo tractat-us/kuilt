@@ -6311,9 +6311,202 @@ val verifySeamHarnessCoverage by tasks.registering {
     }
 }
 
+/**
+ * Every `commonTest` class that produced results on one target must have produced results on every
+ * other target that ran (#2185).
+ *
+ * ## The failure it exists for
+ *
+ * A `:kuilt-otel` class drove enough log volume to push one teamcity service message past the wasm
+ * harness's 1 MB ceiling. Past that, the harness reports `testFailed name='overflow-message'` and
+ * **the task exits 0** — the class's results are simply gone, the suite reads green on every target,
+ * and nothing anywhere says one target's verdict was dropped. The tests it silently stopped running
+ * were the refusal guards on the path that DELETES a user's persisted telemetry. Its loud twin
+ * (#2183) fails the task with a misleading "did not discover any tests"; this is the quiet form, and
+ * only the quiet form needs a guard.
+ *
+ * ## Why the expected set comes from the XML rather than from the sources
+ *
+ * The obvious design — scan `src/commonTest` for `class …Test` and require each one everywhere —
+ * has a large false-red surface: a class with no `@Test`, an `@Ignore`d one, an abstract suite, a
+ * helper that merely ends in `Test`. Taking the expected set as the **union of what actually ran**
+ * removes all of it: a class is only ever demanded from a target because a sibling target already
+ * produced it. That is exactly #2185's shape, and it cannot invent an expectation of its own.
+ *
+ * The source scan survives only as the *classifier*: a class missing from one target fails only if
+ * `src/commonTest` declares it. Anything else is a legitimately target-specific test — the four
+ * `src/jvmTest` concurrency harnesses in `:kuilt-otel`, an `appleTest`-only fabric test.
+ *
+ * ## It compares whatever ONE invocation produced, which is why CI needs a job of its own
+ *
+ * `ci.yml` splits the matrix across two runners: `build-jvm` is `./gradlew build` with every
+ * wasm/native test execution excluded, and `build-native` runs only those and never invokes
+ * `check`. So `check`-wiring alone leaves this comparing JVM against Android in one job and
+ * nothing at all in the other — **structurally vacuous on the very pairing #2185 is about**, and
+ * green by construction. The `test-result-parity` job exists to fix that: both jobs already
+ * upload every module's `build/test-results/` with paths preserved, so it downloads both artifacts
+ * over a fresh checkout and runs this task against the reconstituted tree. The `check` wiring stays, and
+ * earns its keep locally (a full `CI=1 ./gradlew build` sees every target at once) and in
+ * `build-jvm` (JVM against both Android variants).
+ *
+ * ## Why it only runs under `CI` (or when invoked by name)
+ *
+ * A `--tests`-filtered local run prunes one target's results directory to the filtered class, which
+ * is indistinguishable here from a silent drop — and `CLAUDE.md` recommends `--tests` for exactly
+ * the single-test loop. Rather than guess, it stands down unless `CI` is set or somebody asked for
+ * it by name. A full local `CI=1 ./gradlew build` reproduces what CI checks.
+ *
+ * ## What a green here does NOT mean
+ *
+ * It does not mean every target ran. A target whose task never ran leaves no results directory and
+ * is skipped, so this cannot catch "the whole target silently produced nothing" — that shape fails
+ * loudly today (#2183) and is a different guard if it ever stops doing so. It also says nothing
+ * about a class that lost *some* of its cases on one target while keeping others; the unit here is
+ * the class, because that is the unit the harness drops.
+ */
+val verifyTestResultParity by tasks.registering {
+    group = "verification"
+    description = "Fails if a commonTest class produced results on one target and silently none on another (#2185)."
+
+    // Configuration-time capture of plain serializable values only — module path, commonTest root,
+    // results root. The source READ happens in `doLast`: it is ~800 files, and a guard has no
+    // business doing that much I/O while the build is being configured. (A `data class` declared
+    // here would also capture the script object, which the configuration cache refuses to
+    // serialize — hence the Triple.)
+    val classDeclaration = Regex(
+        """(?m)^(?:@\w+(?:\([^)]*\))?\s*)*(?:public\s+|internal\s+|private\s+|open\s+|final\s+|data\s+)*class\s+(\w+)""",
+    )
+    val surfaces = subprojects.mapNotNull { module ->
+        val commonTest = module.projectDir.resolve("src/commonTest/kotlin")
+        if (!commonTest.isDirectory) return@mapNotNull null
+        Triple(module.path, commonTest, module.layout.buildDirectory.get().asFile.resolve("test-results"))
+    }
+
+    // Ordering only, never a dependency: this task must not drag the whole multi-target test matrix
+    // into a build that did not ask for it. `check` already pulls `allTests`; when it does, this
+    // runs after them, and when it does not, it reads whatever the last run left and skips the rest.
+    mustRunAfter(allprojects.map { it.tasks.withType(AbstractTestTask::class.java) })
+
+    // Test results are build outputs, not sources, so a content fingerprint would be a fingerprint
+    // of the very thing under inspection. The scan is a few hundred XML headers — cheaper than
+    // deciding whether it can be skipped.
+    outputs.upToDateWhen { false }
+
+    val suiteName = Regex("""<testsuite\s+name="([^"]+)"""")
+    // Bytes of each results XML scanned for its `<testsuite name=…>` header. It is the second line.
+    val suiteHeaderScan = 2048
+    val ci = providers.environmentVariable("CI")
+    val askedForByName = gradle.startParameter.taskNames.any { it.substringAfterLast(':') == name }
+    doLast {
+        if (ci.orNull.isNullOrBlank() && !askedForByName) {
+            logger.lifecycle(
+                "verifyTestResultParity: stood down — a --tests-filtered run prunes one target's " +
+                    "results and reads as a silent drop. Set CI=1, or run the task by name.",
+            )
+            return@doLast
+        }
+        val failures = mutableListOf<String>()
+        var comparedModules = 0
+        var comparedClasses = 0
+        // Which targets actually took part. Reported on SUCCESS, because a guard against silence
+        // whose green does not say what it compared is one absent artifact away from being
+        // vacuous and unfalsifiable — and it would read exactly the same either way.
+        val comparedTargets = sortedSetOf<String>()
+        val skippedForOneTarget = sortedMapOf<String, String>()
+
+        surfaces.forEach { (modulePath, commonTestRoot, resultsRoot) ->
+            val taskDirs = (resultsRoot.listFiles() ?: emptyArray())
+                .filter { it.isDirectory }
+                .associateWith { dir -> dir.listFiles { f -> f.name.startsWith("TEST-") && f.extension == "xml" }.orEmpty() }
+                .filterValues { it.isNotEmpty() }
+            if (taskDirs.size < 2) {
+                taskDirs.keys.singleOrNull()?.let { skippedForOneTarget[modulePath] = it.name }
+                return@forEach
+            }
+            comparedModules++
+            comparedTargets += taskDirs.keys.map { it.name }
+
+            // The identifier is spelled differently on every target — `FooTest[jvm]` on the JVM,
+            // `macosArm64Test.us.tractat.kuilt.otel.FooTest` on Kotlin/Native and wasm — so it is
+            // normalised to the SIMPLE class name: drop a leading task-name segment, drop a
+            // trailing `[variant]`, keep what is after the last dot. Two same-named classes in
+            // different packages of one module would merge; that makes this weaker, never louder.
+            val ran = taskDirs.mapValues { (dir, files) ->
+                files.mapNotNull { file ->
+                    suiteName.find(file.readText(Charsets.UTF_8).take(suiteHeaderScan))?.groupValues?.get(1)
+                }.map { it.removePrefix("${dir.name}.").substringBefore('[').substringAfterLast('.') }.toSet()
+            }
+            val union = ran.values.flatten().toSet()
+            comparedClasses += union.size
+
+            // Read only once a module has something to compare — most of the repo's ~800 commonTest
+            // files never reach this line in a build that ran one module's tests.
+            val commonTestClasses = commonTestRoot.walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .flatMap { file -> classDeclaration.findAll(file.readText()).map { it.groupValues[1] } }
+                .toSet()
+
+            ran.forEach { (dir, present) ->
+                val missing = (union - present).filter { it in commonTestClasses }.sorted()
+                if (missing.isNotEmpty()) {
+                    val sawItRun = missing.associateWith { cls ->
+                        ran.filterValues { cls in it }.keys.map { it.name }.sorted()
+                    }
+                    failures += "$modulePath: ${dir.name} produced NO results for " +
+                        "${missing.size} commonTest class(es) that other targets ran:" +
+                        missing.joinToString("") { "\n    $it  (ran on ${sawItRun.getValue(it).joinToString(", ")})" }
+                }
+            }
+        }
+
+        if (failures.isNotEmpty()) {
+            error(
+                failures.joinToString("\n\n") + "\n\nA target that drops a class's results and still " +
+                    "exits 0 is the silent form of #2183's message-size ceiling (#2185): the suite " +
+                    "reads green everywhere while one target's verdict has been thrown away. The " +
+                    "usual cause is log volume — one test emitting more than the harness will carry " +
+                    "in a single service message. Cut what the code under test logs, or split the " +
+                    "class. If a class is deliberately absent from one target, it does not belong " +
+                    "in src/commonTest.",
+            )
+        }
+        // Reporting what it compared is not the same as proving it compared anything. With no
+        // `test-results` under any module — an artifact that failed to download, a job whose
+        // upload step was skipped, a rename of the results directory — every module takes the
+        // `< 2` branch above, `comparedModules` stays 0, and this task greens while printing
+        // "0 class(es) across 0 module(s)". That is the guard being one level above the silence it
+        // exists to catch, and it reads identically to a clean repo. Scoped to `askedForByName`
+        // because that is exactly the CI job whose whole purpose is this comparison; a `check`-
+        // driven run legitimately compares nothing when only one target's tests ran.
+        if (askedForByName && comparedModules == 0) {
+            error(
+                "verifyTestResultParity: compared NOTHING — no module had results from two or more " +
+                    "targets. Invoked by name, that is a broken invocation, not a clean repo: the " +
+                    "results artifacts did not reach this checkout. Check that both test-results " +
+                    "artifacts downloaded into the repo root before this ran.",
+            )
+        }
+        logger.lifecycle(
+            "verifyTestResultParity: $comparedClasses class(es) across $comparedModules module(s), " +
+                "over ${comparedTargets.size} target(s): ${comparedTargets.joinToString(", ")}",
+        )
+        // A module reduced to ONE target is invisible to this check. Named rather than counted, so
+        // "wasm results never reached this job" cannot hide behind a green — it is the difference
+        // between the guard passing and the guard not running.
+        if (skippedForOneTarget.isNotEmpty()) {
+            logger.lifecycle(
+                "verifyTestResultParity: ${skippedForOneTarget.size} module(s) had only one target's " +
+                    "results and were NOT compared: " +
+                    skippedForOneTarget.entries.joinToString(", ") { "${it.key} (${it.value})" },
+            )
+        }
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
+        dependsOn(rootProject.tasks.named("verifyTestResultParity"))
         dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
         dependsOn(rootProject.tasks.named("forbidBoltRejoiningTheLattice"))
         dependsOn(rootProject.tasks.named("forbidUnlintedModule"))

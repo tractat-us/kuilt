@@ -4,6 +4,7 @@ name: ci
 #
 #   detect  →  build-jvm          ┐
 #           →  build-native       │
+#           →  test-result-parity │
 #           →  detekt             │
 #           →  dokka              ├→  ci-required (the one required check)
 #           →  doc-citations      │
@@ -590,6 +591,62 @@ jobs:
         # pass) — the module-doc build is what parses module.md + KDoc and is far faster.
         run: ./gradlew dokkaGenerateModuleHtml --max-workers=2
 
+  # ── test-result-parity ──────────────────────────────────────────────────────
+  # The one place a JVM result and a wasm result exist on the same machine (#2185).
+  #
+  # `verifyTestResultParity` compares, per module, which commonTest classes produced results on
+  # each target — a class present on one and silently absent from another is the quiet form of
+  # #2183's message-size ceiling, where the harness drops a class's results and exits 0. But the
+  # comparison needs both halves of the matrix, and the job split above puts them on two runners:
+  # build-jvm excludes every wasm/native test execution, and build-native never invokes `check`.
+  # Wiring the task into `check` alone therefore leaves it comparing JVM against Android in one
+  # job and nothing at all in the other — green by construction, on the very pairing #2185 is
+  # about.
+  #
+  # Both jobs already upload `**/build/test-results/` with paths preserved, so downloading both
+  # artifacts over a fresh checkout reconstitutes exactly the tree a single-runner build would
+  # have left, and the task runs unchanged. Cheap: no compilation, no Kotlin/Native toolchain.
+  test-result-parity:
+    needs: [detect, build-jvm, build-native]
+    if: needs.detect.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: true
+
+      # Configuring the Android library modules needs an SDK even though nothing is built.
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      # Into the checkout root: the artifacts carry `<module>/build/test-results/<task>/…`, and the
+      # two jobs' task directories are disjoint, so they merge rather than collide.
+      - name: Download JVM/Android test results
+        uses: actions/download-artifact@v7
+        with:
+          name: test-reports-jvm
+          path: .
+
+      - name: Download wasm/native test results
+        uses: actions/download-artifact@v7
+        with:
+          name: test-reports-native
+          path: .
+
+      - name: Verify no target silently dropped a commonTest class
+        run: ./gradlew verifyTestResultParity
+
   # ── doc-citations ───────────────────────────────────────────────────────────
   # The docs-integrity guards, all of which are pure file-reading Gradle tasks:
   #   - verifyDocCitations — every `<!-- verbatim from <path>#<symbol> -->` still matches the
@@ -1103,7 +1160,7 @@ jobs:
   #   - capability-probes skipped/failed on a non-docs change → fails → closes the
   #     regressed-race-merges-green gap (#1768).
   ci-required:
-    needs: [detect, build-jvm, build-native, detekt, dokka, doc-citations, spike-compile, capability-probes]
+    needs: [detect, build-jvm, build-native, test-result-parity, detekt, dokka, doc-citations, spike-compile, capability-probes]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1129,6 +1186,7 @@ jobs:
           DETECT="${{ needs.detect.result }}"
           BUILD_JVM="${{ needs.build-jvm.result }}"
           BUILD_NATIVE="${{ needs.build-native.result }}"
+          PARITY="${{ needs.test-result-parity.result }}"
           DETEKT="${{ needs.detekt.result }}"
           DOKKA="${{ needs.dokka.result }}"
           DOC_CITATIONS="${{ needs.doc-citations.result }}"
@@ -1140,6 +1198,7 @@ jobs:
           echo "detect:             $DETECT"
           echo "build-jvm:          $BUILD_JVM"
           echo "build-native:       $BUILD_NATIVE"
+          echo "test-result-parity: $PARITY"
           echo "detekt:             $DETEKT"
           echo "dokka:              $DOKKA"
           echo "doc-citations:      $DOC_CITATIONS"
@@ -1202,7 +1261,7 @@ jobs:
           if [ "$DOCS_ONLY" = "true" ]; then
             # Docs-only path: the heavy jobs must have been skipped (not run).
             # If any somehow ran and failed, that's still a failure.
-            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "detekt:$DETEKT" "capability-probes:$CAPABILITY_PROBES"; do
+            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "test-result-parity:$PARITY" "detekt:$DETEKT" "capability-probes:$CAPABILITY_PROBES"; do
               name="${pair%%:*}"; result="${pair#*:}"
               if [ "$result" != "skipped" ] && [ "$result" != "success" ]; then
                 echo "::error::docs-only=true but $name had unexpected result: $result."; exit 1
@@ -1214,11 +1273,11 @@ jobs:
             # skipped here means a job was bypassed without a legitimate
             # docs-only classification — the exact race condition being closed.
             # Treat skipped the same as failure.
-            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "detekt:$DETEKT" "capability-probes:$CAPABILITY_PROBES"; do
+            for pair in "build-jvm:$BUILD_JVM" "build-native:$BUILD_NATIVE" "test-result-parity:$PARITY" "detekt:$DETEKT" "capability-probes:$CAPABILITY_PROBES"; do
               name="${pair%%:*}"; result="${pair#*:}"
               if [ "$result" != "success" ]; then
                 echo "::error::Non-docs change requires a passing $name (result: $result). skipped is not accepted."; exit 1
               fi
             done
-            echo "build-jvm, build-native, detekt and capability-probes all succeeded. Gate green."
+            echo "build-jvm, build-native, test-result-parity, detekt and capability-probes all succeeded. Gate green."
           fi

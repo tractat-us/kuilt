@@ -134,11 +134,46 @@ internal class FailReadOfStore(private val backing: DurableStore, private val po
     override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
 }
 
-/** Delegates to [backing], but throws on every delete. */
+/**
+ * Delegates to [backing], but throws on **every** delete.
+ *
+ * Counts what it refused in the two units that stop being the same number once the caller
+ * retries: [deleteAttempts] is every call, [deleteTargets] is the distinct keys behind them.
+ * A retry path re-attempts a key it already failed, so the gap between the two is what a test
+ * asserting "once per key, not once per attempt" measures against — and asserting that gap is
+ * non-trivial is what stops such a test passing on a run that never retried at all, where the
+ * two claims are indistinguishable.
+ *
+ * **Refusal is unconditional, and there is deliberately no way to lift it.** A knob that let a
+ * caller stop and restart the refusals would model a *second* outage on the same segment number,
+ * and `WarpLogRecordExporter.sweep`'s KDoc proves that state unreachable: a number leaves
+ * `LogSegmentIndex.retired` the moment its delete lands and never re-enters, so a store that
+ * recovers and breaks again always fails on **fresh** numbers, which report either way. Such an
+ * arm passes whether the re-arm exists or not — the vacuity a mutation caught on this very PR, and
+ * whose test was rewritten around a restart instead. A knob left on a fake five suites share is an
+ * invitation to write that arm again, so the fake cannot express the state at all.
+ */
 internal class FailDeleteStore(private val backing: DurableStore) : DurableStore {
+    private val lock = reentrantLock()
+    private var attempts = 0
+    private val targets = mutableSetOf<StoreKey>()
+
+    /** Every [delete] call this store refused. */
+    fun deleteAttempts(): Int = lock.withLock { attempts }
+
+    /** The distinct keys those refusals named. */
+    fun deleteTargets(): Set<StoreKey> = lock.withLock { targets.toSet() }
+
     override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
     override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = backing.write(key, bytes)
-    override suspend fun delete(key: StoreKey): Unit = throw IllegalStateException("simulated delete failure")
+
+    override suspend fun delete(key: StoreKey) {
+        lock.withLock {
+            attempts++
+            targets += key
+        }
+        throw IllegalStateException("simulated delete failure")
+    }
 }
 
 /** Fails the [failOn]-th [write] call, then keeps failing until [failing] is cleared. */
