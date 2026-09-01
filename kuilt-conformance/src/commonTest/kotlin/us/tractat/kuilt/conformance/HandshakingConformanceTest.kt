@@ -37,6 +37,14 @@ class HandshakingConformanceTest : SeamConformanceSuite() {
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "handshaking()'s Hello preamble: the joiner learns the host's PeerId off the wire before its " +
+            "LinkSeam is built. Honest weakness: that exchange is a PRECONDITION of weave() returning, so a " +
+            "join path that stopped recording the peer would wedge the weave rather than red this arm.",
+        )
+
     override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean =
         dropBothEnds(link, host, joiner)
 

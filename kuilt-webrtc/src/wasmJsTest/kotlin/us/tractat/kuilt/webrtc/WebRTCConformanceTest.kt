@@ -1,5 +1,6 @@
 package us.tractat.kuilt.webrtc
 
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -97,4 +98,12 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
 
     override fun capabilityGaps(): Map<String, String> = emptyMap()
+
+    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.FilledByConstruction(
+            "a seeded roster: WebRTCPeerLink opens at MutableStateFlow(setOf(selfId, remoteId)), and on the " +
+            "host that remoteId is a locally-minted placeholder the ID exchange later replaces - so the " +
+            "roster has two entries from birth and one of them may not yet name the real peer.",
+        )
 }

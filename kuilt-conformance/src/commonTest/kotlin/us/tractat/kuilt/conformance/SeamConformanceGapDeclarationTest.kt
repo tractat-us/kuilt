@@ -26,6 +26,11 @@ class SeamConformanceGapDeclarationTest {
             override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
             override fun capabilities(): SeamCapabilities = caps
             override fun capabilityGaps(): Map<String, String> = gaps
+
+            // This harness never weaves — it only drives `everyFalseCapabilityDeclaresAGap` — so the
+            // arm is about the fixture it WOULD present, not about anything these tests observe.
+            override fun joinerRosterOrigin(): JoinerRosterOrigin =
+                JoinerRosterOrigin.FilledByConstruction("a shared roster: one InMemoryLoom, both ends")
         }
 
     @Test

@@ -8,6 +8,7 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.CloseReason
@@ -145,4 +146,13 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
     )
+
+    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.FilledByConstruction(
+            "a seeded roster: joinTag() reads serverLoom.selfPeerId off the shared server loom field, and the " +
+            "joiner's WebSocketSeam is LinkSeam-backed, so it opens at setOf(selfId, remoteId). The socket " +
+            "does have to connect for weave() to return, so the arm is not unfalsifiable - it is implied by " +
+            "a seam existing at all.",
+        )
 }

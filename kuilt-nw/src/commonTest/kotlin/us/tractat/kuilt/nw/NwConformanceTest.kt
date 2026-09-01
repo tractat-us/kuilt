@@ -1,6 +1,7 @@
 package us.tractat.kuilt.nw
 
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
@@ -128,4 +129,12 @@ class NwConformanceTest : SeamConformanceSuite() {
     // proven by NwLoopbackConformanceTest. Points at the by-design in-memory anchor, not #1412.
     override fun capabilityGaps(): Map<String, String> =
         mapOf("securesTransport" to CapabilityGaps.SECURES_TRANSPORT)
+
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "NwSeam._peers opens at { selfId } and grows only from a connection this seam resolved. Each " +
+            "loom has its own FakeNwApi with its own event flows and its own selfId; only the radio is " +
+            "shared, and a radio is a transport bus, not a roster.",
+        )
 }

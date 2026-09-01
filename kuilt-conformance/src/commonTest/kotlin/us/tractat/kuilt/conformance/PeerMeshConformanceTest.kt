@@ -43,6 +43,13 @@ class PeerMeshConformanceTest : SeamConformanceSuite() {
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "peerMesh's per-link handshake: the joiner mesh opens holding only its own id and learns the " +
+            "host's PeerId from the link handshake it ran itself.",
+        )
+
     override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
         // Drop BOTH ends so each side observes its peer's disconnect (a remote death, not a local
         // close()). Closing a peer's end completes the other's read loop → its last link drops →

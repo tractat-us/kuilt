@@ -6106,8 +6106,10 @@ object KotlinTypeGraph {
 //
 // The harness side scans TEST source for the transitive subclasses of `SeamConformanceSuite`; the
 // ANONYMOUS harnesses (`object : SeamConformanceSuite()` inside the suite's own meta-tests) have no
-// name to cite and are correctly absent from it. `git grep ": SeamConformanceSuite"` reports 21 hits
-// and the count that matters is 17 — the other four are three object expressions and a return type.
+// name to cite and are correctly absent from it. So `git grep ": SeamConformanceSuite"` always
+// over-reports what this task sees — object expressions and factory-function return types match the
+// same string. Compare NAMED `class … : SeamConformanceSuite()` declarations against the registry,
+// never the raw hit count (a literal here rotted once already, and nothing failed when it did).
 //
 // The transitive closure there is deliberate but has one known friction, stated before it bites: an
 // ABSTRACT harness base (`abstract class BaseFooConformanceTest : SeamConformanceSuite()`, subclassed

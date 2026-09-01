@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import platform.MultipeerConnectivity.MCPeerID
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -106,6 +107,15 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
+
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "the Apple session link's roster opens at { selfId } and grows only on MCSessionStateConnected, " +
+            "so a joiner that mishandled that event reds. Honest weakness: the shared fake session bus fires " +
+            "both ends' state callbacks, so this proves the joiner PROCESSES its event, not that a real " +
+            "MultipeerConnectivity negotiation happened.",
+        )
 
     /**
      * Kill the transport under both ends with no `close()` anywhere: the bus simply tells each link

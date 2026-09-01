@@ -46,4 +46,13 @@ class CompositeConformanceTest : SeamConformanceSuite() {
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
+
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "CompositeSeam._peers opens at { selfId } and the reachability fold publishes a peer only once " +
+            "an Announce has mapped (plyId, transportPeer) to a composite PeerId, so the joiner's roster is " +
+            "the Announce round-trip's output. Honest weakness: the ply underneath is one shared InMemoryLoom, " +
+            "so transport reachability IS shared construction — only the composite layer is proven here.",
+        )
 }

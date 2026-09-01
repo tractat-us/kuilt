@@ -1,6 +1,7 @@
 package us.tractat.kuilt.multipeer
 
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -105,4 +106,13 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
     override fun capabilityGaps(): Map<String, String> = mapOf(
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
+
+    /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
+    override fun joinerRosterOrigin(): JoinerRosterOrigin =
+        JoinerRosterOrigin.TheJoinPath(
+            "BridgePeerLink's roster opens at { selfId } and grows only in its peer-state callback, so a " +
+            "joiner that mishandled that callback reds. Honest weakness: the shared fake native lib fires " +
+            "BOTH ends' callbacks once both links have registered, so this proves the joiner PROCESSES its " +
+            "callback, not that a negotiation across two devices happened.",
+        )
 }
