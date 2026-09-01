@@ -1416,8 +1416,13 @@ opens a `quiesce(edge)` barrier over each retired inbound edge, every peer promi
 write that edge again and acks its own final values, and the move is *derived at apply time*
 from those recorded promises — so a lagged or deposed proposer cannot commit a wrong amount.
 Expect to call it twice: the acks are separate committed acts, so the first call is usually
-refused naming the peers it waits on (`pendingAcks(edge)` reads that set). It fails closed on a
-transfer-tangled strand, and it **blocks while any enrolled peer is down** — that peer is
+refused naming the peers it waits on (`pendingAcks(edge)` reads that set). A **transfer-tangled
+strand is re-homed with its hand-offs**, not refused: the three terms of a pocket — net inflow,
+already-charged service, and the transfer rows — travel together, so a recipient who merely holds
+handed-off credit keeps it across the move. It still refuses when the arithmetic or the fence says
+so: a replica net-negative on the strand, fenced edges that together cannot cover what was charged
+through them, a cross-parent re-home, or a carried hand-off whose donor is no longer on the roster
+to ack it. And it **blocks while any enrolled peer is down** — that peer is
 exactly the one that may hold an unreplicated reservation, so the wait is the safety property,
 not a bug. `enroll(replica)`/`depart()` keep the **agreed participant list** the barrier
 quantifies over (`enrolledReplicas()` reads it back); only a peer may depart itself, and
