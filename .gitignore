@@ -9,9 +9,14 @@ local.properties
 .claude/*.lock
 .claude/settings.local.json
 
-# Session-local "do next" scratch (see /next, /donext) — never committed
+# Session-local scratch (see /next, /donext, /goodnight) — never committed.
+# These are hand-off notes between Claude sessions, not documentation: they are
+# accurate for hours, name in-flight PRs and worker ids, and go stale silently.
+# Repo history is the wrong home for them. See CLAUDE.md, "Session scratch".
 next-plan.md
 next-plan-*.md
+morning-report.md
+morning-report-*.md
 
 # Brainstorming visual companion sessions
 .superpowers/
