@@ -633,13 +633,13 @@ jobs:
       # Into the checkout root: the artifacts carry `<module>/build/test-results/<task>/…`, and the
       # two jobs' task directories are disjoint, so they merge rather than collide.
       - name: Download JVM/Android test results
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: test-reports-jvm
           path: .
 
       - name: Download wasm/native test results
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: test-reports-native
           path: .
