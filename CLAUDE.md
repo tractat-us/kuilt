@@ -379,19 +379,45 @@ merge; the deterministic virtual-time siblings do.
   }
   ```
 
+  **A NARROW catch is not a safer one — `catch (e: IllegalStateException)` swallows cancellation
+  too.** Every shape above is a *broad* catch, which is precisely why this one passed review eight
+  times over (#2535): it is specific, it names a plausible exception, and it looks nothing like the
+  thing this section warns about. The receipt is one line —
+
+  ```
+  IllegalStateException.class.isAssignableFrom(java.util.concurrent.CancellationException.class) == true
+  ```
+
+  — so a `CancellationException` **is** an `IllegalStateException`, and an arm catching one catches
+  both. In a test the cost lands on the *diagnosis* rather than the behaviour, which is what makes
+  it invisible: an arm with an assertion in it throws an `AssertionError` **instead of** the
+  `TimeoutCancellationException` the wedge harness watches for, so a hung test reports a failed
+  assertion inside the arm and the dump that would have named the wedge is destroyed. Measured, on
+  a real hang. Same remedy as everywhere else — `currentCoroutineContext().ensureActive()` at the
+  top of the arm — unless nothing inside the `try` can suspend, in which case keep the arm and say
+  so in a line-tight `// ALLOW-ise: <reason>` marker. The reason is not paperwork: it is a claim
+  that stops being true the moment that body gains its first suspension point.
+
   If a cancellable bound (`withTimeout`/`withTimeoutOrNull`) intervenes *inside* the shield, its
   premise is false at that position — hoist the `try`/`catch` outside the bound rather than
-  swallowing within it. **On most of this the prose is the enforcement.** Two `check`-wired root
-  guards scan production `*Main` sources lexically, and both are backstops rather than proofs.
-  `forbidRunCatchingCancellableUnderNonCancellable` looks for the `runCatchingCancellable` **token**
-  inside a shield: it cannot see the hand-written rethrow, and sees neither form when reached
-  through a helper called from the shield. `forbidCancellationRethrowAroundBound` (#2292) takes the
-  one **unshielded** case where the ambiguity is decidable — a rethrow written *directly around a
-  `withTimeout`*, where the cancellation reaching it can only be the bound's own — in both its
-  `try`/`catch` and its `runCatchingCancellable` spellings, and clears the site if an earlier
-  `catch (…: TimeoutCancellationException)` already handles the expiry by type. Everywhere else
-  unshielded the two cancellations really are lexically ambiguous, and one helper hop defeats both
-  guards. `ensureActive()` remains the only thing that decides it at runtime.
+  swallowing within it. **On most of this the prose is the enforcement.** Three `check`-wired root
+  guards scan lexically, and all three are backstops rather than proofs. Two cover production
+  `*Main` sources. `forbidRunCatchingCancellableUnderNonCancellable` looks for the
+  `runCatchingCancellable` **token** inside a shield: it cannot see the hand-written rethrow, and
+  sees neither form when reached through a helper called from the shield.
+  `forbidCancellationRethrowAroundBound` (#2292) takes the one **unshielded** case where the
+  ambiguity is decidable — a rethrow written *directly around a `withTimeout`*, where the
+  cancellation reaching it can only be the bound's own — in both its `try`/`catch` and its
+  `runCatchingCancellable` spellings, and clears the site if an earlier
+  `catch (…: TimeoutCancellationException)` already handles the expiry by type. The third,
+  `forbidCancellationSwallowInTests` (#2598), covers `*Test` sources and the narrow-catch shape
+  above: it clears an arm carrying `ensureActive()`, an arm sitting behind an earlier
+  `catch (…: CancellationException) { throw … }` on the same `try`, or an `// ALLOW-ise:` marker
+  with a non-empty reason. Its scope is deliberate rather than an omission — in production the arm
+  is usually a real precondition catch, and the damage concentrates in tests because that is where
+  the swallowed cancellation *is* the signal. Everywhere else unshielded the two cancellations
+  really are lexically ambiguous, and one helper hop defeats every one of the three.
+  `ensureActive()` remains the only thing that decides it at runtime.
 
 - **A long-lived pump is launched through `Flow.pumpIn` (`:kuilt-core`, public), never a bare
   `onEach { … }.launchIn(scope)`.** A pump has no restart and no backstop, so an escaping throw is

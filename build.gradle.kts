@@ -3259,6 +3259,351 @@ val forbidProductionDispatcherInTests by tasks.registering {
     }
 }
 
+// The `catch (…: IllegalStateException)` scanner behind `forbidCancellationSwallowInTests` (#2598).
+// Same `object` rationale as the sibling scanners: a script-level object keeps the walk out of the
+// task action's closure, and gives the walk somewhere to carry its own fixture.
+//
+// It answers one question per catch arm — is this arm CLEARED? — and the two clearing spellings are
+// found structurally rather than by a token search over the whole file, because both are local
+// properties of the arm and its chain:
+//
+//   * `ensureActive()` ANYWHERE IN THE ARM'S OWN BODY. The body is delimited by a forward brace
+//     walk from the arm's `{`, so an `ensureActive()` in a *sibling* arm, or three functions down,
+//     does not clear this one.
+//   * AN EARLIER `catch (…: CancellationException) { … throw … }` IN THE SAME CHAIN. Found by
+//     walking BACKWARDS through the chain — `}` ⇒ its `{` ⇒ the `catch (…)` heading it ⇒ repeat —
+//     until the walk reaches the `try` (whose block is not preceded by a parameter list) or
+//     something it does not recognise. Only arms of THIS chain are consulted, which is what stops
+//     an unrelated cancellation rethrow elsewhere in the file from clearing the site.
+//
+// The second spelling exists because #2528 fixed `NwSeamConcurrencyTest` that way rather than with
+// `ensureActive()`, and a guard keyed on the `ensureActive` token alone would have opened its life
+// by falsely accusing an already-correct site — which is how a new guard gets an allowlist entry
+// instead of a fix.
+object CancellationSwallowingCatchScanner {
+    /** One `catch (…: IllegalStateException)` arm. [cleared] names the spelling that excused it. */
+    data class Site(val line: Int, val cleared: String?)
+
+    // A chain longer than this is not a shape this walk should keep chasing; bail rather than spin.
+    private const val MAX_CHAIN_ARMS = 16
+
+    // Kotlin allows no multi-catch, so one type per arm. The capture takes the whole (possibly
+    // qualified) name and the simple name is compared, so `kotlin.IllegalStateException` counts.
+    private val CATCH_ARM =
+        Regex("""(?<![A-Za-z0-9_])catch\s*\(\s*(?:[A-Za-z_][A-Za-z0-9_]*|_)\s*:\s*([A-Za-z0-9_.]+)\s*\)\s*\{""")
+
+    // No `.` in the lookbehind: the canonical call is `currentCoroutineContext().ensureActive()`,
+    // so the character before the name is a dot in every real occurrence.
+    private val ENSURE_ACTIVE = Regex("""(?<![A-Za-z0-9_])ensureActive\s*\(""")
+    private val THROW_KEYWORD = Regex("""(?<![A-Za-z0-9_])throw(?![A-Za-z0-9_])""")
+
+    /** Every `catch (…: IllegalStateException)` in already-stripped Kotlin code, with its verdict. */
+    fun sites(code: String): List<Site> = CATCH_ARM.findAll(code).mapNotNull { arm ->
+        if (arm.groupValues[1].substringAfterLast('.') != "IllegalStateException") return@mapNotNull null
+        val line = code.take(arm.range.first).count { it == '\n' } + 1
+        val braceAt = arm.range.last
+        val body = closingBrace(code, braceAt)?.let { code.substring(braceAt, it + 1) } ?: ""
+        val cleared = when {
+            ENSURE_ACTIVE.containsMatchIn(body) -> "ensureActive()"
+            rethrowsCancellationEarlier(code, arm.range.first) ->
+                "an earlier `catch (…: CancellationException) { throw … }` arm"
+            else -> null
+        }
+        Site(line, cleared)
+    }.toList()
+
+    private fun rethrowsCancellationEarlier(code: String, catchAt: Int): Boolean {
+        var cursor = catchAt
+        repeat(MAX_CHAIN_ARMS) {
+            var i = cursor - 1
+            while (i >= 0 && code[i].isWhitespace()) i--
+            // Anything but a `}` here means this is not a chained arm at all.
+            if (i < 0 || code[i] != '}') return false
+            val blockOpen = matchingOpen(code, i, '{', '}') ?: return false
+            var j = blockOpen - 1
+            while (j >= 0 && code[j].isWhitespace()) j--
+            // A block NOT preceded by `)` is the `try` block — the head of the chain, so there is
+            // no earlier arm and the walk is done.
+            if (j < 0 || code[j] != ')') return false
+            val paramOpen = matchingOpen(code, j, '(', ')') ?: return false
+            var k = paramOpen - 1
+            while (k >= 0 && code[k].isWhitespace()) k--
+            var wordStart = k + 1
+            while (wordStart > 0 && (code[wordStart - 1].isLetterOrDigit() || code[wordStart - 1] == '_')) wordStart--
+            if (code.substring(wordStart, k + 1) != "catch") return false
+            val param = code.substring(paramOpen, j + 1)
+            val body = code.substring(blockOpen, i + 1)
+            if ("CancellationException" in param && THROW_KEYWORD.containsMatchIn(body)) return true
+            cursor = wordStart
+        }
+        return false
+    }
+
+    private fun closingBrace(code: String, openAt: Int): Int? {
+        var depth = 0
+        var i = openAt
+        while (i < code.length) {
+            when (code[i]) {
+                '{' -> depth++
+                '}' -> if (--depth == 0) return i
+            }
+            i++
+        }
+        return null
+    }
+
+    private fun matchingOpen(code: String, closeAt: Int, open: Char, close: Char): Int? {
+        var depth = 0
+        var i = closeAt
+        while (i >= 0) {
+            when (code[i]) {
+                close -> depth++
+                open -> if (--depth == 0) return i
+            }
+            i--
+        }
+        return null
+    }
+
+    // name → (source, expected sites as line-to-clearing-spelling). Written with escapes rather
+    // than raw strings, matching `NotNullAssertionScanner`'s fixture.
+    private val cases: List<Triple<String, String, List<Pair<Int, String?>>>> = listOf(
+        Triple(
+            "a bare arm",
+            "try { f() } catch (e: IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "an underscore parameter",
+            "try { f() } catch (_: IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "a fully-qualified type",
+            "try { f() } catch (e: kotlin.IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "an arm carrying ensureActive()",
+            "try { f() } catch (e: IllegalStateException) { currentCoroutineContext().ensureActive() }\n",
+            listOf(1 to "ensureActive()"),
+        ),
+        Triple(
+            "an earlier CancellationException rethrow",
+            "try { f() } catch (e: CancellationException) { throw e } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to "an earlier `catch (…: CancellationException) { throw … }` arm"),
+        ),
+        // The shape #2528 left in `NwSeamConcurrencyTest`: the rethrow is not adjacent.
+        Triple(
+            "a non-adjacent earlier rethrow",
+            "try { f() } catch (e: CancellationException) { throw e } " +
+                "catch (e: ConcurrentModificationException) { throw AssertionError(\"x\", e) } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to "an earlier `catch (…: CancellationException) { throw … }` arm"),
+        ),
+        // A Cancellation arm that SWALLOWS clears nothing — it is the same bug one arm over.
+        Triple(
+            "an earlier CancellationException that does not rethrow",
+            "try { f() } catch (e: CancellationException) { ignore() } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        // A rethrow in a DIFFERENT chain must not reach across.
+        Triple(
+            "a rethrow in an unrelated earlier try",
+            "try { a() } catch (e: CancellationException) { throw e }\n" +
+                "try { b() } catch (e: IllegalStateException) { }\n",
+            listOf(2 to null),
+        ),
+        // Sibling arms do not lend each other an ensureActive().
+        Triple(
+            "ensureActive in a sibling arm only",
+            "try { f() } catch (e: IllegalArgumentException) { currentCoroutineContext().ensureActive() } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "an unrelated exception type",
+            "try { f() } catch (e: IllegalArgumentException) { }\n",
+            emptyList(),
+        ),
+        // The prose case the issue predicted: an early count of 13 included a KDoc line that merely
+        // NAMES the construct. Stripping is what keeps it out.
+        Triple(
+            "KDoc naming the construct",
+            "/** The `catch (e: IllegalStateException)` below is the shape #2535 is about. */\nval n = 1\n",
+            emptyList(),
+        ),
+        Triple(
+            "a string literal naming the construct",
+            "val s = \"catch (e: IllegalStateException) {\"\n",
+            emptyList(),
+        ),
+        Triple(
+            "line numbers survive stripping",
+            "// catch (e: IllegalStateException) { }\n\n/* filler\n more */\n" +
+                "try { f() } catch (e: IllegalStateException) { }\n",
+            listOf(5 to null),
+        ),
+    )
+
+    fun selfTestFailures(): List<String> = cases.mapNotNull { (name, source, expected) ->
+        val actual = sites(KotlinCodeScanner.stripNonCode(source)).map { it.line to it.cleared }
+        if (actual == expected) null else "$name — expected $expected, got $actual"
+    }
+}
+
+// Guard: forbid an unguarded `catch (…: IllegalStateException)` in TEST sources (#2598; the bug
+// class is #2535).
+//
+// THE FACT THIS EXISTS FOR, and it is a fact rather than a judgement:
+//
+//     IllegalStateException.class.isAssignableFrom(java.util.concurrent.CancellationException.class) == true
+//
+// `kotlinx.coroutines.CancellationException` IS an `IllegalStateException` on the JVM, so a narrow,
+// specific, apparently-safe `catch (e: IllegalStateException)` swallows a structured-concurrency
+// cancel exactly as a bare `runCatching` does. The catch looks nothing like the shapes `CLAUDE.md`
+// warns about, which is why eight of these passed review repeatedly.
+//
+// THE MEASURED CONSEQUENCE, from #2535: an arm with an assertion in it throws an `AssertionError`
+// INSTEAD OF the `TimeoutCancellationException` the wedge harness watches for — so the whole hang
+// report is destroyed, and a wedged test reports a plain assertion failure in the arm rather than
+// the dump that would name the wedge. The guard therefore protects DIAGNOSIS, which is the thing
+// nobody notices is missing.
+//
+// SCOPED TO `*Test`, DELIBERATELY, and not by widening a sibling. Both existing cancellation guards
+// scan `"*Main/**/*.kt"` — production only — so neither could have fired on any #2535 site
+// whatever its shape, and neither pattern matches this one either:
+// `forbidRunCatchingCancellableUnderNonCancellable` looks for the `runCatchingCancellable` token
+// inside a `withContext(NonCancellable)` shield, and `forbidCancellationRethrowAroundBound` looks
+// for a cancellation rethrow wrapping a `withTimeout`. An `IllegalStateException` arm has neither.
+// In PRODUCTION the arm is usually a real precondition catch — `WarpNode.registerOrResolve` is the
+// legitimate non-`suspend` case — so the damage concentrates in tests, which is where the swallowed
+// cancellation IS the signal.
+//
+// `catch (…: TimeoutCancellationException)` is deliberately NOT covered. Catching the bound's own
+// expiry BY TYPE is handling it, not swallowing it — it is the spelling
+// `forbidCancellationRethrowAroundBound` already treats as clearing a site, and folding it in here
+// would contradict a sibling guard rather than extend one.
+//
+// THE ESCAPE HATCH is a line-tight marker with a MANDATORY reason, matching
+// `forbidProductionDispatcherInTests`' `// ALLOW-realDispatcher:` and #1329's `// ALLOW-runCatching:`:
+//
+//     } catch (_: IllegalStateException) { // ALLOW-ise: nothing in the try can suspend — accept() is not `suspend`
+//
+// Trailing on the `catch` line or on the line immediately above. Every legitimate site in the tree
+// has the same reason — the guarded body cannot suspend, so no cancellation can be delivered inside
+// the `try` — and writing it down is the point: it is a claim that stops being true the moment
+// somebody makes that body `suspend`, and a marker is where a reader will look for it. An EMPTY
+// reason is itself a violation.
+//
+// KNOWN COVERAGE EDGES, the same set the sibling guards carry: `src/commonSamples/` is not scanned
+// (it demonstrates the production API), a test-support module's `commonMain` is not a test source
+// set, `:spike` is absent unless `-PincludeSpike`, `build-logic/` is a separate included build, and
+// `*.kts` is unscanned. Two limits specific to this walk, stated rather than found later: an
+// `ensureActive()` reached through a HELPER called from the arm reads as absent (ask for a marker,
+// or inline the call), and an `ensureActive()` inside a nested `try` within the arm reads as
+// present. Both are the "cannot see through a helper" limit `forbidNotNullAssertionInUnresolvedSource`
+// records; the fixture pins the cases that matter.
+val forbidCancellationSwallowInTests by tasks.registering {
+    group = "verification"
+    description = "Fails if a test source catches IllegalStateException without an ensureActive(), a cancellation rethrow, or an ALLOW-ise marker — CancellationException IS one (#2598)."
+    // Both test-source layouts, as `forbidProductionDispatcherInTests`: KMP `src/<target>Test/` and
+    // the plain-JVM `src/test/`.
+    val sources = kotlinSourcesIn(
+        subprojects.map { it.projectDir.resolve("src") },
+        listOf("*Test/**/*.kt", "test/**/*.kt"),
+    )
+    inputs.files(sources).withPropertyName("kotlinTestSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a pure function of file contents — there is no allowlist, the markers live in the sources
+    // themselves — so a RELATIVE fingerprint hit genuinely means "this exact source was verified".
+    val stamp = layout.buildDirectory.file("verification/forbid-cancellation-swallow-in-tests.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val selfTest = CancellationSwallowingCatchScanner.selfTestFailures()
+        if (selfTest.isNotEmpty()) {
+            error(
+                "The cancellation-swallow scanner does not agree with its own fixture, so this " +
+                    "guard's verdict — in EITHER direction — means nothing:\n  " +
+                    selfTest.joinToString("\n  "),
+            )
+        }
+        // Group 1 is everything after the colon; blank ⇒ a reasonless marker, itself a violation.
+        val marker = Regex("""//\s*ALLOW-ise:(.*)""")
+        val unmarked = mutableListOf<String>()
+        val reasonless = mutableListOf<String>()
+        var cleared = 0
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            if ("IllegalStateException" !in raw) return@forEach
+            val rawLines = raw.lines()
+            CancellationSwallowingCatchScanner.sites(KotlinCodeScanner.stripNonCode(raw)).forEach { site ->
+                if (site.cleared != null) {
+                    cleared++
+                    return@forEach
+                }
+                // Markers are comments, so they are matched against the RAW text while the offence
+                // is found in the STRIPPED text; `stripNonCode` preserves newlines, so the two line
+                // spaces coincide. Trailing on the `catch` line or the line immediately above —
+                // deliberately NOT a wider lookback window.
+                val candidates = listOfNotNull(rawLines.getOrNull(site.line - 1), rawLines.getOrNull(site.line - 2))
+                val reasons = candidates.mapNotNull { marker.find(it)?.groupValues?.get(1)?.trim() }
+                val where = "${file.relativeTo(rootPath)}:${site.line}  " +
+                    rawLines.getOrElse(site.line - 1) { "" }.trim()
+                when {
+                    reasons.any { it.isNotEmpty() } -> cleared++
+                    reasons.isNotEmpty() -> reasonless += where
+                    else -> unmarked += where
+                }
+            }
+        }
+        if (unmarked.isNotEmpty() || reasonless.isNotEmpty()) {
+            val detail = buildString {
+                if (unmarked.isNotEmpty()) {
+                    append("\n  ").append(unmarked.joinToString("\n  "))
+                }
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-ise:` marker with an EMPTY reason is itself a ")
+                    append("violation. The reason is a claim that stops being true the moment the ")
+                    append("guarded body gains a suspension point, and the marker is where the next ")
+                    append("reader will look for it:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+            }
+            error(
+                "A test source catches `IllegalStateException` without guarding against " +
+                    "cancellation (#2598). `CancellationException` IS an `IllegalStateException` " +
+                    "(`IllegalStateException.class.isAssignableFrom(java.util.concurrent." +
+                    "CancellationException.class)` is `true`), so a narrow, specific, " +
+                    "apparently-safe arm swallows a structured-concurrency cancel exactly as a bare " +
+                    "`runCatching` does — and an arm containing an assertion then throws an " +
+                    "`AssertionError` INSTEAD OF the `TimeoutCancellationException` the wedge " +
+                    "harness watches for, destroying the whole hang report.\n" +
+                    "  THE FIX is one line at the top of the arm:\n" +
+                    "      currentCoroutineContext().ensureActive()\n" +
+                    "  It rethrows only a cancellation of THIS job and falls through on a " +
+                    "callee-minted one. An earlier `catch (…: CancellationException) { throw e }` " +
+                    "arm on the same `try` clears the site too. If nothing inside the `try` can " +
+                    "suspend — every call in it is non-`suspend`, so no cancellation can be " +
+                    "delivered there — keep the arm and say so on this line or the line above:\n" +
+                    "      // ALLOW-ise: <why no cancellation can reach this arm>" +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${sources.files.size} Kotlin test sources scanned, " +
+                "$cleared guarded IllegalStateException arm(s) confirmed\n",
+        )
+    }
+}
+
 // Guard: forbid a bare duration literal as a `runTest(…)` timeout — at a CALL SITE (pass 1, a
 // per-file count ratchet) or in a WRAPPER's parameter default (pass 2, zero tolerance). #1739.
 //
@@ -6788,6 +7133,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
         dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
+        dependsOn(rootProject.tasks.named("forbidCancellationSwallowInTests"))
         dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
         dependsOn(rootProject.tasks.named("forbidCoroutineLaunchDuringConstruction"))
         dependsOn(rootProject.tasks.named("forbidSuspendCallUnderLock"))
