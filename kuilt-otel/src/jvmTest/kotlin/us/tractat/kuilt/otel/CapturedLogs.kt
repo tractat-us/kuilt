@@ -13,11 +13,15 @@ import org.slf4j.LoggerFactory
  * ## Why this is shared rather than copied a third time
  *
  * Three exporters in this module have now had the same defect — a retried failure reported once per
- * attempt, for one unchanging condition (#2237 on `WarpLogRecordExporter`, #2593 on
+ * attempt, for one unchanging condition (#2237 on [WarpLogRecordExporter], #2593 on
  * [WarpSpanExporter] and [WarpMetricExporter]). The test that catches it is the same test each time,
  * and its load-bearing part is this: attach a `ListAppender` to the logger under test and count.
  * The alternative — an `internal` counter on the exporter — is an *instrument*, not an outcome, and
  * keeps reporting `1` after somebody deletes the log call it exists to witness.
+ *
+ * All three failure-reporting suites call this one; `WarpLogRecordExporterFailureReportingTest`
+ * carried the original private copy and was migrated onto it here, so the third instance did not
+ * become a third copy.
  *
  * `:kuilt-otel-tap`'s `JoinCodeNotLoggedTest` established the pattern; `logback` is on this module's
  * JVM test **compile** classpath for it.
@@ -55,7 +59,3 @@ internal suspend fun <T> capturingLogsOf(
 /** The captured events whose rendered message contains [fragment]. */
 internal fun List<ILoggingEvent>.naming(fragment: String): List<ILoggingEvent> =
     filter { fragment in it.formattedMessage }
-
-/** The distinct throwable types attached to these events — empty when none carries a trace. */
-internal fun List<ILoggingEvent>.attachedThrowables(): List<String> =
-    mapNotNull { it.throwableProxy?.className }

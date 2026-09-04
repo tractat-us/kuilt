@@ -1874,7 +1874,7 @@ Before trimming the live replica's own window on the strength of "the archive ha
 
 A retried failure is reported once per *attempt*, and the retry decides how many attempts there are — so one unchanging condition becomes unbounded log volume. That is not a hypothetical tidiness point. A quota-bound `IndexedDbDurableStore` refuses every write; the exporter above it retries on the next export; the result was measured on three separate exporters in this repo at **one line, and one stack trace, per export, forever** — 300 of each over a 300-export outage. It cost real time on Apple targets, where every trace is symbolicated, and it silently destroyed test results on wasm, where the volume walked a class's output past the harness's 1 MB-per-message ceiling — past which it drops the class and **exits 0**.
 
-Latch the outage, and let the *success* arm clear it:
+Latch the outage, and let the *success* arm clear it.
 
 The failure arm reports only when it *wins* the latch, and returns the failure either way:
 
@@ -1895,11 +1895,13 @@ private fun durableWriteSucceeded() {
 }
 ```
 
-Three things decide whether this is a fix or a worse bug.
+Four things decide whether this is a fix or a worse bug.
 
 **The key must cover exactly the population the line is about.** The tempting key is a counter you already keep — a health streak, "consecutive failures", a last-error field. It is almost always *wider* than the set of failures this particular line reports, and then a member of the difference opens the latch first and the outage is reported **zero** times instead of once, with the log pointing at whatever failed earlier. That is strictly worse than the noise it replaced, and it is what happened here on the first attempt. A private latch owned by the one function that performs the retried operation makes the two populations the same set by construction. Where two operations really are one condition — five metric kinds writing five keys in one store — share a latch; where they are not — a refused *delete* says nothing about whether a *write* would land — keep them apart.
 
-**Clearing it must be unconditional.** Set the latch with a CAS so exactly one racing caller reports; clear it with a plain write. A lost CAS on the failure side costs one duplicate line, which is honest. A lost CAS on the success side leaves the latch stuck against a healthy store, which silences the *next* outage entirely.
+**A boolean is the wrong latch as soon as one success does not prove the next attempt will land.** Ask what a *partial* recovery looks like. If each attempt targets one resource — one store key, one endpoint, one peer — a backend that refuses one while accepting another makes a boolean **alternate**: the refused one opens it, the accepted one clears it, the refused one reports again. That is the original defect back at a workload-dependent constant, under a comment still promising "once per outage". Hold the **set of things currently failing**, report on `empty → non-empty`, and remove only the one that succeeded. A boolean is safe only where a turn's operations are grouped so that a partial refusal fails the whole turn. And this is not exotic: an `IndexedDbDurableStore` under quota pressure refuses **large** writes while small ones succeed, so a big blob and a small counter alternate by construction.
+
+**Clearing it must be unconditional.** Set the latch with a CAS so exactly one racing caller reports; clear it with a CAS loop that retries until it lands. A lost update on the failure side costs one duplicate line, which is honest. A lost update on the success side leaves the latch stuck against a healthy backend, which silences the *next* outage entirely.
 
 **Deduplicate the line, never the result.** Every failure still comes back to the caller carrying its cause, so a programmatic reader loses nothing — only the log gets quieter.
 

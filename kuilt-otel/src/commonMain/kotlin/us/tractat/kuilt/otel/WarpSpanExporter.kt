@@ -117,8 +117,24 @@ public class WarpSpanExporter(
      * A latch owned by the durable-write arms makes the counted population and the reported
      * population the same set by construction. Keep it that way: anything that calls
      * [durableWriteFailed] without having attempted a write to [STORE_KEY] reintroduces the defect.
+     *
+     * **On this exporter no test can guard that, and the reason is the guarantee itself**: all
+     * three callers write [STORE_KEY], so the two populations coincide by construction and there is
+     * no non-write path to pre-empt the report. The obligation above binds a *future* caller, and
+     * nothing would red if one broke it. [WarpMetricExporter] is where such a path does exist — its
+     * `clear` fails on a refused delete — and
      * `WarpMetricExporterFailureReportingTest.aRefusedClearDeleteDoesNotSwallowTheDurableWriteReport`
-     * is the arm that reds when it is.
+     * is the analogous guard there.
+     *
+     * ## Why a boolean here, where [WarpMetricExporter] needs a set of keys
+     *
+     * Because a partial refusal cannot alternate this latch. [export] and [clear] write the causal
+     * clock's key *and* [STORE_KEY] inside one `runCatchingCancellable`, so a store refusing either
+     * one fails the whole turn and the latch stays open; a success means every write in the turn
+     * landed. [WarpLogRecordExporter.commit] groups a turn's writes the same way. [WarpMetricExporter]
+     * does not — each of its calls writes exactly one key — so a store refusing one key while
+     * accepting another would alternate a boolean there, and it keys on the refused-key set instead.
+     * Do not copy this boolean to an exporter whose writes are not grouped into a turn.
      *
      * ## Concurrency
      *

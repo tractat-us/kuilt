@@ -1,12 +1,8 @@
 package us.tractat.kuilt.otel
 
-import ch.qos.logback.classic.Level
-import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
-import org.slf4j.LoggerFactory
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
@@ -75,34 +71,6 @@ class WarpLogRecordExporterFailureReportingTest {
         segmentOps = SEGMENT_OPS,
     )
 
-    /**
-     * Run [block] with every event the exporter's logger emits captured, at every level.
-     *
-     * Level `ALL` deliberately: the property is about the *volume* a broken store provokes, so a
-     * line demoted to `debug` still counts against it. Restoring the level and detaching the
-     * appender in `finally` keeps the swap from leaking into whatever runs next in this JVM.
-     */
-    private suspend fun <T> capturingExporterLogs(block: suspend (List<ILoggingEvent>) -> T): T {
-        // Through a declared non-null slf4j type first: `getLogger` is a platform type, and casting
-        // one straight to logback's `Logger` is a nullable-to-non-nullable cast detekt rejects.
-        val slf4j: org.slf4j.Logger = LoggerFactory.getLogger(EXPORTER_LOGGER)
-        val logger = slf4j as Logger
-        val appender = ListAppender<ILoggingEvent>().apply { start() }
-        val previousLevel = logger.level
-        logger.level = Level.TRACE
-        logger.addAppender(appender)
-        try {
-            return block(appender.list)
-        } finally {
-            logger.detachAppender(appender)
-            appender.stop()
-            logger.level = previousLevel
-        }
-    }
-
-    private fun List<ILoggingEvent>.naming(fragment: String): List<ILoggingEvent> =
-        filter { fragment in it.formattedMessage }
-
     @Test
     fun aDeleteThatKeepsFailingIsReportedOncePerSegmentNotOncePerAttempt() = runTest {
         val store = FailDeleteStore(RecordingStore())
@@ -110,7 +78,7 @@ class WarpLogRecordExporterFailureReportingTest {
         lateinit var lines: List<ILoggingEvent>
         var attempts = 0
 
-        capturingExporterLogs { captured ->
+        capturingLogsOf(EXPORTER_LOGGER) { captured ->
             val exporter = exporterFor(store)
             repeat(EXPORTS) { i -> exporter.export(record(i)) }
             // Segment keys only: `sweepLegacyKey` refuses on a different key and reports through a
@@ -188,7 +156,7 @@ class WarpLogRecordExporterFailureReportingTest {
         var afterRestart = 0
         var ledger = emptyList<Int>()
 
-        capturingExporterLogs { captured ->
+        capturingLogsOf(EXPORTER_LOGGER) { captured ->
             val exporter = exporterFor(store)
             repeat(EXPORTS) { i -> exporter.export(record(i)) }
             duringFirstRun = captured.naming(SWEEP_FRAGMENT).size
@@ -243,7 +211,7 @@ class WarpLogRecordExporterFailureReportingTest {
         var failedExports = 0L
         lateinit var lines: List<ILoggingEvent>
 
-        capturingExporterLogs { captured ->
+        capturingLogsOf(EXPORTER_LOGGER) { captured ->
             val exporter = exporterFor(store)
             exporter.export(record(0))
 
@@ -365,7 +333,7 @@ class WarpLogRecordExporterFailureReportingTest {
         var refused = 0
         lateinit var lines: List<ILoggingEvent>
 
-        capturingExporterLogs { captured ->
+        capturingLogsOf(EXPORTER_LOGGER) { captured ->
             val exporter = exporterFor(store)
             exporter.export(record(0))
 
