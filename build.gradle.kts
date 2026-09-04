@@ -2026,6 +2026,135 @@ val forbidUncitedDocCodeBlock by tasks.registering {
     }
 }
 
+// Guard: a `module.md` must not carry a bare `[Identifier]` KDoc link (#2527, part of #2507).
+//
+// WHAT GOES WRONG. `module.md` is wired as Dokka `includes`, so Dokka resolves KDoc links in it and
+// warns on failure — `Couldn't resolve link: [X] in module documentation`. `docs.yml` runs
+// `dokkaGenerate` on every push to `main`, so those warnings are printed today and discarded, and
+// the unresolved link renders on the published API site as literal brackets where a type name
+// should be. #2507 found 19 of them in `kuilt-otel` and 2 in `kuilt-game` (cleared by #2525).
+//
+// WHY THE BARE FORM IS BANNED OUTRIGHT, even though some of them do resolve. Whether `[Seam]`
+// resolves depends on which module's `module.md` it sits in: the convention plugin attaches the
+// file only to source sets it does not suppress (`suppress.set(!kmpSs.name.startsWith("common"))`),
+// so a link can only ever reach the citing module's own `commonMain`. The same three words are
+// therefore correct in one file and silently broken in the next, and nothing tells the author
+// which — the failure mode is a warning nobody reads and brackets on a page nobody rebuilds. Both
+// conventions still under discussion in #2527 — backticks, or the qualified `[Label][fqn]` form
+// `kuilt-otel-tap` already uses — exclude the bare spelling, so banning it settles nothing that is
+// still open and is the reason this tier needs no decision first.
+//
+// WHY LEXICAL AND WHY HERE. The strong check is Dokka's own warning, but it needs full KMP metadata
+// compilation (~1m44s warm) so it belongs in `docs.yml` or the heavy `build` job. This one is
+// milliseconds, compiles nothing, and — the point — runs in `doc-citations`, which fires on
+// DOCS-ONLY PRs. That is exactly where this defect is introduced and exactly where the heavy build
+// is skipped, so the cheap tier catches it in the one lane the strong tier cannot reach.
+//
+// ZERO TOLERANCE, NO ALLOWLIST, deliberately: the population is empty as of #2525, so this locks a
+// swept state rather than grandfathering a backlog. An allowlist over an empty population is
+// indistinguishable from no guard — `forbidUnlintedModule` records that argument at length.
+//
+// WHAT IS EXCLUDED, and each exclusion is where a lexical guard loses a true positive, so they are
+// narrow: a markdown link `[text](url)`, a reference link `[Label][target]` (the qualified form,
+// which IS one of the candidate conventions), a link-reference definition `[label]: url`, anything
+// inside a fenced block (`kuilt-nw/module.md` has `peers=[alice]` in a sample log) or an inline code
+// span (a backticked `[Foo]` is prose about a link, not a link), and any bracket text that is not a
+// Kotlin identifier chain — `[the wedge design doc]` is prose, and is a markdown link anyway.
+//
+// TWO PASSES, because the code-span exclusion above swallowed a real defect on its first draft.
+// `[`DuplicateHostException`]` — backticks INSIDE the brackets — is one of the two `kuilt-game`
+// sites #2525 actually fixed, and blanking code spans first turns it into `[…]` with nothing left
+// to match. Verified by re-running this guard against the pre-#2525 files: one pass found 18 of the
+// 19, and the missing one was exactly that spelling. So the backticked-label form is matched on the
+// RAW line first, and only then are code spans blanked for the plain form. The two cannot
+// double-count: after blanking, the backticked one no longer matches.
+//
+// DELIBERATELY OUT OF SCOPE, both tracked on #2527 and both needing a decision this guard must not
+// pre-empt: the 3 QUALIFIED links that still do not resolve (`installMultipeerLogTap`,
+// `installMultipeerMetricTap`, `MultipeerPeerLinkFactory` — all platform-specific declarations that
+// a `commonMain`-only include structurally cannot reach, which is a hole in "just qualify it"
+// rather than an argument against it), and the 7 RELATIVE markdown links to `../docs/*.md`, which
+// Dokka also tries to resolve as KDoc references and which render dead under `/api/` either way.
+val verifyModuleDocLinks by tasks.registering {
+    group = "verification"
+    description = "Fails if a module.md carries a bare `[Identifier]` KDoc link — it resolves only against the citing module's own commonMain, and renders as literal brackets when it does not (#2527)."
+    val moduleDocs = moduleDocFiles()
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a pure function of these files' contents — no allowlist, no in-source marker — so a
+    // RELATIVE fingerprint hit genuinely means "these exact files were verified".
+    inputs.files(moduleDocs).withPropertyName("moduleDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val stamp = layout.buildDirectory.file("verification/verify-module-doc-links.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        // A bare KDoc link: `[` + a Kotlin identifier chain + `]`, not part of a reference link
+        // (`][`), not a markdown link (`](`), not a link-reference definition (`]:`), and not the
+        // second half of one (`](`… handled, `][`… handled by the lookbehind on the closing side).
+        val ident = """[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"""
+        val bareLink = Regex("""(?<!\])\[($ident)\](?![(\[:])""")
+        // The same link with a BACKTICKED label — matched on the raw line, before code spans are
+        // blanked, because blanking would leave nothing inside the brackets. See the header.
+        val backtickedLink = Regex("""(?<!\])\[`($ident)`\](?![(\[:])""")
+        val codeSpan = Regex("""`[^`]*`""")
+        val taskListMarker = Regex("""^(\s*(?:[-*+]|\d+\.)\s+)\[[xX]\]""")
+        val offenders = mutableListOf<String>()
+        var scanned = 0
+        moduleDocs.files.sortedBy { it.invariantSeparatorsPath }.forEach { md ->
+            scanned++
+            var inFence = false
+            md.readLines().forEachIndexed { n, line ->
+                if (line.trim().startsWith("```")) {
+                    inFence = !inFence
+                    return@forEachIndexed
+                }
+                if (inFence) return@forEachIndexed
+                val where = "${md.relativeTo(rootPath).invariantSeparatorsPath}:${n + 1}"
+                // A markdown task-list checkbox — `- [x] …` — is not a link, and `x` happens to be
+                // a valid identifier. Scoped to the ONLY shape it can take (a bullet, then the
+                // marker, at the start of the line) rather than excluding `[x]` anywhere: a
+                // single-letter bracket in running prose is exactly the `[S]` type parameter that
+                // was one of the two real `kuilt-game` defects. `[ ]` needs no exclusion — a space
+                // is not an identifier.
+                val body = taskListMarker.replace(line) { m -> m.groupValues[1] + "   " }
+                backtickedLink.findAll(body).forEach { hit ->
+                    offenders += "$where  [`${hit.groupValues[1]}`]   in: ${line.trim()}"
+                }
+                // Blank out inline code spans rather than dropping them, so column positions and
+                // the rest of the line survive: a backticked `[Foo]` is prose ABOUT a link. This
+                // also erases the backticked-label form already collected above, so the two passes
+                // cannot report the same site twice.
+                val prose = codeSpan.replace(body) { m -> " ".repeat(m.value.length) }
+                bareLink.findAll(prose).forEach { hit ->
+                    offenders += "$where  [${hit.groupValues[1]}]   in: ${line.trim()}"
+                }
+            }
+        }
+        if (offenders.isNotEmpty()) {
+            error(
+                "Bare `[Identifier]` KDoc link(s) in a `module.md` (#2527). Dokka resolves a " +
+                    "module.md link only against the CITING module's own `commonMain`, so the same " +
+                    "spelling is correct in one file and silently broken in the next — and when it " +
+                    "breaks, the published API page shows literal brackets while the only signal is " +
+                    "a `Couldn't resolve link: … in module documentation` warning nothing reads:\n  " +
+                    offenders.joinToString("\n  ") + "\n\n" +
+                    "  THE FIX is either spelling, both of which are unambiguous:\n" +
+                    "      `Foo`                          backticks — prose, no resolution attempted\n" +
+                    "      [Foo][pkg.to.Foo]              a qualified link, which renders as a link\n" +
+                    "  A platform-specific declaration (Apple-only, JVM-only) cannot be linked at " +
+                    "all from a module.md — the include reaches `commonMain` only — so backtick " +
+                    "those.\n" +
+                    "  There is no allowlist, deliberately: the population was swept to zero in " +
+                    "#2525 and this locks it there.",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — $scanned module.md file(s) scanned, no bare `[Identifier]` links\n")
+    }
+}
+
 // Guard: every `@sample` KDoc tag must name a sample Dokka can actually resolve (#2259).
 //
 // A sample's BODY cannot rot — `src/commonSamples/kotlin` is compiled into `commonTest`, so a broken
@@ -7340,6 +7469,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
         dependsOn(rootProject.tasks.named("forbidUncitedDocCodeBlock"))
+        dependsOn(rootProject.tasks.named("verifyModuleDocLinks"))
         dependsOn(rootProject.tasks.named("verifySampleLinks"))
         dependsOn(rootProject.tasks.named("verifySamplesAreRun"))
         dependsOn(rootProject.tasks.named("verifyModuleTable"))
