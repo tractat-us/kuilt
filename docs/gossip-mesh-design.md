@@ -403,11 +403,16 @@ Phase 4 wraps Phases 2–3 as a conforming `Seam` and measures the broadcast win
   satisfies the `Seam.incoming` contract that consumers (e.g. Quilter) rely on to
   self-clean — and incidentally fixes a latent drop of frames delivered before a
   collector subscribed.
-- **Passes `SeamConformanceSuite`.** Verified over a real `InMemoryLoom` base (genuine
+- **Passes `SeamConformanceSuite`.** Verified over a real `peerMesh` base (genuine
   `Torn`/`close`/`PeerNotConnected` lifecycle), via a test-only `GossipLoom` adapter that
   wraps each woven base seam in a started `GossipSeam`. The base is deliberately *not* the
   simulation-only `InMemoryGossipNetwork` (its mesh seam reports a constant `Woven` state
-  with a no-op `close`, so it can't exercise the lifecycle invariants). Two pieces of
+  with a no-op `close`, so it can't exercise the lifecycle invariants), and — since #2605 —
+  deliberately not `InMemoryLoom` either: that loom owns one roster every seam it weaves
+  reads, and `GossipSeam.peers` delegates to its base, so the joiner held the host by
+  construction and the suite's joiner obligation could not fail. Two ends of one
+  `connectionPair`, one `peerMesh` per role, give each end a roster grown only by the
+  handshake it ran itself. Two pieces of
   plumbing let a started, timer-driven seam fit a TCK built for stateless fabrics: the
   suite gained a backward-compatible `newLoomPair(testScope)` overload (started seams run
   their background work on `backgroundScope`, cancelled before `runTest`'s terminal

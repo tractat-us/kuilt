@@ -148,12 +148,24 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
         "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
     )
 
-    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    /**
+     * #2591/#2605: the joiner's roster is filled before a byte moves, so the joiner arm cannot fail
+     * here — and #2605 triaged whether a real join-path fixture is constructible. It is not: the seed
+     * is this fabric's **join contract**, not this fixture's convenience, so no rearrangement of the
+     * harness reaches it.
+     */
     override fun joinerRosterOrigin(): JoinerRosterOrigin =
         JoinerRosterOrigin.FilledByConstruction(
-            "a seeded roster: joinTag() reads serverLoom.selfPeerId off the shared server loom field, and the " +
-            "joiner's WebSocketSeam is LinkSeam-backed, so it opens at setOf(selfId, remoteId). The socket " +
-            "does have to connect for weave() to return, so the arm is not unfalsifiable - it is implied by " +
-            "a seam existing at all.",
+            "a seeded roster, seeded by the FABRIC rather than by this fixture: WebSocketAdvertisement " +
+            "carries a required serverPeerId, KtorClientLoom.weave passes it straight to WebSocketSeam as " +
+            "remoteId, and identified()/LinkSeam opens at setOf(selfId, remoteId). This pairing sends no " +
+            "in-band hello in either direction by design - identity crosses out of band, the client's in " +
+            "the ?peer= query and the server's in the tag - so there is no code path on which this joiner " +
+            "LEARNS its counterparty, and splitting the harness into two processes would change nothing. " +
+            "Only giving the fabric a preamble would, which is a different fabric: the handshaking sibling " +
+            "is KtorMeshClientLoom against a MuxServerLoom hub, covered by MuxServerLoomConformanceTest, " +
+            "which declares TheJoinPath over the same mesh Hello. What the arm still implies here is that " +
+            "the dial succeeded, since weave() does not return without a live socket. Triage recorded at " +
+            "https://github.com/tractat-us/kuilt/issues/2605.",
         )
 }
