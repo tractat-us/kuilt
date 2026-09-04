@@ -55,4 +55,23 @@ class CompositeConformanceTest : SeamConformanceSuite() {
             "the Announce round-trip's output. Honest weakness: the ply underneath is one shared InMemoryLoom, " +
             "so transport reachability IS shared construction — only the composite layer is proven here.",
         )
+
+    /**
+     * **Not a gap — the event is not constructible here (#2568).** One [CompositeLoom] over one
+     * shared [InMemoryLoom] ply plays both roles, so there is no 2-peer transport under the pair to
+     * drop. A peer going away leaves the surviving composite's ply seam live and the composite
+     * itself [us.tractat.kuilt.core.SeamState.Woven]; the reachability fold simply un-maps that
+     * peer. The in-memory transport-death path is covered by [PeerMeshConformanceTest], which holds
+     * both ends of a real 2-peer link.
+     *
+     * This harness does **not** yet prove the sibling membership-drain obligation — that stays a
+     * tracked gap under the default — so unlike [InMemoryLoomConformanceTest] the departure event is
+     * asserted on here only by [midSessionDeathDeclarationIsHonest]'s refutation.
+     */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.NotConstructible(
+            "one CompositeLoom over one shared InMemoryLoom ply plays both roles, so no 2-peer " +
+                "transport exists under the pair to drop; a peer leaving un-maps it from the " +
+                "reachability fold and leaves the surviving composite Woven",
+        )
 }

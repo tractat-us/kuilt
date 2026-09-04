@@ -2,6 +2,7 @@ package us.tractat.kuilt.multipeer
 
 import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
+import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -86,7 +87,7 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
         bus?.injectHostSelfDial() ?: false
 
     /** Proven: this harness fires a genuine self-peer event through the fake, so no gap. */
-    override fun selfDialGap(): String? = null
+    override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /**
      * Every capability honoured but one — MultipeerConnectivity requires encryption

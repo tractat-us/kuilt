@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import platform.MultipeerConnectivity.MCPeerID
 import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
+import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -129,7 +130,7 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
         pair?.bus?.dropTransport() ?: false
 
     /** Proven: this harness kills the transport under a live session, so no gap. */
-    override fun midSessionDeathGap(): String? = null
+    override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /**
      * Hand the host a connection whose remote identity is its own `MCPeerID` — the #1466 self-dial.
@@ -148,7 +149,7 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
     override suspend fun injectSelfDial(host: Seam): Boolean = pair?.injectSelfDial() ?: false
 
     /** Proven: this harness offers the host a connection to its own identity, so no gap. */
-    override fun selfDialGap(): String? = null
+    override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 }
 
 /**

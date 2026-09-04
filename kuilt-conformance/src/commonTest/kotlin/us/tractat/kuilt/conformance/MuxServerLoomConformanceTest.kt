@@ -133,7 +133,49 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
     }
 
     /** Proven: this harness drains a peer without tearing the survivor, so no gap. */
-    override fun membershipDrainGap(): String? = null
+    override fun membershipDrainDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
+
+    /**
+     * **Not a gap — the event is not constructible here (#2568).** A room hub does not die of one
+     * link: killing the client's base seam deregisters that spoke and leaves the hub
+     * [us.tractat.kuilt.core.SeamState.Woven] with every other spoke intact, which is precisely why
+     * that same injection is this harness's [injectMembershipDrain] directly above. The obligation
+     * needs *both* ends to latch `Torn`, and the survivor here structurally cannot. (Compounded by
+     * #2372: the joiner handed back is a `NamedMux` channel view that does not reach `Torn` even on
+     * its own `close()`.)
+     *
+     * [midSessionDeathDeclarationIsHonest] refutes that claim's cheap failure mode rather than
+     * believing it; [ObligationDeclaration] states what the arm still cannot detect.
+     */
+    /**
+     * Depart the client by closing its **base seam**, not the `NamedMux` channel view this harness
+     * hands back as the joiner — the stimulus [midSessionDeathDeclaration]'s reason actually names,
+     * and the same one [injectMembershipDrain] performs.
+     *
+     * **Without this override the refutation is vacuous here, and that nearly shipped (#2568 review).**
+     * `MuxBase.ChannelView.close` drains its own delivery spool and returns while `state` and `peers`
+     * keep delegating to a base connection that is still alive (#2372) — so the default
+     * `joiner.close()` departs nobody, the hub stays `Woven` because *nothing happened*, and the
+     * arm's no-tear conclusion would have been green by absence rather than by topology. Closing the
+     * base seam is a real departure: the hub deregisters the spoke from every room it joined.
+     */
+    override suspend fun departCounterpart(host: Seam, joiner: Seam): Boolean {
+        val base = pair?.clientBase ?: return false
+        base.close()
+        return true
+    }
+
+    override fun midSessionDeathDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.NotConstructible(
+            "a room hub does not die of one link: killing the client's base seam deregisters that " +
+                "spoke and leaves the hub Woven with every other spoke intact, so the survivor " +
+                "cannot latch Torn. That same injection is this harness's membership drain, which " +
+                "this harness proves. The JOINER half is separately contaminated by #2372 (the " +
+                "NamedMux channel view does not reach Torn even on its own close()) - named here so " +
+                "this arm is not read as laundering that open defect into a by-design claim: the " +
+                "obligation needs BOTH ends to latch Torn and the star's survivor never can, so the " +
+                "declaration stays accurate however #2372 resolves",
+        )
 
     private companion object {
         /** Must match the `Pattern` [SeamConformanceSuite.connectedPair] hosts with. */

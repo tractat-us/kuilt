@@ -9,6 +9,7 @@ import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
+import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.CloseReason
@@ -184,7 +185,7 @@ class MDNSConformanceTest : SeamConformanceSuite() {
     }
 
     /** Proven: the factory refuses to dial its own advertisement, so no gap. */
-    override fun selfDialGap(): String? = null
+    override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     // identical byte path to websocket — plaintext ws:// to a host-peer hub;
     // joiner↔joiner frames traverse the host; no path observer either (#1712).

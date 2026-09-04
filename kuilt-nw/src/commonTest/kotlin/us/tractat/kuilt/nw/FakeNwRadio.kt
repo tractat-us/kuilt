@@ -718,6 +718,37 @@ internal class FakeNwRadio {
     }
 
     /**
+     * Inject a **mid-session transport death**: drop every live link the radio holds, so each attached
+     * device observes its peer's connection go away with no `Seam.close()` anywhere.
+     *
+     * This is the fake's analogue of yanking the cable, and it is what lets `NwConformanceTest` declare
+     * `ObligationDeclaration.NotApplicable.ContractDiffers` and have the suite *watch* the deviation
+     * rather than take its word (#2568): since #1513 an `NwSeam` losing its last remote re-forms
+     * `Woven`→`Weaving` and keeps `incoming` open instead of latching `Torn`.
+     *
+     * Each entry in [links] maps one end's connId to the OTHER end, so calling [disconnect] with that
+     * `LinkEnd`'s own device/connId is a well-formed "the far end went away" for the pair — and
+     * [disconnect] removes BOTH directions, which is why the liveness re-check below is needed: the
+     * partner entry captured in the same snapshot is already gone by the time its turn comes.
+     *
+     * @return how many links were dropped. **Zero is meaningful** — the caller must return `false`
+     *   from its `injectMidSessionDeath` hook rather than credit a deviation to an injection that
+     *   never happened.
+     */
+    suspend fun dropAllLinks(): Int {
+        val ends = lock.withLock { links.values.toList() }
+        var dropped = 0
+        ends.forEach { end ->
+            val stillLive = lock.withLock { end.connectionId.value in links }
+            if (stillLive) {
+                disconnect(end.deviceId, end.connectionId)
+                dropped++
+            }
+        }
+        return dropped
+    }
+
+    /**
      * Inject a **misresolved dial**: a dial that carries the REMOTE peer's endpoint id but lands on the
      * LOCAL device. This is the connect-time hazard of #2416, and it is distinct from [injectSelfDial],
      * where the dialled id is the device's own.
