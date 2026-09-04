@@ -184,7 +184,7 @@ class MDNSConformanceTest : SeamConformanceSuite() {
     }
 
     /** Proven: the factory refuses to dial its own advertisement, so no gap. */
-    override fun selfDialGap(): String? = null
+    override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     // identical byte path to websocket — plaintext ws:// to a host-peer hub;
     // joiner↔joiner frames traverse the host; no path observer either (#1712).

@@ -49,5 +49,5 @@ class HandshakingConformanceTest : SeamConformanceSuite() {
         dropBothEnds(link, host, joiner)
 
     /** Proven: this harness drops the transport under a live pair, so no gap. */
-    override fun midSessionDeathGap(): String? = null
+    override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 }

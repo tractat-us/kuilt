@@ -89,5 +89,24 @@ class ControllableLoomConformanceTest : SeamConformanceSuite() {
     }
 
     /** Proven: this harness drains a peer without tearing the survivor, so no gap. */
-    override fun membershipDrainGap(): String? = null
+    override fun membershipDrainDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
+
+    /**
+     * **Not a gap — the event is not constructible here (#2568).** One [ControllableLoom] plays both
+     * roles, so there is no 2-peer transport under the pair to drop. A peer going away shrinks the
+     * loom-wide registry both seams observe and leaves the survivor
+     * [us.tractat.kuilt.core.SeamState.Woven] — the *distinct* [injectMembershipDrain] event this
+     * harness proves directly above. The in-memory transport-death path is covered by
+     * [PeerMeshConformanceTest], which holds both ends of a real 2-peer link.
+     *
+     * [midSessionDeathDeclarationIsHonest] refutes that claim's cheap failure mode rather than
+     * believing it; [ObligationDeclaration] states what the arm still cannot detect.
+     */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.NotConstructible(
+            "one shared ControllableLoom plays both roles, so no 2-peer transport exists under the " +
+                "pair to drop; a peer leaving shrinks the loom-wide registry both seams observe and " +
+                "leaves the survivor Woven, which is the distinct membership drain this harness " +
+                "proves instead",
+        )
 }

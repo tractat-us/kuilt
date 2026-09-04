@@ -2,11 +2,13 @@ package us.tractat.kuilt.nw
 
 import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
+import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 import kotlin.random.Random
 
@@ -102,7 +104,7 @@ class NwConformanceTest : SeamConformanceSuite() {
     }
 
     /** Proven: this harness drives a genuine self-dial through the radio, so no gap. */
-    override fun selfDialGap(): String? = null
+    override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /**
      * No gap: [NwSeam] publishes its 16 MiB frame ceiling as of #2134, so this harness is held to the
@@ -112,13 +114,47 @@ class NwConformanceTest : SeamConformanceSuite() {
      */
     override fun payloadBudgetGap(): String? = null
 
-    // Mid-session-death obligation (13b — injectMidSessionDeath / both-ends-Torn-on-death + incoming
-    // completes) is UNPROVABLE for this fabric BY DESIGN — do NOT "fix" it by re-introducing tear-on-death.
-    // Since #1513 NwSeam treats a transport death (a dropped remote) as *recoverable*: the last-remote loss
-    // re-forms Woven→Weaving and keeps `incoming` OPEN so NwLoom can redial, rather than latching Torn on
-    // both ends. So injectMidSessionDeath is deliberately left at its default `false` and midSessionDeathGap
-    // keeps its tracked-URL default — the obligation simply does not hold for a recoverable fabric. `Torn`
-    // here means ONLY an explicit close()/weave-timeout, never peer loss.
+    /**
+     * Drop every live link the radio holds, so both seams observe their remote go away with no
+     * `Seam.close()` anywhere. This does **not** prove
+     * [SeamConformanceSuite.incomingCompletesOnInjectedMidSessionDeath] — see
+     * [midSessionDeathDeclaration]; it is the injection that arm is required to *perform* so the
+     * suite can watch the by-design deviation instead of believing it.
+     */
+    override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
+        val r = radio ?: return false
+        check(host.state.value !is SeamState.Torn && joiner.state.value !is SeamState.Torn) {
+            "mid-session-death rig precondition: both seams must be live before the links are dropped, " +
+                "or the declaration would be judged on a tear this rig did not cause; got " +
+                "host=${host.state.value}, joiner=${joiner.state.value}"
+        }
+        // Zero dropped ⇒ honestly un-injected: returning false reds midSessionDeathDeclarationIsHonest
+        // on the ContractDiffers arm rather than crediting a deviation to an injection that never ran.
+        return r.dropAllLinks() > 0
+    }
+
+    /**
+     * **Not a gap — the fabric answers this event differently by design (#2568).** Since #1513 `NwSeam`
+     * treats a dropped remote as *recoverable*: losing the last remote re-forms `Woven`→`Weaving` and
+     * keeps `incoming` OPEN so [NwLoom] can redial, rather than latching `Torn` on both ends.
+     * [SeamConformanceSuite.incomingCompletesOnInjectedMidSessionDeath] requires both ends to latch
+     * `Torn`, so it is unprovable on this fabric **by design** — `Torn` here means only an explicit
+     * `close()` or a weave timeout, never peer loss. **Do NOT "fix" this by re-introducing
+     * tear-on-death**; that would undo #1513 and break redial.
+     *
+     * That instruction used to live in a comment, which is not what someone burning down a tracked gap
+     * list reads — the whole of #2568. As a declaration it is also *enforced*:
+     * [SeamConformanceSuite.midSessionDeathDeclarationIsHonest] makes [injectMidSessionDeath] really
+     * drop the links and then requires the obligation's own postcondition to FAIL. So the arm reds the
+     * day the fabric starts tearing on peer loss — the regression this comment could only warn about.
+     */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.ContractDiffers(
+            "NwSeam treats a dropped remote as recoverable (#1513): losing the last remote re-forms " +
+                "Woven -> Weaving and keeps incoming open so NwLoom can redial. Torn means only an " +
+                "explicit close() or a weave timeout, never peer loss, so the both-ends-latch-Torn " +
+                "obligation cannot hold here. Do not re-introduce tear-on-death to satisfy it.",
+        )
 
     /** Session name matches `Pattern("host")`; discovery is by [SERVICE_TYPE] so this only satisfies join()'s signature. */
     override fun joinTag(): Tag = InMemoryTag(sessionName = "host", peerKey = "nw-joiner")

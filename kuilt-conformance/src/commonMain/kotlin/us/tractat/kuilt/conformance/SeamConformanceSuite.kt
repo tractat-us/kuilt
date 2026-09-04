@@ -110,12 +110,21 @@ import kotlin.test.fail
  * There is a **third** gating mechanism alongside *core (ungated)* and *capability-gated*:
  * **harness-hook-gated**. [incomingCompletesOnInjectedMidSessionDeath] runs only when a harness
  * overrides [injectMidSessionDeath] to actually drop the transport — a capability of the *harness*,
- * not the *fabric*. Its silent-skip is made accountable exactly as a capability gap is: an
- * un-overridden harness must declare a tracking URL via [midSessionDeathGap], enforced by
- * [midSessionDeathObligationIsTrackedWhenUnproven]. The same shape governs [injectMembershipDrain]
+ * not the *fabric*. Its silent-skip is made accountable exactly as a capability gap is: every harness
+ * declares an [ObligationDeclaration] via [midSessionDeathDeclaration], enforced by
+ * [midSessionDeathDeclarationIsHonest]. The same shape governs [injectMembershipDrain]
  * (a peer leaving without a tear) and [injectSelfDial] (a peer dialling its own advertisement, the
- * #1466 class) — each opt-in, each tracked-by-default via its own `*Gap()` and `*IsTrackedWhenUnproven`
- * meta-test rather than a required abstract every fabric would have to implement.
+ * #1466 class) — each opt-in, each tracked-by-default via its own `*Declaration()` and
+ * `*DeclarationIsHonest` meta-test rather than a required abstract every fabric would have to implement.
+ *
+ * Those declarations were a `String?` until #2568 — a tracking URL or `null` — which had **two** states
+ * for **three** situations and no way at all to say *this obligation does not apply to this fabric, by
+ * design*. Nine of the sixteen harnesses tracked under the mid-session-death umbrella were exactly
+ * that, and the framing invited a contributor burning the list down to "fix" `kuilt-nw` by
+ * re-introducing tear-on-peer-loss (undoing #1513, breaking redial). [ObligationDeclaration] adds the
+ * two by-design arms — and, because an "I cannot reach this state" opt-out otherwise just moves the
+ * vacuity one level up, **checks** them against the injection hook rather than believing them. Its
+ * KDoc carries the arm-by-arm contract and what each arm cannot detect.
  *
  * A **fourth** selects on a value the fabric already publishes rather than on any declaration:
  * [payloadOfExactlyTheBudgetIsCarried] and [overBudgetAddressedSendIsRefusedNotLeaked] run exactly
@@ -241,22 +250,26 @@ public abstract class SeamConformanceSuite {
      * the seam is peer-symmetric, a 2-peer transport death is symmetric: both ends latch
      * [SeamState.Torn] and both `incoming` flows complete — which is what
      * [incomingCompletesOnInjectedMidSessionDeath] asserts. A harness that overrides this to `true`
-     * MUST also override [midSessionDeathGap] to return `null` (the obligation is now proven).
+     * MUST also declare [ObligationDeclaration.Proven] via [midSessionDeathDeclaration] — or, if its
+     * fabric answers an injected death differently on purpose,
+     * [ObligationDeclaration.NotApplicable.ContractDiffers], which is the arm that *watches* the
+     * deviation happen.
      */
     public open suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean = false
 
     /**
-     * Tracking URL for **why this harness does not prove the mid-session-death obligation** — the
-     * accountability analog of [capabilityGaps] for the [injectMidSessionDeath] hook.
+     * What this harness says about the mid-session-death obligation — the accountability analog of
+     * [capabilityGaps] for the [injectMidSessionDeath] hook, and since #2568 a four-armed
+     * [ObligationDeclaration] rather than a two-state `String?`.
      *
-     * The base default is a **non-null** umbrella URL ([CapabilityGaps.MID_SESSION_DEATH]): an
-     * un-overridden harness (one that leaves [injectMidSessionDeath] at its default `false`) is
-     * *tracked by default*, never silently green. A harness that overrides [injectMidSessionDeath]
-     * to actually drop the transport **proves** the obligation and MUST override this to return
-     * `null`/blank (no gap). [midSessionDeathObligationIsTrackedWhenUnproven] enforces the pairing:
-     * hook-returns-`false` ⇒ this must be non-blank.
+     * The base default is [ObligationDeclaration.Gap] on the umbrella ([CapabilityGaps.MID_SESSION_DEATH]):
+     * an un-overridden harness (one that leaves [injectMidSessionDeath] at its default `false`) is
+     * *tracked by default*, never silently green. [midSessionDeathDeclarationIsHonest] enforces the
+     * pairing between whichever arm is declared and what the hook actually does — including the two
+     * by-design arms, which are checked rather than believed. See [ObligationDeclaration].
      */
-    public open fun midSessionDeathGap(): String? = CapabilityGaps.MID_SESSION_DEATH
+    public open fun midSessionDeathDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.MID_SESSION_DEATH)
 
     /**
      * Inject a **mid-session membership drain**: drop [joiner] from [host]'s peer set mid-session
@@ -271,21 +284,22 @@ public abstract class SeamConformanceSuite {
      * IS a tear — so only an **N-peer** harness whose shared roster survives one peer leaving (e.g. the
      * reference `InMemoryLoom`, where a leaver's `close()` removes it from the shared `peers` while the
      * other seam stays Woven) can prove it. An overriding harness drops [joiner] from the roster,
-     * leaving [host] Woven, then returns `true`, and MUST also override [membershipDrainGap] to `null`.
+     * leaving [host] Woven, then returns `true`, and MUST also declare [ObligationDeclaration.Proven]
+     * via [membershipDrainDeclaration].
      */
     public open suspend fun injectMembershipDrain(host: Seam, joiner: Seam): Boolean = false
 
     /**
-     * Tracking URL for **why this harness does not prove the membership-drain obligation** — the
-     * accountability analog of [midSessionDeathGap] for the [injectMembershipDrain] hook.
+     * What this harness says about the membership-drain obligation — the accountability analog of
+     * [midSessionDeathDeclaration] for the [injectMembershipDrain] hook.
      *
-     * The base default is a non-null umbrella URL ([CapabilityGaps.MEMBERSHIP_DRAIN]): an un-overridden
-     * harness (one that leaves [injectMembershipDrain] at its default `false`) is tracked by default,
-     * never silently green. A harness that overrides [injectMembershipDrain] to actually drain a peer
-     * **proves** the obligation and MUST override this to return `null`/blank.
-     * [membershipDrainObligationIsTrackedWhenUnproven] enforces the pairing.
+     * The base default is [ObligationDeclaration.Gap] on the umbrella ([CapabilityGaps.MEMBERSHIP_DRAIN]):
+     * an un-overridden harness (one that leaves [injectMembershipDrain] at its default `false`) is
+     * tracked by default, never silently green. [membershipDrainDeclarationIsHonest] enforces the
+     * pairing. See [ObligationDeclaration] for what each arm costs and what it cannot detect.
      */
-    public open fun membershipDrainGap(): String? = CapabilityGaps.MEMBERSHIP_DRAIN
+    public open fun membershipDrainDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.MEMBERSHIP_DRAIN)
 
     /**
      * Inject a **self-dial**: make [host] resolve a connection whose remote identity is its OWN
@@ -302,27 +316,46 @@ public abstract class SeamConformanceSuite {
      * It is deliberately **opt-in** rather than a required abstract: a required hook would force every
      * fabric subclass to implement a self-dial many structurally cannot perform. Accountability is
      * preserved exactly as [injectMidSessionDeath]'s is — an un-overriding harness is *tracked*, never
-     * silently green, via [selfDialGap] and [selfDialObligationIsTrackedWhenUnproven].
+     * silently green, via [selfDialDeclaration] and [selfDialDeclarationIsHonest].
      *
-     * A harness that overrides this to `true` MUST also override [selfDialGap] to return `null`.
+     * A harness that overrides this to `true` MUST also declare [ObligationDeclaration.Proven] via
+     * [selfDialDeclaration].
      */
     public open suspend fun injectSelfDial(host: Seam): Boolean = false
 
     /**
-     * Tracking URL for **why this harness does not prove the self-dial obligation** — the
-     * accountability analog of [midSessionDeathGap] for the [injectSelfDial] hook.
+     * What this harness says about the self-dial obligation — the accountability analog of
+     * [midSessionDeathDeclaration] for the [injectSelfDial] hook.
      *
-     * The base default is a non-null umbrella URL ([CapabilityGaps.SELF_DIAL]): an un-overridden
-     * harness (one that leaves [injectSelfDial] at its default `false`) is tracked by default, never
-     * silently green. A harness that overrides [injectSelfDial] to genuinely inject a self-dial
-     * **proves** the obligation and MUST override this to return `null`/blank.
-     * [selfDialObligationIsTrackedWhenUnproven] enforces the pairing.
+     * The base default is [ObligationDeclaration.Gap] on the umbrella ([CapabilityGaps.SELF_DIAL]): an
+     * un-overridden harness (one that leaves [injectSelfDial] at its default `false`) is tracked by
+     * default, never silently green. [selfDialDeclarationIsHonest] enforces the pairing.
+     *
+     * **The weakest of the three**, and deliberately said out loud: a self-dial has no universal
+     * stimulus a suite can reach for, so [ObligationDeclaration.NotApplicable.NotConstructible] here
+     * buys only the hook-consistency check and the prose toll — there is no cheap refutation to run,
+     * the way there is for the death/drain pair (whose stimulus is a peer going away). No in-tree
+     * harness declares that arm for this obligation today; if one does, its reason is all a reader gets.
      */
-    public open fun selfDialGap(): String? = CapabilityGaps.SELF_DIAL
+    public open fun selfDialDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.SELF_DIAL)
 
     /**
      * Tracking URL for **why this fabric names no frame ceiling** — the accountability analog of
-     * [midSessionDeathGap] for [us.tractat.kuilt.core.Seam.maxPayloadBytes] (#2069).
+     * [midSessionDeathDeclaration] for [us.tractat.kuilt.core.Seam.maxPayloadBytes] (#2069).
+     *
+     * **Deliberately still a `String?`, and not an [ObligationDeclaration] (#2568).** The other three
+     * hooks were converted because their two states could not express "by design"; this one is a
+     * different animal on every axis that made the conversion worth it. Its selector is a *value the
+     * fabric publishes* rather than a harness hook, so there is no injection whose return value could
+     * cross-check an arm — [ObligationDeclaration.NotApplicable.ContractDiffers] has nothing to
+     * demonstrate and [ObligationDeclaration.NotApplicable.NotConstructible] nothing to refute, which
+     * would leave both arms as exactly the self-certified opt-out that type exists to refuse. Its
+     * default is a *doc anchor*, not an issue umbrella, precisely because `null` is usually the honest
+     * answer here rather than a shortfall (see below) — so there is no false-gap population to migrate,
+     * which is what #2568 was about. And the pairing already binds in **both** directions, which is the
+     * accountability the by-design arms were added to supply elsewhere: publishing a number requires
+     * this to be cleared, so it cannot be left behind as an opt-out.
      *
      * The base default is a **non-null** umbrella ([CapabilityGaps.PAYLOAD_BUDGET]), so a fabric
      * that publishes nothing is *declared*, never silently green; a fabric that publishes a number
@@ -1376,8 +1409,14 @@ public abstract class SeamConformanceSuite {
     public fun incomingCompletesOnInjectedMidSessionDeath(): TestResult =
         runTest {
             connectedPair { host, joiner ->
+                // Read the declaration BEFORE injecting: a harness whose fabric answers a death
+                // differently on purpose (ObligationDeclaration.NotApplicable.ContractDiffers) can
+                // inject, but this obligation is not the one that holds for it — the DEVIATION is
+                // asserted by midSessionDeathDeclarationIsHonest instead. Injecting first and skipping
+                // after would perform a destructive drop for nothing.
+                if (midSessionDeathDeclaration() !is ObligationDeclaration.Proven) return@connectedPair
                 val injected = injectMidSessionDeath(host, joiner)
-                if (!injected) return@connectedPair // harness cannot inject death — nothing to assert.
+                if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
 
                 // Both symmetric ends must reach Torn on the injected transport death (bounded — no
                 // unbounded advance) AND both `incoming` flows must complete (a late collector on the
@@ -1415,8 +1454,10 @@ public abstract class SeamConformanceSuite {
         runTest {
             connectedPair { host, joiner ->
                 val drainedPeer = joiner.selfId
+                // Declaration first — see incomingCompletesOnInjectedMidSessionDeath for why.
+                if (membershipDrainDeclaration() !is ObligationDeclaration.Proven) return@connectedPair
                 val injected = injectMembershipDrain(host, joiner)
-                if (!injected) return@connectedPair // harness cannot inject a drain — nothing to assert.
+                if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
 
                 // Bounded: the survivor observes the drained peer leave its roster (no unbounded advance).
                 val peersAfter = withTimeout(5.seconds) { host.peers.first { drainedPeer !in it } }
@@ -1471,8 +1512,10 @@ public abstract class SeamConformanceSuite {
         runTest {
             connectedPair { host, _ ->
                 val peersBefore = host.peers.value
+                // Declaration first — see incomingCompletesOnInjectedMidSessionDeath for why.
+                if (selfDialDeclaration() !is ObligationDeclaration.Proven) return@connectedPair
                 val injected = injectSelfDial(host)
-                if (!injected) return@connectedPair // harness cannot inject a self-dial — nothing to assert.
+                if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
 
                 // Subscribe the sole `incoming` collector first, then let the injected self-dial fully
                 // resolve-or-drop, then broadcast the probe. A self-registered link echoes the broadcast
@@ -1573,72 +1616,130 @@ public abstract class SeamConformanceSuite {
         }
     }
 
-    // ── (16) an un-proven mesh-death obligation must be tracked, not silently skipped ──
+    // ── (16) the mid-session-death declaration is honest ─────────────────────
     //
-    // The harness-hook analog of [everyFalseCapabilityDeclaresAGap]. [injectMidSessionDeath]'s own
-    // return value is the "is it proven?" proxy: a harness that cannot inject death (hook returns
-    // `false`) MUST declare a non-blank [midSessionDeathGap], so the silent early-return of
-    // [incomingCompletesOnInjectedMidSessionDeath] is tracked rather than invisibly green. A harness
-    // that proves the obligation (hook returns `true`) may leave the gap `null`. The base default
-    // gap is non-null, so an un-overridden harness passes this by being tracked by the umbrella issue.
+    // The harness-hook analog of [everyFalseCapabilityDeclaresAGap], widened by #2568 from "an
+    // un-proven obligation is tracked" to "whichever of the four arms you declare, the suite checks
+    // it". [injectMidSessionDeath]'s own return value is the cross-check the harness cannot fake
+    // without actually injecting; [ObligationDeclaration]'s KDoc carries the arm-by-arm contract and
+    // states what each arm still cannot detect.
 
     @Test
-    public fun midSessionDeathObligationIsTrackedWhenUnproven(): TestResult =
+    public fun midSessionDeathDeclarationIsHonest(): TestResult =
+        runTest { runMidSessionDeathDeclarationIsHonest(this) }
+
+    /**
+     * The body of [midSessionDeathDeclarationIsHonest], separated so `ObligationDeclarationRigTest`
+     * can drive it against deliberately-lying harnesses inside ONE `runTest` (a nested `runTest`
+     * returns an un-awaited Promise on wasmJs/JS). Every check lives here, never in the wrapper.
+     */
+    internal suspend fun runMidSessionDeathDeclarationIsHonest(scope: TestScope): Unit =
+        scope.connectedPair { host, joiner ->
+            when (val declared = midSessionDeathDeclaration()) {
+                is ObligationDeclaration.Proven ->
+                    assertTrue(
+                        injectMidSessionDeath(host, joiner),
+                        "Proven claims incomingCompletesOnInjectedMidSessionDeath ran — but " +
+                            "injectMidSessionDeath returned false, so it early-returned and asserted " +
+                            "nothing. Override the hook, or declare Gap/NotApplicable.",
+                    )
+
+                is ObligationDeclaration.Gap -> {
+                    val injected = injectMidSessionDeath(host, joiner)
+                    assertAll(
+                        { assertTrue(declared.trackingUrl.isNotBlank(), GAP_NEEDS_A_URL) },
+                        {
+                            assertFalse(
+                                injected,
+                                "this harness CAN inject a mid-session death, so it has no gap: declare " +
+                                    "Proven, or ContractDiffers if the fabric answers a death differently " +
+                                    "on purpose",
+                            )
+                        },
+                    )
+                }
+
+                is ObligationDeclaration.NotApplicable.ContractDiffers ->
+                    assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON)
+
+                is ObligationDeclaration.NotApplicable.NotConstructible ->
+                    assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON)
+            }
+        }
+
+    // ── (17) the membership-drain declaration is honest ──────────────────────
+    //
+    // The analog of [midSessionDeathDeclarationIsHonest] for the [injectMembershipDrain] hook.
+
+    @Test
+    public fun membershipDrainDeclarationIsHonest(): TestResult =
         runTest {
             connectedPair { host, joiner ->
-                val proven = injectMidSessionDeath(host, joiner)
-                if (!proven) {
-                    assertFalse(
-                        midSessionDeathGap().isNullOrBlank(),
-                        "an un-proven mesh-death obligation must be tracked: override midSessionDeathGap() " +
-                            "with a tracking URL, or override injectMidSessionDeath to prove it",
-                    )
+                when (val declared = membershipDrainDeclaration()) {
+                    is ObligationDeclaration.Proven ->
+                        assertTrue(
+                            injectMembershipDrain(host, joiner),
+                            "Proven claims peersDrainWithoutTearOnInjectedMembershipDrain ran — but " +
+                                "injectMembershipDrain returned false, so it early-returned and asserted " +
+                                "nothing. Override the hook, or declare Gap/NotApplicable.",
+                        )
+
+                    is ObligationDeclaration.Gap -> {
+                        val injected = injectMembershipDrain(host, joiner)
+                        assertAll(
+                            { assertTrue(declared.trackingUrl.isNotBlank(), GAP_NEEDS_A_URL) },
+                            {
+                                assertFalse(
+                                    injected,
+                                    "this harness CAN inject a membership drain, so it has no gap: declare " +
+                                        "Proven, or ContractDiffers if the fabric answers a drain differently " +
+                                        "on purpose",
+                                )
+                            },
+                        )
+                    }
+
+                    is ObligationDeclaration.NotApplicable ->
+                        assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON)
                 }
             }
         }
 
-    // ── (17) an un-proven membership-drain obligation must be tracked, not silently skipped ──
+    // ── (18) the self-dial declaration is honest ─────────────────────────────
     //
-    // The harness-hook analog of [midSessionDeathObligationIsTrackedWhenUnproven] for the
-    // [injectMembershipDrain] hook. A harness that cannot inject a drain (hook returns `false`) MUST
-    // declare a non-blank [membershipDrainGap], so the silent early-return of
-    // [peersDrainWithoutTearOnInjectedMembershipDrain] is tracked rather than invisibly green. A
-    // harness that proves the obligation (hook returns `true`) may leave the gap `null`.
+    // The analog of [midSessionDeathDeclarationIsHonest] for the [injectSelfDial] hook — and the
+    // weakest of the three, because a self-dial has no universal stimulus the suite can reach for, so
+    // there is no cheap refutation to pair with a NotConstructible reason. [selfDialDeclaration]'s
+    // KDoc says so.
 
     @Test
-    public fun membershipDrainObligationIsTrackedWhenUnproven(): TestResult =
-        runTest {
-            connectedPair { host, joiner ->
-                val proven = injectMembershipDrain(host, joiner)
-                if (!proven) {
-                    assertFalse(
-                        membershipDrainGap().isNullOrBlank(),
-                        "an un-proven membership-drain obligation must be tracked: override membershipDrainGap() " +
-                            "with a tracking URL, or override injectMembershipDrain to prove it",
-                    )
-                }
-            }
-        }
-
-    // ── (18) an un-proven self-dial obligation must be tracked, not silently skipped ──
-    //
-    // The harness-hook analog of [midSessionDeathObligationIsTrackedWhenUnproven] for the
-    // [injectSelfDial] hook. A harness that cannot inject a self-dial (hook returns `false`) MUST
-    // declare a non-blank [selfDialGap], so the silent early-return of [selfDialIsRejected] is tracked
-    // rather than invisibly green. A harness that proves the obligation (hook returns `true`) may leave
-    // the gap `null`.
-
-    @Test
-    public fun selfDialObligationIsTrackedWhenUnproven(): TestResult =
+    public fun selfDialDeclarationIsHonest(): TestResult =
         runTest {
             connectedPair { host, _ ->
-                val proven = injectSelfDial(host)
-                if (!proven) {
-                    assertFalse(
-                        selfDialGap().isNullOrBlank(),
-                        "an un-proven self-dial obligation must be tracked: override selfDialGap() " +
-                            "with a tracking URL, or override injectSelfDial to prove it",
-                    )
+                when (val declared = selfDialDeclaration()) {
+                    is ObligationDeclaration.Proven ->
+                        assertTrue(
+                            injectSelfDial(host),
+                            "Proven claims selfDialIsRejected ran — but injectSelfDial returned false, so it " +
+                                "early-returned and asserted nothing. Override the hook, or declare " +
+                                "Gap/NotApplicable.",
+                        )
+
+                    is ObligationDeclaration.Gap -> {
+                        val injected = injectSelfDial(host)
+                        assertAll(
+                            { assertTrue(declared.trackingUrl.isNotBlank(), GAP_NEEDS_A_URL) },
+                            {
+                                assertFalse(
+                                    injected,
+                                    "this harness CAN inject a self-dial, so it has no gap: declare Proven",
+                                )
+                            },
+                        )
+                    }
+
+                    is ObligationDeclaration.NotApplicable ->
+                        assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON)
                 }
             }
         }
@@ -1763,5 +1864,20 @@ public abstract class SeamConformanceSuite {
     private companion object {
         /** Non-uniform fill for the at-budget payload, so a truncation cannot pass as a zero-fill. */
         const val PAYLOAD_FILL_MODULUS = 251
+
+        /**
+         * The prose toll every [ObligationDeclaration.NotApplicable] arm pays, and the only thing
+         * standing between a by-design declaration and a silent opt-out for the arms the suite cannot
+         * otherwise refute. Same shape as [JoinerRosterOrigin]'s: a sentence naming a mechanism a
+         * reviewer can go and read, not a conclusion asserted.
+         */
+        /** The toll an [ObligationDeclaration.Gap] pays — same shape [everyFalseCapabilityDeclaresAGap] charges. */
+        const val GAP_NEEDS_A_URL =
+            "a Gap must carry a non-blank tracking URL — a blank one is a silent skip wearing a declaration"
+
+        const val NOT_APPLICABLE_NEEDS_A_REASON =
+            "a by-design NotApplicable declaration must say WHY in non-blank prose — what the fabric " +
+                "does instead, or what makes the event unconstructible here. A bare arm is the silent " +
+                "opt-out this vocabulary exists to refuse (#2568)"
     }
 }

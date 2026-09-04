@@ -60,7 +60,7 @@ class PeerMeshConformanceTest : SeamConformanceSuite() {
     }
 
     /** Proven: this harness overrides [injectMidSessionDeath] to drop the transport, so no gap. */
-    override fun midSessionDeathGap(): String? = null
+    override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /** Weaves a [peerMesh] over one [Connection] — a 2-peer peer-mesh (self + the remote it dials). */
     private class PeerMeshLoom(private val self: PeerId, private val conn: Connection) : Loom {

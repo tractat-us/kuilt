@@ -86,7 +86,7 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
         bus?.injectHostSelfDial() ?: false
 
     /** Proven: this harness fires a genuine self-peer event through the fake, so no gap. */
-    override fun selfDialGap(): String? = null
+    override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /**
      * Every capability honoured but one — MultipeerConnectivity requires encryption

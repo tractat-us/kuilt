@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
+import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryLoom
@@ -64,6 +65,25 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
         JoinerRosterOrigin.FilledByConstruction(
             "a shared roster, twice over: one GossipLoom over one InMemoryLoom, and GossipSeam.peers " +
             "delegates straight to its base seam - so the joiner reads the same registry the host does.",
+        )
+
+    /**
+     * **Not a gap — the event is not constructible here (#2568).** One [GossipLoom] over one shared
+     * [InMemoryLoom] base plays both roles, so there is no 2-peer transport under the pair to drop.
+     * A peer going away shrinks the base loom's shared roster — which [GossipSeam.peers] delegates
+     * straight to — and leaves the survivor [us.tractat.kuilt.core.SeamState.Woven]. The in-memory
+     * transport-death path is covered by `PeerMeshConformanceTest`, which holds both ends of a real
+     * 2-peer link.
+     *
+     * This harness does **not** yet prove the sibling membership-drain obligation — that stays a
+     * tracked gap under the default — so the departure event is asserted on here only by
+     * [SeamConformanceSuite.midSessionDeathDeclarationIsHonest]'s refutation.
+     */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.NotConstructible(
+            "one GossipLoom over one shared InMemoryLoom base plays both roles, so no 2-peer " +
+                "transport exists under the pair to drop; a peer leaving shrinks the base loom's " +
+                "shared roster (which GossipSeam.peers delegates to) and leaves the survivor Woven",
         )
 }
 

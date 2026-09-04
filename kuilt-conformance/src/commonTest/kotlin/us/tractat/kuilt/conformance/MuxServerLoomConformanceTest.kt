@@ -133,7 +133,26 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
     }
 
     /** Proven: this harness drains a peer without tearing the survivor, so no gap. */
-    override fun membershipDrainGap(): String? = null
+    override fun membershipDrainDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
+
+    /**
+     * **Not a gap — the event is not constructible here (#2568).** A room hub does not die of one
+     * link: killing the client's base seam deregisters that spoke and leaves the hub
+     * [us.tractat.kuilt.core.SeamState.Woven] with every other spoke intact, which is precisely why
+     * that same injection is this harness's [injectMembershipDrain] directly above. The obligation
+     * needs *both* ends to latch `Torn`, and the survivor here structurally cannot. (Compounded by
+     * #2372: the joiner handed back is a `NamedMux` channel view that does not reach `Torn` even on
+     * its own `close()`.)
+     *
+     * [midSessionDeathDeclarationIsHonest] refutes that claim's cheap failure mode rather than
+     * believing it; [ObligationDeclaration] states what the arm still cannot detect.
+     */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.NotConstructible(
+            "a room hub does not die of one link: killing the client's base seam deregisters that " +
+                "spoke and leaves the hub Woven with every other spoke intact, so the survivor " +
+                "cannot latch Torn. That same injection is this harness's membership drain",
+        )
 
     private companion object {
         /** Must match the `Pattern` [SeamConformanceSuite.connectedPair] hosts with. */

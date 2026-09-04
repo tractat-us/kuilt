@@ -7,10 +7,13 @@ import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loop
 import org.junit.AssumptionViolatedException
 import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
+import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 import kotlin.test.AfterTest
 
@@ -151,4 +154,39 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
      */
     override fun payloadBudgetGap(): String? = null
 
+    /**
+     * Cancel every live connection under the pair through the bridge, so each seam observes a real
+     * remote disconnect with no `Seam.close()` anywhere. Not a proof of
+     * [SeamConformanceSuite.incomingCompletesOnInjectedMidSessionDeath] — see
+     * [midSessionDeathDeclaration].
+     */
+    override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
+        check(host.state.value !is SeamState.Torn && joiner.state.value !is SeamState.Torn) {
+            "mid-session-death rig precondition: both seams must be live before the connections are " +
+                "cancelled; got host=${host.state.value}, joiner=${joiner.state.value}"
+        }
+        return dropEveryLiveConnection(bridges) > 0
+    }
+
+    /**
+     * **Not a gap — the fabric answers this event differently by design (#2568).** Same argument as
+     * [NwConformanceTest]'s, driven through the cdecl bridge: since #1513 `NwSeam` treats a dropped
+     * remote as recoverable, re-forming `Woven`→`Weaving` and keeping `incoming` open so [NwLoom] can
+     * redial. **Do not "fix" this by re-introducing tear-on-death.**
+     *
+     * **Weaker here than on the fake-backed harness, and worth saying so.**
+     * [SeamConformanceSuite.midSessionDeathDeclarationIsHonest] proves the deviation by injecting and
+     * then observing that no `Torn` arrives within a bound — and that bound is `runTest`'s *virtual*
+     * clock while these seams run on a real dispatcher. What the arm genuinely buys over a
+     * self-certification is that the injection must FIRE; the promptness half is strong only on
+     * [NwConformanceTest].
+     */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.ContractDiffers(
+            "NwSeam treats a dropped remote as recoverable (#1513): losing the last remote re-forms " +
+                "Woven -> Weaving and keeps incoming open so NwLoom can redial. Torn means only an " +
+                "explicit close() or a weave timeout, never peer loss. Demonstrated strongly by the " +
+                "fake-backed NwConformanceTest; here the deviation check is bounded on virtual time " +
+                "over a real socket, so it proves the injection fired and no prompt tear followed.",
+        )
 }

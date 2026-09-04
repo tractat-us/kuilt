@@ -115,7 +115,7 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
     }
 
     /** Proven: this harness drops the transport by stopping the server, so no gap. */
-    override fun midSessionDeathGap(): String? = null
+    override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /**
      * Plaintext `ws://`; relay/hub topology — frames traverse the server.

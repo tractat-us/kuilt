@@ -129,7 +129,7 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
         pair?.bus?.dropTransport() ?: false
 
     /** Proven: this harness kills the transport under a live session, so no gap. */
-    override fun midSessionDeathGap(): String? = null
+    override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /**
      * Hand the host a connection whose remote identity is its own `MCPeerID` — the #1466 self-dial.
