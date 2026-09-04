@@ -5,6 +5,31 @@ tasks.withType<Test>().configureEach {
     if (flag != null) systemProperty("multipeer.realnet.tests", flag)
 }
 
+// Every `*ConcurrencyTest` in this module is a real-threaded probe (the name is the contract, not an
+// enumeration — the same convention as `:kuilt-core`, `:kuilt-nearby` and `:kuilt-nw`). They run on
+// real threads rather than virtual time, so their coroutines depend on the OS scheduling a
+// `Dispatchers.Default` worker; when the machine is saturated by sibling test JVMs that dispatch can
+// be delayed far past any budget the probe sets, and the probe reds — or is killed and writes no XML
+// — for a reason that has nothing to do with the code under test (#1135 / #1158). So they are
+// EXCLUDED from the normal run and only execute under -Pconcurrency.stress.tests=true, on a runner
+// with no co-scheduled test JVMs.
+//
+// The cost, stated rather than discovered later: that job is deliberately NON-BLOCKING and is not
+// aggregated into `ci-required`, so the merge gate does NOT pin the #1803 fix in `BridgePeerLink`.
+// Nothing cheaper is available — a single-threaded test cannot distinguish the check-then-act from
+// the `SeamStateGate`, because the check-then-act is *correct* when nothing runs between the read
+// and the write, which is precisely what a test dispatcher guarantees. That is the same posture
+// every sibling lost-terminal-`Torn` probe in `:kuilt-core` and `:kuilt-nearby` already has.
+val runConcurrencyStress = providers.gradleProperty("concurrency.stress.tests").orNull == "true"
+tasks.withType<Test>().configureEach {
+    // Apply the exclusion only when the flag is OFF. With the flag ON the exclusion is absent, so a
+    // command-line `--tests "*ConcurrencyTest"` include filter runs them (a build-defined exclude
+    // would otherwise win over the include and match nothing — the CI job would be green by vacuity).
+    if (!runConcurrencyStress) {
+        filter { excludeTestsMatching("*ConcurrencyTest") }
+    }
+}
+
 kotlin {
     val macosLibName = "kuilt"
     macosArm64 { binaries.sharedLib { baseName = macosLibName } }

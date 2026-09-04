@@ -54,10 +54,12 @@ import kotlinx.coroutines.flow.asStateFlow
  * ## Why this is `public`, and in `:kuilt-core` (#1803)
  *
  * Stated rather than left to inference, because this type spent its first year `internal` and the
- * cost is measured. Every `Seam` implementation publishes a `SeamState`, and most of them live
- * *outside* this module — `:kuilt-multipeer`, `:kuilt-nearby`, `:kuilt-nw`, `:kuilt-webrtc`,
- * `:kuilt-websocket`, plus any out-of-tree fabric. While the remedy was unreachable to them, four
- * such fabrics hand-rolled their own latch and **three wrote precisely the check-then-set this
+ * cost is measured. Every `Seam` implementation publishes a `SeamState`, and the ones that own their
+ * own state flow rather than composing a core seam live *outside* this module: `:kuilt-multipeer`
+ * (twice), `:kuilt-nearby`, `:kuilt-nw`, `:kuilt-webrtc`, plus any out-of-tree fabric.
+ * (`:kuilt-websocket` is not among them — it composes [LinkSeam]/[MeshSeam], which is why it never
+ * had to solve this at all, and is the shape to prefer.) While the remedy was unreachable to them,
+ * four such fabrics hand-rolled their own latch and **three wrote precisely the check-then-set this
  * KDoc bans**, three lines below a comment describing the race. The remedy was unreachable, not
  * ignored; the sibling lesson is written up on [pumpIn], whose helper was made `public` for exactly
  * this reason after the same thing happened to it.

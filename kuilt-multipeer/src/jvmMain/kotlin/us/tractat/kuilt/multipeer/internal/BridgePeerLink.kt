@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.PeerIdentityRegistry
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.multipeer.MultipeerNativeLib
@@ -84,8 +85,18 @@ internal class BridgePeerLink(
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     // Starts Weaving; transitions to Woven on first peer-connected callback.
-    private val _state: MutableStateFlow<SeamState> = MutableStateFlow(SeamState.Weaving)
-    override val state: StateFlow<SeamState> = _state.asStateFlow()
+    //
+    // A `SeamStateGate`, not a bare MutableStateFlow, because the two writers are on genuinely
+    // different OS threads: the promotion below runs on a JNA trampoline thread (native calls
+    // `peerStateCallback` from whatever thread MultipeerConnectivity is on) while `tearDown` runs
+    // on the consumer's. The old `if (_state.value is Weaving) _state.value = Woven` was a
+    // check-then-set across that boundary — a tear landing between the read and the write was
+    // stamped over with `Woven`, permanently, because both writers then retire and the factory's
+    // `ActiveSeamSlot` waits on a `Torn` that never comes (#1803; measured at 7 clobbers in 20 000
+    // races by `BridgePeerLinkStateLatchConcurrencyTest`). The gate fuses the latch check and the
+    // write into one critical section, so a late promotion is a no-op instead.
+    private val stateGate = SeamStateGate(SeamState.Weaving)
+    override val state: StateFlow<SeamState> = stateGate.state
 
     // Bounded staging channel: the JNA data callback deposits frames here non-suspendingly.
     // DROP_OLDEST overflow so the callback never blocks; the single drain coroutine forwards
@@ -106,14 +117,13 @@ internal class BridgePeerLink(
     // IS unexpected, so it must still warn) and disposes no native handle.
     private val closing = AtomicBoolean(false)
 
-    // SEPARATE single-shot latch for the seam's terminal state+resource teardown
-    // (state→Torn, bridge/spool close, scope cancel). Distinct from `closing`:
-    // the self-driven drop path tears the seam down (so `state` reaches Torn and
-    // `incoming` completes per the Seam contract) WITHOUT issuing mc_session_close,
-    // while an explicit close() does both. One CAS winner across both paths so a
-    // drop followed by a consumer close() never double-closes bridge/spool or
-    // re-cancels the scope.
-    private val tornDown = AtomicBoolean(false)
+    // The seam's terminal state+resource teardown (state→Torn, bridge/spool close, scope cancel) is
+    // latched by [stateGate] itself — `tear()` returns true for exactly one caller, so it IS the
+    // single-shot latch and the separate `tornDown` AtomicBoolean this class used to carry is gone
+    // (a migrating seam deletes a field rather than gaining one). The distinction from `closing`
+    // survives the migration and still matters: the self-driven drop path tears the seam down (so
+    // `state` reaches Torn and `incoming` completes per the Seam contract) WITHOUT issuing
+    // mc_session_close, while an explicit close() does both.
 
     // Strong refs so JNA trampolines aren't GC'd before the K/N side
     // finishes pumping. Held for this link's whole lifetime — they outlive
@@ -153,7 +163,12 @@ internal class BridgePeerLink(
                 when (registry.bind(peer, peer)) {
                     PeerIdentityRegistry.BindResult.BOUND -> {
                         _peers.value = registry.peers + selfId
-                        if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven
+                        // Unconditional, and equivalent to the old `is Weaving` guard: `Woven` over
+                        // `Woven` is a no-op (StateFlow conflates equal values, and `Woven` is a
+                        // data object), and `Woven` over a latched `Torn` is refused by the gate —
+                        // which is the whole point. The guard was never a promotion *rule*, it was
+                        // the read half of the race.
+                        stateGate.update(SeamState.Woven)
                     }
                     PeerIdentityRegistry.BindResult.ALREADY_BOUND -> Unit // duplicate connect callback
                     // See the [registry] comment: with `T` = the id itself this arm cannot fire.
@@ -227,7 +242,7 @@ internal class BridgePeerLink(
         // close() or a self-driven last-peer drop (tearDown). Checked before the
         // `closing` gate so a send racing an in-progress close() (closing latched, Torn
         // not yet set) still no-ops rather than throwing, protecting the native handle.
-        check(_state.value !is SeamState.Torn) { "broadcast on a Torn seam" }
+        check(state.value !is SeamState.Torn) { "broadcast on a Torn seam" }
         if (closing.get()) return
         if (_peers.value.none { it != selfId }) {
             log.warn { "mc.session.send dropped — no connected peers localPeer=${selfId.value} bytes=${payload.size}" }
@@ -240,7 +255,7 @@ internal class BridgePeerLink(
         peer: PeerId,
         payload: ByteArray,
     ) {
-        check(_state.value !is SeamState.Torn) { "sendTo on a Torn seam" }
+        check(state.value !is SeamState.Torn) { "sendTo on a Torn seam" }
         // Ahead of the `closing` short-circuit and the roster check: `_peers` includes selfId, so
         // without this the bridge handed its OWN id to `mc_session_send_to` as a native addressee
         // (#2428).
@@ -280,7 +295,7 @@ internal class BridgePeerLink(
      * Single-shot terminal teardown — latch [SeamState.Torn], close the JNA
      * [bridge] and the [spool] (completing [incoming] per the `Seam` contract),
      * cancel [scope]. Shared by the self-driven drop path and [closeNow]; the
-     * [tornDown] CAS makes it run once even if a drop and a consumer [close]
+     * [stateGate] latch makes it run once even if a drop and a consumer [close]
      * interleave. Issues no native call — the native handle is disposed only by
      * [closeNow]. The latched `Torn` is what the owning factory's `ActiveSeamSlot`
      * reads to free its single-session slot on the next weave.
@@ -288,7 +303,7 @@ internal class BridgePeerLink(
      * Collapses [_peers] to `{ selfId }` **before** latching `Torn` (#1816): a torn fabric can
      * reach nobody, and a decorator folding this seam reads whatever is left here as still
      * reachable until the member is detached — so the roster must already be collapsed by the
-     * time anyone can observe `Torn`. The collapse sits ahead of the [tornDown] CAS, as in
+     * time anyone can observe `Torn`. The collapse sits ahead of the [stateGate] latch, as in
      * `LinkSeam.tearDown`: it is idempotent (always `setOf(selfId)`), so running it on a losing
      * caller costs nothing and buys the stronger post-condition that `peers` is collapsed once
      * *any* `tearDown` has returned. Previously only the remote-drop path reached `{ selfId }`,
@@ -304,8 +319,7 @@ internal class BridgePeerLink(
     private fun tearDown(reason: CloseReason) {
         registry.clear()
         _peers.value = setOf(selfId)
-        if (!tornDown.compareAndSet(false, true)) return
-        _state.value = SeamState.Torn(reason)
+        if (!stateGate.tear(reason)) return
         bridge.close()
         spool.close()
         scope.cancel()
