@@ -103,9 +103,13 @@ Four or five workers build concurrently on one 16-core box.
   stop command received"*, from a sibling's `--stop` — **and the wrapper reported exit 0 while the
   log said `FAILURE`**, so it very nearly banked as a green.
 - **So: do not reap daemons at all.** They idle-expire on their own, and a build that needs a fresh
-  one can pass `--no-daemon`. If you genuinely must kill something, build an explicit PID list with
-  `pgrep -f … `, filter it on `$PWD`, and confirm every PID belongs to *your* worktree before killing
-  anything.
+  one can pass `--no-daemon`. The two genuinely scoped forms, if you must: `--stop` under an
+  **isolated `GRADLE_USER_HOME`** (which gives you your own daemon pool), or an explicit PID list
+  built with `pgrep -f … `, filtered on `$PWD`, every entry confirmed to be yours.
+- **A sibling's `--stop` arrives at you as an unexplained mid-build failure.** The string is
+  `Gradle build daemon has been stopped: stop command received`. It is distinctive — but a worker
+  who meets it mid-mutation can easily bank it as a flake, which is how one agent's convenience
+  becomes another's false verdict. If you see it, you were a victim: re-run, do not record.
 - **`--max-workers=6`**, always.
 - **Check `uptime` before quoting any absolute timing**, and say the load alongside it. A saturated
   box distorts wall-clock by orders of magnitude and the distortion is invisible in the number.
@@ -122,6 +126,19 @@ State these in the PR body; they are the deliverable as much as the diff is.
   test fails, restore.
 - **Report the *shape* of the red**, not that it reddened: which assertions failed, how many of how
   many. A mutation reddening one assertion of six is a weak verdict a reader will otherwise tick off.
+- **Re-run every mutation row against the *final* suite, and quote the header.** A row measured
+  before you added a test is written up against a denominator that no longer exists — one worker
+  reported `3/4 red` from a transcript reading `3 tests completed, 3 failed`, which was 3-of-**3** on
+  a three-test suite. It looked like a harness serving a stale results XML, and from the table alone
+  those two are **indistinguishable**; only re-running separates them. So quote
+  `tests=N skipped=0 failures=M` per row, not a remembered fraction.
+- **When judging whether a red is load-contaminated, the discriminator is the failure *type* and
+  stack shape — never the word "timeout" in the text.** A fixture that mints a
+  `TimeoutCancellationException` on the **virtual** clock surfaces it as a *value quoted inside* an
+  `AssertionError` message ("Timed out after 1ms of _virtual_ … time"), and the failure type is
+  `AssertionError` with real frames. A worker grepping its own logs for "timeout" nearly discarded a
+  perfectly sound row that way. Look at the type, the frames, and `time=`; `at null:-1` on the
+  console with a real stack in the XML is the genuine Kotlin/Native timeout signature.
 - **Prove your rig fired.** A test asserting "X is now frozen/refused/deduplicated" passes trivially
   if the fixture never reached the state under test. Assert the precondition — the *before* value —
   or the green means nothing. This repo has ten recorded instances of fixture vacuity, four of them
