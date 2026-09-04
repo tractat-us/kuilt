@@ -117,7 +117,8 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
             "the background reconcile swaps it into the roster), but this obligation is a snapshot of " +
             "size, so it cannot see the difference. Converting it needs WebRTCPeerLink itself to open at " +
             "{ selfId } and grow on that reconcile - a fabric change with knock-on effects on sendTo's " +
-            "resolvedRoster() await and on survivorStopsAdvertisingADepartedPeer (#2304). Triage recorded " +
-            "at https://github.com/tractat-us/kuilt/issues/2605.",
+            "resolvedRoster() await and on survivorStopsAdvertisingADepartedPeer (#2304), tracked at " +
+            "https://github.com/tractat-us/kuilt/issues/2618. Triage recorded at " +
+            "https://github.com/tractat-us/kuilt/issues/2605.",
         )
 }
