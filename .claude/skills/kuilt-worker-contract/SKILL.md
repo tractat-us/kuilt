@@ -95,8 +95,17 @@ Four or five workers build concurrently on one 16-core box.
   machine, so a pattern kill reaps a **sibling's** build. The damage lands on a different agent and
   arrives disguised as a failure in *its* change: a crash, a truncated results XML, a one-off that
   will not reproduce. The honest reading of that evidence is "my change broke something" or "this
-  test is flaky", and both are wrong. Use `./gradlew --stop`, or a `pgrep -f …` PID list you have
-  filtered on `$PWD` and confirmed is yours.
+  test is flaky", and both are wrong.
+- **`./gradlew --stop` is NOT the safe alternative — it has the same blast radius.** Gradle daemons
+  are pooled per Gradle version and JVM args, **not** per project, so every worktree of this repo
+  shares one pool and `--stop` reaps a sibling's daemon exactly as `pkill` would. Measured
+  2026-09-03: a worker's full build died at 5279 tasks with *"Gradle build daemon has been stopped:
+  stop command received"*, from a sibling's `--stop` — **and the wrapper reported exit 0 while the
+  log said `FAILURE`**, so it very nearly banked as a green.
+- **So: do not reap daemons at all.** They idle-expire on their own, and a build that needs a fresh
+  one can pass `--no-daemon`. If you genuinely must kill something, build an explicit PID list with
+  `pgrep -f … `, filter it on `$PWD`, and confirm every PID belongs to *your* worktree before killing
+  anything.
 - **`--max-workers=6`**, always.
 - **Check `uptime` before quoting any absolute timing**, and say the load alongside it. A saturated
   box distorts wall-clock by orders of magnitude and the distortion is invisible in the number.
