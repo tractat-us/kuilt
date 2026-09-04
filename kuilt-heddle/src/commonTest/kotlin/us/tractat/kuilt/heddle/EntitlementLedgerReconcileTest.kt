@@ -1116,13 +1116,14 @@ class EntitlementLedgerReconcileTest {
      *    relationship to `alice`. He is the whole question — whether the refusal's cost lands only on
      *    the chain or on everyone standing at the group.
      *
-     * Deliberately a second builder rather than a defaulted parameter on the first. Four arms above
-     * carry mutation receipts derived from its exact numbers, and a knob that switches a peer on and
-     * off is the shape that quietly re-selects a fixture onto the configuration where the property
-     * under test cannot fail.
+     * Deliberately a second builder rather than a defaulted parameter on the first. Three arms above
+     * are built on that fixture and reason explicitly about its exact numbers and about which of the
+     * refusal's two predicates each one drives false; a knob that switches a peer on and off is the
+     * shape that quietly re-selects a fixture onto the configuration where the property under test
+     * cannot fail.
      *
      * The knobs, and what each one switches **off** if moved:
-     *  - `carol` 120 vs. the 100 she hands over — at 100 her frozen pocket is 0 and arm 1 goes vacuous.
+     *  - `carol` 120 vs. the 100 she hands over — at 100 her frozen pocket is 0 and her arm goes vacuous.
      *  - `alice → bob` 40, strictly between 0 and alice's 100 — at 0 there is no carried row and no
      *    refusal at all; at 100 alice's own pocket is 0 and *her* arm goes vacuous.
      *  - `dave` 30, non-zero — at 0 the bystander measures nothing, which is the finding.
