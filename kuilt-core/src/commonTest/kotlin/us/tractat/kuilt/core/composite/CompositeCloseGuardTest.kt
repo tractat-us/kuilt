@@ -1,14 +1,19 @@
 package us.tractat.kuilt.core.composite
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
@@ -203,6 +208,57 @@ class CompositeCloseGuardTest {
     }
 
     /**
+     * The other half of the discriminator: the **caller's own** cancellation must still come out.
+     *
+     * Absorbing every `Throwable` unconditionally would pass all three tests above while swallowing a
+     * structured-concurrency cancel — the thing the guard's `currentCoroutineContext().ensureActive()`
+     * exists to prevent, and the reason a bare `catch (_: Throwable) { }` is not the right shape here.
+     * Without that one line nothing else in this file reds, so this is what pins it.
+     *
+     * The ply cancels its caller and *then* throws an ordinary exception: the guard must report the
+     * cancellation, not the exception. That the plies after it are consequently left open is the correct
+     * trade and not an oversight — this site is deliberately unshielded, because a consumer that cancels
+     * `close()` has to be able to stop it. The shielded teardowns ([detachPly], [discardOrphanedPly]) are
+     * where the opposite trade is made, and their KDoc argues why.
+     */
+    @Test
+    fun aGenuineCallerCancellationIsNotSwallowed() = runTest {
+        val doomed = ClosingLoom(DOOMED, CloseBehaviour.CANCELS_ITS_CALLER)
+        val second = ClosingLoom(SECOND, CloseBehaviour.CLEAN)
+        val composite = CompositeLoom(
+            plies = listOf(PlyId(DOOMED) to doomed as Loom, PlyId(SECOND) to second),
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+        ).host(Pattern("host"))
+        runCurrent()
+
+        // A child job of our own, so the cancellation the ply issues is a REAL one rather than a mint.
+        val escaped = CompletableDeferred<Throwable?>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            val failure = try {
+                composite.close(CloseReason.Normal)
+                null
+            } catch (thrown: Throwable) {
+                thrown
+            }
+            // Reporting it is the last thing this now-cancelled coroutine does, so it must be shielded.
+            withContext(NonCancellable) { escaped.complete(failure) }
+        }
+        runCurrent()
+
+        assertAll(
+            { assertTrue(escaped.isCompleted, "the closing coroutine must have finished") },
+            {
+                assertIs<CancellationException>(
+                    escaped.getCompleted(),
+                    "close() must not swallow its caller's own cancellation — `ensureActive()` is what tells " +
+                        "it apart from one a ply minted, and absorbing it turns a structured-concurrency " +
+                        "cancel into a silent success",
+                )
+            },
+        )
+    }
+
+    /**
      * Run `close()` and hand back whatever escaped it, rather than letting it end the test.
      *
      * The discrimination is by **state**, not by type: a `CancellationException` caught here is this
@@ -220,8 +276,8 @@ class CompositeCloseGuardTest {
             failure
         }
 
-    /** How a ply's `close()` behaves — the three shapes a consumer-authored teardown can take. */
-    private enum class CloseBehaviour { CLEAN, THROWS, MINTS_CANCELLATION }
+    /** How a ply's `close()` behaves — the shapes a consumer-authored teardown can take. */
+    private enum class CloseBehaviour { CLEAN, THROWS, MINTS_CANCELLATION, CANCELS_ITS_CALLER }
 
     /**
      * A [Loom] weaving one ply whose `close()` behaves as [behaviour].
@@ -241,6 +297,12 @@ class CompositeCloseGuardTest {
                     CloseBehaviour.THROWS -> throw IllegalStateException(REFUSES_MESSAGE)
                     CloseBehaviour.MINTS_CANCELLATION ->
                         withTimeout(CLOSE_TIMEOUT) { delay(1.seconds) }
+                    // Cancels the coroutine calling close() and *then* fails ordinarily: the guard must
+                    // report the real cancellation, not the exception layered over it.
+                    CloseBehaviour.CANCELS_ITS_CALLER -> {
+                        currentCoroutineContext().cancel()
+                        throw IllegalStateException(REFUSES_MESSAGE)
+                    }
                 }
             }
         }
