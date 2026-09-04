@@ -5,6 +5,7 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.cbor.Cbor
@@ -42,6 +43,16 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpSpanExporte
  * the new span is inserted. **Every eviction is logged** with enough detail to
  * correlate against a backend's orphan-span index.
  *
+ * ## Failure reporting
+ *
+ * A refused durable write is logged **once per outage, not once per attempt** (#2593). Every call
+ * retries the write the last one could not land, so a store that stays broken is one unchanging
+ * condition, and reporting it per call produced a line — and a stack trace — per export, forever.
+ * [export], [merge] and [clear] share one latch because they write one key; the next line comes
+ * after the store has taken a write. Every failure is still returned to the caller as
+ * [ExportResult.Failure] carrying the cause, so nothing is hidden from a programmatic reader — only
+ * from the log. See `durableWriteOutage`.
+ *
  * @param replica The [ReplicaId] for this device/process. Must be unique and stable
  *   across restarts (a UUID is recommended).
  * @param store The [DurableStore] to persist CRDT state. Use [InMemoryDurableStore]
@@ -75,6 +86,76 @@ public class WarpSpanExporter(
     private val lock = reentrantLock()
     private val ioMutex = Mutex()
     private var spans: ORSet<SpanRecord> = ORSet.empty()
+
+    /**
+     * Whether a durable-write outage is currently **open** — i.e. a refused store write has already
+     * been reported and the store has not taken a write since. Read and written only by
+     * [durableWriteSucceeded] and [durableWriteFailed]; nothing else touches it.
+     *
+     * ## What it is for
+     *
+     * A refused write is retried by the next call, so a store that stays broken — a quota-bound
+     * `IndexedDbDurableStore` is the shape [WarpLogRecordExporter]'s KDoc names — would otherwise
+     * report one unchanging condition once per export, forever, each line carrying a stack trace.
+     * Measured here at 300 throwable-bearing lines over a 300-export outage (#2593), matching what
+     * #2237 measured on the sibling.
+     *
+     * ## What the population is, and why that is the whole design
+     *
+     * Exactly the durable writes to [STORE_KEY]: [export], [merge] and [clear], which are the three
+     * functions that call `store.write` and the three that emit a `"durable write failed"` line.
+     * One latch across all three, not one each — they write the *same key*, so "the store is
+     * refusing writes" is a single condition however it is reached, and announcing it once per path
+     * is the same defect at a smaller constant.
+     *
+     * **It is deliberately not keyed on a failure counter, and specifically not on an
+     * [ExporterHealth]-style `consecutiveFailures` streak.** That was tried on the sibling and was
+     * itself the bug (#2237): a streak counts *every* failure, while only the store path reports
+     * one, so any member of the difference opens the streak first and the store's own outage is
+     * then reported **zero** times rather than once — worse than the noise the dedup replaced,
+     * because the log points at the wrong subsystem while the store's exception goes unmentioned.
+     * A latch owned by the durable-write arms makes the counted population and the reported
+     * population the same set by construction. Keep it that way: anything that calls
+     * [durableWriteFailed] without having attempted a write to [STORE_KEY] reintroduces the defect.
+     *
+     * **On this exporter no test can guard that, and the reason is the guarantee itself**: all
+     * three callers write [STORE_KEY], so the two populations coincide by construction and there is
+     * no non-write path to pre-empt the report. The obligation above binds a *future* caller, and
+     * nothing would red if one broke it. [WarpMetricExporter] is where such a path does exist — its
+     * `clear` fails on a refused delete — and
+     * `WarpMetricExporterFailureReportingTest.aRefusedClearDeleteDoesNotSwallowTheDurableWriteReport`
+     * is the analogous guard there.
+     *
+     * ## Why a boolean here, where [WarpMetricExporter] needs a set of keys
+     *
+     * Because a partial refusal cannot alternate this latch. [export] and [clear] write the causal
+     * clock's key *and* [STORE_KEY] inside one `runCatchingCancellable`, so a store refusing either
+     * one fails the whole turn and the latch stays open; a success means every write in the turn
+     * landed. [WarpLogRecordExporter.commit] groups a turn's writes the same way. [WarpMetricExporter]
+     * does not — each of its calls writes exactly one key — so a store refusing one key while
+     * accepting another would alternate a boolean there, and it keys on the refused-key set instead.
+     * Do not copy this boolean to an exporter whose writes are not grouped into a turn.
+     *
+     * ## Concurrency
+     *
+     * A [MutableStateFlow], not an `atomicfu` `atomic()`: the atomicfu **Gradle plugin** is not
+     * applied in this build (the dependency is present for the multiplatform `locks` API only), so
+     * an atomic *field* would be untransformed. [MutableStateFlow.compareAndSet] is a real
+     * lock-free CAS on every target — never dispatcher confinement, per repo policy.
+     *
+     * [ioMutex] serializes the whole durable-write section, so today two of these cannot overlap;
+     * the CAS is what keeps this correct without depending on that. **Exactly one racing caller
+     * reports**: the failure arm reports only when it wins `false → true`, and a loser is by
+     * definition looking at an outage someone has already announced.
+     *
+     * The reset is a plain unconditional write rather than a CAS, and the asymmetry is deliberate.
+     * The only interleaving it admits is a success landing between a failure's CAS and the next
+     * failure's, which costs **one duplicate line** for a store that really did take a write in
+     * between — a repeat is honest there. The shape that must not happen is the reverse: a latch
+     * left `true` against a healthy store, which would silence the *next* outage entirely. An
+     * unconditional write cannot lose, so it cannot leave the latch open.
+     */
+    private val durableWriteOutage = MutableStateFlow(false)
 
     private companion object {
         private val STORE_KEY = StoreKey("otel.spans")
@@ -171,7 +252,10 @@ public class WarpSpanExporter(
                 causalClock?.persist(store)
                 store.write(STORE_KEY, encoded)
             }.fold(
-                onSuccess = { ExportResult.Success },
+                onSuccess = {
+                    durableWriteSucceeded()
+                    ExportResult.Success
+                },
                 onFailure = { cause ->
                     if (minted) {
                         // Undo the in-memory add so a retry produces exactly one stamped
@@ -179,8 +263,11 @@ public class WarpSpanExporter(
                         // clobbers a concurrent add of a different span.
                         lock.withLock { spans = spans.piece { current -> current.remove(stamped) } }
                     }
-                    logger.error(cause) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
-                    ExportResult.Failure(cause)
+                    // Rollback first, and unconditionally: it is owed on every failed write,
+                    // whereas the line below is owed only on the one that opens the outage.
+                    durableWriteFailed(cause) {
+                        logger.error(it) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
+                    }
                 },
             )
         }
@@ -216,10 +303,14 @@ public class WarpSpanExporter(
                 val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
                 store.write(STORE_KEY, encoded)
             }.fold(
-                onSuccess = { ExportResult.Success },
+                onSuccess = {
+                    durableWriteSucceeded()
+                    ExportResult.Success
+                },
                 onFailure = { cause ->
-                    logger.error(cause) { "WarpSpanExporter: durable write failed during merge" }
-                    ExportResult.Failure(cause)
+                    durableWriteFailed(cause) {
+                        logger.error(it) { "WarpSpanExporter: durable write failed during merge" }
+                    }
                 },
             )
         }
@@ -284,12 +375,42 @@ public class WarpSpanExporter(
             causalClock?.persist(store)
             store.write(STORE_KEY, encoded)
         }.fold(
-            onSuccess = { ExportResult.Success },
+            onSuccess = {
+                durableWriteSucceeded()
+                ExportResult.Success
+            },
             onFailure = { cause ->
-                logger.error(cause) { "WarpSpanExporter: durable write failed during clear" }
-                ExportResult.Failure(cause)
+                durableWriteFailed(cause) {
+                    logger.error(it) { "WarpSpanExporter: durable write failed during clear" }
+                }
             },
         )
+    }
+
+    /**
+     * The store took a write, so the next refusal is a new outage worth reporting.
+     *
+     * Call from the success arm of **every** durable write, including [clear]'s: leaving one out
+     * would let a latch stay open across a store that demonstrably recovered, which silences the
+     * next real outage — the one failure mode [durableWriteOutage] must not have.
+     */
+    private fun durableWriteSucceeded() {
+        durableWriteOutage.value = false
+    }
+
+    /**
+     * Report [cause] through [report] only if this failure **opens** an outage, and return the
+     * failure either way.
+     *
+     * Call from the failure arm of a durable write and nowhere else — see [durableWriteOutage] for
+     * why the population must be exactly the writes to [STORE_KEY]. The throwable is passed on to
+     * [report] and kept on the line: unlike a refused sweep of superseded garbage, a refused
+     * durable write is the store rejecting the application's own data, and at one line per outage
+     * the trace is affordable.
+     */
+    private fun durableWriteFailed(cause: Throwable, report: (Throwable) -> Unit): ExportResult {
+        if (durableWriteOutage.compareAndSet(expect = false, update = true)) report(cause)
+        return ExportResult.Failure(cause)
     }
 
     /** Must be called with [lock] held. */
