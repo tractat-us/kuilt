@@ -201,12 +201,23 @@ class MDNSConformanceTest : SeamConformanceSuite() {
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 
-    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    /**
+     * #2591/#2605: the joiner's roster is filled before a byte moves, so the joiner arm cannot fail
+     * here — and #2605 triaged whether a real join-path fixture is constructible. It is not, and the
+     * tempting fix is the one that does not work: routing this harness through **real** discovery
+     * would not convert the arm, because the id is *in the record*.
+     */
     override fun joinerRosterOrigin(): JoinerRosterOrigin =
         JoinerRosterOrigin.FilledByConstruction(
-            "a seeded roster: joinTag() is built from hostFactory.selfPeerId read off the shared host factory, " +
-            "and the joiner's seam is LinkSeam-backed, so it opens at setOf(selfId, remoteId). Discovery is " +
-            "what this harness proves; the joiner's roster is handed to it.",
+            "a seeded roster, seeded by the FABRIC rather than by this fixture's discovery bypass: " +
+            "MDNSAdvertisement carries a required serverPeerId, MDNSPeerLinkFactory.weave copies it into the " +
+            "WebSocketAdvertisement it dials with, and the resulting seam is LinkSeam-backed, so it opens at " +
+            "setOf(selfId, remoteId). Building the tag by hand rather than by browsing is therefore NOT what " +
+            "makes this arm unfalsifiable - MDNSServiceDiscoverer.toAdvertisement reads the same id out of " +
+            "the record's TXT_KEY_PEER_ID, so a joiner that discovered the host over real multicast would " +
+            "hold it just as early. The joiner learns WHERE its peer is; it is told WHO its peer is. " +
+            "Converting the arm would need an in-band preamble on the WebSocket transport under it, not a " +
+            "different fixture. Triage recorded at https://github.com/tractat-us/kuilt/issues/2605.",
         )
 
     // ── Private helpers ──────────────────────────────────────────────────────

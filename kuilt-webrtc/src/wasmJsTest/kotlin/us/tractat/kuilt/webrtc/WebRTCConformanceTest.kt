@@ -99,11 +99,26 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
 
     override fun capabilityGaps(): Map<String, String> = emptyMap()
 
-    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    /**
+     * #2591/#2605: the joiner's roster holds two entries before a byte moves, so the joiner arm
+     * cannot fail here — and #2605 triaged whether a real join-path fixture is constructible. It is
+     * not, and the reason is worth reading, because this fabric is the one where "the fixture hands
+     * the joiner its counterparty" is **false** and the arm is unfalsifiable anyway.
+     */
     override fun joinerRosterOrigin(): JoinerRosterOrigin =
         JoinerRosterOrigin.FilledByConstruction(
-            "a seeded roster: WebRTCPeerLink opens at MutableStateFlow(setOf(selfId, remoteId)), and on the " +
-            "host that remoteId is a locally-minted placeholder the ID exchange later replaces - so the " +
-            "roster has two entries from birth and one of them may not yet name the real peer.",
+            "a seeded roster, seeded with a FICTION rather than with the counterparty: " +
+            "WebRTCPeerLinkFactory.buildLink mints guessedRemoteId = PeerId(randomToken(\"peer\")) on BOTH " +
+            "roles and WebRTCPeerLink opens at MutableStateFlow(setOf(selfId, guessedRemoteId)), so the " +
+            "joiner's roster has two entries from birth and the second one names nobody. Nothing in this " +
+            "harness is handed to the joiner - both ids are local mints - which is exactly why no fixture " +
+            "change reaches the arm: even a totally dead ID exchange leaves peers.size == 2. The real id " +
+            "DOES arrive through the join path (the first data-channel frame resolves senderIdDeferred and " +
+            "the background reconcile swaps it into the roster), but this obligation is a snapshot of " +
+            "size, so it cannot see the difference. Converting it needs WebRTCPeerLink itself to open at " +
+            "{ selfId } and grow on that reconcile - a fabric change with knock-on effects on sendTo's " +
+            "resolvedRoster() await and on survivorStopsAdvertisingADepartedPeer (#2304), tracked at " +
+            "https://github.com/tractat-us/kuilt/issues/2618. Triage recorded at " +
+            "https://github.com/tractat-us/kuilt/issues/2605.",
         )
 }
