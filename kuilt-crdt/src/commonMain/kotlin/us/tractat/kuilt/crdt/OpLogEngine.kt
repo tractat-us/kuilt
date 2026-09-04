@@ -12,6 +12,10 @@ package us.tractat.kuilt.crdt
  * turns on: content ops ([Insert], [Remove]) are what an archive keeps, and [Compact] —
  * a record of forgetting, not of content — is what it discards, so an archive can outlive
  * the forgetting of the replica that fed it.
+ *
+ * The per-variant dot rules above are the ones [Quilted.causalDots] points at rather than
+ * restating; its KDoc had them inverted for `Remove` and `Compact` for months (#2176)
+ * because it carried its own copy. Change the rule here and that reference follows.
  */
 public sealed interface LogOp<out Id> {
     /** An insert that mints [id] — contributes exactly one causal [Dot]. */
