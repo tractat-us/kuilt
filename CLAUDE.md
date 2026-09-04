@@ -412,12 +412,13 @@ merge; the deterministic virtual-time siblings do.
   cancellation reaching it can only be the bound's own — in both its `try`/`catch` and its
   `runCatchingCancellable` spellings, and clears the site if an earlier
   `catch (…: TimeoutCancellationException)` already handles the expiry by type. The third,
-  `forbidCancellationSwallowInTests` (#2598), covers `*Test` sources and the narrow-catch shape
-  above: it clears an arm carrying `ensureActive()`, an arm sitting behind an earlier
-  `catch (…: CancellationException) { throw … }` on the same `try`, or an `// ALLOW-ise:` marker
-  with a non-empty reason. Its scope is deliberate rather than an omission — in production the arm
-  is usually a real precondition catch, and the damage concentrates in tests because that is where
-  the swallowed cancellation *is* the signal. Everywhere else unshielded the two cancellations
+  `forbidCancellationSwallowingCatch` (#2598), covers the narrow-catch shape above across the WHOLE
+  tree, production and test: it clears an arm carrying `ensureActive()`, an arm sitting behind an
+  earlier `catch (…: CancellationException) { throw … }` on the same `try`, or an `// ALLOW-ise:`
+  marker with a non-empty reason. It is the one of the three that is not production-only, and
+  deliberately so — in a **test** a swallowed cancellation costs the *diagnosis* (the hang report is
+  destroyed); in **production** it costs *behaviour* (the cancel is never observed and the coroutine
+  carries on), which is the stronger case, not the weaker one. Everywhere else unshielded the two cancellations
   really are lexically ambiguous, and one helper hop defeats every one of the three.
   `ensureActive()` remains the only thing that decides it at runtime.
 

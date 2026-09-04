@@ -1475,6 +1475,54 @@ val verifyDocCitations by tasks.registering {
             } + moduleDocs.files
             ).sortedBy { it.invariantSeparatorsPath }
 
+        // ── Fence parity, checked BEFORE anything walks a fence ─────────────────────────────────
+        // Every fence walk in this file is a parity toggle, and a parity toggle with an odd number
+        // of delimiters does not merely mis-read one block — it inverts the rest of the FILE. The
+        // consequence is the worst kind a guard can have, because all three failures are SILENT and
+        // all three are green:
+        //   * this task reads everything after the stray delimiter as fenced, so every citation
+        //     below it is skipped and never content-checked;
+        //   * `forbidUncitedDocCodeBlock` reads subsequent OPENING fences as closing ones, so the
+        //     file's uncited count DROPS below its baseline — which that guard deliberately
+        //     tolerates, since failing on a decrease would red-light the branch doing a sweep;
+        //   * `verifyModuleDocLinks` simply stops looking.
+        // So the parity check is hoisted here, ahead of `stowaways`, `lineRangeCites` and the main
+        // scan, and run over a SUPERSET of what all three walk — otherwise the first spurious
+        // failure a reader sees would be a bogus citation error rather than the real defect.
+        // An unbalanced fence is a documentation bug in its own right (the rest of the page renders
+        // as one code block), so failing on it costs nothing and is worth having on its own terms.
+        val unbalanced = allMarkdown.files
+            .asSequence()
+            .filterNot(::exempt)
+            .sortedBy { it.invariantSeparatorsPath }
+            .mapNotNull { md ->
+                var open = false
+                var lastDelimiter = 0
+                md.readLines().forEachIndexed { n, line ->
+                    if (line.trim().startsWith("```")) {
+                        open = !open
+                        lastDelimiter = n + 1
+                    }
+                }
+                if (open) "${md.relativeTo(rootPath).invariantSeparatorsPath}:$lastDelimiter" else null
+            }
+            .toList()
+        if (unbalanced.isNotEmpty()) {
+            error(
+                "Markdown file(s) with an odd number of ``` fence delimiters. Every fence walk in " +
+                    "the root build is a parity toggle, so one stray delimiter inverts the rest of " +
+                    "the file: this task skips every citation below it, " +
+                    "`forbidUncitedDocCodeBlock` reads later OPENING fences as closing ones and the " +
+                    "file's count falls below baseline, and `verifyModuleDocLinks` stops looking. " +
+                    "All three then pass, which is why this is checked rather than assumed. The " +
+                    "line below is the LAST delimiter seen, i.e. the one left open:\n  " +
+                    unbalanced.joinToString("\n  ") + "\n\n" +
+                    "  THE FIX is to close the block, or delete the stray delimiter. The page is " +
+                    "mis-rendering either way — everything after that line is showing as one code " +
+                    "block.\n",
+            )
+        }
+
         // ── The citING side of the `inputRoots` check below ─────────────────────────────────────
         // That check refuses a citation whose cited SOURCE no declared input reaches, on the grounds
         // that a gate nothing invalidates goes green over drift. This is its twin, and it guards the
@@ -1851,15 +1899,26 @@ val forbidUncitedDocCodeBlock by tasks.registering {
     // the exemption's staleness check) and file CONTENTS, both captured by a RELATIVE fingerprint.
     // The declared set is the UNFILTERED one, so a file entering or leaving the exemption
     // invalidates a cached success too.
-    val scannedDocs = fileTree(rootDir) {
-        docRoots.forEach { include("${it.relativeTo(rootDir).invariantSeparatorsPath}/**/*.md") }
-        // `**/build/**` for `verifyDocCitations`' reason and for #2411's: a generated `.md` under a
-        // GITIGNORED build directory would be meaningless to check, would make this task's input
-        // overlap another's output, and — the expensive half — would red only on the machine that
-        // generated it, never in CI. Nothing writes there today; the exclusion is what keeps that
-        // from having to stay true.
-        exclude("**/build/**")
-    }
+    val scannedDocs = objects.fileCollection()
+    // `module.md` too, through the SAME provider `verifyDocCitations` uses. #2256 extended that
+    // guard to these files and `moduleDocFiles()`' KDoc records the property it bought — "one
+    // provider, two guards: the set of files they cover is now the same object". Scanning
+    // `docs/` + `Writerside/` alone would re-open that divergence, and re-open it on the surface
+    // where it costs most: `module.md` is Dokka `includes`, so it is the first page a reader meets
+    // a module through, it is published under `/api/`, and it is the one doc surface a consumer
+    // cannot route around.
+    scannedDocs.from(moduleDocFiles())
+    scannedDocs.from(
+        fileTree(rootDir) {
+            docRoots.forEach { include("${it.relativeTo(rootDir).invariantSeparatorsPath}/**/*.md") }
+            // `**/build/**` for `verifyDocCitations`' reason and for #2411's: a generated `.md`
+            // under a GITIGNORED build directory would be meaningless to check, would make this
+            // task's input overlap another's output, and — the expensive half — would red only on
+            // the machine that generated it, never in CI. Nothing writes there today; the exclusion
+            // is what keeps that from having to stay true.
+            exclude("**/build/**")
+        },
+    )
     inputs.files(scannedDocs).withPropertyName("referenceDocs")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     val stamp = layout.buildDirectory.file("verification/forbid-uncited-doc-code-block.ok")
@@ -1872,10 +1931,12 @@ val forbidUncitedDocCodeBlock by tasks.registering {
     // implementation hash, so moving it to `gradle.properties` or a resource would silently drop it
     // out and reintroduce the stale-green class the stamps exist to prevent.
     //
-    // Counts as of #2583 — 173 uncited blocks across 46 files, of 314 Kotlin/Java/Swift blocks in
-    // the live reference set. DERIVED BY RUNNING THIS GUARD WITH THE MAP EMPTIED, not by trusting a
-    // clean run: a guard with a bug that makes it match nothing produces an empty violation list
-    // that is indistinguishable from a clean repo. Regenerate the same way after a sweep.
+    // Counts as of #2583 — 202 uncited blocks across 57 files in the live reference set: 173 in
+    // `docs/` + `Writerside/`, plus the 29 across 11 `module.md` files that the first cut of this
+    // guard did not scan at all. DERIVED BY RUNNING THIS GUARD WITH THE MAP EMPTIED, not by
+    // trusting a clean run: a guard with a bug that makes it match nothing produces an empty
+    // violation list that is indistinguishable from a clean repo. Regenerate the same way after a
+    // sweep.
     val baseline = mapOf(
         "docs/adr-001-conformance-suite-two-loom.md" to 3,
         "docs/adr-002-weave-rendezvous.md" to 3,
@@ -1923,6 +1984,18 @@ val forbidUncitedDocCodeBlock by tasks.registering {
         "Writerside/topics/raft.md" to 3,
         "Writerside/topics/warp-compiler.md" to 1,
         "Writerside/topics/warp.md" to 1,
+        // `module.md` — Dokka `includes`, the most-published doc surface in the repo (#2615 review).
+        "kuilt-cluster/module.md" to 2,
+        "kuilt-core/module.md" to 2,
+        "kuilt-game/module.md" to 7,
+        "kuilt-nw/module.md" to 1,
+        "kuilt-otel-logging/module.md" to 2,
+        "kuilt-otel-tap/module.md" to 3,
+        "kuilt-otel/module.md" to 1,
+        "kuilt-quilter/module.md" to 1,
+        "kuilt-store/module.md" to 1,
+        "kuilt-warp-compiler/module.md" to 1,
+        "kuilt-warp/module.md" to 8,
     )
     doLast {
         val cite = Regex("""^<!--\s*(?:verbatim|condensed) from\s+.+?\s*-->$""")
@@ -1976,6 +2049,20 @@ val forbidUncitedDocCodeBlock by tasks.registering {
                 if (m >= 0 && cite.matches(lines[m].trim())) return@forEachIndexed
                 found.merge(rel, 1, Int::plus)
                 firstSite.putIfAbsent(rel, "$rel:${n + 1}")
+            }
+            // Parity, asserted rather than assumed. An odd number of delimiters makes this walk
+            // read subsequent OPENING fences as closing ones, so the file's count falls — and a
+            // DECREASE is exactly what the ratchet below tolerates, so the guard would go quiet
+            // and stay green. That is the failure this whole file is written to prevent.
+            if (open) {
+                error(
+                    "$rel has an odd number of ``` fence delimiters, so this walk reads later " +
+                        "opening fences as closing ones and undercounts the file. The count would " +
+                        "then fall BELOW its baseline, which this ratchet tolerates by design — so " +
+                        "the guard goes quiet and passes.\n" +
+                        "  THE FIX is to close the block or delete the stray delimiter; the page is " +
+                        "mis-rendering as one code block either way.",
+                )
             }
         }
 
@@ -2135,6 +2222,18 @@ val verifyModuleDocLinks by tasks.registering {
                 bareLink.findAll(prose).forEach { hit ->
                     offenders += "$where  [${hit.groupValues[1]}]   in: ${line.trim()}"
                 }
+            }
+            // Parity, asserted rather than assumed: an odd number of delimiters leaves this walk
+            // reading the rest of the file as fenced, so it simply stops looking — and reports a
+            // clean file, which is indistinguishable from a file with no bare links in it.
+            if (inFence) {
+                error(
+                    "${md.relativeTo(rootPath).invariantSeparatorsPath} has an odd number of ``` " +
+                        "fence delimiters, so this walk treats the rest of the file as fenced and " +
+                        "stops looking — reporting a clean file it never read.\n" +
+                        "  THE FIX is to close the block or delete the stray delimiter; the page is " +
+                        "mis-rendering as one code block either way.",
+                )
             }
         }
         if (offenders.isNotEmpty()) {
@@ -3394,7 +3493,7 @@ val forbidProductionDispatcherInTests by tasks.registering {
     }
 }
 
-// The `catch (…: IllegalStateException)` scanner behind `forbidCancellationSwallowInTests` (#2598).
+// The `catch (…: IllegalStateException)` scanner behind `forbidCancellationSwallowingCatch` (#2598).
 // Same `object` rationale as the sibling scanners: a script-level object keeps the walk out of the
 // task action's closure, and gives the walk somewhere to carry its own fixture.
 //
@@ -3429,6 +3528,10 @@ object CancellationSwallowingCatchScanner {
 
     // No `.` in the lookbehind: the canonical call is `currentCoroutineContext().ensureActive()`,
     // so the character before the name is a dot in every real occurrence.
+    // The caught type inside a catch arm's parameter list, for the chain walk below. Same shape as
+    // CATCH_ARM's capture, applied to a `(name: Type)` fragment rather than to whole code.
+    private val ARM_TYPE = Regex("""\(\s*(?:[A-Za-z_][A-Za-z0-9_]*|_)\s*:\s*([A-Za-z0-9_.]+)\s*\)""")
+
     private val ENSURE_ACTIVE = Regex("""(?<![A-Za-z0-9_])ensureActive\s*\(""")
     private val THROW_KEYWORD = Regex("""(?<![A-Za-z0-9_])throw(?![A-Za-z0-9_])""")
 
@@ -3468,7 +3571,16 @@ object CancellationSwallowingCatchScanner {
             if (code.substring(wordStart, k + 1) != "catch") return false
             val param = code.substring(paramOpen, j + 1)
             val body = code.substring(blockOpen, i + 1)
-            if ("CancellationException" in param && THROW_KEYWORD.containsMatchIn(body)) return true
+            // EXACT simple name, not a substring. `"CancellationException" in param` also matches
+            // `catch (e: TimeoutCancellationException)`, and rethrowing a TIMEOUT cancellation does
+            // not stop an ordinary one: a plain `JobCancellationException` sails past that arm into
+            // the `IllegalStateException` arm below, is swallowed exactly as before, and this guard
+            // then reports the site as "cleared by an earlier rethrow" — a false clearance, which
+            // is worse than no guard because it is asserted. The header already says a
+            // `TimeoutCancellationException` arm is not itself an offence; it never said it clears
+            // a SIBLING arm, so the substring test contradicted this scanner's own documentation.
+            val caught = ARM_TYPE.find(param)?.groupValues?.get(1)?.substringAfterLast('.')
+            if (caught == "CancellationException" && THROW_KEYWORD.containsMatchIn(body)) return true
             cursor = wordStart
         }
         return false
@@ -3534,6 +3646,24 @@ object CancellationSwallowingCatchScanner {
             "a non-adjacent earlier rethrow",
             "try { f() } catch (e: CancellationException) { throw e } " +
                 "catch (e: ConcurrentModificationException) { throw AssertionError(\"x\", e) } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to "an earlier `catch (…: CancellationException) { throw … }` arm"),
+        ),
+        // A TIMEOUT cancellation rethrow clears NOTHING: an ordinary `JobCancellationException`
+        // is not a `TimeoutCancellationException`, so it sails past that arm into the
+        // `IllegalStateException` arm and is swallowed just the same. A substring test on the
+        // parameter passed this and reported a false clearance; this case is what pins it.
+        Triple(
+            "an earlier TimeoutCancellationException rethrow",
+            "try { f() } catch (e: TimeoutCancellationException) { throw e } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        // The qualified spelling of the real thing still clears, so the fix is an EXACT SIMPLE-NAME
+        // test rather than an exact-string one.
+        Triple(
+            "a fully-qualified CancellationException rethrow",
+            "try { f() } catch (e: kotlinx.coroutines.CancellationException) { throw e } " +
                 "catch (e: IllegalStateException) { }\n",
             listOf(1 to "an earlier `catch (…: CancellationException) { throw … }` arm"),
         ),
@@ -3613,9 +3743,14 @@ object CancellationSwallowingCatchScanner {
 // `forbidRunCatchingCancellableUnderNonCancellable` looks for the `runCatchingCancellable` token
 // inside a `withContext(NonCancellable)` shield, and `forbidCancellationRethrowAroundBound` looks
 // for a cancellation rethrow wrapping a `withTimeout`. An `IllegalStateException` arm has neither.
-// In PRODUCTION the arm is usually a real precondition catch — `WarpNode.registerOrResolve` is the
-// legitimate non-`suspend` case — so the damage concentrates in tests, which is where the swallowed
-// cancellation IS the signal.
+// SCOPE IS THE WHOLE TREE, production and test. The first cut of this guard was test-only, on the
+// argument that "in production the arm is usually a real precondition catch". That claim had a
+// sample size of ONE — `WarpNode.registerOrResolve`, the only production arm in the tree — which is
+// not a basis for a permanent scope decision, and the reasoning ran the wrong way besides: in a
+// TEST a swallowed cancellation costs the DIAGNOSIS (the hang report is destroyed), while in
+// PRODUCTION it costs BEHAVIOUR (the cancel is never observed and the coroutine carries on). The
+// stronger case is the one the narrower scope excluded. Production is also where the population is
+// smallest and the marker cheapest, so there was nothing to buy by leaving it out.
 //
 // `catch (…: TimeoutCancellationException)` is deliberately NOT covered. Catching the bound's own
 // expiry BY TYPE is handling it, not swallowing it — it is the spelling
@@ -3633,29 +3768,28 @@ object CancellationSwallowingCatchScanner {
 // somebody makes that body `suspend`, and a marker is where a reader will look for it. An EMPTY
 // reason is itself a violation.
 //
-// KNOWN COVERAGE EDGES, the same set the sibling guards carry: `src/commonSamples/` is not scanned
-// (it demonstrates the production API), a test-support module's `commonMain` is not a test source
-// set, `:spike` is absent unless `-PincludeSpike`, `build-logic/` is a separate included build, and
-// `*.kts` is unscanned. Two limits specific to this walk, stated rather than found later: an
+// KNOWN COVERAGE EDGES, the same set the sibling guards carry: `src/commonSamples/` matches none of
+// the four patterns and is unscanned, `:spike` is absent unless `-PincludeSpike`, `build-logic/` is
+// a separate included build, and `*.kts` is unscanned. Two limits specific to this walk, stated rather than found later: an
 // `ensureActive()` reached through a HELPER called from the arm reads as absent (ask for a marker,
 // or inline the call), and an `ensureActive()` inside a nested `try` within the arm reads as
 // present. Both are the "cannot see through a helper" limit `forbidNotNullAssertionInUnresolvedSource`
 // records; the fixture pins the cases that matter.
-val forbidCancellationSwallowInTests by tasks.registering {
+val forbidCancellationSwallowingCatch by tasks.registering {
     group = "verification"
-    description = "Fails if a test source catches IllegalStateException without an ensureActive(), a cancellation rethrow, or an ALLOW-ise marker — CancellationException IS one (#2598)."
-    // Both test-source layouts, as `forbidProductionDispatcherInTests`: KMP `src/<target>Test/` and
-    // the plain-JVM `src/test/`.
+    description = "Fails if any source catches IllegalStateException without an ensureActive(), a cancellation rethrow, or an ALLOW-ise marker — CancellationException IS one (#2598)."
+    // Production AND test, in both layouts: KMP `src/<target>Main/` + `src/<target>Test/`, and the
+    // plain-JVM `src/main/` + `src/test/`. See the header for why the scope is not test-only.
     val sources = kotlinSourcesIn(
         subprojects.map { it.projectDir.resolve("src") },
-        listOf("*Test/**/*.kt", "test/**/*.kt"),
+        listOf("*Main/**/*.kt", "main/**/*.kt", "*Test/**/*.kt", "test/**/*.kt"),
     )
     inputs.files(sources).withPropertyName("kotlinTestSources")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
     // is a pure function of file contents — there is no allowlist, the markers live in the sources
     // themselves — so a RELATIVE fingerprint hit genuinely means "this exact source was verified".
-    val stamp = layout.buildDirectory.file("verification/forbid-cancellation-swallow-in-tests.ok")
+    val stamp = layout.buildDirectory.file("verification/forbid-cancellation-swallowing-catch.ok")
     outputs.file(stamp)
     outputs.cacheIf { true }
     val rootPath = rootDir
@@ -3711,7 +3845,7 @@ val forbidCancellationSwallowInTests by tasks.registering {
                 }
             }
             error(
-                "A test source catches `IllegalStateException` without guarding against " +
+                "A source catches `IllegalStateException` without guarding against " +
                     "cancellation (#2598). `CancellationException` IS an `IllegalStateException` " +
                     "(`IllegalStateException.class.isAssignableFrom(java.util.concurrent." +
                     "CancellationException.class)` is `true`), so a narrow, specific, " +
@@ -3733,7 +3867,7 @@ val forbidCancellationSwallowInTests by tasks.registering {
         val out = stamp.get().asFile
         out.parentFile.mkdirs()
         out.writeText(
-            "ok — ${sources.files.size} Kotlin test sources scanned, " +
+            "ok — ${sources.files.size} Kotlin sources scanned (production and test), " +
                 "$cleared guarded IllegalStateException arm(s) confirmed\n",
         )
     }
@@ -6466,7 +6600,8 @@ val lintProbeCoordinates = "com.android.tools.external.com-intellij:kotlin-compi
 // `com.android.tools.lint:lint-gradle` and finding this jar on its graph, which is the shape
 // `forbidDetektFrontendSkew` uses — drags in the whole lint runtime (analytics, sdk-common, guava)
 // on every `check`, and makes a REQUIRED gate fail whenever any corner of that graph is
-// unresolvable. Naming the one artifact keeps the probe to a single small jar. What that trades
+// unresolvable. Naming the one artifact keeps the probe to ONE jar — not a small one (~49 MB), but
+// one file from one coordinate instead of a graph with a dozen ways to fail. What that trades
 // away is re-deriving the lint→frontend EDGE every build; it is asserted instead by the version
 // derivation above, and a wrong derivation cannot pass silently — the coordinate simply stops
 // resolving and this guard fails loudly, which is the same outcome.
@@ -7485,7 +7620,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
         dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
-        dependsOn(rootProject.tasks.named("forbidCancellationSwallowInTests"))
+        dependsOn(rootProject.tasks.named("forbidCancellationSwallowingCatch"))
         dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
         dependsOn(rootProject.tasks.named("forbidCoroutineLaunchDuringConstruction"))
         dependsOn(rootProject.tasks.named("forbidSuspendCallUnderLock"))
