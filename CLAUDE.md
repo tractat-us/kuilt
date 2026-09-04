@@ -382,9 +382,9 @@ merge; the deterministic virtual-time siblings do.
   ```
 
   **A NARROW catch is not a safer one — `catch (e: IllegalStateException)` swallows cancellation
-  too.** Every shape above is a *broad* catch, which is precisely why this one passed review eight
-  times over (#2535): it is specific, it names a plausible exception, and it looks nothing like the
-  thing this section warns about. The receipt is one line —
+  too.** Every shape above is a *broad* catch, which is precisely why the eight sites #2535 found
+  sat here unremarked: this one is specific, it names a plausible exception, and it looks nothing
+  like the thing this section warns about. The receipt is one line —
 
   ```
   IllegalStateException.class.isAssignableFrom(java.util.concurrent.CancellationException.class) == true

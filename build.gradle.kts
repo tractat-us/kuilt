@@ -1853,6 +1853,12 @@ val forbidUncitedDocCodeBlock by tasks.registering {
     // invalidates a cached success too.
     val scannedDocs = fileTree(rootDir) {
         docRoots.forEach { include("${it.relativeTo(rootDir).invariantSeparatorsPath}/**/*.md") }
+        // `**/build/**` for `verifyDocCitations`' reason and for #2411's: a generated `.md` under a
+        // GITIGNORED build directory would be meaningless to check, would make this task's input
+        // overlap another's output, and — the expensive half — would red only on the machine that
+        // generated it, never in CI. Nothing writes there today; the exclusion is what keeps that
+        // from having to stay true.
+        exclude("**/build/**")
     }
     inputs.files(scannedDocs).withPropertyName("referenceDocs")
         .withPathSensitivity(PathSensitivity.RELATIVE)
