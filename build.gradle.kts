@@ -1806,6 +1806,226 @@ val verifyDocCitations by tasks.registering {
     }
 }
 
+// Guard: a code block in a LIVE REFERENCE doc must carry a provenance marker, on a per-file count
+// ratchet that only ever moves down (#2583).
+//
+// WHAT THIS IS FOR. `verifyDocCitations` above is strong but opt-in: it checks a block only once
+// somebody has written a citation over it. A block with NO marker at all is invisible to it — and
+// that is the larger set. The live instance: #2573 edited the `handshaking()` block in
+// `docs/extending-fabrics.md` to add the new `policy` argument, and silently dropped the four-line
+// self-connection guard (`require(remoteId != selfId)`, #1488) while doing it. The published doc
+// showed a `handshaking()` that cannot refuse a self-connection, on the page a fabric author reads
+// to write a fabric. Nothing could have caught it: the block's provenance was a bare source-path
+// comment, so no check in this file was looking at it. #2578 forbade that particular shape; this
+// closes the wider one — a block with no provenance at all.
+//
+// WHY A RATCHET AND NOT A SWEEP. 173 blocks were uncited when this landed and MANY of them are
+// legitimately illustrative: a consumer's `build.gradle.kts`, a sketch of a type the reader will
+// write, pseudo-code for a design that does not exist yet. Forcing a citation onto those would push
+// people to `condensed from`, which is a ONE-WAY DOOR — that block is never content-checked again.
+// That trades a visible gap for an invisible one, which is strictly worse. So the baseline records
+// today's count per file, a NEW uncited block fails, and the 173 get swept opportunistically by
+// whoever is already editing a file. A file swept to zero loses its entry and is locked at zero.
+//
+// WHAT COUNTS. A fenced block whose language is `kotlin`, `java` or `swift` — the languages whose
+// content can drift against a compiled source in this repo. `bash`, `text`, `toml`, `yaml` and the
+// rest are deliberately out: a shell incantation has no declaration to cite. A block is CITED when
+// the nearest preceding non-blank line is a `verbatim from` / `condensed from` marker, which is
+// exactly the attachment rule `verifyDocCitations` enforces, so the two cannot disagree about which
+// block a marker covers.
+//
+// WHAT IS EXEMPT, and why it is by PATH and commented rather than incidental: `docs/plans/`,
+// `docs/superpowers/plans/` and `docs/superpowers/specs/` are frozen, dated snapshots of a moment.
+// Their blocks are supposed to quote an API as it stood, or as it was proposed and never built;
+// content-checking them against today's source would be checking the wrong claim. The stale
+// direction is checked below — a prefix that no longer matches any file fails, so an exemption
+// cannot outlive the directory it was written for.
+val uncitedDocBlockExempt = listOf("docs/plans/", "docs/superpowers/plans/", "docs/superpowers/specs/")
+
+val forbidUncitedDocCodeBlock by tasks.registering {
+    group = "verification"
+    description = "Fails when a live reference doc gains a Kotlin/Java/Swift code block with no `verbatim from`/`condensed from` provenance, on a per-file count ratchet (#2583)."
+    val docRoots = listOf(rootDir.resolve("docs"), rootDir.resolve("Writerside"))
+        .filter(java.io.File::isDirectory)
+    // See "Guard plumbing" above. The verdict is a function of file PATHS (the baseline keys and
+    // the exemption's staleness check) and file CONTENTS, both captured by a RELATIVE fingerprint.
+    // The declared set is the UNFILTERED one, so a file entering or leaving the exemption
+    // invalidates a cached success too.
+    val scannedDocs = fileTree(rootDir) {
+        docRoots.forEach { include("${it.relativeTo(rootDir).invariantSeparatorsPath}/**/*.md") }
+    }
+    inputs.files(scannedDocs).withPropertyName("referenceDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val stamp = layout.buildDirectory.file("verification/forbid-uncited-doc-code-block.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    val exempt = uncitedDocBlockExempt
+    // The baseline MUST stay a literal here, for `forbidNotNullAssertionInUnresolvedSource`'s
+    // reason: it is covered by the cache key only because it is folded into the task-action
+    // implementation hash, so moving it to `gradle.properties` or a resource would silently drop it
+    // out and reintroduce the stale-green class the stamps exist to prevent.
+    //
+    // Counts as of #2583 — 173 uncited blocks across 46 files, of 314 Kotlin/Java/Swift blocks in
+    // the live reference set. DERIVED BY RUNNING THIS GUARD WITH THE MAP EMPTIED, not by trusting a
+    // clean run: a guard with a bug that makes it match nothing produces an empty violation list
+    // that is indistinguishable from a clean repo. Regenerate the same way after a sweep.
+    val baseline = mapOf(
+        "docs/adr-001-conformance-suite-two-loom.md" to 3,
+        "docs/adr-002-weave-rendezvous.md" to 3,
+        "docs/adr-003-addendum-causal-stability-barrier.md" to 2,
+        "docs/adr-003-rga-tombstone-gc-history-windowing.md" to 5,
+        "docs/adr-005-per-peer-bonjour-instance-name.md" to 4,
+        "docs/agent-cookbook.md" to 1,
+        "docs/architecture.md" to 1,
+        "docs/extending-fabrics.md" to 2,
+        "docs/fabric-delivery-backpressure-design.md" to 2,
+        "docs/fabric-delivery-backpressure-plan.md" to 10,
+        "docs/gamehosted-bootstrap-design.md" to 4,
+        "docs/gossip-mesh-design.md" to 1,
+        "docs/heddle-design.md" to 9,
+        "docs/heddle-ledger-design.md" to 1,
+        "docs/host-election-design.md" to 1,
+        "docs/hosted-game-hub-replication-plan.md" to 12,
+        "docs/log-capture-and-extraction.md" to 3,
+        "docs/nw-transport-design.md" to 1,
+        "docs/offline-otel.md" to 1,
+        "docs/op-log-crdt-compaction.md" to 2,
+        "docs/testing-coroutine-determinism.md" to 1,
+        "docs/testing.md" to 2,
+        "docs/usage.md" to 23,
+        "docs/warp-op-autoregistration.md" to 4,
+        "docs/warp-vision.md" to 4,
+        "Writerside/topics/cluster-server-client.md" to 2,
+        "Writerside/topics/contract.md" to 10,
+        "Writerside/topics/crdt-custom.md" to 5,
+        "Writerside/topics/crdt-orset.md" to 1,
+        "Writerside/topics/crdt-overview.md" to 3,
+        "Writerside/topics/crdt-quilter.md" to 1,
+        "Writerside/topics/crdt-rga.md" to 1,
+        "Writerside/topics/fabric-kit.md" to 6,
+        "Writerside/topics/fabrics.md" to 5,
+        "Writerside/topics/game-bootstrap.md" to 6,
+        "Writerside/topics/getting-started.md" to 10,
+        "Writerside/topics/install.md" to 4,
+        "Writerside/topics/log-capture.md" to 1,
+        "Writerside/topics/multipath.md" to 4,
+        "Writerside/topics/nw.md" to 2,
+        "Writerside/topics/partial-mesh.md" to 1,
+        "Writerside/topics/picking-a-host.md" to 1,
+        "Writerside/topics/quick-start.md" to 3,
+        "Writerside/topics/raft.md" to 3,
+        "Writerside/topics/warp-compiler.md" to 1,
+        "Writerside/topics/warp.md" to 1,
+    )
+    doLast {
+        val cite = Regex("""^<!--\s*(?:verbatim|condensed) from\s+.+?\s*-->$""")
+        val checkedLanguages = setOf("kotlin", "java", "swift")
+        val all = scannedDocs.files.sortedBy { it.invariantSeparatorsPath }
+        val scanned = all.filterNot { f ->
+            val rel = f.relativeTo(rootPath).invariantSeparatorsPath
+            exempt.any(rel::startsWith)
+        }
+        // The exemption's stale direction, mirroring `commonTierSourceSets`' check on the sibling
+        // guard: a prefix matching nothing left in the tree has stopped excusing anything and has
+        // become a claim about a directory that is not there — which would then silently exempt
+        // whatever next lands on that path.
+        val staleExempt = exempt.filter { prefix ->
+            all.none { it.relativeTo(rootPath).invariantSeparatorsPath.startsWith(prefix) }
+        }
+        if (staleExempt.isNotEmpty()) {
+            error(
+                "`uncitedDocBlockExempt` excuses ${staleExempt.joinToString(", ")} from this guard " +
+                    "because those are frozen, dated planning snapshots, and no markdown lives " +
+                    "there any more — the entry has become a claim about a directory that is not " +
+                    "in the tree, and would exempt whatever next lands on that path.\n" +
+                    "  THE FIX is to delete the entry, then re-run and cite whatever it was hiding.",
+            )
+        }
+
+        var total = 0
+        val found = sortedMapOf<String, Int>()
+        val firstSite = mutableMapOf<String, String>()
+        scanned.forEach { md ->
+            val rel = md.relativeTo(rootPath).invariantSeparatorsPath
+            val lines = md.readText().lines()
+            var open = false
+            lines.forEachIndexed { n, line ->
+                val t = line.trim()
+                if (!t.startsWith("```")) return@forEachIndexed
+                if (open) {
+                    open = false
+                    return@forEachIndexed
+                }
+                open = true
+                val language = t.removePrefix("```").trim().substringBefore(' ').lowercase()
+                if (language !in checkedLanguages) return@forEachIndexed
+                total++
+                // The attachment rule, identical to `verifyDocCitations`': the marker is the
+                // nearest preceding NON-BLANK line. Anything else — a marker three paragraphs up,
+                // a marker under the fence — is not a citation of this block, and reading it as
+                // one is how a guard goes quietly vacuous.
+                var m = n - 1
+                while (m >= 0 && lines[m].isBlank()) m--
+                if (m >= 0 && cite.matches(lines[m].trim())) return@forEachIndexed
+                found.merge(rel, 1, Int::plus)
+                firstSite.putIfAbsent(rel, "$rel:${n + 1}")
+            }
+        }
+
+        // The baseline's own stale direction — a key naming a file that is no longer scanned
+        // (deleted, renamed, or moved under an exemption). That entry has stopped grandfathering
+        // anything, and left in place it would silently absorb a future file of the same name.
+        // A mere DECREASE is tolerated, for `forbidTightRunTestTimeout`'s reason: failing on one
+        // would red-light the branch doing the sweeping.
+        val scannedPaths = scanned.mapTo(mutableSetOf()) { it.relativeTo(rootPath).invariantSeparatorsPath }
+        val dangling = baseline.keys.filterNot { it in scannedPaths }.sorted()
+        if (dangling.isNotEmpty()) {
+            error(
+                "Uncited-doc-block baseline entr(ies) naming a file this guard no longer scans " +
+                    "(#2583). The entry grandfathers nothing and would absorb whatever next takes " +
+                    "that path:\n  " + dangling.joinToString("\n  ") + "\n\n" +
+                    "  THE FIX is to delete the entry from `baseline` in build.gradle.kts.",
+            )
+        }
+
+        val over = found.filter { (path, count) -> count > (baseline[path] ?: 0) }
+        if (over.isNotEmpty()) {
+            error(
+                "Uncited code block(s) in live reference docs (#2583). A Kotlin/Java/Swift block " +
+                    "with no provenance marker is content-checked by nobody, so it drifts silently " +
+                    "against the API it shows — which is exactly how the published " +
+                    "`handshaking()` lost its self-connection guard:\n\n" +
+                    over.entries.joinToString("\n") { (path, count) ->
+                        val was = baseline[path]
+                        val where = firstSite[path] ?: path
+                        "  $path — ${was?.let { "baseline $it" } ?: "no baseline (new to the ratchet)"}, " +
+                            "now $count (first uncited block at $where)"
+                    } + "\n\n" +
+                    "Attach a citation to the new block:\n" +
+                    "      <!-- verbatim from <path>#<symbol> -->\n" +
+                    "Use `<!-- condensed from <path>#<symbol> -->` ONLY if the block cannot be a " +
+                    "literal quote — that exempts it from content checking for good, which is why " +
+                    "it is not the default way past this.\n" +
+                    "Do NOT raise the baseline in `build.gradle.kts`. It only moves down: sweep the " +
+                    "file and lower or delete its entry. An illustrative block that cites nothing " +
+                    "real — a consumer's build file, a type the reader will write — belongs in a " +
+                    "non-code fence, or the file belongs in `uncitedDocBlockExempt` with a reason.\n",
+            )
+        }
+
+        val uncited = found.values.sum()
+        stamp.get().asFile.apply {
+            parentFile.mkdirs()
+            writeText("$uncited uncited of $total checked block(s) across ${scanned.size} docs\n")
+        }
+        logger.info(
+            "forbidUncitedDocCodeBlock: $uncited uncited of $total Kotlin/Java/Swift block(s) " +
+                "across ${scanned.size} live reference docs",
+        )
+    }
+}
+
 // Guard: every `@sample` KDoc tag must name a sample Dokka can actually resolve (#2259).
 //
 // A sample's BODY cannot rot — `src/commonSamples/kotlin` is compiled into `commonTest`, so a broken
@@ -6558,6 +6778,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
+        dependsOn(rootProject.tasks.named("forbidUncitedDocCodeBlock"))
         dependsOn(rootProject.tasks.named("verifySampleLinks"))
         dependsOn(rootProject.tasks.named("verifySamplesAreRun"))
         dependsOn(rootProject.tasks.named("verifyModuleTable"))
