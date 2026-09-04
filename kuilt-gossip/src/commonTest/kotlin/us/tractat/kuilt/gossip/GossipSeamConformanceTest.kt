@@ -86,8 +86,13 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
         return true
     }
 
-    /** Proven: this harness drops the transport under a live pair, so no gap. */
-    override fun midSessionDeathGap(): String? = null
+    /**
+     * [ObligationDeclaration.Proven]: this harness drops the transport under a live pair and the
+     * obligation holds. Not [ObligationDeclaration.NotApplicable.NotConstructible] — that arm is for
+     * the shared in-process meshes with no 2-peer transport under the pair to drop, which is what this
+     * harness was until #2605 gave it a `connectionPair`.
+     */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     // overlay adds no crypto, inherits its base; dissemination is deliberate
     // multi-hop flood — not direct p2p; and the overlay wires no path observer (#1712).
@@ -119,24 +124,6 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
             "does not manufacture a remote its base never had.",
         )
 
-    /**
-     * **Not a gap — the event is not constructible here (#2568).** One [GossipLoom] over one shared
-     * [InMemoryLoom] base plays both roles, so there is no 2-peer transport under the pair to drop.
-     * A peer going away shrinks the base loom's shared roster — which [GossipSeam.peers] delegates
-     * straight to — and leaves the survivor [us.tractat.kuilt.core.SeamState.Woven]. The in-memory
-     * transport-death path is covered by `PeerMeshConformanceTest`, which holds both ends of a real
-     * 2-peer link.
-     *
-     * This harness does **not** yet prove the sibling membership-drain obligation — that stays a
-     * tracked gap under the default — so the departure event is asserted on here only by
-     * [SeamConformanceSuite.midSessionDeathDeclarationIsHonest]'s refutation.
-     */
-    override fun midSessionDeathDeclaration(): ObligationDeclaration =
-        ObligationDeclaration.NotApplicable.NotConstructible(
-            "one GossipLoom over one shared InMemoryLoom base plays both roles, so no 2-peer " +
-                "transport exists under the pair to drop; a peer leaving shrinks the base loom's " +
-                "shared roster (which GossipSeam.peers delegates to) and leaves the survivor Woven",
-        )
 }
 
 /**
