@@ -494,10 +494,30 @@ public class WarpNode(
     /**
      * Cumulative count of task executions whose result was already present on the
      * Results board when [recordResult] was called — i.e. duplicates absorbed by
-     * the LWW ORMap backstop.
+     * the LWW ORMap backstop **at record time**.
      *
-     * A non-zero value here indicates the dual-leader window or ring-disagreement
-     * window was hit. A [GCounter] snapshot suitable for merging across replicas.
+     * **A lower bound on duplicate executions, not a count of them — and zero is
+     * uninformative.** The increment is gated on the board already holding an entry for
+     * the task, so it sees the *sequential* re-run (the dual-leader window on one node, or
+     * a peer recording after convergence) and is systematically blind to the *concurrent*
+     * one: two peers whose state has not reconciled both record against a board holding no
+     * other entry, neither increments, and the merge absorbs the collision with no
+     * accounting. That is precisely the cross-partition churn regime a duplicate metric is
+     * watched for, so `duplicates == 0` across a partition is the expected reading whether
+     * or not a task ran twice. This KDoc used to add that "a non-zero value indicates the
+     * dual-leader window was hit" — true as written, but a reader takes the converse, and
+     * the converse is false; it is struck rather than qualified.
+     *
+     * Two smaller caveats at the same site: the coordinated path shares the recording
+     * helper and never touches admission control, so its increments are not admission-path
+     * duplicates; and a bobbin *load* failure reaches the terminal-error path before
+     * `admitAndRun`, so some counted executions were never charged.
+     *
+     * Counting the concurrent case needs a merge-time observation on the Results board or
+     * per-execution provenance — #2565, which shares that design question with #1756.
+     *
+     * A [GCounter] snapshot suitable for merging across replicas. Exported as
+     * `warp.tasks.duplicate.absorbed` by [us.tractat.kuilt.warp.otel.recordWarp].
      */
     public val duplicates: GCounter get() = lock.withLock { _duplicates }
 

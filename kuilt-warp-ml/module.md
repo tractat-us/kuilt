@@ -105,9 +105,13 @@ they spend from their own local holdings, and §4.4 makes reservations deliberat
 
 So a lane that churns is charged more than a quiet lane for the same work, by the
 duplicate-execution rate — normally zero, rising only during churn. `WarpNode.duplicates`
-counts those executions across *all* lanes together (`warp.tasks.duplicate` via
-`:kuilt-warp-otel`); the **per-lane** rate §8.2 asks for, reported alongside the bound's
-other pieces, is not exposed yet — [#1756](https://github.com/tractat-us/kuilt/issues/1756).
+is a **lower bound** on those executions across *all* lanes together
+(`warp.tasks.duplicate.absorbed` via `:kuilt-warp-otel`): it counts only the duplicates the
+results board absorbed at record time, and reads zero for the concurrent cross-partition
+case — which is the churn regime this paragraph is about
+([#2565](https://github.com/tractat-us/kuilt/issues/2565)). The **per-lane** rate §8.2 asks
+for, reported alongside the bound's other pieces, is not exposed yet —
+[#1756](https://github.com/tractat-us/kuilt/issues/1756).
 
 Nothing in this module depends on heddle; `:kuilt-warp-ml` has no lane gating of its own.
 It is recorded here because the federated-learning demo is what surfaced it.

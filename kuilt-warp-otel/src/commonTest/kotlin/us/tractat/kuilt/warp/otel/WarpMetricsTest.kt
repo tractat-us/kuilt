@@ -148,6 +148,12 @@ class WarpMetricsTest {
 
             exporter.recordWarp(node)
 
+            // `sumValue` returns 0 for an ABSENT key, so a bare `assertEquals(0L, sumValue(k))` is
+            // vacuous about k's NAME — it passes whatever name production wrote, including none.
+            // `mergeSum` always stores the key (even at zero), so the written key set is the sound
+            // pin, and it is what actually reds if the exported string drifts (#2565 renamed one).
+            val exported = exporter.snapshotAll().sums.keys.map { it.name }.toSet()
+
             assertAll(
                 {
                     assertEquals(
@@ -159,8 +165,8 @@ class WarpMetricsTest {
                 {
                     assertEquals(
                         0L,
-                        exporter.sumValue(MetricKey("warp.tasks.duplicate", MetricKind.SUM)),
-                        "duplicates counter must map to warp.tasks.duplicate SUM",
+                        exporter.sumValue(MetricKey("warp.tasks.duplicate.absorbed", MetricKind.SUM)),
+                        "duplicates counter must map to warp.tasks.duplicate.absorbed SUM",
                     )
                 },
                 {
@@ -168,6 +174,20 @@ class WarpMetricsTest {
                         0L,
                         exporter.sumValue(MetricKey("warp.failover.count", MetricKind.SUM)),
                         "failovers counter must map to warp.failover.count SUM",
+                    )
+                },
+                {
+                    assertEquals(
+                        setOf(
+                            "warp.tasks.executed",
+                            "warp.tasks.duplicate.absorbed",
+                            "warp.failover.count",
+                            "warp.tasks.interpreted",
+                            "warp.tasks.compiled",
+                        ),
+                        exported,
+                        "recordWarp must write exactly these SUM series — the pre-#2565 name " +
+                            "`warp.tasks.duplicate` must be gone, and no series may appear unnamed here",
                     )
                 },
             )

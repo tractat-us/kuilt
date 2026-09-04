@@ -22,10 +22,20 @@ import us.tractat.kuilt.warp.coordinationCost
  * | name | kind | source |
  * |---|---|---|
  * | `warp.tasks.executed` | SUM | [WarpNode.executions] |
- * | `warp.tasks.duplicate` | SUM | [WarpNode.duplicates] |
+ * | `warp.tasks.duplicate.absorbed` | SUM | [WarpNode.duplicates] |
  * | `warp.failover.count` | SUM | [WarpNode.failovers] |
  * | `warp.tasks.interpreted` | SUM | [WarpNode.executionsInterpreted] |
  * | `warp.tasks.compiled` | SUM | [WarpNode.executionsCompiled] |
+ *
+ * **`warp.tasks.duplicate.absorbed` is a lower bound, and zero is uninformative.** It
+ * counts only the duplicates the LWW ORMap backstop absorbed *at record time* — a peer
+ * recording against a board that already holds an entry for that task. Two peers whose
+ * state has not reconciled both record against a board holding no other entry, so neither
+ * increments and the merge absorbs the collision silently. It is therefore systematically
+ * blind to the concurrent cross-partition case, which is exactly the churn regime a
+ * duplicate metric is watched for. The name was `warp.tasks.duplicate` until #2565; it was
+ * renamed because a bare "duplicate" reads as a count of duplicate executions, which this
+ * is not. See [WarpNode.duplicates].
  *
  * @param node The [WarpNode] whose counter snapshots to merge.
  * @param attributes Additional label attributes added to every [MetricKey].
@@ -35,7 +45,7 @@ public suspend fun WarpMetricExporter.recordWarp(
     attributes: Map<String, String> = emptyMap(),
 ) {
     mergeSum(MetricKey("warp.tasks.executed", MetricKind.SUM, attributes), node.executions)
-    mergeSum(MetricKey("warp.tasks.duplicate", MetricKind.SUM, attributes), node.duplicates)
+    mergeSum(MetricKey("warp.tasks.duplicate.absorbed", MetricKind.SUM, attributes), node.duplicates)
     mergeSum(MetricKey("warp.failover.count", MetricKind.SUM, attributes), node.failovers)
     mergeSum(MetricKey("warp.tasks.interpreted", MetricKind.SUM, attributes), node.executionsInterpreted)
     mergeSum(MetricKey("warp.tasks.compiled", MetricKind.SUM, attributes), node.executionsCompiled)
