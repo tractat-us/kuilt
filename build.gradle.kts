@@ -5393,29 +5393,24 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
     // class the stamps were made safe against. Entries are paths relative to the root, violation
     // counts as of the PR that added them. Regenerate after a sweep with this scanner, not by hand.
     //
-    // The first three are what remains of #2039's original population — apple/wasm/:spike, where
-    // detekt fires nothing at all. (Two more, `kuilt-store`'s `NSFileManagerDurableStoreTest` and
+    // All three are what remains of #2039's original population — apple/wasm/:spike, where detekt
+    // fires nothing at all. (Two more, `kuilt-store`'s `NSFileManagerDurableStoreTest` and
     // `IndexedDbDurableStoreTest`, were swept to zero by #2500 and are deleted here: both files are
     // still scanned, so the `dangling` check below could not see them, and a decrease is tolerated
     // — they were entries that had stopped grandfathering anything. Deleting them makes this map
     // reconcile with the stamp's file/site counts.)
     //
-    // The rest arrived with #2471, which widened the scope to source sets detekt was believed to
-    // cover and found 11 more sites it had never reported. Every one of them is a TRUE POSITIVE
-    // `!!` on a genuinely nullable type, and all 11 are in test/example sources — the one
-    // production site the widening caught (`GossipDedup.forceForwardPastGap`) was FIXED in the same
-    // PR rather than grandfathered. Burning these down is #2530.
+    // #2471's widening added six more entries — 11 sites detekt had never reported, all in
+    // test/example sources — grandfathered to keep that PR a lint fix rather than a cross-module
+    // refactor. #2530 swept all six to zero and deleted them: `assertNotNull` where the value was
+    // asserted anyway, `CoroutineContext.job` where the key is present by construction, `minBy`
+    // where a `groupBy` group cannot be empty, and a `?.let` where a `mapNotNull` lambda was
+    // building a pair it then filtered on. Each says the same thing and fails with a diagnostic
+    // instead of an NPE. Nothing is left to burn down here outside the apple/`:spike` tier.
     val baseline = mapOf(
         "kuilt-nw/src/appleMain/kotlin/us/tractat/kuilt/nw/RealNwApi.kt" to 1,
         "kuilt-nw/src/appleTest/kotlin/us/tractat/kuilt/nw/NwHalfCloseProbeTest.kt" to 2,
         "spike/src/appleMain/kotlin/spike/nw/SpikeNw.kt" to 1,
-        // #2471 — detekt's type resolution never saw any of these.
-        "examples/src/test/kotlin/us/tractat/kuilt/examples/ResumeTokenFailoverTest.kt" to 1,
-        "examples/src/test/kotlin/us/tractat/kuilt/examples/warp/WarpSpikeV2.kt" to 2,
-        "kuilt-otel-otlp/src/jvmTest/kotlin/us/tractat/kuilt/otel/otlp/OtlpHttpEdgeIntegrationTest.kt" to 3,
-        "kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpLoomFactoryTest.kt" to 1,
-        "kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpLoomTestDispatcherGuardTest.kt" to 3,
-        "kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/PublicWebSocketConnectionSpokeTest.kt" to 1,
     )
     doLast {
         val selfTest = NotNullAssertionScanner.selfTestFailures()

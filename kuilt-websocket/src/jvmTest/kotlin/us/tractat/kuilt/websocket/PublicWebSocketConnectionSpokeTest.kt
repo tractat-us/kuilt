@@ -5,6 +5,7 @@ import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.server.testing.testApplication
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.test.Test
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -28,7 +29,10 @@ class PublicWebSocketConnectionSpokeTest {
     @Test
     fun clientSpokeHandshakesHubViaMeshSeamUsingPublicWebSocketConnection() =
         testApplication {
-            val dispatcher = currentCoroutineContext()[ContinuationInterceptor]!!
+            val dispatcher = assertNotNull(
+                currentCoroutineContext()[ContinuationInterceptor],
+                "testApplication must run under a dispatcher for the mesh to schedule on",
+            )
             val source = KtorConnectionSource(application, "/hub")
             val client = createClient { install(ClientWebSockets) }
             val hubId = PeerId("hub")

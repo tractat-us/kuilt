@@ -22,6 +22,7 @@ import us.tractat.kuilt.otel.WarpTelemetry
 import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -62,12 +63,15 @@ class OtlpHttpEdgeIntegrationTest {
             bridge.drain(edge)
             bridge.drain(edge) // idempotent — nothing new on the second pass
 
-            assertEquals(1, bodies["traces"]?.size)
-            assertEquals(1, bodies["logs"]?.size)
-            assertEquals(1, bodies["metrics"]?.size)
-            assertTrue(bodies["traces"]!!.first().contains("resourceSpans"))
-            assertTrue(bodies["logs"]!!.first().contains("resourceLogs"))
-            assertTrue(bodies["metrics"]!!.first().contains("resourceMetrics"))
+            val traces = assertNotNull(bodies["traces"], "the traces endpoint was never posted to")
+            val logs = assertNotNull(bodies["logs"], "the logs endpoint was never posted to")
+            val metrics = assertNotNull(bodies["metrics"], "the metrics endpoint was never posted to")
+            assertEquals(1, traces.size)
+            assertEquals(1, logs.size)
+            assertEquals(1, metrics.size)
+            assertTrue(traces.first().contains("resourceSpans"))
+            assertTrue(logs.first().contains("resourceLogs"))
+            assertTrue(metrics.first().contains("resourceMetrics"))
         } finally {
             client.close()
             server.stop(0, 0)
