@@ -3,6 +3,7 @@ package us.tractat.kuilt.otel
 import ch.qos.logback.classic.spi.ILoggingEvent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -178,6 +179,87 @@ class WarpMetricExporterFailureReportingTest {
     }
 
     /**
+     * A store that refuses **one** key while accepting the others is still one outage.
+     *
+     * This is the shape a per-exporter latch cannot bound, and it is not contrived — it is the one
+     * `:kuilt-otel`'s own fakes already model and name. `RefuseSegmentWritesStore`'s KDoc: *"an
+     * `IndexedDbDurableStore` under quota pressure does exactly this — it refuses **large** writes
+     * while small ones succeed."* Every mutating method here writes exactly **one** key, and a
+     * DDSketch histogram blob against a [GCounter] map is precisely that size split. So the
+     * alternation below — `recordHistogram` refused, `incrementSum` accepted — is the very scenario
+     * #2593 cites as its motivation.
+     *
+     * Under a single boolean latch the two calls take turns: the histogram failure opens it and
+     * reports, the sum success clears it, and the next histogram failure reports again. One line per
+     * failing call, unbounded — the #2593 defect back at a workload-dependent constant, under a
+     * class KDoc still promising "once per outage, not once per attempt".
+     *
+     * The latch is therefore keyed **per store key**, and reports only on the `empty → non-empty`
+     * transition: the sum's success removes `sums` from a set that does not contain it, so the set
+     * stays non-empty and the histogram's next refusal stays quiet.
+     *
+     * ⚠ The fixture is the whole test. [WriteRefusingStore] has taken a `refuses` predicate all
+     * along and every arm above leaves it at its `{ true }` default — the one setting at which this
+     * property cannot fail. That is this repo's most persistent failure mode (*the fixture's
+     * configuration is a prescription too, and it drifts toward the setting where the property
+     * cannot fail*), and it landed here inside the fix for the previous instance of itself.
+     */
+    @Test
+    fun aStoreRefusingOneKeyWhileAcceptingAnotherIsStillOneOutage() = runTest {
+        val store = WriteRefusingStore(RecordingStore(), refuses = { it == HISTOGRAM_STORE_KEY })
+        var histogramFailures = 0
+        var sumSuccesses = 0
+        lateinit var lines: List<ILoggingEvent>
+
+        capturingLogsOf(METRIC_EXPORTER_LOGGER) { captured ->
+            val exporter = exporterFor(store)
+            store.refuseWrites()
+
+            // Alternate the refused key with an accepted one. Under a per-exporter latch every
+            // accepted write re-arms the report that the next refused one then emits.
+            repeat(ALTERNATIONS) {
+                val histogram = exporter.recordHistogram(
+                    MetricKey("latency", MetricKind.EXPONENTIAL_HISTOGRAM, emptyMap()),
+                    value = 12.0,
+                )
+                if (histogram is MetricExportResult.Failure) histogramFailures++
+                if (exporter.incrementSum(sumKey("requests")) is MetricExportResult.Success) sumSuccesses++
+            }
+
+            lines = captured.naming(WRITE_FRAGMENT).toList()
+        }
+
+        assertAll(
+            {
+                assertEquals(
+                    ALTERNATIONS,
+                    histogramFailures,
+                    "precondition: the refused key did not fail on every pass, so there is no " +
+                        "sustained outage to be quiet about",
+                )
+            },
+            {
+                // Without this the claim below is satisfied by a store that refused everything,
+                // where "per store" and "per key" are the same latch and prove nothing apart.
+                assertEquals(
+                    ALTERNATIONS,
+                    sumSuccesses,
+                    "precondition: the accepted key did not succeed on every pass, so the latch " +
+                        "was never re-armed and this test cannot tell the two keyings apart",
+                )
+            },
+            {
+                assertEquals(
+                    1,
+                    lines.size,
+                    "a store refusing one key while taking another re-reported the same outage on " +
+                        "every alternation ($ALTERNATIONS of them)",
+                )
+            },
+        )
+    }
+
+    /**
      * **A failure the write path had nothing to do with must not swallow the write path's report.**
      *
      * This is the arm that decides whether the dedup key is sound, and it is the defect #2586 found
@@ -277,6 +359,21 @@ class WarpMetricExporterFailureReportingTest {
          * would be asserting nothing.
          */
         const val DELETE_FRAGMENT = "durable delete failed during clear"
+
+        /**
+         * The histogram blob's store key, spelled out because the production constant is private.
+         *
+         * It is the **large** write of the five — a DDSketch against four small CRDT maps — which
+         * is what makes refusing exactly this one the `IndexedDbDurableStore`-under-quota shape
+         * rather than an arbitrary choice.
+         */
+        val HISTOGRAM_STORE_KEY = StoreKey("otel.metrics.histograms")
+
+        /**
+         * Refused/accepted write pairs. Small: the claim is that the report count does not track it
+         * at all, and under the defect this test exists for the count equals it exactly.
+         */
+        const val ALTERNATIONS = 20
 
         /**
          * Metric writes per outage. Only has to be comfortably more than one, since the claim is
