@@ -6265,6 +6265,221 @@ val forbidDetektFrontendSkew by tasks.registering {
     }
 }
 
+// Guard: notice when Android Lint's bundled Kotlin frontend catches up with the project's Kotlin
+// (#2595). The #2471 shape, one layer over — and this time the blind tool sits inside `ci-required`.
+//
+// WHAT IS ACTUALLY TRUE, measured rather than assumed, because this issue's first attribution was
+// wrong. The Kotlin COMPILE is fine: `compileDebugUnitTestKotlinAndroid --rerun-tasks` emits zero
+// of the metadata diagnostics, and four `androidUnitTest` arms that would go silent if metadata
+// were invisible — two of them resolving `:kuilt-core` members — are all RED. Attributing all 60
+// diagnostics from a `:kuilt-nearby:build --no-build-cache` to their emitting task puts 100% under
+// `lintAnalyzeDebug` / `lintAnalyzeDebugUnitTest` / `lintAnalyzeDebugAndroidTest`.
+//
+// ANDROID LINT IS BLIND TO EVERY KOTLIN *LIBRARY* SYMBOL. Lint 31.13.2 (AGP 8.13.2) bundles
+// `com.android.tools.external.com-intellij:kotlin-compiler:31.13.2`, whose `META-INF/compiler.version`
+// reads `2.2.20-Beta1-for-lint` — so `JvmMetadataVersion.INSTANCE` is `[2,2,0]` and the read ceiling
+// is `[2,3,0]`. Everything on its analysis classpath is past it: kotlin-stdlib/kotlin-test 2.4.10,
+// play-services-nearby, and every sibling `us.tractat.kuilt_*.kotlin_module`, all `[2,4,0]`.
+// Metadata a frontend cannot read is SILENCE, not an error, so lint prints "No issues found" either
+// way. Positive controls both directions, which is what makes this a verdict rather than a
+// suspicion: four Java/Android-keyed lint arms FIRE, the two kotlin-stdlib arms are SILENT, and
+// forcing `kotlin-stdlib:2.2.20` onto `:kuilt-nearby` alone — byte-identical source, same lint —
+// makes both silent arms FIRE. Causation, not correlation.
+//
+// BLAST RADIUS: `lint` sits in `check` → `build` → `ci-required`, with AGP's default
+// `abortOnError = true`, across every `kuilt.kmp-library` module × 3 analyze tasks. Silently
+// unenforced is every lint check keyed on a Kotlin LIBRARY symbol — stdlib, coroutines,
+// serialization, Ktor, and every sibling kuilt module. Still live: everything keyed on
+// Java/JDK/Android APIs.
+//
+// THE DECISION, recorded rather than left implicit: lint STAYS in `check`. Its Java/Android-keyed
+// half is genuinely live, this is a KMP networking library with a thin Android surface, and a
+// partial gate beats no gate. What is not acceptable is the partial gate being indistinguishable
+// from a working one, which is what this guard fixes — the claim above now fails when it stops
+// being true. There is nothing to bump: lint's frontend is pinned by AGP, the same trade detekt's
+// is in #2471.
+//
+// FAILS ON GOOD NEWS, deliberately, exactly like `forbidDetektFrontendSkew`. The direction nobody
+// watches is lint getting BETTER while the repo keeps acting as though it had not: somebody bumps
+// AGP, CI is green, and every claim above is quietly false. `+ 1` on the minor for the same reason
+// as the detekt guard — the ceiling is `INSTANCE_NEXT`, the frontend's own metadata version plus one
+// minor — so a frontend one minor behind reads the project's binaries fine and is NOT lagging in
+// the sense meant here. Do not "simplify" it away.
+//
+// The frontend version cannot be read from the jar NAME the way detekt's is: this jar is versioned
+// on the LINT line (31.13.2), not the Kotlin one, and the Kotlin version lives in
+// `META-INF/compiler.version` inside it. So the probe opens the jar. If either the coordinate or
+// that entry ever moves, the guard fails loudly — which is itself the packaging-changed event it
+// exists to catch.
+val agpCatalogVersion = libs.versions.agp.get()
+
+// AGP and the Android tools libraries — lint included — ship in lockstep on two version lines that
+// differ by exactly 23 in the major: AGP 8.13.2 is lint 31.13.2. DERIVED rather than pinned, so an
+// AGP bump carries the probe with it and cannot leave this guard describing a lint nobody runs;
+// the derivation is then checked by resolving the coordinate, which fails if it is ever wrong.
+val lintProbeVersion = agpCatalogVersion.split('.').let { parts ->
+    val major = parts.firstOrNull()?.toIntOrNull() ?: error(
+        "Could not read a major version from `agp = \"$agpCatalogVersion\"` in " +
+            "`gradle/libs.versions.toml`, so `forbidLintFrontendSkew` cannot derive the matching " +
+            "lint version (lint major = AGP major + 23).",
+    )
+    (listOf((major + 23).toString()) + parts.drop(1)).joinToString(".")
+}
+val lintProbeCoordinates = "com.android.tools.external.com-intellij:kotlin-compiler:$lintProbeVersion"
+
+// NON-TRANSITIVE, and that is the point rather than an optimisation. The alternative — resolving
+// `com.android.tools.lint:lint-gradle` and finding this jar on its graph, which is the shape
+// `forbidDetektFrontendSkew` uses — drags in the whole lint runtime (analytics, sdk-common, guava)
+// on every `check`, and makes a REQUIRED gate fail whenever any corner of that graph is
+// unresolvable. Naming the one artifact keeps the probe to a single small jar. What that trades
+// away is re-deriving the lint→frontend EDGE every build; it is asserted instead by the version
+// derivation above, and a wrong derivation cannot pass silently — the coordinate simply stops
+// resolving and this guard fails loudly, which is the same outcome.
+val lintFrontendProbe: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isVisible = false
+    isTransitive = false
+}
+
+dependencies {
+    lintFrontendProbe(lintProbeCoordinates)
+}
+
+// The catalog entry `build-logic` actually applies AGP through, as `group` to `version`. A sibling
+// of `DetektCatalogScanner` rather than a generalisation of it: that object is cited by name in
+// several comments and its regex is shaped to one entry, and two focused parsers are easier to read
+// than one parameterised one. Same `object` rationale (see "Guard plumbing"), and the same reason it
+// needs no fixture — its subject is a single real file every build parses, so a spelling change
+// returns null and fails the next run.
+object AgpCatalogScanner {
+    /** The version of `com.android.tools.build:gradle` the catalog declares, or null. */
+    fun pluginVersion(toml: String): String? {
+        val entry = Regex(
+            """android-gradlePlugin\s*=\s*\{[^}]*module\s*=\s*"com\.android\.tools\.build:gradle"[^}]*""" +
+                """version\.ref\s*=\s*"([^"]+)"""",
+        ).find(toml) ?: return null
+        val versionRef = entry.groupValues[1]
+        return Regex("""(?m)^\s*${Regex.escape(versionRef)}\s*=\s*"([^"]+)"""")
+            .find(toml)?.groupValues?.get(1)
+    }
+}
+
+val forbidLintFrontendSkew by tasks.registering {
+    group = "verification"
+    description = "Fails when Android Lint's bundled Kotlin frontend catches up with the project's Kotlin, so the partial-gate claims that rest on the skew get revisited (#2595)."
+    // See "Guard plumbing" above. The verdict is a function of three things: the project's Kotlin
+    // and the derived lint coordinate (task input properties), and the frontend's own Kotlin, read
+    // from inside the resolved jar — declared as a file input so resolution stays lazy.
+    inputs.files(lintFrontendProbe).withPropertyName("lintRuntimeClasspath")
+        .withPathSensitivity(PathSensitivity.NAME_ONLY)
+    val projectKotlin = libs.versions.kotlin.get()
+    inputs.property("projectKotlinVersion", projectKotlin)
+    inputs.property("lintProbeCoordinates", lintProbeCoordinates)
+    val catalogFile = rootDir.resolve("gradle/libs.versions.toml")
+    inputs.file(catalogFile).withPropertyName("versionCatalog")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val stamp = layout.buildDirectory.file("verification/forbid-lint-frontend-skew.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val frontendJars = lintFrontendProbe.incoming.files
+    val probeCoordinates = lintProbeCoordinates
+    val probeVersion = lintProbeVersion
+    val agpVersion = agpCatalogVersion
+    doLast {
+        val applied = AgpCatalogScanner.pluginVersion(catalogFile.readText())
+            ?: error(
+                "Could not find an `android-gradlePlugin = { module = " +
+                    "\"com.android.tools.build:gradle\", version.ref = \"…\" }` entry in " +
+                    "`gradle/libs.versions.toml`, so this guard cannot confirm it is probing the lint " +
+                    "the build actually runs — and an unconfirmed probe must fail rather than pass.\n" +
+                    "  THE FIX is to re-sync the parser in `build.gradle.kts` with however that entry " +
+                    "is spelled now.",
+            )
+        if (applied != agpVersion) {
+            error(
+                "This guard derived lint $probeVersion from `agp = \"$agpVersion\"`, but " +
+                    "`gradle/libs.versions.toml` applies `com.android.tools.build:gradle:$applied`. " +
+                    "Its verdict would be about a lint that is not in the build.\n" +
+                    "  THE FIX is to point `agpCatalogVersion` in `build.gradle.kts` at whichever " +
+                    "catalog entry `build-logic` takes AGP from.",
+            )
+        }
+        val frontendJar = frontendJars.files.firstOrNull { it.name == "kotlin-compiler-$probeVersion.jar" }
+            ?: error(
+                "Could not find `kotlin-compiler-$probeVersion.jar` on the resolved " +
+                    "`$probeCoordinates` graph, so this guard cannot tell whether lint's frontend " +
+                    "still lags the project's Kotlin — and a guard that cannot see its subject must " +
+                    "fail rather than pass.\n" +
+                    "  Either lint's packaging changed, or the lint-major = AGP-major + 23 " +
+                    "convention did. Both are themselves the event this guard exists to catch.\n" +
+                    "  Files on the configuration: " +
+                    (frontendJars.files.map { it.name }.sorted().takeIf { it.isNotEmpty() }
+                        ?.joinToString(", ") ?: "none"),
+            )
+        // The Kotlin version is NOT in the jar name — that carries the lint line (31.x). It is in
+        // `META-INF/compiler.version`, which reads e.g. `2.2.20-Beta1-for-lint`.
+        val declared = java.util.zip.ZipFile(frontendJar).use { zip ->
+            zip.getEntry("META-INF/compiler.version")
+                ?.let { zip.getInputStream(it).use { input -> input.readBytes().decodeToString().trim() } }
+        } ?: error(
+            "`${frontendJar.name}` carries no `META-INF/compiler.version`, so this guard cannot read " +
+                "which Kotlin frontend lint bundles — and a guard that cannot see its subject must " +
+                "fail rather than pass.\n" +
+                "  That entry moving is itself the packaging change this guard exists to catch.",
+        )
+        val parsed = Regex("""^(\d+)\.(\d+)\.(\d+)""").find(declared)
+            ?: error(
+                "`${frontendJar.name}` declares its Kotlin frontend as \"$declared\", which does not " +
+                    "start with a `<major>.<minor>.<patch>` version, so this guard cannot compare it " +
+                    "with the project's Kotlin $projectKotlin.",
+            )
+        val (frontendMajor, frontendMinor) = parsed.groupValues.drop(1).take(2).map { it.toInt() }
+        val frontendVersion = parsed.groupValues.drop(1).take(3).joinToString(".")
+        val projectParts = projectKotlin.split('.').mapNotNull { it.toIntOrNull() }
+        val projectMajor = projectParts.getOrElse(0) { 0 }
+        val projectMinor = projectParts.getOrElse(1) { 0 }
+        // `+ 1` because the read ceiling is `JvmMetadataVersion.INSTANCE_NEXT` — the frontend's own
+        // metadata version plus one minor. See the header; the mutation receipt for the `+ 1` is the
+        // one-minor-behind case, not the equal case.
+        val frontendLags =
+            frontendMajor < projectMajor ||
+                (frontendMajor == projectMajor && frontendMinor + 1 < projectMinor)
+        if (!frontendLags) {
+            error(
+                "Android Lint's bundled frontend (Kotlin $frontendVersion, from " +
+                    "`${frontendJar.name}`) can now read this repo's binary metadata — its ceiling is " +
+                    "`[$frontendMajor,${frontendMinor + 1},0]` and the project's Kotlin is " +
+                    "$projectKotlin — so the partial-gate claims written while it could not are " +
+                    "stale.\n" +
+                    "  THIS IS GOOD NEWS, and the failure is the point: nothing else would tell you, " +
+                    "because lint prints \"No issues found\" in both states. Three things to " +
+                    "re-open, in this order:\n" +
+                    "    1. Re-run #2595's positive control — a lint check keyed on a kotlin-stdlib " +
+                    "symbol against an `androidMain` source — and confirm lint now REPORTS it. Until " +
+                    "it does, the skew is not really gone and this guard should be pinned, not " +
+                    "deleted.\n" +
+                    "    2. Re-read the Android Lint paragraph in `CLAUDE.md`'s build section. It " +
+                    "describes a partial gate; it would now be wrong, and it is the paragraph a " +
+                    "reader trusts when deciding what a green `lint` proves.\n" +
+                    "    3. Re-run a `--no-build-cache` module build and triage whatever lint has " +
+                    "started reporting. The unmeasured half of #2595 is whether any REAL finding was " +
+                    "being missed repo-wide; a frontend that has caught up is the first chance to " +
+                    "answer it.",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — Android Lint frontend Kotlin $frontendVersion (declared \"$declared\" in " +
+                "${frontendJar.name}, probed via $probeCoordinates, derived from catalog agp " +
+                "$applied) reads metadata up to [$frontendMajor,${frontendMinor + 1},0], below " +
+                "project Kotlin $projectKotlin, so lint remains blind to every Kotlin library " +
+                "symbol and is a partial gate\n",
+        )
+    }
+}
+
 // Guard: forbid `:kuilt-bolt` rejoining the CRDT lattice (#2212, epic #2210).
 //
 // A bolt is a WRITE-ONLY archive. Its whole reason to exist is that it consumes operations, never
@@ -7120,6 +7335,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidUnlintedAndroidMain"))
         dependsOn(rootProject.tasks.named("forbidNotNullAssertionInUnresolvedSource"))
         dependsOn(rootProject.tasks.named("forbidDetektFrontendSkew"))
+        dependsOn(rootProject.tasks.named("forbidLintFrontendSkew"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
