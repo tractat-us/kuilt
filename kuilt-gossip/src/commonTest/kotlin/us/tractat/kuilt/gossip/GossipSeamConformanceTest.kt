@@ -9,10 +9,12 @@ import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
+import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.peerMesh
 import us.tractat.kuilt.test.fabric.connectionPair
@@ -125,6 +127,11 @@ internal fun gossipLoomPair(testScope: TestScope?): Pair<Loom, Loom> {
 /**
  * Weaves a [peerMesh] over one [Connection] and wraps it in a started [GossipSeam].
  *
+ * [Rendezvous] is ignored: this loom owns exactly one end of one link, so its role is fixed at
+ * construction and `host()` and `join()` would build the same seam. Same shape as
+ * `PeerMeshConformanceTest`'s loom. The suite still drives the two ends concurrently, which is what
+ * the `peerMesh` handshake under each of them needs.
+ *
  * @param seed this peer's view-recompute/selection RNG seed. Distinct per role so the two ends
  *   choose independently, exactly as [GossipSeam]'s `random` parameter requires.
  */
@@ -135,6 +142,16 @@ internal class GossipLoom(
     private val seed: Int,
     private val testScope: TestScope?,
 ) : Loom {
+    /**
+     * [FabricAvailability.Available] is a fact here, not a guess: everything under this loom is
+     * in-process — a `peerMesh` over an in-memory `connectionPair` — so it opens no socket, acquires
+     * no OS resource and reaches no remote. Nothing is left that could make a weave unattemptable.
+     * Stated explicitly because the `Loom` default is the `Unknown` floor, and silently dropping to
+     * it here would be a false negative, not caution.
+     */
+    override fun capability(): TransportCapability =
+        TransportCapability(roles = emptySet(), availability = FabricAvailability.Available)
+
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         val scope = testScope ?: error("GossipLoom.weave needs a TestScope — use newLoomPair(testScope)")
         val base = peerMesh(

@@ -162,10 +162,13 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
             "in-band hello in either direction by design - identity crosses out of band, the client's in " +
             "the ?peer= query and the server's in the tag - so there is no code path on which this joiner " +
             "LEARNS its counterparty, and splitting the harness into two processes would change nothing. " +
-            "Only giving the fabric a preamble would, which is a different fabric: the handshaking sibling " +
-            "is KtorMeshClientLoom against a MuxServerLoom hub, covered by MuxServerLoomConformanceTest, " +
-            "which declares TheJoinPath over the same mesh Hello. What the arm still implies here is that " +
-            "the dial succeeded, since weave() does not return without a live socket. Triage recorded at " +
-            "https://github.com/tractat-us/kuilt/issues/2605.",
+            "Only giving the fabric a preamble would, which is a different fabric: KtorMeshClientLoom dials " +
+            "a MuxServerLoom hub with MeshSeam's in-band MeshHello and learns the hub's PeerId from the " +
+            "preamble it gets back, explicitly NOT from WebSocketAdvertisement.serverPeerId - so the " +
+            "contrast is a deliberate design split, not an oversight here. That hub's own harness, " +
+            "MuxServerLoomConformanceTest over an in-memory room fabric, declares TheJoinPath on the " +
+            "strength of that Hello; KtorMeshClientLoom itself has no SeamConformanceSuite harness. What " +
+            "the arm still implies here is that the dial succeeded, since weave() does not return without " +
+            "a live socket. Triage recorded at https://github.com/tractat-us/kuilt/issues/2605.",
         )
 }

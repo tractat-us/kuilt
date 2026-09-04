@@ -20,8 +20,8 @@ import kotlin.time.Duration.Companion.seconds
  *
  * `Seam.peers` requires a `Torn` seam's roster to be exactly `{ selfId }`, published **before, or
  * atomically with**, the terminal `Torn` latch (#1816). `SeamConformanceSuite.peersCollapseToSelfIdWhenTorn`
- * (bound here by `InMemoryLoomConformanceTest`, and inherited by `GossipSeamConformanceTest`, whose
- * base is an `InMemoryLoom`) asserts the terminal **value**. Two further properties it structurally
+ * (bound here by `InMemoryLoomConformanceTest`, and inherited by any harness layered over one —
+ * `TieredSeamConformanceTest` drives two `InMemoryLoom` tiers) asserts the terminal **value**. Two further properties it structurally
  * cannot reach get their own probes here, and both are the reason the obvious fix for #1849 is wrong.
  *
  * ### 1. Ordering — invisible to a dispatched collector

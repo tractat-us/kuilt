@@ -2,6 +2,7 @@ package us.tractat.kuilt.gossip
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.core.InMemoryLoom
@@ -43,7 +44,7 @@ class GossipJoinerRosterPremiseTest {
      * obligation there, satisfied only by a handshake the joiner ran itself.
      */
     @Test
-    fun overlayOverAnUnjoinedPeerMeshHoldsOnlyItself(): Unit = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+    fun overlayOverAnUnjoinedPeerMeshHoldsOnlyItself(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val self = PeerId("joiner")
         val base = peerMesh(
             selfId = self,
@@ -76,7 +77,7 @@ class GossipJoinerRosterPremiseTest {
      * joiner does not yet exist, and the joiner's own weave adds only its own id.
      */
     @Test
-    fun aSharedInMemoryRosterNamesTheHostBeforeTheJoinerExists(): Unit = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+    fun aSharedInMemoryRosterNamesTheHostBeforeTheJoinerExists(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val host = loom.host(Pattern("host"))
 
