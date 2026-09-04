@@ -1,6 +1,7 @@
 package us.tractat.kuilt.gossip
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.conformance.CapabilityGaps
@@ -8,10 +9,14 @@ import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
-import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.fabric.Connection
+import us.tractat.kuilt.core.fabric.peerMesh
+import us.tractat.kuilt.test.fabric.connectionPair
+import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.ZERO
 import kotlin.time.Instant
@@ -23,13 +28,21 @@ import kotlin.time.Instant
  * completion), and `PeerNotConnected` — when wrapping a real full-membership base.
  *
  * Wiring notes:
- * - **Base is [InMemoryLoom]**, *not* the simulation-only `InMemoryGossipNetwork`:
- *   that mesh seam reports a constant `Woven` state with a no-op `close`, so it can't
- *   exercise the suite's `Torn`-lifecycle invariants (tests 9 & 11). `InMemoryLoom`
- *   already passes the suite itself and gives a genuine teardown.
- * - **A fresh [InMemoryLoom] per pair.** A shared loom accumulates peers across tests;
- *   a k-regular gossip flood would then pick a subset that need not include the specific
- *   joiner the broadcast test asserts on (a full-mesh base hides this — it reaches all).
+ * - **Base is a [peerMesh] over one [connectionPair]** — the same base
+ *   `PeerMeshConformanceTest` drives, one end per role. It is *not* the simulation-only
+ *   `InMemoryGossipNetwork`: that mesh seam reports a constant `Woven` state with a no-op
+ *   `close`, so it can't exercise the suite's `Torn`-lifecycle invariants (tests 9 & 11).
+ *   `peerMesh` already passes the suite itself and gives a genuine teardown.
+ * - **It is also not [us.tractat.kuilt.core.InMemoryLoom], which is what it used to be, and
+ *   that swap is the point of this harness's shape (#2605).** An `InMemoryLoom` owns *one*
+ *   roster `StateFlow` that every seam it weaves reads, and `GossipSeam.peers` delegates
+ *   straight to its base — so the joiner held the host by construction and the joiner half of
+ *   [SeamConformanceSuite.peersReportsSelfIdAndAtLeastTwoAfterJoin] could not fail here however
+ *   badly a join path behaved. Two ends of a `connectionPair` give each role its own roster,
+ *   grown only by the handshake it ran itself. See [joinerRosterOrigin].
+ * - **A fresh pair per [newLoomPair].** A shared base accumulates peers across tests; a
+ *   k-regular gossip flood would then pick a subset that need not include the specific joiner
+ *   the broadcast test asserts on (a full-mesh base hides this — it reaches all).
  * - **Started on `backgroundScope`.** [GossipSeam] owns perpetually re-arming heartbeat
  *   timers; only `backgroundScope` is cancelled before `runTest`'s terminal time-advance,
  *   so they neither block the test's structured scope nor spin `advanceUntilIdle`.
@@ -39,12 +52,10 @@ import kotlin.time.Instant
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class GossipSeamConformanceTest : SeamConformanceSuite() {
-    // availability() never weaves, so the scope-free pair is enough for that one test.
-    override fun newLoomPair(): Pair<Loom, Loom> =
-        GossipLoom(InMemoryLoom(), testScope = null).let { it to it }
+    // availability() never weaves, so a scope-free pair is enough for that one test.
+    override fun newLoomPair(): Pair<Loom, Loom> = gossipLoomPair(testScope = null)
 
-    override fun newLoomPair(testScope: TestScope): Pair<Loom, Loom> =
-        GossipLoom(InMemoryLoom(), testScope).let { it to it }
+    override fun newLoomPair(testScope: TestScope): Pair<Loom, Loom> = gossipLoomPair(testScope)
 
     // overlay adds no crypto, inherits its base; dissemination is deliberate
     // multi-hop flood — not direct p2p; and the overlay wires no path observer (#1712).
@@ -60,11 +71,20 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
 
-    /** #2591: this fixture fills the joiner's roster itself, so the joiner arm cannot fail here. */
+    /**
+     * #2605: converted from [JoinerRosterOrigin.FilledByConstruction], and the receipt is in the PR
+     * — with the joiner's woven base wrapped so its `peers` reports `{ selfId }` (the shape of the
+     * `:kuilt-nearby` defect: transport up, counterparty never recorded), the JOINER arm of
+     * [SeamConformanceSuite.peersReportsSelfIdAndAtLeastTwoAfterJoin] reds and the host arm does not.
+     */
     override fun joinerRosterOrigin(): JoinerRosterOrigin =
-        JoinerRosterOrigin.FilledByConstruction(
-            "a shared roster, twice over: one GossipLoom over one InMemoryLoom, and GossipSeam.peers " +
-            "delegates straight to its base seam - so the joiner reads the same registry the host does.",
+        JoinerRosterOrigin.TheJoinPath(
+            "peerMesh's per-link handshake, read through GossipSeam.peers: the joiner's base mesh opens " +
+            "holding only its own id and learns the host's PeerId from the handshake it ran itself, and " +
+            "the overlay delegates peers straight to that base. Honest weakness: the handshake is a " +
+            "PRECONDITION of peerMesh returning, so a base that stopped recording its peer would wedge " +
+            "the weave rather than red this arm - what this harness newly proves is that the OVERLAY " +
+            "does not manufacture a remote its base never had.",
         )
 
     /**
@@ -88,41 +108,59 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
 }
 
 /**
- * Test-only [Loom] decorator that wraps every woven base [Seam] in a started
- * [GossipSeam] — the adapter that drives [GossipSeam] through the seam TCK. Background
- * work runs on [TestScope.backgroundScope]; the virtual clock reads the test scheduler.
+ * A host/joiner [Loom] pair, each wrapping its own end of one in-memory [connectionPair] in a
+ * started [GossipSeam] — the adapter that drives [GossipSeam] through the seam TCK.
+ *
+ * Two looms, not one returned twice: each role's roster must be its own, or the joiner is handed
+ * the host rather than learning it (#2605). Background work runs on [TestScope.backgroundScope];
+ * the virtual clock reads the test scheduler.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+internal fun gossipLoomPair(testScope: TestScope?): Pair<Loom, Loom> {
+    val (hostConn, joinerConn) = connectionPair()
+    return GossipLoom(PeerId("host"), hostConn, seed = 0, testScope) to
+        GossipLoom(PeerId("joiner"), joinerConn, seed = 1, testScope)
+}
+
+/**
+ * Weaves a [peerMesh] over one [Connection] and wraps it in a started [GossipSeam].
+ *
+ * @param seed this peer's view-recompute/selection RNG seed. Distinct per role so the two ends
+ *   choose independently, exactly as [GossipSeam]'s `random` parameter requires.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal class GossipLoom(
-    private val base: Loom,
+    private val self: PeerId,
+    private val conn: Connection,
+    private val seed: Int,
     private val testScope: TestScope?,
 ) : Loom {
-    private var seed = 0
-    private val seams = mutableListOf<GossipSeam>()
-
-    override fun capability() = base.capability()
-
     override suspend fun weave(rendezvous: Rendezvous): Seam {
         val scope = testScope ?: error("GossipLoom.weave needs a TestScope — use newLoomPair(testScope)")
+        val base = peerMesh(
+            selfId = self,
+            connections = listOf(conn),
+            dispatcher = requireNotNull(currentCoroutineContext()[ContinuationInterceptor]) {
+                "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+            },
+        )
         val seam =
             GossipSeam(
-                base = base.weave(rendezvous),
-                random = Random(seed++),
+                base = base,
+                random = Random(seed),
                 clock = { Instant.fromEpochMilliseconds(scope.testScheduler.currentTime) },
                 jitter = ZERO..ZERO,
             )
         seam.start(scope.backgroundScope)
-        seams += seam
 
-        // Return only once the overlay has converged: every seam woven so far must hold
-        // each of its other peers in its active view. At the 2-peer conformance scale this
-        // is "each peer sees the other". With jitter = ZERO the recompute is synchronous, so
-        // each `first { }` returns as soon as virtual time lets that seam's roster watcher
-        // observe the new membership. This runs inside the suite's host()/join() awaits, so a
-        // subsequent broadcast is guaranteed to flood a non-empty active view.
-        seams.forEach { s ->
-            s.activePeers.first { active -> (s.peers.value - s.selfId).all { it in active } }
-        }
+        // Return only once THIS overlay has converged: every peer the base handshake admitted must
+        // be in this seam's active view. At the 2-peer conformance scale that is "this peer sees the
+        // other". With jitter = ZERO the recompute is synchronous, so the `first { }` returns as soon
+        // as virtual time lets the roster watcher observe the membership the handshake produced.
+        // Awaiting only this seam is enough — the suite awaits BOTH weaves before running a test, so
+        // the sibling's own convergence is a precondition of the test body too, and iterating a
+        // shared list across a suspension point would race the sibling's append.
+        seam.activePeers.first { active -> (seam.peers.value - seam.selfId).all { it in active } }
         return seam
     }
 }
