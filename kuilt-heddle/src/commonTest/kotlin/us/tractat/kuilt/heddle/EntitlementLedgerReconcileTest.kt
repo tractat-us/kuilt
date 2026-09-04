@@ -1201,6 +1201,15 @@ class EntitlementLedgerReconcileTest {
      * to peers who are still present, which is the fairness quantity the module exists to protect;
      * and the **confinement** — the parent `g` gains no phantom credit, so the damage is one group
      * wide, not a subtree.
+     *
+     * **Mutation receipt.** Neutering `unackedCarriedDonors` to `emptyList()` reds six of the arms —
+     * the refusal, the four zeros, the frozen total, the spend gate, `dave`'s stranded issuance and
+     * the conflict list — and the state it leaves is the #2366 defect verbatim: `alice=100, bob=0,
+     * carol=20, dave=30`, conservation intact, `OrphanedTransferPath` the only conflict. So the
+     * measured cost is the price of *this* guard, and the alternative it is priced against is the
+     * departed peer being credited a hand-off its recipient loses. The `before`, `g`/`root` and
+     * carried-residual arms stay green under that mutation by design: they measure the pre-state and
+     * the rig, not the refusal.
      */
     @Test
     fun aDepartedDonorFreezesEveryPocketAtTheGroupIncludingABystanders() {
