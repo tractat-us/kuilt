@@ -5,6 +5,7 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.MapSerializer
@@ -65,6 +66,16 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * When the cap is exceeded, the [bufferPolicy] selects a series to evict. **Every eviction
  * is logged** — the metric name and kind are emitted at WARN so an operator can detect
  * label-cardinality explosions.
+ *
+ * ## Failure reporting
+ *
+ * A refused durable write is logged **once per outage, not once per attempt** (#2593). Every
+ * mutating call retries the write the last one could not land, so a store that stays broken is one
+ * unchanging condition, and reporting it per call produced a line — and a stack trace — per metric
+ * write, forever. All five metric kinds share one latch because they are five keys in one store;
+ * the next line comes after the store has taken a write. Every failure is still returned to the
+ * caller as [MetricExportResult.Failure] carrying the cause, so nothing is hidden from a
+ * programmatic reader — only from the log. See `durableWriteOutage`.
  *
  * ## Thread safety
  *
@@ -140,6 +151,59 @@ public class WarpMetricExporter(
     private val gauges: LinkedHashMap<MetricKey, LWWRegister<Double>> = LinkedHashMap()
     private val cardinalities: LinkedHashMap<MetricKey, HyperLogLog> = LinkedHashMap()
     private val histograms: LinkedHashMap<MetricKey, DDSketch> = LinkedHashMap()
+
+    /**
+     * Whether a durable-write outage is currently **open** — i.e. a refused store write has already
+     * been reported and the store has not taken a write since. Read and written only by [persist];
+     * nothing else touches it.
+     *
+     * ## What it is for
+     *
+     * A refused write is retried by the next mutating call, so a store that stays broken — a
+     * quota-bound `IndexedDbDurableStore` is the shape [WarpLogRecordExporter]'s KDoc names — would
+     * otherwise report one unchanging condition once per metric write, forever, each line carrying
+     * a stack trace. Measured here at 300 throwable-bearing lines over a 300-write outage (#2593),
+     * matching what #2237 measured on the sibling.
+     *
+     * ## What the population is, and why that is the whole design
+     *
+     * Exactly [persist] — the single function through which every mutating method on this exporter,
+     * across all five metric kinds and all five store keys, performs its durable write, and the
+     * single function that emits a `"durable write failed for metric"` line. One latch, not one per
+     * kind or per key: five keys in one store make "the store is refusing writes" a single
+     * condition, and announcing it once per kind is the same defect at a smaller constant.
+     *
+     * **[clear] is deliberately outside it.** Its failure is a refused `delete`, not a refused
+     * write; it reports through a line of its own, is not retried, and — this is the operative part
+     * — a store that takes a delete has proven nothing about whether it will take a write. Folding
+     * it in would make the counted population wider than the reported one, which is precisely the
+     * defect #2237 turned out to be on the sibling once the obvious dedup shipped there: keyed on
+     * anything that moves on *every* failure, a member of the difference opens the key first and the
+     * store's own outage is then reported **zero** times rather than once. That is worse than the
+     * noise the dedup replaced, because the log then points at the wrong subsystem entirely.
+     * `WarpMetricExporterFailureReportingTest.aRefusedClearDeleteDoesNotSwallowTheDurableWriteReport`
+     * is the arm that reds if the two are ever merged.
+     *
+     * ## Concurrency
+     *
+     * A [MutableStateFlow], not an `atomicfu` `atomic()`: the atomicfu **Gradle plugin** is not
+     * applied in this build (the dependency is present for the multiplatform `locks` API only), so
+     * an atomic *field* would be untransformed. [MutableStateFlow.compareAndSet] is a real
+     * lock-free CAS on every target — never dispatcher confinement, per repo policy.
+     *
+     * [writeMutex] serializes whole turns, so today two [persist] calls cannot overlap; the CAS is
+     * what keeps this correct without depending on that. **Exactly one racing caller reports**: the
+     * failure arm reports only when it wins `false → true`, and a loser is by definition looking at
+     * an outage someone has already announced.
+     *
+     * The reset is a plain unconditional write rather than a CAS, and the asymmetry is deliberate.
+     * The only interleaving it admits is a success landing between a failure's CAS and the next
+     * failure's, which costs **one duplicate line** for a store that really did take a write in
+     * between — a repeat is honest there. The shape that must not happen is the reverse: a latch
+     * left `true` against a healthy store, which would silence the *next* outage entirely. An
+     * unconditional write cannot lose, so it cannot leave the latch open.
+     */
+    private val durableWriteOutage = MutableStateFlow(false)
 
     private companion object {
         private val SUM_STORE_KEY = StoreKey("otel.metrics.sums")
@@ -269,6 +333,12 @@ public class WarpMetricExporter(
      *
      * **Never throws.** A refused delete returns [MetricExportResult.Failure]; the in-memory
      * maps are cleared either way, so a retry converges.
+     *
+     * Its failure line is **not** deduplicated against the durable-write outage latch, and that is
+     * deliberate on both arms: a `clear` is caller-initiated rather than retried, so it cannot
+     * produce the unbounded volume #2593 is about; and a store that takes a delete has proven
+     * nothing about whether it will take a write, so letting a refused delete open — or close —
+     * that latch would let one path silence the other. See `durableWriteOutage`.
      *
      * Holds [writeMutex] across the whole turn, so a mutation that encoded the pre-clear map
      * cannot land its stale bytes after the deletes. Without that fence the resurrection is
@@ -611,13 +681,34 @@ public class WarpMetricExporter(
     private suspend fun persistHistograms(encoded: ByteArray, key: MetricKey): MetricExportResult =
         persist(HISTOGRAM_STORE_KEY, encoded, key)
 
+    /**
+     * The one durable write on this exporter — every mutating method funnels through here.
+     *
+     * **Reports a refused write once per outage, not once per attempt** (#2593): the next call
+     * retries the write this one could not land, so a store that stays broken is one unchanging
+     * condition and reporting it per call produced a line, and a stack trace, per metric write,
+     * forever. The latch is [durableWriteOutage]; see it for what the population is and why [clear]
+     * is not in it.
+     *
+     * The throwable is **kept** on the line. Unlike a refused sweep of superseded garbage, a refused
+     * durable write is the store rejecting the application's own data, and at one line per outage
+     * the trace is affordable. Every failure is returned to the caller as
+     * [MetricExportResult.Failure] carrying the cause regardless, so deduplicating the *line* hides
+     * nothing from a programmatic reader.
+     */
     private suspend fun persist(storeKey: StoreKey, encoded: ByteArray, metricKey: MetricKey): MetricExportResult =
         runCatchingCancellable { store.write(storeKey, encoded) }
             .fold(
-                onSuccess = { MetricExportResult.Success },
+                onSuccess = {
+                    // The store took what it was given, so the next refusal is a new outage.
+                    durableWriteOutage.value = false
+                    MetricExportResult.Success
+                },
                 onFailure = { cause ->
-                    logger.error(cause) {
-                        "WarpMetricExporter: durable write failed for metric ${metricKey.name} (${metricKey.kind})"
+                    if (durableWriteOutage.compareAndSet(expect = false, update = true)) {
+                        logger.error(cause) {
+                            "WarpMetricExporter: durable write failed for metric ${metricKey.name} (${metricKey.kind})"
+                        }
                     }
                     MetricExportResult.Failure(cause)
                 },
