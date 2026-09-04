@@ -44,6 +44,11 @@ class EntitlementLedgerReconcileTest {
     private val alice = ReplicaId("alice") // the middle of the chain; departs the roster after move 1
     private val e8 = AttachmentId("e8") // g → h, the SECOND legal reparent generation for `h`
 
+    // #2600 — the blast radius of that refusal. `dave` is the BYSTANDER: he holds entitlement at the
+    // same group and never touches the chain, so his pocket measures collateral rather than cause.
+    private val dave = ReplicaId("dave")
+    private val e9 = AttachmentId("e9") // g → h, a THIRD reparent generation — the freeze survives it
+
     // #1916 — the cross-parent reparent: `g` moves out from under `a` and in under `b`.
     private val a = GroupId("a")
     private val b = GroupId("b")
@@ -1093,6 +1098,335 @@ class EntitlementLedgerReconcileTest {
                     receiver.relocationPatch(e8, mapOf(e4 to acksWithoutAlice)),
                     "an unacked BASE row must not refuse the move — it is the documented " +
                         "left-untouched case, reported by OrphanedTransferPath and not a refusal",
+                )
+            },
+        )
+    }
+
+    // ── #2600 — how much the refusal above freezes, and for whom ─────────────────────────────────
+
+    /**
+     * The chain of [handOffChainAcrossTwoMoves] plus the two things that make its cost *measurable*
+     * rather than merely present, and neither of which that fixture can supply:
+     *
+     *  - `carol` keeps a residual (mints 120, hands 100 away) instead of ending on zero. On the
+     *    original fixture she reads `0` both before and after the refusal, so her arm cannot tell a
+     *    frozen pocket from an empty one.
+     *  - `dave` is added: 30 units delegated down the same two edges, no transfer row anywhere, no
+     *    relationship to `alice`. He is the whole question — whether the refusal's cost lands only on
+     *    the chain or on everyone standing at the group.
+     *
+     * Deliberately a second builder rather than a defaulted parameter on the first. Three arms above
+     * are built on that fixture and reason explicitly about its exact numbers and about which of the
+     * refusal's two predicates each one drives false; a knob that switches a peer on and off is the
+     * shape that quietly re-selects a fixture onto the configuration where the property under test
+     * cannot fail.
+     *
+     * The knobs, and what each one switches **off** if moved:
+     *  - `carol` 120 vs. the 100 she hands over — at 100 her frozen pocket is 0 and her arm goes vacuous.
+     *  - `alice → bob` 40, strictly between 0 and alice's 100 — at 0 there is no carried row and no
+     *    refusal at all; at 100 alice's own pocket is 0 and *her* arm goes vacuous.
+     *  - `dave` 30, non-zero — at 0 the bystander measures nothing, which is the finding.
+     */
+    private class ChainWithBystander(
+        val afterMove1: EntitlementLedger,
+        val staged: EntitlementLedger,
+        val move1: Relocation.Moved,
+    )
+
+    private fun handOffChainWithBystander(): ChainWithBystander {
+        var l = EntitlementLedger.ZERO.piece(
+            EntitlementLedger.bootstrap(root, mapOf(carol to 120L, dave to 30L), nonce = "genesis"),
+        )
+        l = l.piece(l.prepare(rec(e1, root, g))!!.delta)
+        l = l.piece(l.activate(e1)!!.delta)
+        l = l.piece(l.prepare(rec(e2, g, h))!!.delta)
+        l = l.piece(l.activate(e2)!!.delta)
+        l = l.piece(l.delegate(carol, e1, 120L)!!.delta)
+        l = l.piece(l.delegate(carol, e2, 120L)!!.delta)
+        l = l.piece(l.delegate(dave, e1, 30L)!!.delta)
+        l = l.piece(l.delegate(dave, e2, 30L)!!.delta)
+        l = l.piece(l.transfer(h, carol, alice, 100L)!!.delta) // hop 1
+        l = l.piece(l.transfer(h, alice, bob, 40L)!!.delta) // hop 2
+        // Race 1: retire `e2` with the chain still outstanding, reparent `h` onto `e4`.
+        l = l.piece(l.close(e2)!!.delta)
+        l = l.piece(EntitlementLedger.of(lifecycle = mapOf(e2 to Lifecycle.RETIRED)))
+        l = l.piece(l.prepare(rec(e4, g, h))!!.delta)
+        l = l.piece(l.activate(e4)!!.delta)
+        val move1 = assertIs<Relocation.Moved>(
+            EntitlementLedger.ZERO.relocationPatch(e4, mapOf(e2 to l.baseFinalsOn(e2))),
+            "fixture: the first move must carry the chain onto e4",
+        )
+        val afterMove1 = l.piece(move1.patch)
+        // Race 2: the same thing again, one generation on — and this time `alice` has departed.
+        var staged = afterMove1.piece(afterMove1.close(e4)!!.delta)
+        staged = staged.piece(EntitlementLedger.of(lifecycle = mapOf(e4 to Lifecycle.RETIRED)))
+        staged = staged.piece(staged.prepare(rec(e8, g, h))!!.delta)
+        staged = staged.piece(staged.activate(e8)!!.delta)
+        return ChainWithBystander(afterMove1, staged, move1)
+    }
+
+    /** Every peer's spendable pocket at [group] — the surface a consumer actually reads. */
+    private fun pockets(l: EntitlementLedger, group: GroupId): Map<ReplicaId, Long> =
+        listOf(alice, bob, carol, dave).associateWith { l.holdings(group, it) }
+
+    /**
+     * The state a `Reconcile` leaves behind, modelled exactly as `HeddleControlPlane.reconcile` does:
+     * `Moved` publishes its patch to the data plane, `Refused` and `Nothing` publish nothing at all.
+     *
+     * Measuring through this rather than reading the staged ledger directly is what makes the frozen
+     * pockets below **attributable to the refusal**. Read straight off `staged` they are zero whether
+     * the derivation refuses or moves, because a patch that was never applied and a patch that does
+     * not exist leave the same ledger — an arm green by absence, and one that would stay green if the
+     * #2577 guard were deleted.
+     */
+    private fun afterReconcile(l: EntitlementLedger, move: Relocation): EntitlementLedger =
+        if (move is Relocation.Moved) l.piece(move.patch) else l
+
+    /**
+     * **#2600 — the measurement.** One departed hand-off donor freezes **every** pocket at the group,
+     * not just the chain's.
+     *
+     * `alice` departs holding an uncancelled carried row at `e4`, so the second generation move
+     * refuses (`aCarriedRowWhoseDonorNeverAckedRefusesInsteadOfReassigningItsRecipient`). Refusing is
+     * the right call; this arm prices it. `Relocation.Refused` carries no patch at all, and
+     * `HeddleControlPlane.reconcile` passes it straight through
+     * (`is Relocation.Refused -> refuse(move.reason)`), so the refusal is **per-edge**: nothing moves
+     * for anybody. `holdings` then reads its terms at `h`'s live inbound `e8`, where nothing was ever
+     * issued and no row was ever carried, so all four peers read 0 — including `dave`, who has no
+     * transfer row anywhere and never met `alice`.
+     *
+     * The numbers this arm pins, and why each is here rather than described in prose: the **before**
+     * pocket, without which "it reads 0" is satisfied by a fixture that was never funded; the
+     * **after** pocket; the **split** between the departed donor's own share and the share belonging
+     * to peers who are still present, which is the fairness quantity the module exists to protect;
+     * and the **confinement** — the parent `g` gains no phantom credit, so the damage is one group
+     * wide, not a subtree.
+     *
+     * **Mutation receipt.** Neutering `unackedCarriedDonors` to `emptyList()` reds six of the arms —
+     * the refusal, the four zeros, the frozen total, the spend gate, `dave`'s stranded issuance and
+     * the conflict list — and the state it leaves is the #2366 defect verbatim: `alice=100, bob=0,
+     * carol=20, dave=30`, conservation intact, `OrphanedTransferPath` the only conflict. So the
+     * measured cost is the price of *this* guard, and the alternative it is priced against is the
+     * departed peer being credited a hand-off its recipient loses. The `before`, `g`/`root` and
+     * carried-residual arms stay green under that mutation by design: they measure the pre-state and
+     * the rig, not the refusal.
+     */
+    @Test
+    fun aDepartedDonorFreezesEveryPocketAtTheGroupIncludingABystanders() {
+        val chain = handOffChainWithBystander()
+        val fullAcks = chain.staged.baseFinalsOn(e4)
+        val departedAcks = fullAcks.filterKeys { it != alice }
+        val refused = chain.move1.patch.relocationPatch(e8, mapOf(e4 to departedAcks))
+
+        // The state the control plane leaves behind, not the state before it ran — see [afterReconcile].
+        val settled = afterReconcile(chain.staged, refused)
+        val before = pockets(chain.afterMove1, h)
+        val after = pockets(settled, h)
+        assertAll(
+            // ── the rig. Without the `before` row every assertion below is satisfied by a fixture
+            // that never held anything, and this repo has shipped that shape ten times.
+            {
+                assertEquals(
+                    mapOf(alice to 60L, bob to 40L, carol to 20L, dave to 30L),
+                    before,
+                    "rig: every peer holds a NON-ZERO pocket at h while e4 is live",
+                )
+            },
+            {
+                assertTrue(
+                    alice in fullAcks.keys,
+                    "rig: alice IS reachable from the honest fence — the arm withholds her, the ledger does not",
+                )
+            },
+            {
+                assertEquals(
+                    40L,
+                    chain.move1.patch.carriedResidualOn(e4, alice, bob),
+                    "rig: alice's carried row at the dead key is uncancelled, so the refusal predicate is live",
+                )
+            },
+            {
+                assertTrue(
+                    dave !in chain.move1.patch.carriedDonorsOn(e4) && dave !in chain.staged.transferDonorsOn(e4),
+                    "rig: dave donates no hand-off at the dead key…",
+                )
+            },
+            {
+                assertEquals(
+                    emptyList(),
+                    chain.move1.patch.carriedDonorsOn(e4)
+                        .filter { chain.move1.patch.carriedResidualOn(e4, it, dave) != 0L },
+                    "rig: …and receives none either — he is a genuine bystander",
+                )
+            },
+            { assertIs<Relocation.Refused>(refused, "the move must refuse, or there is no cost to price") },
+
+            // ── the measurement.
+            {
+                assertEquals(
+                    mapOf(alice to 0L, bob to 0L, carol to 0L, dave to 0L),
+                    after,
+                    "ALL FOUR pockets read zero once e4 retires and the move refuses",
+                )
+            },
+            {
+                assertEquals(
+                    150L,
+                    before.values.sum(),
+                    "150 units of entitlement are frozen — the group's ENTIRE live supply",
+                )
+            },
+            {
+                assertEquals(
+                    90L,
+                    before.filterKeys { it != alice }.values.sum(),
+                    "90 of the 150 (60%) belong to peers who never left: bob 40, dave 30, carol 20",
+                )
+            },
+            {
+                assertEquals(
+                    30L,
+                    before.getValue(dave),
+                    "30 of it (20%) belongs to a peer with no causal connection to the departure at all",
+                )
+            },
+
+            // ── the blast radius is one group wide, not a subtree: no phantom credit at the parent.
+            {
+                assertEquals(
+                    pockets(chain.afterMove1, g),
+                    pockets(settled, g),
+                    "the parent group's pockets are untouched by the refusal",
+                )
+            },
+            {
+                assertEquals(
+                    pockets(chain.afterMove1, root),
+                    pockets(settled, root),
+                    "…and so are the root's",
+                )
+            },
+
+            // ── the units are not lost, and the AGGREGATE is not invisible: the dead generation's
+            // summary still reports all 150 as outstanding. What no surface reports is the
+            // per-peer attribution — which of the 150 is whose, and which of it is hostage to a
+            // donor who is gone.
+            {
+                assertEquals(
+                    150L,
+                    settled.edge(e4)?.outstanding,
+                    "the frozen total is exactly the retired generation's outstanding entitlement",
+                )
+            },
+
+            // ── frozen, not merely mis-reported: nobody can spend a unit of it.
+            {
+                assertEquals(
+                    emptyList(),
+                    listOf(alice, bob, carol, dave).filter { settled.spend(it, h, 1L) != null },
+                    "no peer can spend even one unit at the frozen group",
+                )
+            },
+
+            // ── per-edge, not per-donor: the bystander's COUNTER strand does not move either, so
+            // the refusal is not a partial move that spares the uninvolved.
+            {
+                assertEquals(
+                    30L to 0L,
+                    settled.effectiveIssued(e4, dave) to settled.effectiveIssued(e8, dave),
+                    "dave's issuance stays on the dead generation — nothing of his moved",
+                )
+            },
+
+            // ── and the whole diagnosis an operator gets: two conflicts, both naming the dead
+            // generation. Neither names `alice`, and neither names the unblocking action, so the
+            // 150 frozen units are attributable to a departure only by reading the refusal REASON
+            // — which `HeddleControlPlane.reconcile` returns to the caller of `Reconcile` and does
+            // not record on the ledger.
+            {
+                assertEquals(
+                    listOf(
+                        LedgerConflict.ClosureViolation(e4),
+                        LedgerConflict.OrphanedTransferPath(PathKey.of(e4)),
+                    ),
+                    settled.validate(),
+                    "the reported conflicts name the dead edge and its path key — never the donor",
+                )
+            },
+        )
+    }
+
+    /**
+     * **#2600 — duration and recovery.** The freeze is not transient and no topology change clears
+     * it; exactly one thing does.
+     *
+     * A third reparent (`e9`) does not help: `e4` stays a RETIRED inbound edge of `h` forever, so
+     * every future `Reconcile` re-enumerates it and re-refuses. The only clearing condition is
+     * `alice`'s ack appearing on `e4` — and when it does, every pocket comes back at its exact
+     * pre-retire value, which is what makes the zeros above attributable to the refusal rather than
+     * to the reparent itself. Without this arm "entitlement is frozen" would be equally true of a
+     * fixture whose move never had anything to carry.
+     */
+    @Test
+    fun theFreezeSurvivesFurtherReparentsAndClearsOnlyWhenTheDepartedDonorAcks() {
+        val chain = handOffChainWithBystander()
+        val departedAcks = chain.staged.baseFinalsOn(e4).filterKeys { it != alice }
+        val drainedE2 = chain.staged.baseFinalsOn(e2)
+
+        // A third generation for `h`, exactly as a second reparent would produce it.
+        var reparented = chain.staged.piece(chain.staged.close(e8)!!.delta)
+        reparented = reparented.piece(EntitlementLedger.of(lifecycle = mapOf(e8 to Lifecycle.RETIRED)))
+        reparented = reparented.piece(reparented.prepare(rec(e9, g, h))!!.delta)
+        reparented = reparented.piece(reparented.activate(e9)!!.delta)
+        val thirdMove = chain.move1.patch.relocationPatch(
+            e9,
+            mapOf(e2 to drainedE2, e4 to departedAcks, e8 to reparented.baseFinalsOn(e8)),
+        )
+
+        // The recovery: the same second move with alice's ack restored.
+        val recovered = assertIs<Relocation.Moved>(
+            chain.move1.patch.relocationPatch(e8, mapOf(e4 to chain.staged.baseFinalsOn(e4))),
+            "with the departed donor's ack present the move must go through",
+        )
+        val healed = chain.staged.piece(recovered.patch)
+
+        assertAll(
+            // ── the rig: the third generation really is live and really is a fresh key.
+            {
+                assertEquals(
+                    listOf(e9),
+                    reparented.activeChildren(g).map { it.attachment },
+                    "rig: e9 is h's only live inbound, so the third Reconcile is a real one",
+                )
+            },
+            {
+                assertEquals(
+                    mapOf(alice to 0L, bob to 0L, carol to 0L, dave to 0L),
+                    pockets(afterReconcile(reparented, thirdMove), h),
+                    "rig: reparenting again does not itself restore anything",
+                )
+            },
+            // ── duration: unbounded. Reshaping the topology cannot clear it.
+            {
+                val reason = assertIs<Relocation.Refused>(
+                    thirdMove,
+                    "a further reparent must still refuse — e4 stays a retired inbound edge forever",
+                ).reason
+                assertTrue("alice" in reason && "e4" in reason, "…for the same donor and key: $reason")
+            },
+            // ── recovery: the departed donor's ack, and nothing else.
+            {
+                assertEquals(
+                    mapOf(alice to 60L, bob to 40L, carol to 20L, dave to 30L),
+                    pockets(healed, h),
+                    "every pocket returns at its exact pre-retire value once the donor acks",
+                )
+            },
+            {
+                assertTrue(
+                    healed.validate().isEmpty(),
+                    "…leaving no conflict behind: ${healed.validate()}",
                 )
             },
         )
