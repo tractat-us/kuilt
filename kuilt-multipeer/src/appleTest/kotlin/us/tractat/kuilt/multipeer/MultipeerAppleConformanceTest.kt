@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import platform.MultipeerConnectivity.MCPeerID
 import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
+import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -148,7 +149,7 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
     override suspend fun injectSelfDial(host: Seam): Boolean = pair?.injectSelfDial() ?: false
 
     /** Proven: this harness offers the host a connection to its own identity, so no gap. */
-    override fun selfDialGap(): String? = null
+    override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 }
 
 /**

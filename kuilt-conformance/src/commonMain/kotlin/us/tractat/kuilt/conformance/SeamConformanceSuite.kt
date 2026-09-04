@@ -1447,7 +1447,7 @@ public abstract class SeamConformanceSuite {
     // Gated on a HARNESS hook, not a SeamCapabilities flag: only an N-peer harness whose shared
     // roster survives one peer leaving (e.g. InMemoryLoom) can inject a drain-without-tear; a
     // strictly-2-peer mesh must tear when its only link drops. The default `injectMembershipDrain`
-    // returns false, so such harnesses early-return (a silent skip tracked by `membershipDrainGap`).
+    // returns false, so such harnesses early-return (a silent skip declared via `membershipDrainDeclaration`).
 
     @Test
     public fun peersDrainWithoutTearOnInjectedMembershipDrain(): TestResult =
@@ -1504,7 +1504,7 @@ public abstract class SeamConformanceSuite {
     // Gated on a HARNESS hook, not a SeamCapabilities flag: only a harness that can make a live seam see
     // a connection to its own `selfId` (e.g. the `FakeNwRadio` self-endpoint path, #1485) can inject it.
     // The default [injectSelfDial] returns false, so harnesses that cannot self-dial early-return (a
-    // silent skip tracked by [selfDialGap]). `incoming` is single-collection (ADR-034) and [connectedPair]
+    // silent skip declared via [selfDialDeclaration]). `incoming` is single-collection (ADR-034) and [connectedPair]
     // does NOT collect `host.incoming`, so the collector below is its sole reader.
 
     @Test

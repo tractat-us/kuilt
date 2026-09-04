@@ -151,7 +151,12 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
         ObligationDeclaration.NotApplicable.NotConstructible(
             "a room hub does not die of one link: killing the client's base seam deregisters that " +
                 "spoke and leaves the hub Woven with every other spoke intact, so the survivor " +
-                "cannot latch Torn. That same injection is this harness's membership drain",
+                "cannot latch Torn. That same injection is this harness's membership drain, which " +
+                "this harness proves. The JOINER half is separately contaminated by #2372 (the " +
+                "NamedMux channel view does not reach Torn even on its own close()) - named here so " +
+                "this arm is not read as laundering that open defect into a by-design claim: the " +
+                "obligation needs BOTH ends to latch Torn and the star's survivor never can, so the " +
+                "declaration stays accurate however #2372 resolves",
         )
 
     private companion object {
