@@ -37,6 +37,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -331,14 +332,40 @@ public abstract class SeamConformanceSuite {
      * un-overridden harness (one that leaves [injectSelfDial] at its default `false`) is tracked by
      * default, never silently green. [selfDialDeclarationIsHonest] enforces the pairing.
      *
-     * **The weakest of the three**, and deliberately said out loud: a self-dial has no universal
-     * stimulus a suite can reach for, so [ObligationDeclaration.NotApplicable.NotConstructible] here
-     * buys only the hook-consistency check and the prose toll — there is no cheap refutation to run,
-     * the way there is for the death/drain pair (whose stimulus is a peer going away). No in-tree
-     * harness declares that arm for this obligation today; if one does, its reason is all a reader gets.
+     * **No refutation, and deliberately said out loud** — as for [membershipDrainDeclaration]. Refuting
+     * a [ObligationDeclaration.NotApplicable.NotConstructible] reason needs a stimulus the suite can
+     * apply unaided, and only [midSessionDeathDeclaration] has one (making the counterpart depart). A
+     * self-dial has no universal stimulus at all, so that arm here buys the hook-consistency check and
+     * the prose toll and nothing else. No in-tree harness declares it for this obligation today; if one
+     * does, its reason is all a reader gets.
      */
     public open fun selfDialDeclaration(): ObligationDeclaration =
         ObligationDeclaration.Gap(CapabilityGaps.SELF_DIAL)
+
+    /**
+     * Make [joiner] **depart** [host]'s session — the stimulus
+     * [ObligationDeclaration.NotApplicable.NotConstructible] is refuted with on
+     * [midSessionDeathDeclaration]: that arm's reason is always some form of *"a peer going away here
+     * is a drain, not a tear"*, and the suite makes a peer go away and watches.
+     *
+     * Returns `true` if the harness performed a departure. The default closes [joiner], which is the
+     * universal one — **but a harness whose handed-back joiner cannot depart by being closed MUST
+     * override this with the stimulus its own declared reason names.** That is not hypothetical and it
+     * is why this hook exists: `MuxServerLoomConformanceTest` hands back a `NamedMux` channel view
+     * whose `close()` drains its own spool while `state`/`peers` keep delegating to a live base
+     * connection, so `joiner.close()` departs nobody (#2372) — and its reason names *"killing the
+     * client's base seam"*, a different stimulus entirely. Under the default the refutation would have
+     * concluded "the survivor stayed live" from a stimulus that never landed.
+     *
+     * [midSessionDeathDeclarationIsHonest] therefore asserts the departure **was observed in the
+     * survivor's roster** before concluding anything from the absence of a tear. A harness that cannot
+     * make its counterpart depart cannot refute the arm, and must declare
+     * [ObligationDeclaration.Gap] instead.
+     */
+    protected open suspend fun departCounterpart(host: Seam, joiner: Seam): Boolean {
+        joiner.close()
+        return true
+    }
 
     /**
      * Tracking URL for **why this fabric names no frame ceiling** — the accountability analog of
@@ -1698,13 +1725,31 @@ public abstract class SeamConformanceSuite {
                     // the topology: a departure leaves the survivor live. On a real 2-peer link it reds,
                     // which is what keeps this arm out of the hands of a harness that merely lacks a handle
                     // on its transport (that is a Gap).
-                    joiner.close()
+                    //
+                    // ASSERT THE STIMULUS LANDED FIRST. This conclusion is drawn from an ABSENCE, so a
+                    // departure that never happened produces the same green as a topology that survives one
+                    // — the vacuity this whole file exists to refuse, one level down (#2568 review). The
+                    // roster is the observable: the survivor must actually stop naming the counterpart.
+                    val departed = departCounterpart(host, joiner)
+                    val leftTheRoster = withTimeoutOrNull(DEVIATION_WINDOW) {
+                        host.peers.first { joiner.selfId !in it }
+                    }
                     val hostTorn = withTimeoutOrNull(DEVIATION_WINDOW) { host.state.first { it is SeamState.Torn } }
-                    assertNull(
-                        hostTorn,
-                        "NotConstructible says a peer going away cannot tear the survivor here — but closing " +
-                            "the counterpart latched the survivor Torn, so a mid-session death IS reachable " +
-                            "here and this is a Gap (or Proven), not a by-design inapplicability",
+                    assertAll(
+                        { assertTrue(departed, DEPARTURE_STIMULUS_NEVER_LANDED) },
+                        // Ordering is safe: a survivor that TEARS instead collapses `peers` to { selfId }
+                        // (peersCollapseToSelfIdWhenTorn), so the counterpart still leaves the roster and this
+                        // arm passes — leaving the tear itself for the assertion below to catch.
+                        { assertNotNull(leftTheRoster, DEPARTURE_STIMULUS_NEVER_LANDED) },
+                        {
+                            assertNull(
+                                hostTorn,
+                                "NotConstructible says a peer going away cannot tear the survivor here — but " +
+                                    "the counterpart's departure latched the survivor Torn, so a mid-session " +
+                                    "death IS reachable here and this is a Gap (or Proven), not a by-design " +
+                                    "inapplicability",
+                            )
+                        },
                     )
                 }
             }
@@ -1742,8 +1787,38 @@ public abstract class SeamConformanceSuite {
                         )
                     }
 
-                    is ObligationDeclaration.NotApplicable ->
-                        assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON)
+                    // The hook cross-check applies to every obligation; only the *refutation* is
+                    // death-specific (a drain has no universal stimulus the suite can reach for). No
+                    // in-tree harness declares either arm here today — this is the shape the next one
+                    // meets, and it must not be cheaper than the one above it.
+                    is ObligationDeclaration.NotApplicable.ContractDiffers -> {
+                        val injected = injectMembershipDrain(host, joiner)
+                        assertAll(
+                            { assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON) },
+                            {
+                                assertTrue(
+                                    injected,
+                                    "ContractDiffers must DEMONSTRATE the deviation, not assert it: " +
+                                        "injectMembershipDrain returned false, so nothing was injected and " +
+                                        "nothing was watched",
+                                )
+                            },
+                        )
+                    }
+
+                    is ObligationDeclaration.NotApplicable.NotConstructible -> {
+                        val injected = injectMembershipDrain(host, joiner)
+                        assertAll(
+                            { assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON) },
+                            {
+                                assertFalse(
+                                    injected,
+                                    "this harness just injected a membership drain, so the event IS " +
+                                        "constructible here: declare Proven, or ContractDiffers",
+                                )
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -1781,8 +1856,37 @@ public abstract class SeamConformanceSuite {
                         )
                     }
 
-                    is ObligationDeclaration.NotApplicable ->
-                        assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON)
+                    // Hook cross-check, as everywhere. What is genuinely missing here — and stated at
+                    // [selfDialDeclaration] rather than papered over — is a refutation: a self-dial has
+                    // no universal stimulus, so NotConstructible buys the consistency check and the
+                    // prose toll and nothing more.
+                    is ObligationDeclaration.NotApplicable.ContractDiffers -> {
+                        val injected = injectSelfDial(host)
+                        assertAll(
+                            { assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON) },
+                            {
+                                assertTrue(
+                                    injected,
+                                    "ContractDiffers must DEMONSTRATE the deviation, not assert it: " +
+                                        "injectSelfDial returned false, so nothing was injected",
+                                )
+                            },
+                        )
+                    }
+
+                    is ObligationDeclaration.NotApplicable.NotConstructible -> {
+                        val injected = injectSelfDial(host)
+                        assertAll(
+                            { assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON) },
+                            {
+                                assertFalse(
+                                    injected,
+                                    "this harness just injected a self-dial, so the event IS constructible " +
+                                        "here: declare Proven",
+                                )
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -1909,12 +2013,6 @@ public abstract class SeamConformanceSuite {
         const val PAYLOAD_FILL_MODULUS = 251
 
         /**
-         * The prose toll every [ObligationDeclaration.NotApplicable] arm pays, and the only thing
-         * standing between a by-design declaration and a silent opt-out for the arms the suite cannot
-         * otherwise refute. Same shape as [JoinerRosterOrigin]'s: a sentence naming a mechanism a
-         * reviewer can go and read, not a conclusion asserted.
-         */
-        /**
          * How long a by-design declaration's **negative** observation waits before concluding the
          * deviation is real ("no `Torn` arrived").
          *
@@ -1939,9 +2037,35 @@ public abstract class SeamConformanceSuite {
         const val GAP_NEEDS_A_URL =
             "a Gap must carry a non-blank tracking URL — a blank one is a silent skip wearing a declaration"
 
+        /**
+         * The prose toll every [ObligationDeclaration.NotApplicable] arm pays, and the only thing
+         * standing between a by-design declaration and a silent opt-out on the two obligations that
+         * have no refutation to pair with it. Same shape as [JoinerRosterOrigin]'s: a sentence naming
+         * a mechanism a reviewer can go and read, not a conclusion asserted.
+         */
         const val NOT_APPLICABLE_NEEDS_A_REASON =
             "a by-design NotApplicable declaration must say WHY in non-blank prose — what the fabric " +
                 "does instead, or what makes the event unconstructible here. A bare arm is the silent " +
                 "opt-out this vocabulary exists to refuse (#2568)"
+
+        /**
+         * Why a [ObligationDeclaration.NotApplicable.NotConstructible] refutation that could not make
+         * the counterpart depart must red rather than pass.
+         *
+         * This is the finding that nearly shipped inside the very PR built to prevent it (#2568
+         * review). The refutation concludes from the ABSENCE of a tear — so if the departure stimulus
+         * never lands, the survivor stays live because nothing happened, and the arm is green by
+         * absence. `MuxServerLoomConformanceTest` is the real instance: the joiner it hands back is a
+         * `NamedMux` channel view whose `close()` drains its own spool while `state`/`peers` keep
+         * delegating to a live base connection, so no peer departs at all (#2372). A rig that cannot
+         * be seen to fire is exactly what [dropBothEnds] and `FakeNwRadio.dropAllLinks` assert against
+         * one level down; this is the same assertion for this one.
+         */
+        const val DEPARTURE_STIMULUS_NEVER_LANDED =
+            "the refutation's stimulus never landed: departCounterpart did not remove the counterpart " +
+                "from the survivor's roster, so the no-tear assertion below would be green by ABSENCE " +
+                "rather than by topology. Override departCounterpart with the stimulus this harness's " +
+                "own reason names, or declare Gap — a harness whose counterpart cannot be made to " +
+                "depart cannot refute NotConstructible (#2568)"
     }
 }

@@ -32,9 +32,13 @@ package us.tractat.kuilt.nw
 internal suspend fun dropEveryLiveConnection(apis: List<NwApi>): Int {
     var dropped = 0
     apis.forEach { api ->
-        // Snapshot first: disconnect mutates the map this is derived from. `Closed` is terminal and
-        // dominant, so anything else in the map is a connection that has established and not yet died.
-        val live = api.connectionStates.value.filterValues { it !is NwConnState.Closed }.keys.toList()
+        // [NwConnState.Viable] ONLY — not merely "not Closed". A [NwConnState.PathLost] connection has
+        // already gone silently unreachable (`ready -> waiting`, with no `connectionClosed` to come), so
+        // disconnecting it severs nothing while still incrementing this count — and the count is what the
+        // caller's hook turns into "the deviation was demonstrated". Crediting an injection that severed
+        // a link already dead is the vacuity this rig exists to prevent, one level down. Snapshot first:
+        // `disconnect` mutates the map this is derived from.
+        val live = api.connectionStates.value.filterValues { it is NwConnState.Viable }.keys.toList()
         live.forEach { id ->
             api.disconnect(id)
             dropped++

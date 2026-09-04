@@ -123,8 +123,11 @@ class NwConformanceTest : SeamConformanceSuite() {
      */
     override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
         val r = radio ?: return false
-        check(host.state.value !is SeamState.Torn && joiner.state.value !is SeamState.Torn) {
-            "mid-session-death rig precondition: both seams must be live before the links are dropped, " +
+        // WOVEN, not merely "not Torn": `Weaving` is the exact state this seam re-forms to after losing
+        // a remote (#1513), so a not-Torn precondition is satisfied by a pair that has ALREADY lost its
+        // link and the deviation would be credited to a tear this rig did not cause (#2568 review).
+        check(host.state.value is SeamState.Woven && joiner.state.value is SeamState.Woven) {
+            "mid-session-death rig precondition: both seams must be WOVEN before the links are dropped, " +
                 "or the declaration would be judged on a tear this rig did not cause; got " +
                 "host=${host.state.value}, joiner=${joiner.state.value}"
         }

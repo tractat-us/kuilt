@@ -23,15 +23,21 @@ package us.tractat.kuilt.conformance
  * `CLAUDE.md`: *"an 'I cannot reach this state' opt-out moves the vacuity one level up, where it is
  * harder to see."* A [NotApplicable] arm the suite simply **believed** would be strictly worse than
  * the tracked gap it replaces — it converts a visible, listed shortfall into an invisible,
- * self-certified green. So no arm is taken on trust. Every arm is cross-checked against the harness's
- * own injection hook, whose return value the harness cannot fake without actually injecting:
+ * self-certified green. So no arm is taken on trust. Every arm, on all three obligations, is
+ * cross-checked against the harness's own injection hook, whose return value the harness cannot fake
+ * without actually injecting:
  *
  * | Arm | Injection hook must | And the suite additionally asserts |
  * |---|---|---|
  * | [Proven] | inject (`true`) | the obligation itself runs and passes |
  * | [Gap] | **not** inject (`false`) | the URL is non-blank |
  * | [NotApplicable.ContractDiffers] | inject (`true`) | the obligation's own postcondition **fails** |
- * | [NotApplicable.NotConstructible] | **not** inject (`false`) | the stated reason is not cheaply refutable |
+ * | [NotApplicable.NotConstructible] | **not** inject (`false`) | the reason is not cheaply refutable — *mid-session death only* |
+ *
+ * That last cell is the one asymmetry, and it is deliberate rather than an omission: a refutation
+ * needs a stimulus the suite can apply without the harness's help, and only the mid-session-death arm
+ * has one (make the counterpart depart). The membership-drain and self-dial declarations get the hook
+ * cross-check and the prose toll, and nothing more.
  *
  * [NotApplicable.ContractDiffers] is the strong arm, and the strength is the point: a harness cannot
  * claim its fabric deliberately answers the event differently without **performing the event and
@@ -48,6 +54,14 @@ package us.tractat.kuilt.conformance
  *    stated reason is wrong). A harness that could inject the event through some *other* route it simply
  *    has not written is indistinguishable from one that genuinely cannot — and that distinction is
  *    exactly what [Gap] is for. Only the prose and a reader separate them.
+ *  - **A refutation drawn from an absence is worth exactly as much as the stimulus behind it** — the
+ *    trap this vocabulary itself fell into on review, and the reason
+ *    `SeamConformanceSuite.departCounterpart` is a hook rather than a hardcoded `joiner.close()`. The
+ *    no-tear conclusion is identical whether the topology survived a departure or *no departure ever
+ *    happened*: `MuxServerLoomConformanceTest`'s joiner is a channel view whose `close()` departs
+ *    nobody (#2372), so the arm was green by absence. The suite now asserts the counterpart really left
+ *    the survivor's roster first, and a harness whose counterpart cannot be made to depart may not use
+ *    this arm at all.
  *  - [NotApplicable.ContractDiffers]'s deviation check is a **bounded negative observation**
  *    (`the postcondition did not hold within a window`). Under `runTest`'s virtual clock that window is
  *    virtual, which is strong for an in-process fabric — every eligible continuation runs before the

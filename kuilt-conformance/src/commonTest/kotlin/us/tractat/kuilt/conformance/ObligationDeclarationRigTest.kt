@@ -26,6 +26,7 @@ import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -148,6 +149,24 @@ class ObligationDeclarationRigTest {
     }
 
     @Test
+    fun notConstructibleWhoseDepartureStimulusIsANoOpIsRefused(): TestResult = runTest {
+        // THE CASE THIS RIG WAS MISSING, and its absence is why a vacuous arm shipped to review
+        // (#2568). The refutation concludes from an ABSENCE of a tear, so a departure that never
+        // happens produces the identical green as a topology that genuinely survives one. That is not
+        // hypothetical: MuxServerLoomConformanceTest's joiner is a NamedMux channel view whose close()
+        // drains its own spool and departs nobody (#2372), so the default stimulus was a no-op there
+        // and the arm was green by absence — inside the very PR built to stop arms being believed.
+        val failure = assertFailsWith<AssertionError> {
+            noOpDepartureHarness(NOT_CONSTRUCTIBLE).runMidSessionDeathDeclarationIsHonest(this)
+        }
+        assertTrue(
+            "never landed" in failure.message.orEmpty(),
+            "the red must name the un-landed stimulus, not the no-tear conclusion drawn from it; got: " +
+                "${failure.message}",
+        )
+    }
+
+    @Test
     fun aBlankNotConstructibleReasonIsRefused(): TestResult = runTest {
         assertFailsWith<AssertionError>("a by-design arm must cost a sentence") {
             harness(InMemoryLoom(), ObligationDeclaration.NotApplicable.NotConstructible("  "))
@@ -240,6 +259,25 @@ class ObligationDeclarationRigTest {
             override fun capabilityGaps(): Map<String, String> = emptyMap()
             override fun joinerRosterOrigin(): JoinerRosterOrigin = RIG_ROSTER
             override fun midSessionDeathDeclaration(): ObligationDeclaration = declaration
+        }
+
+    /**
+     * The reference mesh — on which [ObligationDeclaration.NotApplicable.NotConstructible] is honest —
+     * with the departure stimulus replaced by a no-op. Stands in for the `NamedMux` channel view whose
+     * `close()` returns without departing anyone (#2372): everything downstream still passes, because
+     * the survivor stays live for the trivial reason that nothing was done to it.
+     */
+    private fun noOpDepartureHarness(declaration: ObligationDeclaration): SeamConformanceSuite =
+        object : SeamConformanceSuite() {
+            private val loom = InMemoryLoom()
+            override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
+            override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
+            override fun capabilityGaps(): Map<String, String> = emptyMap()
+            override fun joinerRosterOrigin(): JoinerRosterOrigin = RIG_ROSTER
+            override fun midSessionDeathDeclaration(): ObligationDeclaration = declaration
+
+            /** Returns `true` — claiming a departure — while departing nobody. */
+            override suspend fun departCounterpart(host: Seam, joiner: Seam): Boolean = true
         }
 
     /** A harness over a real 2-peer link that tears on an injected death. */

@@ -161,8 +161,13 @@ class NwBridgeLoopbackConformanceTest : SeamConformanceSuite() {
      * [midSessionDeathDeclaration].
      */
     override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
-        check(host.state.value !is SeamState.Torn && joiner.state.value !is SeamState.Torn) {
-            "mid-session-death rig precondition: both seams must be live before the connections are " +
+        // WOVEN, not merely "not Torn". `Weaving` is the exact state NwSeam re-forms to after losing a
+        // remote (#1513), so a not-Torn precondition is satisfied by a pair that has ALREADY lost its
+        // link — and the deviation would then be credited to a tear this rig did not cause. Since the
+        // promptness half of the check is near-vacuous under virtual time here, this precondition is the
+        // load-bearing half (#2568 review).
+        check(host.state.value is SeamState.Woven && joiner.state.value is SeamState.Woven) {
+            "mid-session-death rig precondition: both seams must be WOVEN before the connections are " +
                 "cancelled; got host=${host.state.value}, joiner=${joiner.state.value}"
         }
         return dropEveryLiveConnection(bridges) > 0

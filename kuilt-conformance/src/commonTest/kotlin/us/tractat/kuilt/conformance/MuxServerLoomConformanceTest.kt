@@ -147,6 +147,24 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
      * [midSessionDeathDeclarationIsHonest] refutes that claim's cheap failure mode rather than
      * believing it; [ObligationDeclaration] states what the arm still cannot detect.
      */
+    /**
+     * Depart the client by closing its **base seam**, not the `NamedMux` channel view this harness
+     * hands back as the joiner — the stimulus [midSessionDeathDeclaration]'s reason actually names,
+     * and the same one [injectMembershipDrain] performs.
+     *
+     * **Without this override the refutation is vacuous here, and that nearly shipped (#2568 review).**
+     * `MuxBase.ChannelView.close` drains its own delivery spool and returns while `state` and `peers`
+     * keep delegating to a base connection that is still alive (#2372) — so the default
+     * `joiner.close()` departs nobody, the hub stays `Woven` because *nothing happened*, and the
+     * arm's no-tear conclusion would have been green by absence rather than by topology. Closing the
+     * base seam is a real departure: the hub deregisters the spoke from every room it joined.
+     */
+    override suspend fun departCounterpart(host: Seam, joiner: Seam): Boolean {
+        val base = pair?.clientBase ?: return false
+        base.close()
+        return true
+    }
+
     override fun midSessionDeathDeclaration(): ObligationDeclaration =
         ObligationDeclaration.NotApplicable.NotConstructible(
             "a room hub does not die of one link: killing the client's base seam deregisters that " +
