@@ -21,12 +21,27 @@ tasks.withType<Test>().configureEach {
 // and the write, which is precisely what a test dispatcher guarantees. That is the same posture
 // every sibling lost-terminal-`Torn` probe in `:kuilt-core` and `:kuilt-nearby` already has.
 val runConcurrencyStress = providers.gradleProperty("concurrency.stress.tests").orNull == "true"
-tasks.withType<Test>().configureEach {
+
+// `AbstractTestTask`, NOT `Test` — this module's probes are on BOTH the JVM (`BridgePeerLink`) and
+// Kotlin/Native (`MCSessionLink`), and `KotlinNativeHostTest` is not a `Test` task, so a
+// `withType<Test>` exclusion silently misses `macosArm64Test` entirely. `AbstractTestTask` is the
+// common supertype and covers both with one rule.
+//
+// This is deliberately NOT the env-var-plus-self-skip mechanism `:kuilt-nw` uses for its native
+// probe. That shape was tried here first and **failed silently**: the env var did not arrive, the
+// probe's own `getenv` gate read absent, and it self-skipped — reporting as a PASS in 0.0s for what
+// is supposed to be 3 000 races. A gate whose failure mode is a green is the wrong gate for a test
+// whose whole job is to red. Excluding at the task level instead means an un-run probe is *absent*
+// from the results XML rather than present and passing, which is a checkable signal.
+tasks.withType<AbstractTestTask>().configureEach {
     // Apply the exclusion only when the flag is OFF. With the flag ON the exclusion is absent, so a
     // command-line `--tests "*ConcurrencyTest"` include filter runs them (a build-defined exclude
     // would otherwise win over the include and match nothing — the CI job would be green by vacuity).
+    // `filter.excludeTestsMatching(...)`, not `filter { … }`: the Action-taking overload is declared
+    // on `Test`, so on the `AbstractTestTask` receiver the lambda form resolves to `CopySpec.filter`
+    // and fails to compile. The property form is on the common supertype.
     if (!runConcurrencyStress) {
-        filter { excludeTestsMatching("*ConcurrencyTest") }
+        filter.excludeTestsMatching("*ConcurrencyTest")
     }
 }
 
@@ -39,7 +54,7 @@ kotlin {
             api(project(":kuilt-core"))  // public API returns Seam from weave() — expose the contract transitively
             implementation(project(":kuilt-session"))
             implementation(libs.kotlinx.coroutines.core)
-            implementation(libs.kotlinx.atomicfu)  // single-shot terminal-teardown latch in MCSessionLink
+            implementation(libs.kotlinx.atomicfu)  // reentrantLock in the apple discovery-source conformance binding
             implementation(libs.kotlin.logging)
         }
         // MANUAL appleMain → disables default-hierarchy auto-wiring → hand-wire ALL intermediates:
