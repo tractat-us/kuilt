@@ -1258,21 +1258,82 @@ internal class CompositeSeam(
      * in-flight publish holding a pre-close snapshot lands last) *and* publishes it before `tear()`, so a
      * consumer woken by the terminal state already sees the collapse. That is why the tear is not the
      * first statement of this method. See [collapseAndTear] (#1816).
+     *
+     * **Every ply is closed, whatever any one of them does.** This method is the plies' last holder — it
+     * drains `live` and is single-shot — so the per-ply close goes through [closePlyBestEffort] and the
+     * statements before it sit in a `try`/`finally`. See [closePlyBestEffort] (#1861).
      */
     override suspend fun close(reason: CloseReason) {
         // Collapse the roster and latch Torn as ONE ordered step, and single-shot on its verdict — a
         // loser sees the gate already torn and returns. See [collapseAndTear] (#1816).
         if (!collapseAndTear(reason)) return
-        // Snapshot the plies to close under the lock; perform the suspending closes outside it.
+        // Snapshot the plies to close under the lock; perform the suspending closes outside it. Keyed by
+        // [PlyId] rather than `live.values`, because a failing close is reported through [onPlyFailure] and
+        // a [PlyReconcileException] with no ply identity is not a diagnosis.
         val toClose = lock.withLock {
-            val snapshot = live.values.toList()
+            val snapshot = live.entries.map { (id, handle) -> id to handle }
             live.clear()
             snapshot
         }
-        // The gate guarantees state correctness; cancel is a plain resource release (non-joining).
-        scope.coroutineContext[Job]?.cancel()
-        spool.close()
-        toClose.forEach { it.seam.close(reason) }
+        // In a `finally` so the plies below are closed UNCONDITIONALLY, rather than resting on the two
+        // statements above it never throwing. Both are ours, non-suspending and cannot throw today
+        // (`Spool.close` delegates to `Channel.close`, which returns a Boolean; [Job.cancel] is a state
+        // transition), but that is a property of a collaborator and this method is the plies' only holder —
+        // so the guarantee is written into the control flow instead of resting on it. Deliberately NOT a
+        // `catch`: a throw from either would be a kuilt bug, not a consumer's, and must surface.
+        try {
+            // The gate guarantees state correctness; cancel is a plain resource release (non-joining).
+            scope.coroutineContext[Job]?.cancel()
+            spool.close()
+        } finally {
+            toClose.forEach { (id, handle) -> closePlyBestEffort(id, handle, reason) }
+        }
+    }
+
+    /**
+     * Close one ply on the [close] path, best-effort: **this ply's** failure to close must not skip the
+     * plies after it (#1861).
+     *
+     * ### Why it is per-ply, and why the loop is the wrong axis to think about
+     * [close] has already drained `live` and is single-shot, so after it returns nothing else will ever
+     * close these transports — this loop is their only remaining holder. An unguarded throw therefore does
+     * not merely lose one ply: it leaks every ply after it in iteration order, on a `Seam` whose reason to
+     * exist is not leaking transports. The trigger is the same one `MeshSeam.closeBestEffort` records —
+     * *does anything this seam still owes follow the call* — and here the answer is the rest of the roster.
+     *
+     * ### `try`/`catch (Throwable)` + [ensureActive], not `runCatchingCancellable`
+     * This site is **unshielded**: [close] is a suspending call on the *caller's* coroutine, so the caller's
+     * own cancellation is real and must still propagate — a consumer that cancels `close()` has to be able
+     * to stop it. `runCatchingCancellable` discriminates by TYPE, and type cannot separate "my job was
+     * cancelled" from "the ply minted one": a ply bounding its close handshake with
+     * `withTimeout(closeTimeout)` throws `TimeoutCancellationException` **to its caller** without cancelling
+     * that caller, and rethrowing it strands the rest. [ensureActive] is the discriminator that decides it
+     * at runtime — it fires on our own cancellation and falls through on a minted one. This is the
+     * asymmetry with [detachPly] and [discardOrphanedPly], which run inside `withContext(NonCancellable)`
+     * where our job can never be cancelled and the same `ensureActive` is therefore dead code.
+     *
+     * ### It is also this seam's own conformance
+     * A [CompositeSeam] is a [Seam], so [close] carries the *"a close failure must NOT be reported as a
+     * cancellation"* obligation (#1826) that its plies do. Unguarded, one non-conforming ply made this
+     * decorator break the very rule it enforces on its members — and maximally silently, since the escaping
+     * throwable *is* a `CancellationException`, so the caller is **cancelled rather than failed**: no
+     * handler, no stack trace. `SeamConformanceSuite.closeDoesNotReportFailureAsCancellation` passed
+     * throughout, because every in-tree ply conforms; correct-by-convention is precisely what #1826 is
+     * about, and a ply is consumer-authored.
+     *
+     * ### Absorbed is not silent
+     * [PlyReconcileException.Phase.DETACH] rather than a phase of its own: its contract — "its pumps are
+     * stopped and it is out of the composite regardless" — is exactly true here, `live` having been drained
+     * and [scope] cancelled before this runs. Contrast [PlyReconcileException.Phase.SALVAGE], which exists
+     * because that claim would have been *false* for a ply that never entered the live set.
+     */
+    private suspend fun closePlyBestEffort(id: PlyId, handle: PlyHandle, reason: CloseReason) {
+        try {
+            handle.seam.close(reason)
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            raisePlyFailure(id, PlyReconcileException.Phase.DETACH, failure)
+        }
     }
 
     /**

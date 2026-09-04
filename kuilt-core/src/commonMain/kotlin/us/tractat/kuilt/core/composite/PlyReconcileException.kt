@@ -44,7 +44,13 @@ public class PlyReconcileException(
         /** `Loom.capability()`, `Loom.weave()`, or the attach itself threw; the ply is not live. */
         ATTACH,
 
-        /** The ply's teardown threw. Its pumps are stopped and it is out of the composite regardless. */
+        /**
+         * The ply's teardown threw. Its pumps are stopped and it is out of the composite regardless.
+         *
+         * Covers both teardown paths, because that sentence is true of both: a ply dropped from the desired
+         * set while the composite runs on, and every ply the composite's own `close()` tears down (#1861) —
+         * which drains the live set and cancels the pumps before it closes anything.
+         */
         DETACH,
 
         /**
