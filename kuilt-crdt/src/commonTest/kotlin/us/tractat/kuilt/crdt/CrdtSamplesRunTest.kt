@@ -67,7 +67,7 @@ class CrdtSamplesRunTest {
     private fun runNamed(name: String, run: () -> Unit) {
         try {
             run()
-        } catch (failure: IllegalStateException) {
+        } catch (failure: IllegalStateException) { // ALLOW-ise: `run` is a non-`suspend` `() -> Unit`, so no cancellation can be delivered inside the `try`
             throw AssertionError("$name failed its own check(): ${failure.message}", failure)
         }
     }

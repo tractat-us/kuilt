@@ -78,7 +78,7 @@ class RaftSimWedgeDumpTest {
 
         try {
             dumpOnWedge(sim, emit = { dumps += it }) { error("boom") }
-        } catch (e: IllegalStateException) {
+        } catch (e: IllegalStateException) { // ALLOW-ise: the guarded body is `error("boom")` — it throws synchronously, so `dumpOnWedge` never reaches a suspension point
             caughtMessage = e.message
         }
 

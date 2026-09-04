@@ -11,6 +11,7 @@ import us.tractat.kuilt.core.PeerId
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -40,10 +41,11 @@ class TcpLoomTestDispatcherGuardTest {
         val ex = assertFailsWith<IllegalStateException> {
             loom.weave(us.tractat.kuilt.core.Rendezvous.Existing(TcpAddress("127.0.0.1", 1)))
         }
-        assertTrue("TcpLoom" in ex.message!!, "Diagnostic must name the type: ${ex.message}")
+        val message = assertNotNull(ex.message, "the guard must throw with a diagnostic")
+        assertTrue("TcpLoom" in message, "Diagnostic must name the type: $message")
         assertTrue(
-            "TestDispatcher" in ex.message!! || "virtual time" in ex.message!!,
-            "Diagnostic must mention TestDispatcher or virtual time: ${ex.message}",
+            "TestDispatcher" in message || "virtual time" in message,
+            "Diagnostic must mention TestDispatcher or virtual time: $message",
         )
     }
 }

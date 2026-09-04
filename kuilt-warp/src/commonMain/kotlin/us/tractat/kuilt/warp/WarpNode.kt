@@ -1371,7 +1371,7 @@ public class WarpNode(
         try {
             registry.register(op, loaded)
             loaded
-        } catch (e: IllegalStateException) {
+        } catch (e: IllegalStateException) { // ALLOW-ise: nothing in the `try` can suspend — see the KDoc above
             registry.resolve(op) ?: throw e
         }
 

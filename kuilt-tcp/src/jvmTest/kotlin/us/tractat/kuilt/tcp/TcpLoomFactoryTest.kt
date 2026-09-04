@@ -32,6 +32,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -116,7 +117,8 @@ class TcpLoomFactoryTest {
         val failure = assertFailsWith<IllegalStateException> {
             loom.weave(Rendezvous.Existing(TcpAddress("127.0.0.1", 1)))
         }
-        assertTrue("TcpLoom" in failure.message!!, "diagnostic must name the type: ${failure.message}")
+        val message = assertNotNull(failure.message, "the guard must throw with a diagnostic")
+        assertTrue("TcpLoom" in message, "diagnostic must name the type: $message")
     }
 
     /**

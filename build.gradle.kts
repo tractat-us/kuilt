@@ -1143,9 +1143,24 @@ val verifyDocCitations by tasks.registering {
     // `.md` there (119 of them), which would both be meaningless to check and make this task's
     // input overlap another's output; `.claude/worktrees/**` because ephemeral agent worktrees are
     // whole copies of the repo, `docs/` and all.
+    //
+    // `.superpowers/**` is GITIGNORED scratch — the subagent-driven-development workflow's ledger,
+    // task briefs and review packages (#2411). It is excluded rather than added to `citationExempt`
+    // because exemption means "considered and excused", and these files were never in the tree to
+    // consider: nothing commits them, so CI never sees them and the failure lands only on the
+    // machine that ran the workflow. A local-only red on a REQUIRED gate is the most expensive
+    // shape a false red takes — it reads as "the build is broken on my machine", which is
+    // unfalsifiable from CI.
     val allMarkdown = fileTree(rootDir) {
         include("**/*.md")
-        exclude("**/build/**", "**/.git/**", "**/.gradle/**", "**/node_modules/**", "**/.claude/worktrees/**")
+        exclude(
+            "**/build/**",
+            "**/.git/**",
+            "**/.gradle/**",
+            "**/node_modules/**",
+            "**/.claude/worktrees/**",
+            "**/.superpowers/**",
+        )
     }
     inputs.files(allMarkdown).withPropertyName("allMarkdown")
         .withPathSensitivity(PathSensitivity.RELATIVE)
@@ -1169,6 +1184,29 @@ val verifyDocCitations by tasks.registering {
         // purpose — trailing prose would make it ambiguous with a real source comment, and the
         // marker has to be unmistakable to a reader as well as to this regex.
         val elision = Regex("""^//\s*(?:…|\.\.\.)$""")
+
+        // 0-based indices of every line that sits INSIDE a fenced block, the fence delimiters
+        // included (#2411). A citation marker is an HTML comment on its own line immediately
+        // ABOVE a fence; the same text INSIDE one is a document showing the reader what a citation
+        // looks like. Without this the two are indistinguishable, so a post-mortem, design note or
+        // issue write-up that quotes the marker becomes a build failure, and the natural way out —
+        // paraphrase the marker instead of quoting it — degrades the document to appease the
+        // checker. `verifyModuleTable` skips fences for the same reason (a fenced example row is
+        // not a module row); this brings the two into line. Same toggle the bare-range scan below
+        // uses, so one file cannot be read as fenced by one check and unfenced by the other.
+        fun fencedLines(lines: List<String>): Set<Int> {
+            val inside = mutableSetOf<Int>()
+            var open = false
+            lines.forEachIndexed { n, line ->
+                if (line.trim().startsWith("```")) {
+                    inside += n
+                    open = !open
+                } else if (open) {
+                    inside += n
+                }
+            }
+            return inside
+        }
 
         fun trimBlankEdges(ls: List<String>): List<String> =
             ls.map(String::trimEnd).dropWhile(String::isEmpty).dropLastWhile(String::isEmpty)
@@ -1437,6 +1475,54 @@ val verifyDocCitations by tasks.registering {
             } + moduleDocs.files
             ).sortedBy { it.invariantSeparatorsPath }
 
+        // ── Fence parity, checked BEFORE anything walks a fence ─────────────────────────────────
+        // Every fence walk in this file is a parity toggle, and a parity toggle with an odd number
+        // of delimiters does not merely mis-read one block — it inverts the rest of the FILE. The
+        // consequence is the worst kind a guard can have, because all three failures are SILENT and
+        // all three are green:
+        //   * this task reads everything after the stray delimiter as fenced, so every citation
+        //     below it is skipped and never content-checked;
+        //   * `forbidUncitedDocCodeBlock` reads subsequent OPENING fences as closing ones, so the
+        //     file's uncited count DROPS below its baseline — which that guard deliberately
+        //     tolerates, since failing on a decrease would red-light the branch doing a sweep;
+        //   * `verifyModuleDocLinks` simply stops looking.
+        // So the parity check is hoisted here, ahead of `stowaways`, `lineRangeCites` and the main
+        // scan, and run over a SUPERSET of what all three walk — otherwise the first spurious
+        // failure a reader sees would be a bogus citation error rather than the real defect.
+        // An unbalanced fence is a documentation bug in its own right (the rest of the page renders
+        // as one code block), so failing on it costs nothing and is worth having on its own terms.
+        val unbalanced = allMarkdown.files
+            .asSequence()
+            .filterNot(::exempt)
+            .sortedBy { it.invariantSeparatorsPath }
+            .mapNotNull { md ->
+                var open = false
+                var lastDelimiter = 0
+                md.readLines().forEachIndexed { n, line ->
+                    if (line.trim().startsWith("```")) {
+                        open = !open
+                        lastDelimiter = n + 1
+                    }
+                }
+                if (open) "${md.relativeTo(rootPath).invariantSeparatorsPath}:$lastDelimiter" else null
+            }
+            .toList()
+        if (unbalanced.isNotEmpty()) {
+            error(
+                "Markdown file(s) with an odd number of ``` fence delimiters. Every fence walk in " +
+                    "the root build is a parity toggle, so one stray delimiter inverts the rest of " +
+                    "the file: this task skips every citation below it, " +
+                    "`forbidUncitedDocCodeBlock` reads later OPENING fences as closing ones and the " +
+                    "file's count falls below baseline, and `verifyModuleDocLinks` stops looking. " +
+                    "All three then pass, which is why this is checked rather than assumed. The " +
+                    "line below is the LAST delimiter seen, i.e. the one left open:\n  " +
+                    unbalanced.joinToString("\n  ") + "\n\n" +
+                    "  THE FIX is to close the block, or delete the stray delimiter. The page is " +
+                    "mis-rendering either way — everything after that line is showing as one code " +
+                    "block.\n",
+            )
+        }
+
         // ── The citING side of the `inputRoots` check below ─────────────────────────────────────
         // That check refuses a citation whose cited SOURCE no declared input reaches, on the grounds
         // that a gate nothing invalidates goes green over drift. This is its twin, and it guards the
@@ -1454,8 +1540,10 @@ val verifyDocCitations by tasks.registering {
             .filterNot { it.invariantSeparatorsPath in scannedPaths || exempt(it) }
             .sortedBy { it.invariantSeparatorsPath }
             .mapNotNull { md ->
-                md.readLines().asSequence().withIndex()
-                    .firstOrNull { (_, line) -> cite.matchEntire(line.trim()) != null }
+                val lines = md.readLines()
+                val fenced = fencedLines(lines)
+                lines.asSequence().withIndex()
+                    .firstOrNull { (n, line) -> n !in fenced && cite.matchEntire(line.trim()) != null }
                     ?.let { (n, line) ->
                         "${md.relativeTo(rootPath).invariantSeparatorsPath}:${n + 1}\n      ${line.trim()}"
                     }
@@ -1561,9 +1649,14 @@ val verifyDocCitations by tasks.registering {
 
         mdFiles.forEach { md ->
             val lines = md.readLines()
+            // Same reason as `stowaways` above (#2411): a marker quoted inside a fence is an
+            // illustration, not a citation. On a SCANNED surface reading it as one is worse than a
+            // false accusation — the loop would then hunt for "the next fenced block", find the
+            // enclosing fence's own closing delimiter, and content-check whatever followed it.
+            val fencedHere = fencedLines(lines)
             var i = 0
             while (i < lines.size) {
-                val m = cite.matchEntire(lines[i].trim())
+                val m = if (i in fencedHere) null else cite.matchEntire(lines[i].trim())
                 if (m == null) {
                     i++
                     continue
@@ -1758,6 +1851,412 @@ val verifyDocCitations by tasks.registering {
         stampFile.parentFile.mkdirs()
         stampFile.writeText("verified $checked citations across ${mdFiles.size} markdown files\n")
         logger.info("verifyDocCitations: $checked citations across ${mdFiles.size} markdown files")
+    }
+}
+
+// Guard: a code block in a LIVE REFERENCE doc must carry a provenance marker, on a per-file count
+// ratchet that only ever moves down (#2583).
+//
+// WHAT THIS IS FOR. `verifyDocCitations` above is strong but opt-in: it checks a block only once
+// somebody has written a citation over it. A block with NO marker at all is invisible to it — and
+// that is the larger set. The live instance: #2573 edited the `handshaking()` block in
+// `docs/extending-fabrics.md` to add the new `policy` argument, and silently dropped the four-line
+// self-connection guard (`require(remoteId != selfId)`, #1488) while doing it. The published doc
+// showed a `handshaking()` that cannot refuse a self-connection, on the page a fabric author reads
+// to write a fabric. Nothing could have caught it: the block's provenance was a bare source-path
+// comment, so no check in this file was looking at it. #2578 forbade that particular shape; this
+// closes the wider one — a block with no provenance at all.
+//
+// WHY A RATCHET AND NOT A SWEEP. 173 blocks were uncited when this landed and MANY of them are
+// legitimately illustrative: a consumer's `build.gradle.kts`, a sketch of a type the reader will
+// write, pseudo-code for a design that does not exist yet. Forcing a citation onto those would push
+// people to `condensed from`, which is a ONE-WAY DOOR — that block is never content-checked again.
+// That trades a visible gap for an invisible one, which is strictly worse. So the baseline records
+// today's count per file, a NEW uncited block fails, and the 173 get swept opportunistically by
+// whoever is already editing a file. A file swept to zero loses its entry and is locked at zero.
+//
+// WHAT COUNTS. A fenced block whose language is `kotlin`, `java` or `swift` — the languages whose
+// content can drift against a compiled source in this repo. `bash`, `text`, `toml`, `yaml` and the
+// rest are deliberately out: a shell incantation has no declaration to cite. A block is CITED when
+// the nearest preceding non-blank line is a `verbatim from` / `condensed from` marker, which is
+// exactly the attachment rule `verifyDocCitations` enforces, so the two cannot disagree about which
+// block a marker covers.
+//
+// WHAT IS EXEMPT, and why it is by PATH and commented rather than incidental: `docs/plans/`,
+// `docs/superpowers/plans/` and `docs/superpowers/specs/` are frozen, dated snapshots of a moment.
+// Their blocks are supposed to quote an API as it stood, or as it was proposed and never built;
+// content-checking them against today's source would be checking the wrong claim. The stale
+// direction is checked below — a prefix that no longer matches any file fails, so an exemption
+// cannot outlive the directory it was written for.
+val uncitedDocBlockExempt = listOf("docs/plans/", "docs/superpowers/plans/", "docs/superpowers/specs/")
+
+val forbidUncitedDocCodeBlock by tasks.registering {
+    group = "verification"
+    description = "Fails when a live reference doc gains a Kotlin/Java/Swift code block with no `verbatim from`/`condensed from` provenance, on a per-file count ratchet (#2583)."
+    val docRoots = listOf(rootDir.resolve("docs"), rootDir.resolve("Writerside"))
+        .filter(java.io.File::isDirectory)
+    // See "Guard plumbing" above. The verdict is a function of file PATHS (the baseline keys and
+    // the exemption's staleness check) and file CONTENTS, both captured by a RELATIVE fingerprint.
+    // The declared set is the UNFILTERED one, so a file entering or leaving the exemption
+    // invalidates a cached success too.
+    val scannedDocs = objects.fileCollection()
+    // `module.md` too, through the SAME provider `verifyDocCitations` uses. #2256 extended that
+    // guard to these files and `moduleDocFiles()`' KDoc records the property it bought — "one
+    // provider, two guards: the set of files they cover is now the same object". Scanning
+    // `docs/` + `Writerside/` alone would re-open that divergence, and re-open it on the surface
+    // where it costs most: `module.md` is Dokka `includes`, so it is the first page a reader meets
+    // a module through, it is published under `/api/`, and it is the one doc surface a consumer
+    // cannot route around.
+    scannedDocs.from(moduleDocFiles())
+    scannedDocs.from(
+        fileTree(rootDir) {
+            docRoots.forEach { include("${it.relativeTo(rootDir).invariantSeparatorsPath}/**/*.md") }
+            // `**/build/**` for `verifyDocCitations`' reason and for #2411's: a generated `.md`
+            // under a GITIGNORED build directory would be meaningless to check, would make this
+            // task's input overlap another's output, and — the expensive half — would red only on
+            // the machine that generated it, never in CI. Nothing writes there today; the exclusion
+            // is what keeps that from having to stay true.
+            exclude("**/build/**")
+        },
+    )
+    inputs.files(scannedDocs).withPropertyName("referenceDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val stamp = layout.buildDirectory.file("verification/forbid-uncited-doc-code-block.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    val exempt = uncitedDocBlockExempt
+    // The baseline MUST stay a literal here, for `forbidNotNullAssertionInUnresolvedSource`'s
+    // reason: it is covered by the cache key only because it is folded into the task-action
+    // implementation hash, so moving it to `gradle.properties` or a resource would silently drop it
+    // out and reintroduce the stale-green class the stamps exist to prevent.
+    //
+    // Counts as of #2583 — 202 uncited blocks across 57 files in the live reference set: 173 in
+    // `docs/` + `Writerside/`, plus the 29 across 11 `module.md` files that the first cut of this
+    // guard did not scan at all. DERIVED BY RUNNING THIS GUARD WITH THE MAP EMPTIED, not by
+    // trusting a clean run: a guard with a bug that makes it match nothing produces an empty
+    // violation list that is indistinguishable from a clean repo. Regenerate the same way after a
+    // sweep.
+    val baseline = mapOf(
+        "docs/adr-001-conformance-suite-two-loom.md" to 3,
+        "docs/adr-002-weave-rendezvous.md" to 3,
+        "docs/adr-003-addendum-causal-stability-barrier.md" to 2,
+        "docs/adr-003-rga-tombstone-gc-history-windowing.md" to 5,
+        "docs/adr-005-per-peer-bonjour-instance-name.md" to 4,
+        "docs/agent-cookbook.md" to 1,
+        "docs/architecture.md" to 1,
+        "docs/extending-fabrics.md" to 2,
+        "docs/fabric-delivery-backpressure-design.md" to 2,
+        "docs/fabric-delivery-backpressure-plan.md" to 10,
+        "docs/gamehosted-bootstrap-design.md" to 4,
+        "docs/gossip-mesh-design.md" to 1,
+        "docs/heddle-design.md" to 9,
+        "docs/heddle-ledger-design.md" to 1,
+        "docs/host-election-design.md" to 1,
+        "docs/hosted-game-hub-replication-plan.md" to 12,
+        "docs/log-capture-and-extraction.md" to 3,
+        "docs/nw-transport-design.md" to 1,
+        "docs/offline-otel.md" to 1,
+        "docs/op-log-crdt-compaction.md" to 2,
+        "docs/testing-coroutine-determinism.md" to 1,
+        "docs/testing.md" to 2,
+        "docs/usage.md" to 23,
+        "docs/warp-op-autoregistration.md" to 4,
+        "docs/warp-vision.md" to 4,
+        "Writerside/topics/cluster-server-client.md" to 2,
+        "Writerside/topics/contract.md" to 10,
+        "Writerside/topics/crdt-custom.md" to 5,
+        "Writerside/topics/crdt-orset.md" to 1,
+        "Writerside/topics/crdt-overview.md" to 3,
+        "Writerside/topics/crdt-quilter.md" to 1,
+        "Writerside/topics/crdt-rga.md" to 1,
+        "Writerside/topics/fabric-kit.md" to 6,
+        "Writerside/topics/fabrics.md" to 5,
+        "Writerside/topics/game-bootstrap.md" to 6,
+        "Writerside/topics/getting-started.md" to 10,
+        "Writerside/topics/install.md" to 4,
+        "Writerside/topics/log-capture.md" to 1,
+        "Writerside/topics/multipath.md" to 4,
+        "Writerside/topics/nw.md" to 2,
+        "Writerside/topics/partial-mesh.md" to 1,
+        "Writerside/topics/picking-a-host.md" to 1,
+        "Writerside/topics/quick-start.md" to 3,
+        "Writerside/topics/raft.md" to 3,
+        "Writerside/topics/warp-compiler.md" to 1,
+        "Writerside/topics/warp.md" to 1,
+        // `module.md` — Dokka `includes`, the most-published doc surface in the repo (#2615 review).
+        "kuilt-cluster/module.md" to 2,
+        "kuilt-core/module.md" to 2,
+        "kuilt-game/module.md" to 7,
+        "kuilt-nw/module.md" to 1,
+        "kuilt-otel-logging/module.md" to 2,
+        "kuilt-otel-tap/module.md" to 3,
+        "kuilt-otel/module.md" to 1,
+        "kuilt-quilter/module.md" to 1,
+        "kuilt-store/module.md" to 1,
+        "kuilt-warp-compiler/module.md" to 1,
+        "kuilt-warp/module.md" to 8,
+    )
+    doLast {
+        val cite = Regex("""^<!--\s*(?:verbatim|condensed) from\s+.+?\s*-->$""")
+        val checkedLanguages = setOf("kotlin", "java", "swift")
+        val all = scannedDocs.files.sortedBy { it.invariantSeparatorsPath }
+        val scanned = all.filterNot { f ->
+            val rel = f.relativeTo(rootPath).invariantSeparatorsPath
+            exempt.any(rel::startsWith)
+        }
+        // The exemption's stale direction, mirroring `commonTierSourceSets`' check on the sibling
+        // guard: a prefix matching nothing left in the tree has stopped excusing anything and has
+        // become a claim about a directory that is not there — which would then silently exempt
+        // whatever next lands on that path.
+        val staleExempt = exempt.filter { prefix ->
+            all.none { it.relativeTo(rootPath).invariantSeparatorsPath.startsWith(prefix) }
+        }
+        if (staleExempt.isNotEmpty()) {
+            error(
+                "`uncitedDocBlockExempt` excuses ${staleExempt.joinToString(", ")} from this guard " +
+                    "because those are frozen, dated planning snapshots, and no markdown lives " +
+                    "there any more — the entry has become a claim about a directory that is not " +
+                    "in the tree, and would exempt whatever next lands on that path.\n" +
+                    "  THE FIX is to delete the entry, then re-run and cite whatever it was hiding.",
+            )
+        }
+
+        var total = 0
+        val found = sortedMapOf<String, Int>()
+        val firstSite = mutableMapOf<String, String>()
+        scanned.forEach { md ->
+            val rel = md.relativeTo(rootPath).invariantSeparatorsPath
+            val lines = md.readText().lines()
+            var open = false
+            lines.forEachIndexed { n, line ->
+                val t = line.trim()
+                if (!t.startsWith("```")) return@forEachIndexed
+                if (open) {
+                    open = false
+                    return@forEachIndexed
+                }
+                open = true
+                val language = t.removePrefix("```").trim().substringBefore(' ').lowercase()
+                if (language !in checkedLanguages) return@forEachIndexed
+                total++
+                // The attachment rule, identical to `verifyDocCitations`': the marker is the
+                // nearest preceding NON-BLANK line. Anything else — a marker three paragraphs up,
+                // a marker under the fence — is not a citation of this block, and reading it as
+                // one is how a guard goes quietly vacuous.
+                var m = n - 1
+                while (m >= 0 && lines[m].isBlank()) m--
+                if (m >= 0 && cite.matches(lines[m].trim())) return@forEachIndexed
+                found.merge(rel, 1, Int::plus)
+                firstSite.putIfAbsent(rel, "$rel:${n + 1}")
+            }
+            // Parity, asserted rather than assumed. An odd number of delimiters makes this walk
+            // read subsequent OPENING fences as closing ones, so the file's count falls — and a
+            // DECREASE is exactly what the ratchet below tolerates, so the guard would go quiet
+            // and stay green. That is the failure this whole file is written to prevent.
+            if (open) {
+                error(
+                    "$rel has an odd number of ``` fence delimiters, so this walk reads later " +
+                        "opening fences as closing ones and undercounts the file. The count would " +
+                        "then fall BELOW its baseline, which this ratchet tolerates by design — so " +
+                        "the guard goes quiet and passes.\n" +
+                        "  THE FIX is to close the block or delete the stray delimiter; the page is " +
+                        "mis-rendering as one code block either way.",
+                )
+            }
+        }
+
+        // The baseline's own stale direction — a key naming a file that is no longer scanned
+        // (deleted, renamed, or moved under an exemption). That entry has stopped grandfathering
+        // anything, and left in place it would silently absorb a future file of the same name.
+        // A mere DECREASE is tolerated, for `forbidTightRunTestTimeout`'s reason: failing on one
+        // would red-light the branch doing the sweeping.
+        val scannedPaths = scanned.mapTo(mutableSetOf()) { it.relativeTo(rootPath).invariantSeparatorsPath }
+        val dangling = baseline.keys.filterNot { it in scannedPaths }.sorted()
+        if (dangling.isNotEmpty()) {
+            error(
+                "Uncited-doc-block baseline entr(ies) naming a file this guard no longer scans " +
+                    "(#2583). The entry grandfathers nothing and would absorb whatever next takes " +
+                    "that path:\n  " + dangling.joinToString("\n  ") + "\n\n" +
+                    "  THE FIX is to delete the entry from `baseline` in build.gradle.kts.",
+            )
+        }
+
+        val over = found.filter { (path, count) -> count > (baseline[path] ?: 0) }
+        if (over.isNotEmpty()) {
+            error(
+                "Uncited code block(s) in live reference docs (#2583). A Kotlin/Java/Swift block " +
+                    "with no provenance marker is content-checked by nobody, so it drifts silently " +
+                    "against the API it shows — which is exactly how the published " +
+                    "`handshaking()` lost its self-connection guard:\n\n" +
+                    over.entries.joinToString("\n") { (path, count) ->
+                        val was = baseline[path]
+                        val where = firstSite[path] ?: path
+                        "  $path — ${was?.let { "baseline $it" } ?: "no baseline (new to the ratchet)"}, " +
+                            "now $count (first uncited block at $where)"
+                    } + "\n\n" +
+                    "Attach a citation to the new block:\n" +
+                    "      <!-- verbatim from <path>#<symbol> -->\n" +
+                    "Use `<!-- condensed from <path>#<symbol> -->` ONLY if the block cannot be a " +
+                    "literal quote — that exempts it from content checking for good, which is why " +
+                    "it is not the default way past this.\n" +
+                    "Do NOT raise the baseline in `build.gradle.kts`. It only moves down: sweep the " +
+                    "file and lower or delete its entry. An illustrative block that cites nothing " +
+                    "real — a consumer's build file, a type the reader will write — belongs in a " +
+                    "non-code fence, or the file belongs in `uncitedDocBlockExempt` with a reason.\n",
+            )
+        }
+
+        val uncited = found.values.sum()
+        stamp.get().asFile.apply {
+            parentFile.mkdirs()
+            writeText("$uncited uncited of $total checked block(s) across ${scanned.size} docs\n")
+        }
+        logger.info(
+            "forbidUncitedDocCodeBlock: $uncited uncited of $total Kotlin/Java/Swift block(s) " +
+                "across ${scanned.size} live reference docs",
+        )
+    }
+}
+
+// Guard: a `module.md` must not carry a bare `[Identifier]` KDoc link (#2527, part of #2507).
+//
+// WHAT GOES WRONG. `module.md` is wired as Dokka `includes`, so Dokka resolves KDoc links in it and
+// warns on failure — `Couldn't resolve link: [X] in module documentation`. `docs.yml` runs
+// `dokkaGenerate` on every push to `main`, so those warnings are printed today and discarded, and
+// the unresolved link renders on the published API site as literal brackets where a type name
+// should be. #2507 found 19 of them in `kuilt-otel` and 2 in `kuilt-game` (cleared by #2525).
+//
+// WHY THE BARE FORM IS BANNED OUTRIGHT, even though some of them do resolve. Whether `[Seam]`
+// resolves depends on which module's `module.md` it sits in: the convention plugin attaches the
+// file only to source sets it does not suppress (`suppress.set(!kmpSs.name.startsWith("common"))`),
+// so a link can only ever reach the citing module's own `commonMain`. The same three words are
+// therefore correct in one file and silently broken in the next, and nothing tells the author
+// which — the failure mode is a warning nobody reads and brackets on a page nobody rebuilds. Both
+// conventions still under discussion in #2527 — backticks, or the qualified `[Label][fqn]` form
+// `kuilt-otel-tap` already uses — exclude the bare spelling, so banning it settles nothing that is
+// still open and is the reason this tier needs no decision first.
+//
+// WHY LEXICAL AND WHY HERE. The strong check is Dokka's own warning, but it needs full KMP metadata
+// compilation (~1m44s warm) so it belongs in `docs.yml` or the heavy `build` job. This one is
+// milliseconds, compiles nothing, and — the point — runs in `doc-citations`, which fires on
+// DOCS-ONLY PRs. That is exactly where this defect is introduced and exactly where the heavy build
+// is skipped, so the cheap tier catches it in the one lane the strong tier cannot reach.
+//
+// ZERO TOLERANCE, NO ALLOWLIST, deliberately: the population is empty as of #2525, so this locks a
+// swept state rather than grandfathering a backlog. An allowlist over an empty population is
+// indistinguishable from no guard — `forbidUnlintedModule` records that argument at length.
+//
+// WHAT IS EXCLUDED, and each exclusion is where a lexical guard loses a true positive, so they are
+// narrow: a markdown link `[text](url)`, a reference link `[Label][target]` (the qualified form,
+// which IS one of the candidate conventions), a link-reference definition `[label]: url`, anything
+// inside a fenced block (`kuilt-nw/module.md` has `peers=[alice]` in a sample log) or an inline code
+// span (a backticked `[Foo]` is prose about a link, not a link), and any bracket text that is not a
+// Kotlin identifier chain — `[the wedge design doc]` is prose, and is a markdown link anyway.
+//
+// TWO PASSES, because the code-span exclusion above swallowed a real defect on its first draft.
+// `[`DuplicateHostException`]` — backticks INSIDE the brackets — is one of the two `kuilt-game`
+// sites #2525 actually fixed, and blanking code spans first turns it into `[…]` with nothing left
+// to match. Verified by re-running this guard against the pre-#2525 files: one pass found 18 of the
+// 19, and the missing one was exactly that spelling. So the backticked-label form is matched on the
+// RAW line first, and only then are code spans blanked for the plain form. The two cannot
+// double-count: after blanking, the backticked one no longer matches.
+//
+// DELIBERATELY OUT OF SCOPE, both tracked on #2527 and both needing a decision this guard must not
+// pre-empt: the 3 QUALIFIED links that still do not resolve (`installMultipeerLogTap`,
+// `installMultipeerMetricTap`, `MultipeerPeerLinkFactory` — all platform-specific declarations that
+// a `commonMain`-only include structurally cannot reach, which is a hole in "just qualify it"
+// rather than an argument against it), and the 7 RELATIVE markdown links to `../docs/*.md`, which
+// Dokka also tries to resolve as KDoc references and which render dead under `/api/` either way.
+val verifyModuleDocLinks by tasks.registering {
+    group = "verification"
+    description = "Fails if a module.md carries a bare `[Identifier]` KDoc link — it resolves only against the citing module's own commonMain, and renders as literal brackets when it does not (#2527)."
+    val moduleDocs = moduleDocFiles()
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a pure function of these files' contents — no allowlist, no in-source marker — so a
+    // RELATIVE fingerprint hit genuinely means "these exact files were verified".
+    inputs.files(moduleDocs).withPropertyName("moduleDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val stamp = layout.buildDirectory.file("verification/verify-module-doc-links.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        // A bare KDoc link: `[` + a Kotlin identifier chain + `]`, not part of a reference link
+        // (`][`), not a markdown link (`](`), not a link-reference definition (`]:`), and not the
+        // second half of one (`](`… handled, `][`… handled by the lookbehind on the closing side).
+        val ident = """[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"""
+        val bareLink = Regex("""(?<!\])\[($ident)\](?![(\[:])""")
+        // The same link with a BACKTICKED label — matched on the raw line, before code spans are
+        // blanked, because blanking would leave nothing inside the brackets. See the header.
+        val backtickedLink = Regex("""(?<!\])\[`($ident)`\](?![(\[:])""")
+        val codeSpan = Regex("""`[^`]*`""")
+        val taskListMarker = Regex("""^(\s*(?:[-*+]|\d+\.)\s+)\[[xX]\]""")
+        val offenders = mutableListOf<String>()
+        var scanned = 0
+        moduleDocs.files.sortedBy { it.invariantSeparatorsPath }.forEach { md ->
+            scanned++
+            var inFence = false
+            md.readLines().forEachIndexed { n, line ->
+                if (line.trim().startsWith("```")) {
+                    inFence = !inFence
+                    return@forEachIndexed
+                }
+                if (inFence) return@forEachIndexed
+                val where = "${md.relativeTo(rootPath).invariantSeparatorsPath}:${n + 1}"
+                // A markdown task-list checkbox — `- [x] …` — is not a link, and `x` happens to be
+                // a valid identifier. Scoped to the ONLY shape it can take (a bullet, then the
+                // marker, at the start of the line) rather than excluding `[x]` anywhere: a
+                // single-letter bracket in running prose is exactly the `[S]` type parameter that
+                // was one of the two real `kuilt-game` defects. `[ ]` needs no exclusion — a space
+                // is not an identifier.
+                val body = taskListMarker.replace(line) { m -> m.groupValues[1] + "   " }
+                backtickedLink.findAll(body).forEach { hit ->
+                    offenders += "$where  [`${hit.groupValues[1]}`]   in: ${line.trim()}"
+                }
+                // Blank out inline code spans rather than dropping them, so column positions and
+                // the rest of the line survive: a backticked `[Foo]` is prose ABOUT a link. This
+                // also erases the backticked-label form already collected above, so the two passes
+                // cannot report the same site twice.
+                val prose = codeSpan.replace(body) { m -> " ".repeat(m.value.length) }
+                bareLink.findAll(prose).forEach { hit ->
+                    offenders += "$where  [${hit.groupValues[1]}]   in: ${line.trim()}"
+                }
+            }
+            // Parity, asserted rather than assumed: an odd number of delimiters leaves this walk
+            // reading the rest of the file as fenced, so it simply stops looking — and reports a
+            // clean file, which is indistinguishable from a file with no bare links in it.
+            if (inFence) {
+                error(
+                    "${md.relativeTo(rootPath).invariantSeparatorsPath} has an odd number of ``` " +
+                        "fence delimiters, so this walk treats the rest of the file as fenced and " +
+                        "stops looking — reporting a clean file it never read.\n" +
+                        "  THE FIX is to close the block or delete the stray delimiter; the page is " +
+                        "mis-rendering as one code block either way.",
+                )
+            }
+        }
+        if (offenders.isNotEmpty()) {
+            error(
+                "Bare `[Identifier]` KDoc link(s) in a `module.md` (#2527). Dokka resolves a " +
+                    "module.md link only against the CITING module's own `commonMain`, so the same " +
+                    "spelling is correct in one file and silently broken in the next — and when it " +
+                    "breaks, the published API page shows literal brackets while the only signal is " +
+                    "a `Couldn't resolve link: … in module documentation` warning nothing reads:\n  " +
+                    offenders.joinToString("\n  ") + "\n\n" +
+                    "  THE FIX is either spelling, both of which are unambiguous:\n" +
+                    "      `Foo`                          backticks — prose, no resolution attempted\n" +
+                    "      [Foo][pkg.to.Foo]              a qualified link, which renders as a link\n" +
+                    "  A platform-specific declaration (Apple-only, JVM-only) cannot be linked at " +
+                    "all from a module.md — the include reaches `commonMain` only — so backtick " +
+                    "those.\n" +
+                    "  There is no allowlist, deliberately: the population was swept to zero in " +
+                    "#2525 and this locks it there.",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — $scanned module.md file(s) scanned, no bare `[Identifier]` links\n")
     }
 }
 
@@ -2991,6 +3490,386 @@ val forbidProductionDispatcherInTests by tasks.registering {
         val out = stamp.get().asFile
         out.parentFile.mkdirs()
         out.writeText("ok — ${sources.files.size} Kotlin test sources scanned\n")
+    }
+}
+
+// The `catch (…: IllegalStateException)` scanner behind `forbidCancellationSwallowingCatch` (#2598).
+// Same `object` rationale as the sibling scanners: a script-level object keeps the walk out of the
+// task action's closure, and gives the walk somewhere to carry its own fixture.
+//
+// It answers one question per catch arm — is this arm CLEARED? — and the two clearing spellings are
+// found structurally rather than by a token search over the whole file, because both are local
+// properties of the arm and its chain:
+//
+//   * `ensureActive()` ANYWHERE IN THE ARM'S OWN BODY. The body is delimited by a forward brace
+//     walk from the arm's `{`, so an `ensureActive()` in a *sibling* arm, or three functions down,
+//     does not clear this one.
+//   * AN EARLIER `catch (…: CancellationException) { … throw … }` IN THE SAME CHAIN. Found by
+//     walking BACKWARDS through the chain — `}` ⇒ its `{` ⇒ the `catch (…)` heading it ⇒ repeat —
+//     until the walk reaches the `try` (whose block is not preceded by a parameter list) or
+//     something it does not recognise. Only arms of THIS chain are consulted, which is what stops
+//     an unrelated cancellation rethrow elsewhere in the file from clearing the site.
+//
+// The second spelling exists because #2528 fixed `NwSeamConcurrencyTest` that way rather than with
+// `ensureActive()`, and a guard keyed on the `ensureActive` token alone would have opened its life
+// by falsely accusing an already-correct site — which is how a new guard gets an allowlist entry
+// instead of a fix.
+object CancellationSwallowingCatchScanner {
+    /** One `catch (…: IllegalStateException)` arm. [cleared] names the spelling that excused it. */
+    data class Site(val line: Int, val cleared: String?)
+
+    // A chain longer than this is not a shape this walk should keep chasing; bail rather than spin.
+    private const val MAX_CHAIN_ARMS = 16
+
+    // Kotlin allows no multi-catch, so one type per arm. The capture takes the whole (possibly
+    // qualified) name and the simple name is compared, so `kotlin.IllegalStateException` counts.
+    private val CATCH_ARM =
+        Regex("""(?<![A-Za-z0-9_])catch\s*\(\s*(?:[A-Za-z_][A-Za-z0-9_]*|_)\s*:\s*([A-Za-z0-9_.]+)\s*\)\s*\{""")
+
+    // No `.` in the lookbehind: the canonical call is `currentCoroutineContext().ensureActive()`,
+    // so the character before the name is a dot in every real occurrence.
+    // The caught type inside a catch arm's parameter list, for the chain walk below. Same shape as
+    // CATCH_ARM's capture, applied to a `(name: Type)` fragment rather than to whole code.
+    private val ARM_TYPE = Regex("""\(\s*(?:[A-Za-z_][A-Za-z0-9_]*|_)\s*:\s*([A-Za-z0-9_.]+)\s*\)""")
+
+    private val ENSURE_ACTIVE = Regex("""(?<![A-Za-z0-9_])ensureActive\s*\(""")
+    private val THROW_KEYWORD = Regex("""(?<![A-Za-z0-9_])throw(?![A-Za-z0-9_])""")
+
+    /** Every `catch (…: IllegalStateException)` in already-stripped Kotlin code, with its verdict. */
+    fun sites(code: String): List<Site> = CATCH_ARM.findAll(code).mapNotNull { arm ->
+        if (arm.groupValues[1].substringAfterLast('.') != "IllegalStateException") return@mapNotNull null
+        val line = code.take(arm.range.first).count { it == '\n' } + 1
+        val braceAt = arm.range.last
+        val body = closingBrace(code, braceAt)?.let { code.substring(braceAt, it + 1) } ?: ""
+        val cleared = when {
+            ENSURE_ACTIVE.containsMatchIn(body) -> "ensureActive()"
+            rethrowsCancellationEarlier(code, arm.range.first) ->
+                "an earlier `catch (…: CancellationException) { throw … }` arm"
+            else -> null
+        }
+        Site(line, cleared)
+    }.toList()
+
+    private fun rethrowsCancellationEarlier(code: String, catchAt: Int): Boolean {
+        var cursor = catchAt
+        repeat(MAX_CHAIN_ARMS) {
+            var i = cursor - 1
+            while (i >= 0 && code[i].isWhitespace()) i--
+            // Anything but a `}` here means this is not a chained arm at all.
+            if (i < 0 || code[i] != '}') return false
+            val blockOpen = matchingOpen(code, i, '{', '}') ?: return false
+            var j = blockOpen - 1
+            while (j >= 0 && code[j].isWhitespace()) j--
+            // A block NOT preceded by `)` is the `try` block — the head of the chain, so there is
+            // no earlier arm and the walk is done.
+            if (j < 0 || code[j] != ')') return false
+            val paramOpen = matchingOpen(code, j, '(', ')') ?: return false
+            var k = paramOpen - 1
+            while (k >= 0 && code[k].isWhitespace()) k--
+            var wordStart = k + 1
+            while (wordStart > 0 && (code[wordStart - 1].isLetterOrDigit() || code[wordStart - 1] == '_')) wordStart--
+            if (code.substring(wordStart, k + 1) != "catch") return false
+            val param = code.substring(paramOpen, j + 1)
+            val body = code.substring(blockOpen, i + 1)
+            // EXACT simple name, not a substring. `"CancellationException" in param` also matches
+            // `catch (e: TimeoutCancellationException)`, and rethrowing a TIMEOUT cancellation does
+            // not stop an ordinary one: a plain `JobCancellationException` sails past that arm into
+            // the `IllegalStateException` arm below, is swallowed exactly as before, and this guard
+            // then reports the site as "cleared by an earlier rethrow" — a false clearance, which
+            // is worse than no guard because it is asserted. The header already says a
+            // `TimeoutCancellationException` arm is not itself an offence; it never said it clears
+            // a SIBLING arm, so the substring test contradicted this scanner's own documentation.
+            val caught = ARM_TYPE.find(param)?.groupValues?.get(1)?.substringAfterLast('.')
+            if (caught == "CancellationException" && THROW_KEYWORD.containsMatchIn(body)) return true
+            cursor = wordStart
+        }
+        return false
+    }
+
+    private fun closingBrace(code: String, openAt: Int): Int? {
+        var depth = 0
+        var i = openAt
+        while (i < code.length) {
+            when (code[i]) {
+                '{' -> depth++
+                '}' -> if (--depth == 0) return i
+            }
+            i++
+        }
+        return null
+    }
+
+    private fun matchingOpen(code: String, closeAt: Int, open: Char, close: Char): Int? {
+        var depth = 0
+        var i = closeAt
+        while (i >= 0) {
+            when (code[i]) {
+                close -> depth++
+                open -> if (--depth == 0) return i
+            }
+            i--
+        }
+        return null
+    }
+
+    // name → (source, expected sites as line-to-clearing-spelling). Written with escapes rather
+    // than raw strings, matching `NotNullAssertionScanner`'s fixture.
+    private val cases: List<Triple<String, String, List<Pair<Int, String?>>>> = listOf(
+        Triple(
+            "a bare arm",
+            "try { f() } catch (e: IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "an underscore parameter",
+            "try { f() } catch (_: IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "a fully-qualified type",
+            "try { f() } catch (e: kotlin.IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "an arm carrying ensureActive()",
+            "try { f() } catch (e: IllegalStateException) { currentCoroutineContext().ensureActive() }\n",
+            listOf(1 to "ensureActive()"),
+        ),
+        Triple(
+            "an earlier CancellationException rethrow",
+            "try { f() } catch (e: CancellationException) { throw e } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to "an earlier `catch (…: CancellationException) { throw … }` arm"),
+        ),
+        // The shape #2528 left in `NwSeamConcurrencyTest`: the rethrow is not adjacent.
+        Triple(
+            "a non-adjacent earlier rethrow",
+            "try { f() } catch (e: CancellationException) { throw e } " +
+                "catch (e: ConcurrentModificationException) { throw AssertionError(\"x\", e) } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to "an earlier `catch (…: CancellationException) { throw … }` arm"),
+        ),
+        // A TIMEOUT cancellation rethrow clears NOTHING: an ordinary `JobCancellationException`
+        // is not a `TimeoutCancellationException`, so it sails past that arm into the
+        // `IllegalStateException` arm and is swallowed just the same. A substring test on the
+        // parameter passed this and reported a false clearance; this case is what pins it.
+        Triple(
+            "an earlier TimeoutCancellationException rethrow",
+            "try { f() } catch (e: TimeoutCancellationException) { throw e } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        // The qualified spelling of the real thing still clears, so the fix is an EXACT SIMPLE-NAME
+        // test rather than an exact-string one.
+        Triple(
+            "a fully-qualified CancellationException rethrow",
+            "try { f() } catch (e: kotlinx.coroutines.CancellationException) { throw e } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to "an earlier `catch (…: CancellationException) { throw … }` arm"),
+        ),
+        // A Cancellation arm that SWALLOWS clears nothing — it is the same bug one arm over.
+        Triple(
+            "an earlier CancellationException that does not rethrow",
+            "try { f() } catch (e: CancellationException) { ignore() } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        // A rethrow in a DIFFERENT chain must not reach across.
+        Triple(
+            "a rethrow in an unrelated earlier try",
+            "try { a() } catch (e: CancellationException) { throw e }\n" +
+                "try { b() } catch (e: IllegalStateException) { }\n",
+            listOf(2 to null),
+        ),
+        // Sibling arms do not lend each other an ensureActive().
+        Triple(
+            "ensureActive in a sibling arm only",
+            "try { f() } catch (e: IllegalArgumentException) { currentCoroutineContext().ensureActive() } " +
+                "catch (e: IllegalStateException) { }\n",
+            listOf(1 to null),
+        ),
+        Triple(
+            "an unrelated exception type",
+            "try { f() } catch (e: IllegalArgumentException) { }\n",
+            emptyList(),
+        ),
+        // The prose case the issue predicted: an early count of 13 included a KDoc line that merely
+        // NAMES the construct. Stripping is what keeps it out.
+        Triple(
+            "KDoc naming the construct",
+            "/** The `catch (e: IllegalStateException)` below is the shape #2535 is about. */\nval n = 1\n",
+            emptyList(),
+        ),
+        Triple(
+            "a string literal naming the construct",
+            "val s = \"catch (e: IllegalStateException) {\"\n",
+            emptyList(),
+        ),
+        Triple(
+            "line numbers survive stripping",
+            "// catch (e: IllegalStateException) { }\n\n/* filler\n more */\n" +
+                "try { f() } catch (e: IllegalStateException) { }\n",
+            listOf(5 to null),
+        ),
+    )
+
+    fun selfTestFailures(): List<String> = cases.mapNotNull { (name, source, expected) ->
+        val actual = sites(KotlinCodeScanner.stripNonCode(source)).map { it.line to it.cleared }
+        if (actual == expected) null else "$name — expected $expected, got $actual"
+    }
+}
+
+// Guard: forbid an unguarded `catch (…: IllegalStateException)` in TEST sources (#2598; the bug
+// class is #2535).
+//
+// THE FACT THIS EXISTS FOR, and it is a fact rather than a judgement:
+//
+//     IllegalStateException.class.isAssignableFrom(java.util.concurrent.CancellationException.class) == true
+//
+// `kotlinx.coroutines.CancellationException` IS an `IllegalStateException` on the JVM, so a narrow,
+// specific, apparently-safe `catch (e: IllegalStateException)` swallows a structured-concurrency
+// cancel exactly as a bare `runCatching` does. The catch looks nothing like the shapes `CLAUDE.md`
+// warns about, which is why eight of these passed review repeatedly.
+//
+// THE MEASURED CONSEQUENCE, from #2535: an arm with an assertion in it throws an `AssertionError`
+// INSTEAD OF the `TimeoutCancellationException` the wedge harness watches for — so the whole hang
+// report is destroyed, and a wedged test reports a plain assertion failure in the arm rather than
+// the dump that would name the wedge. The guard therefore protects DIAGNOSIS, which is the thing
+// nobody notices is missing.
+//
+// SCOPED TO `*Test`, DELIBERATELY, and not by widening a sibling. Both existing cancellation guards
+// scan `"*Main/**/*.kt"` — production only — so neither could have fired on any #2535 site
+// whatever its shape, and neither pattern matches this one either:
+// `forbidRunCatchingCancellableUnderNonCancellable` looks for the `runCatchingCancellable` token
+// inside a `withContext(NonCancellable)` shield, and `forbidCancellationRethrowAroundBound` looks
+// for a cancellation rethrow wrapping a `withTimeout`. An `IllegalStateException` arm has neither.
+// SCOPE IS THE WHOLE TREE, production and test. The first cut of this guard was test-only, on the
+// argument that "in production the arm is usually a real precondition catch". That claim had a
+// sample size of ONE — `WarpNode.registerOrResolve`, the only production arm in the tree — which is
+// not a basis for a permanent scope decision, and the reasoning ran the wrong way besides: in a
+// TEST a swallowed cancellation costs the DIAGNOSIS (the hang report is destroyed), while in
+// PRODUCTION it costs BEHAVIOUR (the cancel is never observed and the coroutine carries on). The
+// stronger case is the one the narrower scope excluded. Production is also where the population is
+// smallest and the marker cheapest, so there was nothing to buy by leaving it out.
+//
+// `catch (…: TimeoutCancellationException)` is deliberately NOT covered. Catching the bound's own
+// expiry BY TYPE is handling it, not swallowing it — it is the spelling
+// `forbidCancellationRethrowAroundBound` already treats as clearing a site, and folding it in here
+// would contradict a sibling guard rather than extend one.
+//
+// THE ESCAPE HATCH is a line-tight marker with a MANDATORY reason, matching
+// `forbidProductionDispatcherInTests`' `// ALLOW-realDispatcher:` and #1329's `// ALLOW-runCatching:`:
+//
+//     } catch (_: IllegalStateException) { // ALLOW-ise: nothing in the try can suspend — accept() is not `suspend`
+//
+// Trailing on the `catch` line or on the line immediately above. Every legitimate site in the tree
+// has the same reason — the guarded body cannot suspend, so no cancellation can be delivered inside
+// the `try` — and writing it down is the point: it is a claim that stops being true the moment
+// somebody makes that body `suspend`, and a marker is where a reader will look for it. An EMPTY
+// reason is itself a violation.
+//
+// KNOWN COVERAGE EDGES, the same set the sibling guards carry: `src/commonSamples/` matches none of
+// the four patterns and is unscanned, `:spike` is absent unless `-PincludeSpike`, `build-logic/` is
+// a separate included build, and `*.kts` is unscanned. Two limits specific to this walk, stated rather than found later: an
+// `ensureActive()` reached through a HELPER called from the arm reads as absent (ask for a marker,
+// or inline the call), and an `ensureActive()` inside a nested `try` within the arm reads as
+// present. Both are the "cannot see through a helper" limit `forbidNotNullAssertionInUnresolvedSource`
+// records; the fixture pins the cases that matter.
+val forbidCancellationSwallowingCatch by tasks.registering {
+    group = "verification"
+    description = "Fails if any source catches IllegalStateException without an ensureActive(), a cancellation rethrow, or an ALLOW-ise marker — CancellationException IS one (#2598)."
+    // Production AND test, in both layouts: KMP `src/<target>Main/` + `src/<target>Test/`, and the
+    // plain-JVM `src/main/` + `src/test/`. See the header for why the scope is not test-only.
+    val sources = kotlinSourcesIn(
+        subprojects.map { it.projectDir.resolve("src") },
+        listOf("*Main/**/*.kt", "main/**/*.kt", "*Test/**/*.kt", "test/**/*.kt"),
+    )
+    inputs.files(sources).withPropertyName("kotlinTestSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a pure function of file contents — there is no allowlist, the markers live in the sources
+    // themselves — so a RELATIVE fingerprint hit genuinely means "this exact source was verified".
+    val stamp = layout.buildDirectory.file("verification/forbid-cancellation-swallowing-catch.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val selfTest = CancellationSwallowingCatchScanner.selfTestFailures()
+        if (selfTest.isNotEmpty()) {
+            error(
+                "The cancellation-swallow scanner does not agree with its own fixture, so this " +
+                    "guard's verdict — in EITHER direction — means nothing:\n  " +
+                    selfTest.joinToString("\n  "),
+            )
+        }
+        // Group 1 is everything after the colon; blank ⇒ a reasonless marker, itself a violation.
+        val marker = Regex("""//\s*ALLOW-ise:(.*)""")
+        val unmarked = mutableListOf<String>()
+        val reasonless = mutableListOf<String>()
+        var cleared = 0
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            if ("IllegalStateException" !in raw) return@forEach
+            val rawLines = raw.lines()
+            CancellationSwallowingCatchScanner.sites(KotlinCodeScanner.stripNonCode(raw)).forEach { site ->
+                if (site.cleared != null) {
+                    cleared++
+                    return@forEach
+                }
+                // Markers are comments, so they are matched against the RAW text while the offence
+                // is found in the STRIPPED text; `stripNonCode` preserves newlines, so the two line
+                // spaces coincide. Trailing on the `catch` line or the line immediately above —
+                // deliberately NOT a wider lookback window.
+                val candidates = listOfNotNull(rawLines.getOrNull(site.line - 1), rawLines.getOrNull(site.line - 2))
+                val reasons = candidates.mapNotNull { marker.find(it)?.groupValues?.get(1)?.trim() }
+                val where = "${file.relativeTo(rootPath)}:${site.line}  " +
+                    rawLines.getOrElse(site.line - 1) { "" }.trim()
+                when {
+                    reasons.any { it.isNotEmpty() } -> cleared++
+                    reasons.isNotEmpty() -> reasonless += where
+                    else -> unmarked += where
+                }
+            }
+        }
+        if (unmarked.isNotEmpty() || reasonless.isNotEmpty()) {
+            val detail = buildString {
+                if (unmarked.isNotEmpty()) {
+                    append("\n  ").append(unmarked.joinToString("\n  "))
+                }
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-ise:` marker with an EMPTY reason is itself a ")
+                    append("violation. The reason is a claim that stops being true the moment the ")
+                    append("guarded body gains a suspension point, and the marker is where the next ")
+                    append("reader will look for it:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+            }
+            error(
+                "A source catches `IllegalStateException` without guarding against " +
+                    "cancellation (#2598). `CancellationException` IS an `IllegalStateException` " +
+                    "(`IllegalStateException.class.isAssignableFrom(java.util.concurrent." +
+                    "CancellationException.class)` is `true`), so a narrow, specific, " +
+                    "apparently-safe arm swallows a structured-concurrency cancel exactly as a bare " +
+                    "`runCatching` does — and an arm containing an assertion then throws an " +
+                    "`AssertionError` INSTEAD OF the `TimeoutCancellationException` the wedge " +
+                    "harness watches for, destroying the whole hang report.\n" +
+                    "  THE FIX is one line at the top of the arm:\n" +
+                    "      currentCoroutineContext().ensureActive()\n" +
+                    "  It rethrows only a cancellation of THIS job and falls through on a " +
+                    "callee-minted one. An earlier `catch (…: CancellationException) { throw e }` " +
+                    "arm on the same `try` clears the site too. If nothing inside the `try` can " +
+                    "suspend — every call in it is non-`suspend`, so no cancellation can be " +
+                    "delivered there — keep the arm and say so on this line or the line above:\n" +
+                    "      // ALLOW-ise: <why no cancellation can reach this arm>" +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${sources.files.size} Kotlin sources scanned (production and test), " +
+                "$cleared guarded IllegalStateException arm(s) confirmed\n",
+        )
     }
 }
 
@@ -5348,29 +6227,24 @@ val forbidNotNullAssertionInUnresolvedSource by tasks.registering {
     // class the stamps were made safe against. Entries are paths relative to the root, violation
     // counts as of the PR that added them. Regenerate after a sweep with this scanner, not by hand.
     //
-    // The first three are what remains of #2039's original population — apple/wasm/:spike, where
-    // detekt fires nothing at all. (Two more, `kuilt-store`'s `NSFileManagerDurableStoreTest` and
+    // All three are what remains of #2039's original population — apple/wasm/:spike, where detekt
+    // fires nothing at all. (Two more, `kuilt-store`'s `NSFileManagerDurableStoreTest` and
     // `IndexedDbDurableStoreTest`, were swept to zero by #2500 and are deleted here: both files are
     // still scanned, so the `dangling` check below could not see them, and a decrease is tolerated
     // — they were entries that had stopped grandfathering anything. Deleting them makes this map
     // reconcile with the stamp's file/site counts.)
     //
-    // The rest arrived with #2471, which widened the scope to source sets detekt was believed to
-    // cover and found 11 more sites it had never reported. Every one of them is a TRUE POSITIVE
-    // `!!` on a genuinely nullable type, and all 11 are in test/example sources — the one
-    // production site the widening caught (`GossipDedup.forceForwardPastGap`) was FIXED in the same
-    // PR rather than grandfathered. Burning these down is #2530.
+    // #2471's widening added six more entries — 11 sites detekt had never reported, all in
+    // test/example sources — grandfathered to keep that PR a lint fix rather than a cross-module
+    // refactor. #2530 swept all six to zero and deleted them: `assertNotNull` where the value was
+    // asserted anyway, `CoroutineContext.job` where the key is present by construction, `minBy`
+    // where a `groupBy` group cannot be empty, and a `?.let` where a `mapNotNull` lambda was
+    // building a pair it then filtered on. Each says the same thing and fails with a diagnostic
+    // instead of an NPE. Nothing is left to burn down here outside the apple/`:spike` tier.
     val baseline = mapOf(
         "kuilt-nw/src/appleMain/kotlin/us/tractat/kuilt/nw/RealNwApi.kt" to 1,
         "kuilt-nw/src/appleTest/kotlin/us/tractat/kuilt/nw/NwHalfCloseProbeTest.kt" to 2,
         "spike/src/appleMain/kotlin/spike/nw/SpikeNw.kt" to 1,
-        // #2471 — detekt's type resolution never saw any of these.
-        "examples/src/test/kotlin/us/tractat/kuilt/examples/ResumeTokenFailoverTest.kt" to 1,
-        "examples/src/test/kotlin/us/tractat/kuilt/examples/warp/WarpSpikeV2.kt" to 2,
-        "kuilt-otel-otlp/src/jvmTest/kotlin/us/tractat/kuilt/otel/otlp/OtlpHttpEdgeIntegrationTest.kt" to 3,
-        "kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpLoomFactoryTest.kt" to 1,
-        "kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpLoomTestDispatcherGuardTest.kt" to 3,
-        "kuilt-websocket/src/jvmTest/kotlin/us/tractat/kuilt/websocket/PublicWebSocketConnectionSpokeTest.kt" to 1,
     )
     doLast {
         val selfTest = NotNullAssertionScanner.selfTestFailures()
@@ -5656,6 +6530,222 @@ val forbidDetektFrontendSkew by tasks.registering {
                 "metadata up to [$frontendMajor,${frontendMinor + 1},0], below project Kotlin " +
                 "$projectKotlin, so detekt's nullability rules remain partial and the lexical `!!` " +
                 "guard remains the floor\n",
+        )
+    }
+}
+
+// Guard: notice when Android Lint's bundled Kotlin frontend catches up with the project's Kotlin
+// (#2595). The #2471 shape, one layer over — and this time the blind tool sits inside `ci-required`.
+//
+// WHAT IS ACTUALLY TRUE, measured rather than assumed, because this issue's first attribution was
+// wrong. The Kotlin COMPILE is fine: `compileDebugUnitTestKotlinAndroid --rerun-tasks` emits zero
+// of the metadata diagnostics, and four `androidUnitTest` arms that would go silent if metadata
+// were invisible — two of them resolving `:kuilt-core` members — are all RED. Attributing all 60
+// diagnostics from a `:kuilt-nearby:build --no-build-cache` to their emitting task puts 100% under
+// `lintAnalyzeDebug` / `lintAnalyzeDebugUnitTest` / `lintAnalyzeDebugAndroidTest`.
+//
+// ANDROID LINT IS BLIND TO EVERY KOTLIN *LIBRARY* SYMBOL. Lint 31.13.2 (AGP 8.13.2) bundles
+// `com.android.tools.external.com-intellij:kotlin-compiler:31.13.2`, whose `META-INF/compiler.version`
+// reads `2.2.20-Beta1-for-lint` — so `JvmMetadataVersion.INSTANCE` is `[2,2,0]` and the read ceiling
+// is `[2,3,0]`. Everything on its analysis classpath is past it: kotlin-stdlib/kotlin-test 2.4.10,
+// play-services-nearby, and every sibling `us.tractat.kuilt_*.kotlin_module`, all `[2,4,0]`.
+// Metadata a frontend cannot read is SILENCE, not an error, so lint prints "No issues found" either
+// way. Positive controls both directions, which is what makes this a verdict rather than a
+// suspicion: four Java/Android-keyed lint arms FIRE, the two kotlin-stdlib arms are SILENT, and
+// forcing `kotlin-stdlib:2.2.20` onto `:kuilt-nearby` alone — byte-identical source, same lint —
+// makes both silent arms FIRE. Causation, not correlation.
+//
+// BLAST RADIUS: `lint` sits in `check` → `build` → `ci-required`, with AGP's default
+// `abortOnError = true`, across every `kuilt.kmp-library` module × 3 analyze tasks. Silently
+// unenforced is every lint check keyed on a Kotlin LIBRARY symbol — stdlib, coroutines,
+// serialization, Ktor, and every sibling kuilt module. Still live: everything keyed on
+// Java/JDK/Android APIs.
+//
+// THE DECISION, recorded rather than left implicit: lint STAYS in `check`. Its Java/Android-keyed
+// half is genuinely live, this is a KMP networking library with a thin Android surface, and a
+// partial gate beats no gate. What is not acceptable is the partial gate being indistinguishable
+// from a working one, which is what this guard fixes — the claim above now fails when it stops
+// being true. There is nothing to bump: lint's frontend is pinned by AGP, the same trade detekt's
+// is in #2471.
+//
+// FAILS ON GOOD NEWS, deliberately, exactly like `forbidDetektFrontendSkew`. The direction nobody
+// watches is lint getting BETTER while the repo keeps acting as though it had not: somebody bumps
+// AGP, CI is green, and every claim above is quietly false. `+ 1` on the minor for the same reason
+// as the detekt guard — the ceiling is `INSTANCE_NEXT`, the frontend's own metadata version plus one
+// minor — so a frontend one minor behind reads the project's binaries fine and is NOT lagging in
+// the sense meant here. Do not "simplify" it away.
+//
+// The frontend version cannot be read from the jar NAME the way detekt's is: this jar is versioned
+// on the LINT line (31.13.2), not the Kotlin one, and the Kotlin version lives in
+// `META-INF/compiler.version` inside it. So the probe opens the jar. If either the coordinate or
+// that entry ever moves, the guard fails loudly — which is itself the packaging-changed event it
+// exists to catch.
+val agpCatalogVersion = libs.versions.agp.get()
+
+// AGP and the Android tools libraries — lint included — ship in lockstep on two version lines that
+// differ by exactly 23 in the major: AGP 8.13.2 is lint 31.13.2. DERIVED rather than pinned, so an
+// AGP bump carries the probe with it and cannot leave this guard describing a lint nobody runs;
+// the derivation is then checked by resolving the coordinate, which fails if it is ever wrong.
+val lintProbeVersion = agpCatalogVersion.split('.').let { parts ->
+    val major = parts.firstOrNull()?.toIntOrNull() ?: error(
+        "Could not read a major version from `agp = \"$agpCatalogVersion\"` in " +
+            "`gradle/libs.versions.toml`, so `forbidLintFrontendSkew` cannot derive the matching " +
+            "lint version (lint major = AGP major + 23).",
+    )
+    (listOf((major + 23).toString()) + parts.drop(1)).joinToString(".")
+}
+val lintProbeCoordinates = "com.android.tools.external.com-intellij:kotlin-compiler:$lintProbeVersion"
+
+// NON-TRANSITIVE, and that is the point rather than an optimisation. The alternative — resolving
+// `com.android.tools.lint:lint-gradle` and finding this jar on its graph, which is the shape
+// `forbidDetektFrontendSkew` uses — drags in the whole lint runtime (analytics, sdk-common, guava)
+// on every `check`, and makes a REQUIRED gate fail whenever any corner of that graph is
+// unresolvable. Naming the one artifact keeps the probe to ONE jar — not a small one (~49 MB), but
+// one file from one coordinate instead of a graph with a dozen ways to fail. What that trades
+// away is re-deriving the lint→frontend EDGE every build; it is asserted instead by the version
+// derivation above, and a wrong derivation cannot pass silently — the coordinate simply stops
+// resolving and this guard fails loudly, which is the same outcome.
+val lintFrontendProbe: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isVisible = false
+    isTransitive = false
+}
+
+dependencies {
+    lintFrontendProbe(lintProbeCoordinates)
+}
+
+// The catalog entry `build-logic` actually applies AGP through, as `group` to `version`. A sibling
+// of `DetektCatalogScanner` rather than a generalisation of it: that object is cited by name in
+// several comments and its regex is shaped to one entry, and two focused parsers are easier to read
+// than one parameterised one. Same `object` rationale (see "Guard plumbing"), and the same reason it
+// needs no fixture — its subject is a single real file every build parses, so a spelling change
+// returns null and fails the next run.
+object AgpCatalogScanner {
+    /** The version of `com.android.tools.build:gradle` the catalog declares, or null. */
+    fun pluginVersion(toml: String): String? {
+        val entry = Regex(
+            """android-gradlePlugin\s*=\s*\{[^}]*module\s*=\s*"com\.android\.tools\.build:gradle"[^}]*""" +
+                """version\.ref\s*=\s*"([^"]+)"""",
+        ).find(toml) ?: return null
+        val versionRef = entry.groupValues[1]
+        return Regex("""(?m)^\s*${Regex.escape(versionRef)}\s*=\s*"([^"]+)"""")
+            .find(toml)?.groupValues?.get(1)
+    }
+}
+
+val forbidLintFrontendSkew by tasks.registering {
+    group = "verification"
+    description = "Fails when Android Lint's bundled Kotlin frontend catches up with the project's Kotlin, so the partial-gate claims that rest on the skew get revisited (#2595)."
+    // See "Guard plumbing" above. The verdict is a function of three things: the project's Kotlin
+    // and the derived lint coordinate (task input properties), and the frontend's own Kotlin, read
+    // from inside the resolved jar — declared as a file input so resolution stays lazy.
+    inputs.files(lintFrontendProbe).withPropertyName("lintRuntimeClasspath")
+        .withPathSensitivity(PathSensitivity.NAME_ONLY)
+    val projectKotlin = libs.versions.kotlin.get()
+    inputs.property("projectKotlinVersion", projectKotlin)
+    inputs.property("lintProbeCoordinates", lintProbeCoordinates)
+    val catalogFile = rootDir.resolve("gradle/libs.versions.toml")
+    inputs.file(catalogFile).withPropertyName("versionCatalog")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val stamp = layout.buildDirectory.file("verification/forbid-lint-frontend-skew.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val frontendJars = lintFrontendProbe.incoming.files
+    val probeCoordinates = lintProbeCoordinates
+    val probeVersion = lintProbeVersion
+    val agpVersion = agpCatalogVersion
+    doLast {
+        val applied = AgpCatalogScanner.pluginVersion(catalogFile.readText())
+            ?: error(
+                "Could not find an `android-gradlePlugin = { module = " +
+                    "\"com.android.tools.build:gradle\", version.ref = \"…\" }` entry in " +
+                    "`gradle/libs.versions.toml`, so this guard cannot confirm it is probing the lint " +
+                    "the build actually runs — and an unconfirmed probe must fail rather than pass.\n" +
+                    "  THE FIX is to re-sync the parser in `build.gradle.kts` with however that entry " +
+                    "is spelled now.",
+            )
+        if (applied != agpVersion) {
+            error(
+                "This guard derived lint $probeVersion from `agp = \"$agpVersion\"`, but " +
+                    "`gradle/libs.versions.toml` applies `com.android.tools.build:gradle:$applied`. " +
+                    "Its verdict would be about a lint that is not in the build.\n" +
+                    "  THE FIX is to point `agpCatalogVersion` in `build.gradle.kts` at whichever " +
+                    "catalog entry `build-logic` takes AGP from.",
+            )
+        }
+        val frontendJar = frontendJars.files.firstOrNull { it.name == "kotlin-compiler-$probeVersion.jar" }
+            ?: error(
+                "Could not find `kotlin-compiler-$probeVersion.jar` on the resolved " +
+                    "`$probeCoordinates` graph, so this guard cannot tell whether lint's frontend " +
+                    "still lags the project's Kotlin — and a guard that cannot see its subject must " +
+                    "fail rather than pass.\n" +
+                    "  Either lint's packaging changed, or the lint-major = AGP-major + 23 " +
+                    "convention did. Both are themselves the event this guard exists to catch.\n" +
+                    "  Files on the configuration: " +
+                    (frontendJars.files.map { it.name }.sorted().takeIf { it.isNotEmpty() }
+                        ?.joinToString(", ") ?: "none"),
+            )
+        // The Kotlin version is NOT in the jar name — that carries the lint line (31.x). It is in
+        // `META-INF/compiler.version`, which reads e.g. `2.2.20-Beta1-for-lint`.
+        val declared = java.util.zip.ZipFile(frontendJar).use { zip ->
+            zip.getEntry("META-INF/compiler.version")
+                ?.let { zip.getInputStream(it).use { input -> input.readBytes().decodeToString().trim() } }
+        } ?: error(
+            "`${frontendJar.name}` carries no `META-INF/compiler.version`, so this guard cannot read " +
+                "which Kotlin frontend lint bundles — and a guard that cannot see its subject must " +
+                "fail rather than pass.\n" +
+                "  That entry moving is itself the packaging change this guard exists to catch.",
+        )
+        val parsed = Regex("""^(\d+)\.(\d+)\.(\d+)""").find(declared)
+            ?: error(
+                "`${frontendJar.name}` declares its Kotlin frontend as \"$declared\", which does not " +
+                    "start with a `<major>.<minor>.<patch>` version, so this guard cannot compare it " +
+                    "with the project's Kotlin $projectKotlin.",
+            )
+        val (frontendMajor, frontendMinor) = parsed.groupValues.drop(1).take(2).map { it.toInt() }
+        val frontendVersion = parsed.groupValues.drop(1).take(3).joinToString(".")
+        val projectParts = projectKotlin.split('.').mapNotNull { it.toIntOrNull() }
+        val projectMajor = projectParts.getOrElse(0) { 0 }
+        val projectMinor = projectParts.getOrElse(1) { 0 }
+        // `+ 1` because the read ceiling is `JvmMetadataVersion.INSTANCE_NEXT` — the frontend's own
+        // metadata version plus one minor. See the header; the mutation receipt for the `+ 1` is the
+        // one-minor-behind case, not the equal case.
+        val frontendLags =
+            frontendMajor < projectMajor ||
+                (frontendMajor == projectMajor && frontendMinor + 1 < projectMinor)
+        if (!frontendLags) {
+            error(
+                "Android Lint's bundled frontend (Kotlin $frontendVersion, from " +
+                    "`${frontendJar.name}`) can now read this repo's binary metadata — its ceiling is " +
+                    "`[$frontendMajor,${frontendMinor + 1},0]` and the project's Kotlin is " +
+                    "$projectKotlin — so the partial-gate claims written while it could not are " +
+                    "stale.\n" +
+                    "  THIS IS GOOD NEWS, and the failure is the point: nothing else would tell you, " +
+                    "because lint prints \"No issues found\" in both states. Three things to " +
+                    "re-open, in this order:\n" +
+                    "    1. Re-run #2595's positive control — a lint check keyed on a kotlin-stdlib " +
+                    "symbol against an `androidMain` source — and confirm lint now REPORTS it. Until " +
+                    "it does, the skew is not really gone and this guard should be pinned, not " +
+                    "deleted.\n" +
+                    "    2. Re-read the Android Lint paragraph in `CLAUDE.md`'s build section. It " +
+                    "describes a partial gate; it would now be wrong, and it is the paragraph a " +
+                    "reader trusts when deciding what a green `lint` proves.\n" +
+                    "    3. Re-run a `--no-build-cache` module build and triage whatever lint has " +
+                    "started reporting. The unmeasured half of #2595 is whether any REAL finding was " +
+                    "being missed repo-wide; a frontend that has caught up is the first chance to " +
+                    "answer it.",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — Android Lint frontend Kotlin $frontendVersion (declared \"$declared\" in " +
+                "${frontendJar.name}, probed via $probeCoordinates, derived from catalog agp " +
+                "$applied) reads metadata up to [$frontendMajor,${frontendMinor + 1},0], below " +
+                "project Kotlin $projectKotlin, so lint remains blind to every Kotlin library " +
+                "symbol and is a partial gate\n",
         )
     }
 }
@@ -6515,9 +7605,12 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidUnlintedAndroidMain"))
         dependsOn(rootProject.tasks.named("forbidNotNullAssertionInUnresolvedSource"))
         dependsOn(rootProject.tasks.named("forbidDetektFrontendSkew"))
+        dependsOn(rootProject.tasks.named("forbidLintFrontendSkew"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
+        dependsOn(rootProject.tasks.named("forbidUncitedDocCodeBlock"))
+        dependsOn(rootProject.tasks.named("verifyModuleDocLinks"))
         dependsOn(rootProject.tasks.named("verifySampleLinks"))
         dependsOn(rootProject.tasks.named("verifySamplesAreRun"))
         dependsOn(rootProject.tasks.named("verifyModuleTable"))
@@ -6527,6 +7620,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
         dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
+        dependsOn(rootProject.tasks.named("forbidCancellationSwallowingCatch"))
         dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
         dependsOn(rootProject.tasks.named("forbidCoroutineLaunchDuringConstruction"))
         dependsOn(rootProject.tasks.named("forbidSuspendCallUnderLock"))

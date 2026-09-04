@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.Pattern
@@ -112,7 +113,7 @@ class ResumeTokenFailoverTest {
                             room.roster.first { it.isNotEmpty() }
                         }
                         // Hold the room open until the scope is cancelled.
-                        serverAScope.coroutineContext[Job]!!.join()
+                        serverAScope.coroutineContext.job.join()
                     }
                 }
 

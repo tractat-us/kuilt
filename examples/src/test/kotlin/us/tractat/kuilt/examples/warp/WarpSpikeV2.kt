@@ -427,13 +427,15 @@ private fun claimConsensus(
 
     // Each peer requests one task; oracle assigns exactly one winner per task.
     val taskRequests = peers.mapNotNull { peer ->
-        pickCandidateForConsensus(peer, consensusAssigned) to peer.id
-    }.filter { it.first != null }.map { it.first!! to it.second }
+        pickCandidateForConsensus(peer, consensusAssigned)?.let { task -> task to peer.id }
+    }
 
     // Group requests by task; assign one peer per task (lowest replica-id = deterministic winner).
+    // `minBy`, not `minByOrNull` + `!!`: a `groupBy` group is non-empty by construction, so the
+    // null branch is unreachable and the throw belongs to the collection, not to an assertion here.
     val taskToWinner = taskRequests
         .groupBy { it.first }
-        .mapValues { (_, requesters) -> requesters.minByOrNull { it.second.value }!!.second }
+        .mapValues { (_, requesters) -> requesters.minBy { it.second.value }.second }
 
     // Record assignments. Attribute the full 2×quorum cost to the winner so the
     // per-task average is correct — real Raft concentrates messages on the leader anyway.

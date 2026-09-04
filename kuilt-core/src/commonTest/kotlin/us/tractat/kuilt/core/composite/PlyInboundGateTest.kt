@@ -32,6 +32,7 @@ class PlyInboundGateTest {
         while (admitted < ORIGIN_PROBE_CEILING) {
             try {
                 gate.accept(data(0, origin = "o$admitted"))
+                // ALLOW-ise: nothing in the `try` can suspend — `fillOriginTable` and `accept` are both non-`suspend`
             } catch (_: IllegalStateException) {
                 return admitted
             }

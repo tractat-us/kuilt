@@ -162,6 +162,8 @@ source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem
 
 **But know what `detektAll` reaches — it is not "everything".** With type resolution it covers `commonMain` + `jvmMain` (plus any `jvmAndAndroidMain` intermediate, folded into `detektJvmMain`), **`androidMain` production source** (via `detektAndroidRelease`, wired in #2334), and `jvmTest` + both `androidUnitTest` variants. It reaches **nothing** in `appleMain`/`appleTest` or the native/wasm source sets — those tasks exist but run **parse-only**, and all four enabled rules require type resolution, so none of them can fire (#2039) — nor `commonTest` (no task at all, #1960), nor `spike/` (no convention plugin). So a green `detektAll` on a PR touching only Apple, `commonTest`, or spike source proves nothing about the changed files; name a real gate instead and compensate with review attention on what detekt would have caught. **And "with type resolution" is weaker than it sounds (#2471).** detekt 1.23.8 pins `kotlin-compiler-embeddable:{strictly 2.0.21}` and refuses to start against any other. That frontend's metadata **read ceiling** is `[2,1,0]` (`JvmMetadataVersion.INSTANCE` is `[2,0,0]`, and non-strict binaries are checked against `INSTANCE_NEXT` — i.e. the frontend's own version **plus one minor**; `[1,9,0]` is only what a 2.0.21 compiler *writes*, a different axis). Every Kotlin binary on the analysis classpath is past that ceiling: `[2,4,0]` for kotlin-stdlib-2.4.10, `kuilt-core-jvm.jar` and a module's own `build/classes`; `[2,2,0]` for kotlinx-coroutines. Metadata a frontend cannot read is **silence, not an error** — so the four rules see only compiler **built-ins**, **Java/JDK** classes, and declarations in the **source files of the task being run** (siblings in the same source set resolve; the classpath does not). kotlin-stdlib, kotlinx-coroutines and every sibling kuilt module are invisible, so `val m: MutableMap<Long, String> = mutableMapOf(); m.remove(k)!!` is REPORTED while `val m = mutableMapOf<Long, String>(); m.remove(k)!!` is SILENT — same file, same task. Repo-wide `detektAll` was green on 12 true-positive `!!` when this was measured. This is a **trade, not an impossibility**: detekt 2.x exists under the group `dev.detekt` (`2.0.0-alpha.6` pins `kotlin-compiler 2.4.10`, exactly this repo's), and is deliberately not adopted — alpha, plus 2.0's KMP run-time regression (detekt/detekt#8882). #2534 tracks re-measuring that. **So `!!` is enforced from outside detekt, everywhere**: `forbidNotNullAssertionInUnresolvedSource` in the root build scans every source set under a module's `src/` (833 files) on a grandfathered per-file count ratchet (#2039, widened in #2471), and `forbidDetektFrontendSkew` reds when detekt's frontend catches up so these claims get revisited. The lexical scan sees neither a typealias nor a helper, and the other three rules stay partial; `commonTest`/`commonSamples`/`jvmAndAndroidTest` are the one carve-out, too big to baseline today (#1960). `androidMain` is wired to the **release** variant only, deliberately: it is one source set compiled identically into both variants, and release is what `publishLibraryVariants("release")` ships. `forbidUnlintedAndroidMain` in the root build asserts **per file, from the resolved task graph**, that no Android production source escapes — so adding a `src/androidDebug` fails the build with the task to wire, rather than going quietly unlinted the way `androidMain` did for months.
 
+**Android Lint is the same shape one layer over, and it sits *inside* `ci-required` (#2595).** `lint` runs from `check` → `build` → `ci-required` with AGP's default `abortOnError = true`, across every `kuilt.kmp-library` module × three analyze tasks — and it is **blind to every Kotlin *library* symbol**. Lint 31.13.2 (AGP 8.13.2) bundles `com.android.tools.external.com-intellij:kotlin-compiler`, whose `META-INF/compiler.version` reads `2.2.20-Beta1-for-lint`, so its read ceiling is `[2,3,0]` while kotlin-stdlib/kotlin-test 2.4.10, play-services-nearby and every sibling `us.tractat.kuilt_*.kotlin_module` are all `[2,4,0]`. Unreadable metadata is **silence**, so lint prints "No issues found" in both states. Silently unenforced: every check keyed on a Kotlin library symbol — stdlib, coroutines, serialization, Ktor, any sibling kuilt module. Still live: everything keyed on **Java/JDK/Android** APIs, which is what the positive controls fired on (four Java/Android arms red, both kotlin-stdlib arms silent, and forcing `kotlin-stdlib:2.2.20` onto one module made the silent arms fire — causation, not correlation). The **Kotlin compile is fine** — `androidUnitTest` resolves a full classpath; the emitter is lint alone. **There is nothing to bump**: lint's frontend is pinned by AGP, the same trade detekt's is. So the decision, recorded rather than left implicit, is that **lint stays in `check`** — a partial gate beats none for a library with this thin an Android surface — and `forbidLintFrontendSkew` in the root build reds when AGP's bundled frontend catches up, so this paragraph cannot quietly become false. What was **not** measured: whether any *real* finding is missed repo-wide. Treat a green `lint` as evidence about Java/Android APIs only.
+
 **Verify cache-disabled before auto-merge: `./gradlew :<module>:build detektAll --rerun-tasks`.** Two false greens recur here. (1) `jvmTest` (or a scoped `:module:jvmTest`) does **not** compile the Android variant — a `commonTest` source can compile on JVM yet fail `compileDebugUnitTestKotlinAndroid` (and Kotlin/Native test targets) on a type-inference difference the JVM compiler accepts. CI runs the full `./gradlew build`, so it catches this; your local `jvmTest` won't. (2) Gradle's **build cache** can serve a stale `FROM-CACHE` "success" for a test-compile task whose source is actually broken, so a re-run "passes locally" without executing the failing code. Before enabling auto-merge on a code PR, run the **full module build** with `--rerun-tasks` (add `--no-build-cache` if any test-compile task still shows `FROM-CACHE`) and confirm the tasks are genuinely `EXECUTED`. "Built locally" via `jvmTest` or a cached build is not proof the Android/Native variants compile. (3) A **`:<module>:build`-scoped build is a false green for consensus/runtime *behavior* changes** — even the full *module* build (not just `jvmTest`) skips the downstream `:examples`/`:kuilt-cluster` **E2E cluster tests**, which exercise the whole runtime stack. A change to `:kuilt-raft` consensus *behavior* (election / replication / membership / forwarding) that passes every `:kuilt-raft` test can still break a cluster E2E invariant — e.g. a forward-reaping change broke `ClusterClientMultiClientHardeningE2ETest`'s "no double-apply", entirely invisible to `:kuilt-raft:build`. For any consensus-*behavior* change, run the **full `./gradlew build`** (or at minimum add `:examples:test`), not a module-scoped build.
 
 The mDNS multicast suite is opt-in because it sends real multicast packets; the
@@ -379,19 +381,46 @@ merge; the deterministic virtual-time siblings do.
   }
   ```
 
+  **A NARROW catch is not a safer one — `catch (e: IllegalStateException)` swallows cancellation
+  too.** Every shape above is a *broad* catch, which is precisely why the eight sites #2535 found
+  sat here unremarked: this one is specific, it names a plausible exception, and it looks nothing
+  like the thing this section warns about. The receipt is one line —
+
+  ```
+  IllegalStateException.class.isAssignableFrom(java.util.concurrent.CancellationException.class) == true
+  ```
+
+  — so a `CancellationException` **is** an `IllegalStateException`, and an arm catching one catches
+  both. In a test the cost lands on the *diagnosis* rather than the behaviour, which is what makes
+  it invisible: an arm with an assertion in it throws an `AssertionError` **instead of** the
+  `TimeoutCancellationException` the wedge harness watches for, so a hung test reports a failed
+  assertion inside the arm and the dump that would have named the wedge is destroyed. Measured, on
+  a real hang. Same remedy as everywhere else — `currentCoroutineContext().ensureActive()` at the
+  top of the arm — unless nothing inside the `try` can suspend, in which case keep the arm and say
+  so in a line-tight `// ALLOW-ise: <reason>` marker. The reason is not paperwork: it is a claim
+  that stops being true the moment that body gains its first suspension point.
+
   If a cancellable bound (`withTimeout`/`withTimeoutOrNull`) intervenes *inside* the shield, its
   premise is false at that position — hoist the `try`/`catch` outside the bound rather than
-  swallowing within it. **On most of this the prose is the enforcement.** Two `check`-wired root
-  guards scan production `*Main` sources lexically, and both are backstops rather than proofs.
-  `forbidRunCatchingCancellableUnderNonCancellable` looks for the `runCatchingCancellable` **token**
-  inside a shield: it cannot see the hand-written rethrow, and sees neither form when reached
-  through a helper called from the shield. `forbidCancellationRethrowAroundBound` (#2292) takes the
-  one **unshielded** case where the ambiguity is decidable — a rethrow written *directly around a
-  `withTimeout`*, where the cancellation reaching it can only be the bound's own — in both its
-  `try`/`catch` and its `runCatchingCancellable` spellings, and clears the site if an earlier
-  `catch (…: TimeoutCancellationException)` already handles the expiry by type. Everywhere else
-  unshielded the two cancellations really are lexically ambiguous, and one helper hop defeats both
-  guards. `ensureActive()` remains the only thing that decides it at runtime.
+  swallowing within it. **On most of this the prose is the enforcement.** Three `check`-wired root
+  guards scan lexically, and all three are backstops rather than proofs. Two cover production
+  `*Main` sources. `forbidRunCatchingCancellableUnderNonCancellable` looks for the
+  `runCatchingCancellable` **token** inside a shield: it cannot see the hand-written rethrow, and
+  sees neither form when reached through a helper called from the shield.
+  `forbidCancellationRethrowAroundBound` (#2292) takes the one **unshielded** case where the
+  ambiguity is decidable — a rethrow written *directly around a `withTimeout`*, where the
+  cancellation reaching it can only be the bound's own — in both its `try`/`catch` and its
+  `runCatchingCancellable` spellings, and clears the site if an earlier
+  `catch (…: TimeoutCancellationException)` already handles the expiry by type. The third,
+  `forbidCancellationSwallowingCatch` (#2598), covers the narrow-catch shape above across the WHOLE
+  tree, production and test: it clears an arm carrying `ensureActive()`, an arm sitting behind an
+  earlier `catch (…: CancellationException) { throw … }` on the same `try`, or an `// ALLOW-ise:`
+  marker with a non-empty reason. It is the one of the three that is not production-only, and
+  deliberately so — in a **test** a swallowed cancellation costs the *diagnosis* (the hang report is
+  destroyed); in **production** it costs *behaviour* (the cancel is never observed and the coroutine
+  carries on), which is the stronger case, not the weaker one. Everywhere else unshielded the two cancellations
+  really are lexically ambiguous, and one helper hop defeats every one of the three.
+  `ensureActive()` remains the only thing that decides it at runtime.
 
 - **A long-lived pump is launched through `Flow.pumpIn` (`:kuilt-core`, public), never a bare
   `onEach { … }.launchIn(scope)`.** A pump has no restart and no backstop, so an escaping throw is
