@@ -1271,7 +1271,7 @@ internal class CompositeSeam(
         // [PlyId] rather than `live.values`, because a failing close is reported through [onPlyFailure] and
         // a [PlyReconcileException] with no ply identity is not a diagnosis.
         val toClose = lock.withLock {
-            val snapshot = live.entries.map { (id, handle) -> id to handle }
+            val snapshot = live.toList()
             live.clear()
             snapshot
         }
