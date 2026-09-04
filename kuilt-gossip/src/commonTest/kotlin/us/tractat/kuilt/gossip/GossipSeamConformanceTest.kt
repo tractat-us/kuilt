@@ -54,10 +54,40 @@ import kotlin.time.Instant
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class GossipSeamConformanceTest : SeamConformanceSuite() {
-    // availability() never weaves, so a scope-free pair is enough for that one test.
-    override fun newLoomPair(): Pair<Loom, Loom> = gossipLoomPair(testScope = null)
+    /**
+     * The two ends of the in-memory link under the current pair, held so [injectMidSessionDeath] can
+     * drop the transport out from under a live session. Tests run one pair at a time, sequentially —
+     * the same capture `PeerMeshConformanceTest` makes.
+     */
+    private var link: Pair<Connection, Connection>? = null
 
-    override fun newLoomPair(testScope: TestScope): Pair<Loom, Loom> = gossipLoomPair(testScope)
+    // availability() never weaves, so a scope-free pair is enough for that one test.
+    override fun newLoomPair(): Pair<Loom, Loom> = newPair(testScope = null)
+
+    override fun newLoomPair(testScope: TestScope): Pair<Loom, Loom> = newPair(testScope)
+
+    private fun newPair(testScope: TestScope?): Pair<Loom, Loom> {
+        val conns = connectionPair()
+        link = conns
+        return gossipLoomPair(conns, testScope)
+    }
+
+    /**
+     * Drop **both** ends of the link under the live pair, so each overlay observes its peer's
+     * disconnect rather than a local `close()`. The base `peerMesh` drains to empty and latches
+     * `Torn`; the obligation this unlocks is whether [GossipSeam]'s **own** inbound spool — not the
+     * base's — completes on that tear (#2605 follow-on: the swap to a `connectionPair` base is what
+     * put this handle within reach at all).
+     */
+    override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
+        val (hostConn, joinerConn) = link ?: return false
+        joinerConn.close()
+        hostConn.close()
+        return true
+    }
+
+    /** Proven: this harness drops the transport under a live pair, so no gap. */
+    override fun midSessionDeathGap(): String? = null
 
     // overlay adds no crypto, inherits its base; dissemination is deliberate
     // multi-hop flood — not direct p2p; and the overlay wires no path observer (#1712).
@@ -118,8 +148,11 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
  * the virtual clock reads the test scheduler.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-internal fun gossipLoomPair(testScope: TestScope?): Pair<Loom, Loom> {
-    val (hostConn, joinerConn) = connectionPair()
+internal fun gossipLoomPair(
+    conns: Pair<Connection, Connection> = connectionPair(),
+    testScope: TestScope?,
+): Pair<Loom, Loom> {
+    val (hostConn, joinerConn) = conns
     return GossipLoom(PeerId("host"), hostConn, seed = 0, testScope) to
         GossipLoom(PeerId("joiner"), joinerConn, seed = 1, testScope)
 }
