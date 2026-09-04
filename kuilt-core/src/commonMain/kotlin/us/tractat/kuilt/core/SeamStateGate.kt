@@ -57,7 +57,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * cost is measured. Every `Seam` implementation publishes a `SeamState`, and the ones that own their
  * own state flow rather than composing a core seam live *outside* this module: `:kuilt-multipeer`
  * (twice), `:kuilt-nearby`, `:kuilt-nw`, `:kuilt-webrtc`, plus any out-of-tree fabric.
- * (`:kuilt-websocket` is not among them — it composes [LinkSeam]/[MeshSeam], which is why it never
+ * (`:kuilt-websocket` is not among them — it composes `LinkSeam`/`MeshSeam`, which is why it never
  * had to solve this at all, and is the shape to prefer.) While the remedy was unreachable to them,
  * four such fabrics hand-rolled their own latch and **three wrote precisely the check-then-set this
  * KDoc bans**, three lines below a comment describing the race. The remedy was unreachable, not
@@ -88,6 +88,8 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * What the gate is *for* is the third shape: two or more writers on genuinely concurrent threads
  * with no shared lock between them — a transport callback racing `close()`.
+ *
+ * @sample us.tractat.kuilt.core.sampleSeamStateGate
  */
 public class SeamStateGate(initial: SeamState) {
 
@@ -106,8 +108,27 @@ public class SeamStateGate(initial: SeamState) {
      * [SeamState.Woven]/[SeamState.Weaving]). A no-op once [tear] has latched, so an in-flight derived
      * write can never overwrite the terminal `Torn`. Derived rollups publish only recoverable states
      * ([SeamState.Woven]/[SeamState.Weaving]); the terminal `Torn` comes solely from [tear].
+     *
+     * ### Why `Torn` is rejected rather than accepted
+     *
+     * Passing a `Torn` here would publish the terminal state **without latching** — leaving
+     * `latched == false`, so the very next [update] overwrites it. That is #1803 rebuilt through the
+     * front door of the type that exists to prevent it, and it would be a *quieter* bug than the one
+     * this class replaced, because the seam would look correctly gated. The close decision is
+     * [tear]'s alone; a caller holding a `Torn` it wants published is holding a close decision.
+     *
+     * `require`, not a silent no-op: a caller reaching here with a `Torn` has a bug in its own
+     * routing, and swallowing it would hide the terminal transition instead of publishing it. A
+     * self-driven death path should branch on the state and call [tear] with the reason — see
+     * `TieredSeam`'s rollup collector, which does exactly that.
+     *
+     * @throws IllegalArgumentException if [next] is [SeamState.Torn].
      */
     public fun update(next: SeamState) {
+        require(next !is SeamState.Torn) {
+            "Torn is the close decision — publish it via tear(reason), not update(). update() does " +
+                "not latch, so a Torn published here would be overwritten by the next update()."
+        }
         lock.withLock {
             if (latched) return
             _state.value = next

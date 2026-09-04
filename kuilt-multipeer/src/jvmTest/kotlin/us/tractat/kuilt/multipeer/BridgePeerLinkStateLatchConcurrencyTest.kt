@@ -69,7 +69,10 @@ import kotlin.test.assertIs
  * The repo-wide `*ConcurrencyTest` contract: a real-threaded probe depends on the OS scheduling two
  * `Dispatchers.Default` workers, and on a saturated runner that dispatch is delayed past any budget
  * set here — reddening the merge gate for a reason unrelated to this code (#1135 / #1158). Excluded
- * from the normal run by `kuilt-multipeer/build.gradle.kts`; run by the concurrency-probes CI job.
+ * from the normal run by `kuilt-multipeer/build.gradle.kts`; run by the `concurrency-probes` job in
+ * `ci.yml`, which names `:kuilt-multipeer:jvmTest` in its own step (added with this probe — before
+ * that no workflow referenced this module at all, so a probe claiming a CI home would have had
+ * none).
  *
  * The honest consequence, the same one `:kuilt-nearby` records: that job is non-blocking, so
  * **`ci-required` does not pin this fix.** Nothing cheaper exists — a single-threaded test cannot
@@ -123,6 +126,7 @@ class BridgePeerLinkStateLatchConcurrencyTest {
     @Test
     fun aPromotionCaughtMidFlightCannotStampWovenOverTheTerminalTorn() = runConcurrencyStress { stage ->
         val survivors = mutableListOf<String>()
+        var completed = 0
         repeat(ITERATIONS) { iter ->
             val fake = CapturingFakeMultipeerNativeLib()
             val link = BridgePeerLink(nativeLib = fake, sessionHandle = handle, selfId = self)
@@ -144,9 +148,18 @@ class BridgePeerLinkStateLatchConcurrencyTest {
             // which is precisely what makes a non-`Torn` value here permanent rather than transient.
             val settled = link.state.value
             if (settled !is SeamState.Torn) survivors += "iter=$iter settled=$settled"
+            completed++
         }
 
         assertAll(
+            {
+                // Rig precondition: the loop actually ran every iteration it claims. Asserted rather
+                // than inferred from the reported duration, because on this module's sibling native
+                // probe the reported duration is `0.0` for a run that provably did all 3 000 of its
+                // iterations. A race arm that asserts only an ABSENCE must prove it did the work, or
+                // a loop that never ran reads as a clean pass.
+                assertEquals(ITERATIONS, completed, "the race loop did not complete every iteration")
+            },
             {
                 assertEquals(
                     emptyList(),

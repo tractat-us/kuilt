@@ -2,6 +2,7 @@ package us.tractat.kuilt.core
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -59,15 +60,32 @@ class SeamStateGateTest {
 
     @Test
     fun updateNeverLatchesOnlyTearDoes() {
-        // The gate latches on the close DECISION, not the Torn VALUE: only tear() latches; update()
-        // never does, whatever value it carries. Production rollups only ever publish recoverable
-        // Woven/Weaving through update() (all-plies-torn is Weaving, #1367), so a derived Torn no
-        // longer occurs — but the gate's invariant is value-independent, pinned here directly: even
-        // a Torn passed to update() does not latch and can be superseded.
-        val gate = SeamStateGate(SeamState.Woven)
-        gate.update(SeamState.Torn(CloseReason.RemoteRequested))
-        assertIs<SeamState.Torn>(gate.state.value)
+        // The gate latches on the close DECISION, not on any published value: only tear() latches.
+        // Shown with the recoverable states, which since #1803 are the only ones update() accepts —
+        // see updateRefusesTorn for why demonstrating it with a Torn is no longer possible.
+        val gate = SeamStateGate(SeamState.Weaving)
         gate.update(SeamState.Woven)
-        assertIs<SeamState.Woven>(gate.state.value, "update() must NOT latch on any value — only tear() latches")
+        gate.update(SeamState.Weaving)
+        gate.update(SeamState.Woven)
+        assertIs<SeamState.Woven>(gate.state.value, "update() must move freely while un-latched")
+        // Still un-latched after all of that: a tear can still win, which is what "never latches" means.
+        assertTrue(gate.tear(CloseReason.Normal), "no update() may have latched the gate")
+    }
+
+    @Test
+    fun updateRefusesTorn() {
+        // This test used to assert the OPPOSITE — that a Torn passed to update() publishes without
+        // latching and can be superseded — on the reasoning that the gate's invariant is
+        // value-independent and production never derives a Torn anyway. That was pinning the
+        // loophole rather than closing it: `update(Torn)` published the terminal state with
+        // `latched == false`, so the very next update() clobbered it. Which is #1803 — the exact bug
+        // this class exists to prevent — reachable through the front door of the class, and QUIETER
+        // than the original, because the seam looks correctly gated. Now refused outright (#1803).
+        val gate = SeamStateGate(SeamState.Woven)
+        assertFailsWith<IllegalArgumentException> { gate.update(SeamState.Torn(CloseReason.RemoteRequested)) }
+        // The refusal must leave the gate exactly as it was — neither published nor latched — or it
+        // would trade a clobber for a half-applied write.
+        assertIs<SeamState.Woven>(gate.state.value, "a refused update() must not have published anything")
+        assertTrue(gate.tear(CloseReason.Normal), "a refused update() must not have latched the gate")
     }
 }

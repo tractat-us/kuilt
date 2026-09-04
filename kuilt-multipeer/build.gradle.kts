@@ -27,12 +27,22 @@ val runConcurrencyStress = providers.gradleProperty("concurrency.stress.tests").
 // `withType<Test>` exclusion silently misses `macosArm64Test` entirely. `AbstractTestTask` is the
 // common supertype and covers both with one rule.
 //
-// This is deliberately NOT the env-var-plus-self-skip mechanism `:kuilt-nw` uses for its native
-// probe. That shape was tried here first and **failed silently**: the env var did not arrive, the
-// probe's own `getenv` gate read absent, and it self-skipped — reporting as a PASS in 0.0s for what
-// is supposed to be 3 000 races. A gate whose failure mode is a green is the wrong gate for a test
-// whose whole job is to red. Excluding at the task level instead means an un-run probe is *absent*
-// from the results XML rather than present and passing, which is a checkable signal.
+// Chosen over the env-var-plus-`getenv`-self-skip mechanism `:kuilt-nw` uses for its native probe.
+// That shape was tried here first and it WORKS — the variable does arrive (measured directly with a
+// throwaway `assertEquals("true", getenv(...)?.toKString())` on this task); an earlier comment here
+// claimed it did not, and that claim was wrong. See the K/N-timing note below for how the wrong
+// conclusion was reached.
+//
+// The task-level exclusion is still preferred, for two reasons that survive the correction: it is
+// ONE mechanism covering both the JVM and native probes instead of two, and an excluded test is
+// *absent* from the results XML rather than present and passing. A self-skip reports a green
+// testcase whether it skipped or ran, which is a poor signal for a test whose whole job is to red.
+//
+// ⚠ K/N result-XML `time` IS NOT A WITNESS that a test ran. `macosArm64Test` reported `time="0.0"`
+// for a run that provably completed all 3 000 of its iterations (the probe asserts its own loop
+// count). Duration was what suggested the env var had failed, and it was measuring nothing. If you
+// need to know whether a native test did its work, make the test assert the work — never read the
+// clock.
 tasks.withType<AbstractTestTask>().configureEach {
     // Apply the exclusion only when the flag is OFF. With the flag ON the exclusion is absent, so a
     // command-line `--tests "*ConcurrencyTest"` include filter runs them (a build-defined exclude
@@ -45,6 +55,20 @@ tasks.withType<AbstractTestTask>().configureEach {
     }
 }
 
+// A SECOND block, on `Test` rather than `AbstractTestTask`, because `jvmArgs` is declared on `Test`
+// and does not exist on the common supertype — so this cannot be folded into an `else` above.
+if (runConcurrencyStress) {
+    tasks.withType<Test>().configureEach {
+        // Copied from kuilt-core/build.gradle.kts with its reason intact: `runConcurrencyStress`
+        // installs DebugProbes to dump coroutine stacks on a hang (#1784), which attaches a java
+        // agent at runtime, and JDK 21+ warns on stderr when that happens (JEP 451). Stderr
+        // cleanliness is itself evidence on these hangs — an uncaught-exception flood in
+        // `system-err` is how #1787's defect was found — so pre-approving the attach keeps that
+        // channel meaningful. Scoped to the stress runs; the normal build's test JVMs are untouched.
+        jvmArgs("-XX:+EnableDynamicAgentLoading")
+    }
+}
+
 kotlin {
     val macosLibName = "kuilt"
     macosArm64 { binaries.sharedLib { baseName = macosLibName } }
@@ -54,7 +78,6 @@ kotlin {
             api(project(":kuilt-core"))  // public API returns Seam from weave() — expose the contract transitively
             implementation(project(":kuilt-session"))
             implementation(libs.kotlinx.coroutines.core)
-            implementation(libs.kotlinx.atomicfu)  // reentrantLock in the apple discovery-source conformance binding
             implementation(libs.kotlin.logging)
         }
         // MANUAL appleMain → disables default-hierarchy auto-wiring → hand-wire ALL intermediates:
@@ -72,11 +95,21 @@ kotlin {
         // one appleTest source set.
         val appleTest by creating {
             dependsOn(commonTest.get())
+            // atomicfu is a TEST-only dependency for this module. It used to sit in commonMain for
+            // MCSessionLink's single-shot `tornDown` atomic; SeamStateGate's own latch replaced that
+            // (#1803), leaving no production use — but a commonMain `implementation` still ships in
+            // the published POM, so a dead production dep is a consumer-visible cost, not just
+            // clutter. The one remaining use is `reentrantLock` in the apple discovery-source
+            // conformance binding, which is here.
+            //
             // appleMain's MultipeerServiceBrowser is bound to DiscoverySourceConformanceSuite here
             // (kuilt #2410). It runs against the real MCNearbyServiceBrowser with its delegate driven by
             // hand — a real foundPeer needs a second physical device, so the delegate is the only
             // place this platform's arrivals and departures can be staged at all.
-            dependencies { implementation(project(":kuilt-conformance")) }
+            dependencies {
+                implementation(libs.kotlinx.atomicfu)
+                implementation(project(":kuilt-conformance"))
+            }
         }
         val iosArm64Test by getting { dependsOn(appleTest) }
         val iosSimulatorArm64Test by getting { dependsOn(appleTest) }

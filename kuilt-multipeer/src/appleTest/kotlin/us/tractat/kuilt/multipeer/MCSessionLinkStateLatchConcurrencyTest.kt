@@ -62,12 +62,37 @@ import kotlin.test.assertIs
  * Excluded from the normal run by this module's `build.gradle.kts` unless
  * `-Pconcurrency.stress.tests=true`, so the probe never reds the merge gate for a scheduling delay
  * on a saturated runner (#1135 / #1158). The exclusion is at the **task** level rather than the
- * env-var-plus-`getenv`-self-skip `:kuilt-nw` uses for its native probe: that shape was tried here
- * and failed silently — the variable did not arrive, the probe self-skipped, and 3 000 races
- * reported as a PASS in 0.0s. A gate whose failure mode is a green is the wrong gate for a test
- * whose whole job is to red; an excluded task leaves the probe *absent* from the results XML, which
- * is checkable. The honest consequence is the same one `:kuilt-nearby` records: `ci-required` does
- * not pin this fix.
+ * env-var-plus-`getenv`-self-skip `:kuilt-nw` uses for its native probe — one mechanism for this
+ * module's JVM and native probes instead of two, and an excluded test is *absent* from the results
+ * XML rather than present and passing.
+ *
+ * ## Do not trust this task's reported duration — assert the work instead
+ *
+ * `macosArm64Test` reported `time="0.0"` for a run of this very test that provably completed all
+ * [ITERATIONS] iterations. That is why the race arm asserts its own loop count: a probe whose only
+ * evidence of having run is a duration has no evidence at all on this target. An earlier revision of
+ * this file concluded from that same 0.0 that the env-var gating had silently failed and the probe
+ * had self-skipped; it had not — the variable arrives fine, and the clock was the thing lying. The
+ * general shape is worth keeping in mind here: a contract-impossible reading is a fork between a
+ * measurement bug and a real one, and this was the measurement branch.
+ *
+ * ## This probe runs NOWHERE in CI — it is a local-only instrument
+ *
+ * Stated plainly because the alternative is a comment that lies. `ci.yml`'s `concurrency-probes` job
+ * is `runs-on: ubuntu-latest` and structurally cannot host a `macosArm64Test`. `apple-nightly.yml`
+ * is the only macOS lane, and it runs `macosArm64Test iosSimulatorArm64Test` **without**
+ * `-Pconcurrency.stress.tests`, so the exclusion above silences this class there too.
+ *
+ * That is deliberate rather than an oversight to be tidied up later. The nightly's own header
+ * records a 10–20x wall-clock slowdown on its 3 vCPU runner, and Kotlin/Native has no
+ * `runConcurrencyStress` equivalent — no wall-clock cap, no coroutine census, no thread dump — so a
+ * probe that wedges there hangs the task and writes **no XML at all**, which is precisely the #1135
+ * shape this whole family exists to avoid. A 3 000-iteration real-threaded probe is a bad tenant for
+ * that runner until the cap exists.
+ *
+ * So the standing instrument for this defect class is the JVM twin, which does have a CI home; this
+ * arm is run by hand (`./gradlew :kuilt-multipeer:macosArm64Test -Pconcurrency.stress.tests=true`)
+ * when the Apple side is touched. Anyone wiring it into the nightly should solve the cap first.
  */
 @OptIn(ExperimentalForeignApi::class)
 class MCSessionLinkStateLatchConcurrencyTest {
@@ -107,6 +132,7 @@ class MCSessionLinkStateLatchConcurrencyTest {
     @Test
     fun aPromotionCaughtMidFlightCannotStampWovenOverTheTerminalTorn() = runBlocking {
         val survivors = mutableListOf<String>()
+        var completed = 0
         repeat(ITERATIONS) { iter ->
             val self = MCPeerID(displayName = "self")
             val session = newSession(self)
@@ -129,7 +155,15 @@ class MCSessionLinkStateLatchConcurrencyTest {
             // value here permanent rather than transient.
             val settled = link.state.value
             if (settled !is SeamState.Torn) survivors += "iter=$iter settled=$settled"
+            completed++
         }
+
+        // Rig precondition: the loop actually ran every iteration it claims. Asserted rather than
+        // inferred from the reported duration, because the duration is exactly what lied earlier in
+        // this PR — a self-skipping probe reported 3 000 races as a PASS in 0.0s, and the K/N result
+        // XML's `time` attribute is not a trustworthy witness either. A race arm that asserts only an
+        // ABSENCE must prove it did the work, or a loop that never executed reads as a clean pass.
+        assertEquals(ITERATIONS, completed, "the race loop did not complete every iteration")
 
         assertEquals(
             emptyList(),

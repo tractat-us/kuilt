@@ -47,6 +47,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a blob cache keyed by a content hash, a "have you got these bytes?" request/response, a manifest of what each peer holds | `Creel` + `BobbinExchange` | [Code mobility](#code-mobility) |
 | running code that arrived from another peer — a plugin loader, an `eval`, a bespoke sandbox or timeout-and-kill wrapper | `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch` | [Code mobility](#code-mobility) |
 | a `try`/`catch` inside an `onEach { … }.launchIn(scope)` so one bad item cannot kill a long-lived collector — or a fix for "the pump stopped and nothing said so", a `Seam`/`Room` that goes deaf after one throw, an iOS crash traced to an unhandled coroutine exception | `Flow.pumpIn(scope, onFailure, name) { … }` — it owns the upstream half your `try` structurally cannot see | [Long-lived pumps](#long-lived-pumps) |
+| declaring a `MutableStateFlow<SeamState>` while writing a fabric, or a `closed`/`tornDown` flag beside one — or a fix for "my `close()` publishes `Torn` and something overwrites it", `state.first { it is Torn }` that hangs forever, a closed seam still reporting `Woven`, a seam slot that never frees | `SeamStateGate` — it fuses the latch check and the flow write, and replaces your single-shot flag | [A seam's terminal state](#a-seams-terminal-state) |
 | turning a peer-supplied id into a roster entry while writing a fabric — `PeerId(bytes.decodeToString())`, a `Set<PeerId>` a callback adds to and removes from, `peers == setOf(selfId)` meaning "the session is over" | `PeerIdentityRegistry` | [A peer id off the wire](#a-peer-id-off-the-wire-straight-into-a-setpeerid) |
 | a 4-byte length prefix and a reassembly loop over a socket or in-house RPC — "I have a byte stream, kuilt wants a fabric" | `framed()` → `handshaking()` | [Your own transport](#your-own-transport) |
 | that same plumbing when the transport really is just TCP | `TcpLoom.host` / `TcpLoom.join` | [Plain TCP is already assembled](#plain-tcp-is-already-assembled) |
@@ -1645,6 +1646,47 @@ val pump = updates.pumpIn(
 }
 pump.join()
 ```
+
+## A seam's terminal state
+
+**Intent:** publish your fabric's `SeamState` when two different threads write it — a transport callback promoting `Weaving → Woven`, and `close()` latching the terminal `Torn`.
+**Primitive:** `SeamStateGate` (`:kuilt-core`).
+
+A `Seam` has **two** state writers and they are genuinely concurrent: the promotion runs on whatever thread your transport calls back on (a JNA trampoline, MC's private delegate queue, a socket reader), while `close()` runs on the consumer's. So this, which is what everyone writes, is a **check-then-set**:
+
+```kotlin
+if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven   // ← read and write are not atomic
+```
+
+A tear landing between that read and that write is stamped over with `Woven`. It is **permanent**, not transient: the spool is closed, `incoming` has completed, `peers` has collapsed, and both writers have retired, so no later emission can correct it. Every consumer on `state.first { it is Torn }` hangs forever, and a factory that frees its seam slot on `Torn` never frees — so no later `weave()` succeeds either.
+
+**A `closed` flag does not fix it.** The flag read and the flow write are still two steps, so a callback can read `closed == false`, be preempted by a complete `close()`, and resume into the same clobber. Check-a-flag-then-write *is* the race. This is not hypothetical: four fabrics hand-rolled a latch while this type was `internal`, and three wrote precisely that shape (#1803).
+
+`update` no-ops once `tear` has latched, and `tear` returns `true` for exactly one caller — so it **replaces** your single-shot atomic rather than sitting beside it. Publish `Torn` through `tear`, never `update`: `update` refuses it, because a `Torn` published without latching is the same bug through the front door.
+
+<!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/SeamStateGateSamples.kt#sampleSeamStateGate -->
+```kotlin
+val gate = SeamStateGate(SeamState.Weaving)
+
+// The transport callback's promotion. Unconditional: `Woven` over `Woven` conflates, and once
+// the gate has latched it cannot land at all — so no `if (state.value is Weaving)` guard, which
+// was never a promotion rule but the read half of a race.
+gate.update(SeamState.Woven)
+assertIs<SeamState.Woven>(gate.state.value)
+
+// The close decision. Single-shot: `true` for the one winning caller, so this IS the seam's
+// terminal latch and it needs no separate `closed` atomic beside it.
+assertTrue(gate.tear(CloseReason.Normal))
+assertEquals(false, gate.tear(CloseReason.RemoteRequested), "a second tear loses; the first reason stands")
+
+// The whole point: a promotion still in flight when the tear landed. Before the gate this write
+// stamped `Woven` over the terminal `Torn` — permanently, because both writers then retire and
+// every `state.first { it is Torn }` waiter hangs forever.
+gate.update(SeamState.Woven)
+assertIs<SeamState.Torn>(gate.state.value)
+```
+
+**Two shapes genuinely do not need it**, and churning them onto the gate buys nothing: one shared mutual-exclusion primitive covering *every* write to the flow (`NwSeam` takes all three under its own lock), and a single-threaded target, where nothing can run between the read and the write (`WebRTCPeerLink` on wasmJs, which documents exactly that).
 
 ## Dedup
 
