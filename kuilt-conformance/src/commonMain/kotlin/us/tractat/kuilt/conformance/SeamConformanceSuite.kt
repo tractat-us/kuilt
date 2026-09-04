@@ -1659,11 +1659,54 @@ public abstract class SeamConformanceSuite {
                     )
                 }
 
-                is ObligationDeclaration.NotApplicable.ContractDiffers ->
-                    assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON)
+                // ── the two anti-vacuity checks ─────────────────────────────
+                //
+                // An "I cannot reach this state" opt-out the suite BELIEVES would move the vacuity one
+                // level up, where it is harder to see: a visible tracked gap becomes an invisible
+                // self-certified green. Neither arm is believed.
 
-                is ObligationDeclaration.NotApplicable.NotConstructible ->
+                is ObligationDeclaration.NotApplicable.ContractDiffers -> {
                     assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON)
+                    assertTrue(
+                        injectMidSessionDeath(host, joiner),
+                        "ContractDiffers must DEMONSTRATE the deviation, not assert it: injectMidSessionDeath " +
+                            "returned false, so nothing was injected and nothing was watched. A harness that " +
+                            "cannot inject the event has a Gap (or NotConstructible), not a differing contract.",
+                    )
+                    // The obligation's OWN postcondition must fail. This is the positive property the arm
+                    // buys — and it inverts into a regression guard: the day the fabric starts latching Torn
+                    // on peer loss (undoing #1513 for kuilt-nw), this declaration goes red.
+                    val hostTorn = withTimeoutOrNull(DEVIATION_WINDOW) { host.state.first { it is SeamState.Torn } }
+                    val joinerTorn = withTimeoutOrNull(DEVIATION_WINDOW) { joiner.state.first { it is SeamState.Torn } }
+                    assertAll(
+                        { assertNull(hostTorn, "the host latched Torn on the injected death — $CONTRACT_DOES_NOT_DIFFER") },
+                        { assertNull(joinerTorn, "the joiner latched Torn on the injected death — $CONTRACT_DOES_NOT_DIFFER") },
+                    )
+                }
+
+                is ObligationDeclaration.NotApplicable.NotConstructible -> {
+                    assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON)
+                    assertFalse(
+                        injectMidSessionDeath(host, joiner),
+                        "this harness just injected a mid-session death, so the event IS constructible here: " +
+                            "declare Proven, or ContractDiffers if the fabric answers it differently on purpose",
+                    )
+                    // Refute the STATED REASON, which is always some form of "a peer going away does not tear
+                    // the survivor here, so there is no death to inject". Nothing can prove the negative
+                    // existential the arm names — see ObligationDeclaration's KDoc — but this is the one way
+                    // the claim is cheaply false, and refuting it turns the arm into a positive property of
+                    // the topology: a departure leaves the survivor live. On a real 2-peer link it reds,
+                    // which is what keeps this arm out of the hands of a harness that merely lacks a handle
+                    // on its transport (that is a Gap).
+                    joiner.close()
+                    val hostTorn = withTimeoutOrNull(DEVIATION_WINDOW) { host.state.first { it is SeamState.Torn } }
+                    assertNull(
+                        hostTorn,
+                        "NotConstructible says a peer going away cannot tear the survivor here — but closing " +
+                            "the counterpart latched the survivor Torn, so a mid-session death IS reachable " +
+                            "here and this is a Gap (or Proven), not a by-design inapplicability",
+                    )
+                }
             }
         }
 
@@ -1871,6 +1914,27 @@ public abstract class SeamConformanceSuite {
          * otherwise refute. Same shape as [JoinerRosterOrigin]'s: a sentence naming a mechanism a
          * reviewer can go and read, not a conclusion asserted.
          */
+        /**
+         * How long a by-design declaration's **negative** observation waits before concluding the
+         * deviation is real ("no `Torn` arrived").
+         *
+         * Bounded rather than instantaneous so an in-process fabric's dispatched continuations all get
+         * to run first — which is what makes the check strong under `runTest`'s virtual clock, where
+         * everything eligible executes before the bound expires. It is correspondingly **weaker on a
+         * real-IO harness**, whose seams run on a wall clock the virtual bound races past;
+         * [ObligationDeclaration]'s KDoc states that limit, and the two `kuilt-nw` loopback harnesses
+         * repeat it at their own declarations. There is no wall-clock alternative here: this runs
+         * inside `runTest`, and a real `delay` would only make every in-process harness slower without
+         * making any of them stricter.
+         */
+        val DEVIATION_WINDOW = 2.seconds
+
+        /** Shared tail of both [ObligationDeclaration.NotApplicable.ContractDiffers] deviation failures. */
+        const val CONTRACT_DOES_NOT_DIFFER =
+            "which is exactly what the obligation requires, so the contract does NOT differ here. " +
+                "Either the fabric regressed into satisfying it (for kuilt-nw that means tear-on-peer-loss " +
+                "is back and #1513's redial is broken), or this harness should declare Proven"
+
         /** The toll an [ObligationDeclaration.Gap] pays — same shape [everyFalseCapabilityDeclaresAGap] charges. */
         const val GAP_NEEDS_A_URL =
             "a Gap must carry a non-blank tracking URL — a blank one is a silent skip wearing a declaration"
