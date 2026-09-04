@@ -192,8 +192,17 @@ public class BridgeNwApi internal constructor(
             // takes its default `true` here — the bridge asserts every discovered id is a real identity. On
             // the bridge that is the safe default rather than a lie of consequence: the JVM side reaches
             // this fabric via Rendezvous.Existing, where the #1709 deferral is inert anyway (an endpoint
-            // under our own advertised name is the self case the pre-dial filter already catches). Widening
-            // the callback signature belongs with the rest of the ABI identity work in #1539.
+            // under our own advertised name is the self case the pre-dial filter already catches). That
+            // argument covers only the #1709 consumer, though: since #2417 the flag has a second one —
+            // NwSeam's dialled-mismatch settle rule, where this default is a known false positive that
+            // line carries in its own message rather than suppressing.
+            //
+            // Two things are outstanding, and #2419 tracks both: widening this callback signature to
+            // marshal `identityResolved`, and threading the loom's own selfId across the ABI at all —
+            // today the bridge defaults its selfId while the dylib's RealNwApi defaults a distinct one,
+            // so the endpoint-id space and the PeerId space diverge here as they do not on the Apple
+            // path. (This deferral is the ONLY #1539 citation in this file that was wrong; the others
+            // are provenance for the drop-tolerant lifecycle state, which is what #1539 actually was.)
             endpointFoundStaging.trySend(NwEndpoint(id = endpointId, serviceName = serviceName))
         }
 
