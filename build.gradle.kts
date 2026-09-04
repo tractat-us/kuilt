@@ -1143,9 +1143,24 @@ val verifyDocCitations by tasks.registering {
     // `.md` there (119 of them), which would both be meaningless to check and make this task's
     // input overlap another's output; `.claude/worktrees/**` because ephemeral agent worktrees are
     // whole copies of the repo, `docs/` and all.
+    //
+    // `.superpowers/**` is GITIGNORED scratch — the subagent-driven-development workflow's ledger,
+    // task briefs and review packages (#2411). It is excluded rather than added to `citationExempt`
+    // because exemption means "considered and excused", and these files were never in the tree to
+    // consider: nothing commits them, so CI never sees them and the failure lands only on the
+    // machine that ran the workflow. A local-only red on a REQUIRED gate is the most expensive
+    // shape a false red takes — it reads as "the build is broken on my machine", which is
+    // unfalsifiable from CI.
     val allMarkdown = fileTree(rootDir) {
         include("**/*.md")
-        exclude("**/build/**", "**/.git/**", "**/.gradle/**", "**/node_modules/**", "**/.claude/worktrees/**")
+        exclude(
+            "**/build/**",
+            "**/.git/**",
+            "**/.gradle/**",
+            "**/node_modules/**",
+            "**/.claude/worktrees/**",
+            "**/.superpowers/**",
+        )
     }
     inputs.files(allMarkdown).withPropertyName("allMarkdown")
         .withPathSensitivity(PathSensitivity.RELATIVE)
@@ -1169,6 +1184,29 @@ val verifyDocCitations by tasks.registering {
         // purpose — trailing prose would make it ambiguous with a real source comment, and the
         // marker has to be unmistakable to a reader as well as to this regex.
         val elision = Regex("""^//\s*(?:…|\.\.\.)$""")
+
+        // 0-based indices of every line that sits INSIDE a fenced block, the fence delimiters
+        // included (#2411). A citation marker is an HTML comment on its own line immediately
+        // ABOVE a fence; the same text INSIDE one is a document showing the reader what a citation
+        // looks like. Without this the two are indistinguishable, so a post-mortem, design note or
+        // issue write-up that quotes the marker becomes a build failure, and the natural way out —
+        // paraphrase the marker instead of quoting it — degrades the document to appease the
+        // checker. `verifyModuleTable` skips fences for the same reason (a fenced example row is
+        // not a module row); this brings the two into line. Same toggle the bare-range scan below
+        // uses, so one file cannot be read as fenced by one check and unfenced by the other.
+        fun fencedLines(lines: List<String>): Set<Int> {
+            val inside = mutableSetOf<Int>()
+            var open = false
+            lines.forEachIndexed { n, line ->
+                if (line.trim().startsWith("```")) {
+                    inside += n
+                    open = !open
+                } else if (open) {
+                    inside += n
+                }
+            }
+            return inside
+        }
 
         fun trimBlankEdges(ls: List<String>): List<String> =
             ls.map(String::trimEnd).dropWhile(String::isEmpty).dropLastWhile(String::isEmpty)
@@ -1454,8 +1492,10 @@ val verifyDocCitations by tasks.registering {
             .filterNot { it.invariantSeparatorsPath in scannedPaths || exempt(it) }
             .sortedBy { it.invariantSeparatorsPath }
             .mapNotNull { md ->
-                md.readLines().asSequence().withIndex()
-                    .firstOrNull { (_, line) -> cite.matchEntire(line.trim()) != null }
+                val lines = md.readLines()
+                val fenced = fencedLines(lines)
+                lines.asSequence().withIndex()
+                    .firstOrNull { (n, line) -> n !in fenced && cite.matchEntire(line.trim()) != null }
                     ?.let { (n, line) ->
                         "${md.relativeTo(rootPath).invariantSeparatorsPath}:${n + 1}\n      ${line.trim()}"
                     }
@@ -1561,9 +1601,14 @@ val verifyDocCitations by tasks.registering {
 
         mdFiles.forEach { md ->
             val lines = md.readLines()
+            // Same reason as `stowaways` above (#2411): a marker quoted inside a fence is an
+            // illustration, not a citation. On a SCANNED surface reading it as one is worse than a
+            // false accusation — the loop would then hunt for "the next fenced block", find the
+            // enclosing fence's own closing delimiter, and content-check whatever followed it.
+            val fencedHere = fencedLines(lines)
             var i = 0
             while (i < lines.size) {
-                val m = cite.matchEntire(lines[i].trim())
+                val m = if (i in fencedHere) null else cite.matchEntire(lines[i].trim())
                 if (m == null) {
                     i++
                     continue
