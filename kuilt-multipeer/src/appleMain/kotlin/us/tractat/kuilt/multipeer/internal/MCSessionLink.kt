@@ -1,7 +1,6 @@
 package us.tractat.kuilt.multipeer.internal
 
 import io.github.oshai.kotlinlogging.KotlinLogging
-import kotlinx.atomicfu.atomic
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +32,7 @@ import us.tractat.kuilt.core.PeerIdentityRegistry
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import kotlin.coroutines.CoroutineContext
@@ -99,8 +99,21 @@ internal class MCSessionLink(
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     // Starts Weaving; transitions to Woven on first MCSessionStateConnected callback.
-    private val _state: MutableStateFlow<SeamState> = MutableStateFlow(SeamState.Weaving)
-    override val state: StateFlow<SeamState> = _state.asStateFlow()
+    //
+    // A `SeamStateGate`, not a bare MutableStateFlow, because the two writers are on genuinely
+    // different threads: MC fires this link's delegate from the framework's own private queue,
+    // while `tearDown` runs on the consumer's. The old
+    // `if (_state.value is Weaving) _state.value = Woven` was a check-then-set across that
+    // boundary — a tear landing between the read and the write was stamped over with `Woven`,
+    // permanently, because both writers then retire and nothing is left to correct it (#1803).
+    // The gate fuses the latch check and the write into one critical section.
+    //
+    // The JVM twin `BridgePeerLink` carried the identical defect and its
+    // `BridgePeerLinkStateLatchConcurrencyTest` reproduces it at 7 clobbers in 20 000 races; this
+    // side cannot be probed the same way (see `MCSessionLinkStateLatchConcurrencyTest` for what is
+    // and is not covered here).
+    private val stateGate = SeamStateGate(SeamState.Weaving)
+    override val state: StateFlow<SeamState> = stateGate.state
 
     // Bounded staging channel: the MC delegate callback deposits frames here non-suspendingly.
     // DROP_OLDEST overflow so the callback never blocks; the single drain coroutine forwards
@@ -149,13 +162,13 @@ internal class MCSessionLink(
     // writes visible across threads; @Volatile is JVM-only.
     private var closing: Boolean = false
 
-    // SEPARATE single-shot latch for the seam's terminal state+resource teardown
-    // (state→Torn, bridge/spool close, scope cancel). Distinct from `closing`:
-    // the self-driven drop path tears the seam down (so `state` reaches Torn and
-    // `incoming` completes per the Seam contract) WITHOUT calling disconnect(),
-    // while close() does both. One CAS winner across both paths so a drop followed
-    // by a consumer close() never double-closes bridge/spool or re-cancels scope.
-    private val tornDown = atomic(false)
+    // The seam's terminal state+resource teardown (state→Torn, bridge/spool close, scope cancel) is
+    // latched by [stateGate] itself — `tear()` returns true for exactly one caller, so it IS the
+    // single-shot latch and the separate `tornDown` atomic this class used to carry is gone (a
+    // migrating seam deletes a field rather than gaining one). The distinction from `closing`
+    // survives and still matters: the self-driven drop path tears the seam down (so `state` reaches
+    // Torn and `incoming` completes per the Seam contract) WITHOUT calling disconnect(), while
+    // close() does both.
 
     init {
         // Single drain coroutine: forwards frames from the MC delegate bridge to the spool in
@@ -179,7 +192,7 @@ internal class MCSessionLink(
         // no-peers warn-drop below; the last-peer drop issues no disconnect, so `connectedPeers`
         // can still name a peer MC has since lost and the send would look ordinary. Only a check
         // that runs before the read covers both.
-        check(_state.value !is SeamState.Torn) { "broadcast on a Torn seam" }
+        check(state.value !is SeamState.Torn) { "broadcast on a Torn seam" }
         // [remotes], never `session.connectedPeers`: a self-dialled session lists this device among
         // its own connected peers, and broadcasting to it loops the frame straight back (#2445).
         val targets = remotes
@@ -205,7 +218,7 @@ internal class MCSessionLink(
         // addressee for the seam's own death, and is an IllegalStateException, so the conformance
         // suite's `assertFailsWith<IllegalStateException>` could not tell the two apart.
         // `MCSessionLinkTornSendTest` is what pins the distinction.
-        check(_state.value !is SeamState.Torn) { "sendTo on a Torn seam" }
+        check(state.value !is SeamState.Torn) { "sendTo on a Torn seam" }
         // [remotes] never names this device, so without this a self-send fell out as
         // PeerNotConnected — false for an id `peers` names (#2428). This comment used to justify
         // itself with "`connectedPeers` is the remotes MC has connected, never this device", which
@@ -243,15 +256,15 @@ internal class MCSessionLink(
     /**
      * Single-shot terminal teardown — latch [SeamState.Torn], close the MC-delegate
      * [bridge] and the [spool] (completing [incoming] per the `Seam` contract),
-     * cancel [scope]. Shared by the self-driven drop path and [close]; the [tornDown]
-     * CAS makes it run once even if a drop and a consumer [close] interleave. Issues no
+     * cancel [scope]. Shared by the self-driven drop path and [close]; the [stateGate]
+     * latch makes it run once even if a drop and a consumer [close] interleave. Issues no
      * `session.disconnect()` — ARC reclaims the dropped `MCSession`; only [close]
      * disconnects. The latched `Torn` is what the owning factory's `ActiveSeamSlot`
      * reads to free its single-session slot on the next weave.
      *
      * Collapses the roster to `{ selfId }` **before** latching `Torn` (#1816): a torn fabric can
      * reach nobody, and a decorator folding this seam reads whatever is left here as still
-     * reachable until the member is detached. The collapse sits ahead of the [tornDown] CAS, as in
+     * reachable until the member is detached. The collapse sits ahead of the [stateGate] latch, as in
      * `LinkSeam.tearDown`: it is idempotent, so running it on a losing caller costs nothing and
      * buys the stronger post-condition that `peers` is collapsed once *any* `tearDown` has
      * returned. Previously only the remote-drop path reached `{ selfId }`, leaving a locally-closed
@@ -269,8 +282,7 @@ internal class MCSessionLink(
     private fun tearDown(reason: CloseReason) {
         registry.clear()
         _peers.value = setOf(selfId)
-        if (!tornDown.compareAndSet(false, true)) return
-        _state.value = SeamState.Torn(reason)
+        if (!stateGate.tear(reason)) return
         bridge.close()
         spool.close()
         scope.cancel()
@@ -315,7 +327,12 @@ internal class MCSessionLink(
                     when (registry.bind(peerId, peer)) {
                         PeerIdentityRegistry.BindResult.BOUND -> {
                             _peers.value = registry.peers + selfId
-                            if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven
+                            // Unconditional, and equivalent to the old `is Weaving` guard:
+                            // `Woven` over `Woven` is a no-op (StateFlow conflates equal values,
+                            // and `Woven` is a data object), and `Woven` over a latched `Torn` is
+                            // refused by the gate — which is the whole point. The guard was never a
+                            // promotion *rule*, it was the read half of the race.
+                            stateGate.update(SeamState.Woven)
                         }
                         PeerIdentityRegistry.BindResult.ALREADY_BOUND -> Unit // duplicate connect callback
                         PeerIdentityRegistry.BindResult.COLLISION ->

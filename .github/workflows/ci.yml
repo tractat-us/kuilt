@@ -898,6 +898,21 @@ jobs:
           ./gradlew :kuilt-nearby:jvmTest -Pconcurrency.stress.tests=true
           --tests "*ConcurrencyTest"
 
+      # `:kuilt-multipeer`'s JVM probe (#1803) — `BridgePeerLinkStateLatchConcurrencyTest`. Its own
+      # step for the same reason `:kuilt-nearby` has one: a red in another module must not hide this
+      # module's result. This covers the JVM half of that fix ONLY. The Apple half
+      # (`MCSessionLinkStateLatchConcurrencyTest`, K/N `macosArm64Test`) has no CI host at all — this
+      # job is ubuntu-latest and structurally cannot run it, and `apple-nightly.yml` is a 3 vCPU
+      # runner whose own header records a 10–20x wall-clock slowdown, with no `runConcurrencyStress`
+      # cap available on K/N to convert a wedge into a named failure. That probe is therefore a
+      # local-only instrument and its KDoc says so; do not "fix" it by adding it to the nightly
+      # without solving the cap first (#1135).
+      - name: Run :kuilt-multipeer concurrency probes (isolated runner, NON-BLOCKING)
+        if: always()
+        run: >-
+          ./gradlew :kuilt-multipeer:jvmTest -Pconcurrency.stress.tests=true
+          --tests "*ConcurrencyTest"
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -908,6 +923,8 @@ jobs:
             kuilt-core/build/test-results/
             kuilt-nearby/build/reports/tests/
             kuilt-nearby/build/test-results/
+            kuilt-multipeer/build/reports/tests/
+            kuilt-multipeer/build/test-results/
             kuilt-conformance/build/reports/tests/
             kuilt-conformance/build/test-results/
 

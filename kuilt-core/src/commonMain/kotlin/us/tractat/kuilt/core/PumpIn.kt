@@ -89,7 +89,9 @@ public enum class PumpFailure {
  * Stated rather than left to inference, because the *identical* remedy for the sibling defect class was
  * written, documented, correct — and `internal` to this module. Four fabrics outside `:kuilt-core` then
  * hand-rolled their own, and three wrote precisely the race that helper's own KDoc bans ([SeamStateGate],
- * #1803). The remedy was unreachable, not ignored. Pumps of this shape live in every fabric and in
+ * #1803). The remedy was unreachable, not ignored — [SeamStateGate] has since been made `public` for
+ * this same reason, so it is now a resolved precedent rather than a live one. Pumps of this shape
+ * live in every fabric and in
  * `:kuilt-raft`, `:kuilt-session` and `:kuilt-quilter` — all outside this module, all depending on it —
  * so an `internal` helper here is a known-failed design. `:kuilt-core` is the lowest module every one of
  * them already depends on.

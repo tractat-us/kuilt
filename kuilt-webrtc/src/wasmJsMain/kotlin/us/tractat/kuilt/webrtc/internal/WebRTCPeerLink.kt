@@ -214,9 +214,12 @@ internal class WebRTCPeerLink(
      * **This is a check-then-act, and its soundness is a property of the TARGET, not of this code.**
      * `wasmJsMain` is single-threaded, and the two writes below are synchronous with no suspension
      * point between them, so nothing can interleave between the read of [_state] and the write to
-     * it. **Do not copy this shape to a multithreaded fabric** — there it needs a lock or a CAS
-     * (`:kuilt-core`'s internal `SeamStateGate` is the lock-guarded equivalent `TieredSeam` and
-     * `RoomHubSeam` use; #1879 is the same shape on a target where it *is* a live bug).
+     * it. **Do not copy this shape to a multithreaded fabric** — there it needs a lock or a CAS.
+     * `:kuilt-core`'s `SeamStateGate` is the lock-guarded equivalent `TieredSeam` and `RoomHubSeam`
+     * use, and it is `public` since #1803 precisely so a fabric outside that module can reach for it
+     * instead of hand-rolling one (#1879 is the same shape on a target where it *is* a live bug).
+     * This site stays as it is on purpose: the gate's own KDoc names a single-threaded target as one
+     * of the two shapes that do not need it, so migrating here would add a lock to buy nothing.
      */
     private fun tear(reason: CloseReason) {
         if (_state.value is SeamState.Torn) return

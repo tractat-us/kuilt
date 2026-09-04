@@ -963,8 +963,9 @@ public abstract class SeamConformanceSuite {
     // deterministic ordering check, necessary but not sufficient — it cannot reproduce the genuine
     // multi-threaded race. The stress-grade coverage lives in the `-Pconcurrency.stress.tests`
     // real-threaded probes (`:kuilt-core`'s `*ConcurrencyTest`). This obligation's value is the
-    // *contract*: it protects out-of-tree fabrics that subclass this suite and cannot use the
-    // in-tree `SeamStateGate`, converting "the next seam ships the bug silently" into a red test.
+    // *contract*: it converts "the next seam ships the bug silently" into a red test. That matters
+    // even now `SeamStateGate` is `public` (#1803) and an out-of-tree fabric *can* reach for it —
+    // reachability is not adoption, and this obligation is what catches a fabric that did not.
 
     @Test
     public fun stateStaysTornAfterClose(): TestResult =
