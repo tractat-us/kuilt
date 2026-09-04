@@ -244,6 +244,76 @@ class WarpSpanExporterFailureReportingTest {
         )
     }
 
+    /**
+     * A success on **any** of the three durable-write paths closes the outage, so the next refusal
+     * is news again.
+     *
+     * The arms above only ever recover through `export`, which leaves the *other two* success arms
+     * unpinned — and that is the half of the latch with the asymmetric cost. A failure arm that
+     * forgets to latch emits one duplicate line; a **success** arm that forgets to clear leaves the
+     * latch stuck `true` against a store that demonstrably recovered, and silences the next real
+     * outage entirely. Deleting `durableWriteSucceeded()` from `merge`'s or `clear`'s success arm
+     * reds here and nowhere else.
+     *
+     * Each path gets a fresh store and exporter, so the three cases cannot mask one another.
+     */
+    @Test
+    fun aSuccessOnAnyDurableWritePathClosesTheOutage() = runTest {
+        val recoveries: List<Pair<String, suspend (WarpSpanExporter) -> ExportResult>> = listOf(
+            "export" to { exporter -> exporter.export(span(100)) },
+            "merge" to { exporter -> exporter.merge(remote(200)) },
+            "clear" to { exporter -> exporter.clear() },
+        )
+        // path -> (the recovering call succeeded, lines while the first outage was open, lines now)
+        val outcomes = mutableMapOf<String, Triple<Boolean, Int, Int>>()
+
+        for ((path, recover) in recoveries) {
+            val store = WriteRefusingStore(RecordingStore())
+            capturingLogsOf(SPAN_EXPORTER_LOGGER) { captured ->
+                val exporter = exporterFor(store)
+                exporter.export(span(0))
+
+                store.refuseWrites()
+                exporter.export(span(1))
+                val opened = captured.naming(WRITE_FRAGMENT).size
+
+                store.allowWrites()
+                val recovered = recover(exporter) is ExportResult.Success
+
+                store.refuseWrites()
+                exporter.export(span(2))
+                outcomes[path] = Triple(recovered, opened, captured.naming(WRITE_FRAGMENT).size)
+            }
+        }
+
+        assertAll(
+            {
+                val notRecovered = outcomes.filterValues { !it.first }.keys
+                assertTrue(
+                    notRecovered.isEmpty(),
+                    "precondition: the recovering call failed on $notRecovered, so the store never " +
+                        "came back and those cases are vacuous",
+                )
+            },
+            {
+                val notOpened = outcomes.filterValues { it.second != 1 }
+                assertTrue(
+                    notOpened.isEmpty(),
+                    "precondition: the first outage was not reported exactly once for $notOpened, " +
+                        "so the counts below are not measuring a re-arm",
+                )
+            },
+            {
+                val stuck = outcomes.filterValues { it.third != 2 }.mapValues { it.value.third }
+                assertTrue(
+                    stuck.isEmpty(),
+                    "a success on these paths did not close the outage, so the next one went " +
+                        "unreported (expected 2 lines each, got $stuck)",
+                )
+            },
+        )
+    }
+
     private companion object {
         /** The exporter's logger name, spelled out because the production constant is private. */
         const val SPAN_EXPORTER_LOGGER = "us.tractat.kuilt.otel.WarpSpanExporter"
