@@ -64,6 +64,32 @@ internal class PairedFacadeFactory private constructor(
         _iceConnectionState.value = state
     }
 
+    /**
+     * Kill the data channel under **both** sides of this pair with no `close()` anywhere: complete
+     * each side's remote-close signal directly, which is what a browser reports through
+     * `RTCDataChannel.onclose` when the connection dies rather than when the application asks.
+     * `WebRTCPeerLink`'s `awaitDataChannelClose()` watcher then tears each seam with
+     * [us.tractat.kuilt.core.CloseReason.RemoteRequested] and completes `incoming` — the
+     * remote-disconnect half of the `incoming`-completes-on-`Torn` contract (#1442).
+     *
+     * **Deliberately not routed through [FakeFacade.close]**, which is the local-close path: it also
+     * closes the outbound [Spool], and a `Seam.close()` on top of it would latch
+     * [us.tractat.kuilt.core.CloseReason.Normal]. Completing the deferreds is the *only* way to make
+     * this fabric see a death it did not ask for.
+     *
+     * Both factories in a [pair] share one `remoteClose` pair, so one call drops both sides and a
+     * second call on the sibling factory would find nothing left — which is what makes the count
+     * below meaningful rather than decorative.
+     *
+     * @return the number of sides **actually** severed (0, 1 or 2), never a bare `true`.
+     *   `CompletableDeferred.complete` answers `false` for a signal that had already fired, so this
+     *   counts real severances. The obligation this unblocks reads only *terminal* state, so it
+     *   would pass just as happily on a pair that was already dead, crediting a tear this fake did
+     *   not cause. Modelled on `FakeNwRadio.dropAllLinks`, which returns a count for the same reason.
+     */
+    fun dropTransport(): Int =
+        listOf(remoteClose.first, remoteClose.second).count { it.complete(Unit) }
+
     override fun create(
         iceConfig: IceConfig,
         hostInitiated: Boolean,

@@ -5,6 +5,8 @@ import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 
 /**
@@ -39,12 +41,22 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
          * [newLoomPair] to drive the #1544 observer loop. Required setup, not decoration.
          */
         val ICE_CONNECTED = IceConnectionState.Connected
+
+        /** Both sides of the 2-peer data channel — what a genuine transport death must sever. */
+        const val BOTH_SIDES = 2
     }
 
     private val room = "conformance-room"
 
+    /**
+     * The facade factory backing the current pair, held so [injectMidSessionDeath] can drop the
+     * data channel. Either half of the pair would do — both share one remote-close signal pair.
+     */
+    private var facades: PairedFacadeFactory? = null
+
     override fun newLoomPair(): Pair<Loom, Loom> {
         val (hostFacFactory, joinerFacFactory) = PairedFacadeFactory.pair()
+        facades = hostFacFactory
         val (hostSig, joinerSig) = PairedSignalingChannels.pair()
         // LOAD-BEARING (#1544/#1712): the ICE observer is the only source of a non-Unknown
         // availability, and the suite's reportsLiveCapability branch AWAITS one. Delete these and
@@ -99,6 +111,38 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
 
     override fun capabilityGaps(): Map<String, String> = emptyMap()
+
+    /**
+     * Kill the data channel under both seams with no `close()` anywhere: [PairedFacadeFactory]
+     * completes each side's remote-close signal, which is what a browser reports through
+     * `RTCDataChannel.onclose` when the connection dies rather than when the application asks. Each
+     * [us.tractat.kuilt.webrtc.internal.WebRTCPeerLink] then tears with
+     * [us.tractat.kuilt.core.CloseReason.RemoteRequested] and completes `incoming` (#1442).
+     *
+     * The missing piece the issue named was exactly this: the paired fake's facade already
+     * *observed* a remote close through `awaitDataChannelClose`, but the only thing that could fire
+     * it was its own `close()` — the **local**-close path, which also closes the outbound spool and
+     * would make this a `close()` obligation the suite already covers elsewhere.
+     *
+     * ## Why this returns a count rather than a bare `true`
+     *
+     * [SeamConformanceSuite.incomingCompletesOnInjectedMidSessionDeath] reads only *terminal* state,
+     * so it would pass just as happily on a pair that was already dead — crediting a tear this rig
+     * did not cause. Two guards make the injection prove it is the thing being observed: the `check`
+     * asserts both seams were live *before* the drop (the `dropBothEnds` pattern in
+     * `:kuilt-conformance`), and the fake reports how many sides it **actually** severed (the
+     * `FakeNwRadio.dropAllLinks` pattern — a `CompletableDeferred` already completed answers
+     * `false`). Anything but both leaves this honestly `false`, so the harness reads as unproven and
+     * [midSessionDeathDeclaration] reds — never falsely green.
+     */
+    override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
+        check(host.state.value !is SeamState.Torn && joiner.state.value !is SeamState.Torn) {
+            "mid-session-death rig precondition: both seams must be live before the data channel is " +
+                "dropped, or the obligation would pass on a tear this rig did not cause; got " +
+                "host=${host.state.value}, joiner=${joiner.state.value}"
+        }
+        return facades?.dropTransport() == BOTH_SIDES
+    }
 
     /** Proven: this harness closes both data channels under a live session, so no gap (#1442). */
     override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
