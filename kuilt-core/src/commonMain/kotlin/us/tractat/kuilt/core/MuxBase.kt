@@ -18,6 +18,15 @@ import kotlinx.coroutines.launch
  * [NamedMux] encodes the channel name to bytes once, not on every [Seam.broadcast].
  */
 internal interface ChannelFraming {
+    /**
+     * How many bytes [wrap] adds to a payload — the reservation a channel view holds back from the
+     * budget it publishes (see [Seam.maxPayloadBytes], #2058).
+     *
+     * Constant for the life of a view, since the header is precomputed per channel: a byte tag
+     * costs one byte, a name costs `1 + nameBytes.size`.
+     */
+    val overheadBytes: Int
+
     /** Wrap [payload] with this channel's outbound header. */
     fun wrap(payload: ByteArray): ByteArray
 
@@ -108,6 +117,27 @@ internal class MuxBase<K>(
          * through, so a path change after this view was created is seen by the view's holders.
          */
         override val capability: StateFlow<TransportCapability> get() = delegate.capability
+
+        /**
+         * The base's budget less this channel's own header (#2058).
+         *
+         * Every send from this view is wrapped by [ChannelFraming.wrap] before it reaches the base,
+         * so those bytes come out of the caller's allowance rather than being added to the wire.
+         * Leaving [Seam]'s `null` in place was safe but lossy — it discarded a bound the fabric
+         * underneath does know, and a consumer holding a channel view got no guidance where guidance
+         * existed.
+         *
+         * `null` stays `null`: a base that names no ceiling has told this view nothing, and
+         * inventing a number from it would turn "unknown" into a promise. Floored at zero, so a base
+         * tighter than this channel's header publishes `0` — nothing fits, which is a legitimate
+         * budget — rather than a negative one.
+         *
+         * Read through per call rather than captured: the base's number moves (a mesh reports the
+         * minimum across its live links), so a snapshot taken when the view was created would hand
+         * out a bound the fabric has since dropped below.
+         */
+        override val maxPayloadBytes: Int?
+            get() = delegate.maxPayloadBytes?.let { (it - framing.overheadBytes).coerceAtLeast(0) }
 
         override val incoming: Flow<Swatch> = spool.incoming
 

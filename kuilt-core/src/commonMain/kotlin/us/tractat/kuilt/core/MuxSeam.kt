@@ -74,6 +74,9 @@ public class MuxSeam(
 /** Byte-tag framing: a single leading [tag] byte identifies the channel. */
 private object ByteFraming : MuxFraming<Byte> {
     override fun forKey(key: Byte): ChannelFraming = object : ChannelFraming {
+        /** One leading tag byte, on every frame. */
+        override val overheadBytes: Int = 1
+
         override fun wrap(payload: ByteArray): ByteArray {
             val tagged = ByteArray(payload.size + 1)
             tagged[0] = key

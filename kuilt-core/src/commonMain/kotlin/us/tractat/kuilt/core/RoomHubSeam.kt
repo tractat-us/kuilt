@@ -16,6 +16,17 @@ import kotlinx.coroutines.flow.update
 internal fun interface OutboundSender {
     /** Send [payload] to this connection on the room's channel. Best-effort. */
     suspend fun send(payload: ByteArray)
+
+    /**
+     * The largest payload [send] can carry on this connection, or `null` when it cannot tell —
+     * the per-connection input to [RoomHubSeam.maxPayloadBytes] (#2058).
+     *
+     * Net of whatever framing [send] applies on the way down, so the hub can fold these without
+     * knowing how a sender is wired. `null` (the default) means unknown, never unbounded: a
+     * hand-built sender in a test says nothing about a ceiling, and the hub must not invent one
+     * from it.
+     */
+    val maxPayloadBytes: Int? get() = null
 }
 
 /**
@@ -127,6 +138,31 @@ public class RoomHubSeam(
 
     private val stateGate = SeamStateGate(SeamState.Woven)
     override val state: StateFlow<SeamState> = stateGate.state
+
+    /**
+     * The **tightest** budget across the registered connections (#2058).
+     *
+     * This hub is the one decorator in #2058 with **no delegate [Seam]** to forward: it fans out
+     * through one [OutboundSender] per admitted connection, so the number it can publish is the
+     * minimum of what those senders name — a [broadcast] goes to every one of them, and a frame that
+     * overflows the narrowest is over budget for the room. Each sender's value is already net of the
+     * room's own channel header, so nothing is subtracted here.
+     *
+     * A connection that names no ceiling is **skipped** rather than collapsing the answer to `null`,
+     * the same call [us.tractat.kuilt.core.fabric.MeshSeam] makes across a mesh of one bounded and
+     * one unknown link. A hub nobody has joined reports `null`: there is nothing yet to be bounded
+     * by, and membership only grows from there.
+     *
+     * So this **loosens and tightens over a room's life** — read it per send, never cache it. The
+     * senders are snapshotted under [lock] and their budgets read **outside** it, exactly as
+     * [broadcast] snapshots its targets before sending: a sender's number can come from the
+     * connection's own seam, which is a lock this hub must not acquire one of its own inside.
+     */
+    override val maxPayloadBytes: Int?
+        get() {
+            val targets = lock.withLock { registered.values.toList() }
+            return targets.mapNotNull { it.maxPayloadBytes }.minOrNull()
+        }
 
     /**
      * Merged inbound stream: frames from all registered connections, pushed here by the loom.

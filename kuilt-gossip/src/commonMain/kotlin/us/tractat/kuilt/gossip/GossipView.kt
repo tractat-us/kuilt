@@ -268,6 +268,13 @@ internal class PerPeerSeam(
     override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
     override val state: StateFlow<SeamState> get() = delegate.state
 
+    /**
+     * The delegate's budget, verbatim (#2058). This view re-filters an existing fan-out and both its
+     * send paths hand the payload down unchanged, so it adds no bytes and has nothing to subtract —
+     * but leaving [Seam]'s `null` in place would discard a bound the seam underneath does know.
+     */
+    override val maxPayloadBytes: Int? get() = delegate.maxPayloadBytes
+
     override val incoming: Flow<Swatch>
         get() = rawIncoming.filter { it.sender == targetPeerId }
 

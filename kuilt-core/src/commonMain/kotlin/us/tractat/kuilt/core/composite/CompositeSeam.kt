@@ -230,6 +230,47 @@ internal class CompositeSeam(
     private val _plies = MutableStateFlow<Map<PlyId, SeamState>>(emptyMap())
     override val plies: StateFlow<Map<PlyId, SeamState>> = _plies.asStateFlow()
 
+    /**
+     * What a [PlyFrame.Data] envelope costs on every send from this seam. Constant for its life:
+     * the envelope stamps [selfId], and that id is minted once and never recomputed.
+     */
+    private val dataEnvelopeBytes = PlyFrame.dataEnvelopeBytes(selfId)
+
+    /**
+     * The **tightest** budget across the currently-attached plies, less this seam's own
+     * [PlyFrame.Data] envelope (#2058).
+     *
+     * Both halves are load-bearing, and they fail differently. One payload is wrapped **once** and
+     * handed to *every* live ply on a [broadcast] — and to any of them in turn on a [sendTo]
+     * fall-through — so a frame that overflows one ply is over budget for this seam; hence the
+     * minimum. And the envelope is paid on every send, so its bytes come out of the caller's
+     * allowance rather than being added to the wire.
+     *
+     * A ply that names no ceiling is **skipped** rather than collapsing the answer to `null`, the
+     * call [us.tractat.kuilt.core.fabric.MeshSeam] already makes across its links: `null` means
+     * "unknown", so a bond of one bounded and one unknown ply is still bounded by what it does know.
+     * A composite with no attached ply — or none that names a ceiling — reports `null`, because
+     * there is nothing yet to be bounded by. Floored at zero, so a ply tighter than the envelope
+     * publishes `0` rather than a negative budget.
+     *
+     * **Recomputed, never captured.** Unlike every other decorator in #2058 this seam's ply set is
+     * live, so the number moves as plies attach and detach: a detach that removes the tight ply
+     * loosens it, and an attach can tighten it. Read it per send.
+     *
+     * The ply handles are snapshotted under [lock] and their budgets read **outside** it, exactly as
+     * [broadcast] snapshots its targets and then reads `it.seam.state.value` — a ply's seam is
+     * foreign code, and this class never calls into one while holding the lock. Unlike
+     * [publishCapability] / [publishPeers] there is no mirrored field to read instead and no writer
+     * to serialise: this is a pull, evaluated on demand, with no [StateFlow] whose trigger could be
+     * lost.
+     */
+    override val maxPayloadBytes: Int?
+        get() {
+            val targets = lock.withLock { live.values.toList() }
+            val tightest = targets.mapNotNull { it.seam.maxPayloadBytes }.minOrNull() ?: return null
+            return (tightest - dataEnvelopeBytes).coerceAtLeast(0)
+        }
+
     // Live capability rollup: the union of the constituent Looms' roles (captured per ply at attach) for
     // currently-Woven plies, folded with those plies' announced Seam availabilities. Seeded roleless/Unknown
     // — before the first recomputeCapability() no ply has been consulted, so a confident verdict here would

@@ -17,6 +17,17 @@ internal sealed interface PlyFrame {
         /** Fixed prefix both frame kinds share: 1 tag byte + a 4-byte big-endian id length. */
         private const val HEADER_BYTES = 1 + Int.SIZE_BYTES
 
+        /**
+         * How many bytes a [Data] envelope adds around a payload stamped with [originId] — the
+         * reservation a composite holds back from the budget it publishes
+         * (`Seam.maxPayloadBytes`, #2058).
+         *
+         * Derived from [encodeData]'s own layout rather than restated, so a wire change moves the
+         * reservation with it instead of leaving the published budget quietly wrong.
+         */
+        fun dataEnvelopeBytes(originId: PeerId): Int =
+            HEADER_BYTES + originId.value.encodeToByteArray().size + Long.SIZE_BYTES
+
         fun encode(frame: PlyFrame): ByteArray =
             when (frame) {
                 is Announce -> encodeAnnounce(frame)
