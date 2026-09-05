@@ -32,8 +32,10 @@ import us.tractat.kuilt.core.internal.MappedStateFlow
  *   [sendTo].
  * - [sendTo] of a payload over [maxPayloadBytes]: throws [PayloadTooLarge]; [broadcast] instead
  *   drops it (best-effort, as above). An obligation on an implementation that *publishes* a budget
- *   — a seam reporting `null` owes nothing here — and one every in-tree seam that publishes one now
- *   meets (#2069). See [maxPayloadBytes].
+ *   — a seam reporting `null` owes nothing here — and one every in-tree **fabric** seam that
+ *   publishes one meets (#2069). The **decorators** do not: since #2058 they publish a derived
+ *   budget without pre-checking it, so a payload above a decorator's number but within the wrapped
+ *   seam's is delivered rather than refused (#2642). See [maxPayloadBytes].
  *   Note it is the one refusal that does **not** depend on the seam's state — a `Woven` seam
  *   raises it — so a caller catching only [PeerNotConnected] does not cover addressed sends on a
  *   seam that publishes a budget.
@@ -168,7 +170,7 @@ public interface Seam {
      * #2058 closed the *publishing* half for the decorators — a mux channel view, `TieredSeam`, a
      * `CompositeSeam`, `RoomHubSeam`, a gossip overlay and its per-peer view all derive a number
      * from what they wrap instead of reporting `null`. The **enforcing** half stays open under
-     * #2069: none of them pre-checks against its own value, so an over-budget send is still refused
+     * #2642: none of them pre-checks against its own value, so an over-budget send is still refused
      * — by the seam underneath, against *its* budget — and the [PayloadTooLarge] a caller sees names
      * a number larger than the decorator published, by exactly the framing the decorator reserved.
      * That is a milder failure than the one this section describes (the refusal is synchronous and
