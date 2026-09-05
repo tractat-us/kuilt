@@ -78,12 +78,18 @@ public interface Quilted<S : Quilted<S>> {
      * CRDT exposes them here. The replicator folds these dots into a contiguous
      * **delivered** [VersionVector] (highest gap-free seq per author) and gossips it.
      *
-     * Only op-based CRDTs whose elements carry per-author dense [Dot]s participate —
-     * today that is [Rga], which returns its `Insert`/`Remove` op dots and **excludes**
-     * `Compact` ops (a compaction mints no author dot). Every other delta-state CRDT in
-     * the zoo (`GCounter`, `ORSet`, …) does not use this GC path; the default empty set
-     * keeps the capability non-breaking for them — they contribute nothing to any
-     * delivered vector.
+     * Only op-based CRDTs whose elements carry per-author dense [Dot]s participate — in
+     * this zoo the [LogOp]-based op-log types [Rga] and [Fugue], and [MovableTree], which
+     * keeps an equivalent log of its own. For the [LogOp]-based pair the per-op rule is
+     * [LogOp]'s own KDoc, and that is the source of truth for it rather than this
+     * paragraph: a [LogOp.Insert] contributes the dot it mints, a [LogOp.Compact]
+     * contributes every dot it recorded, and a [LogOp.Remove] contributes **nothing** — it
+     * reuses its target insert's id and mints no dot. Re-emitting a compaction's recorded
+     * dots is precisely what keeps the delivered frontier gap-free across GC. Composites
+     * ([JsonCrdt], [LatticeProduct]) union what their children report; every other
+     * delta-state CRDT in the zoo (`GCounter`, `ORSet`, …) does not use this GC path, and
+     * the default empty set keeps the capability non-breaking for them — they contribute
+     * nothing to any delivered vector.
      *
      * **This is only half the delivered surface.** A consumer folding a delivered frontier
      * must read `causalDots() ∪ {dots at-or-below causalFloor()}` — the union is the contract,
