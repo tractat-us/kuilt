@@ -720,9 +720,30 @@ jobs:
   # were added, so the class name is the contract and a new deterministic probe
   # opts into the gate by being named for it.
   #
-  # Determinism is the entrance fee, and each member carries its receipt here.
-  # A red in this job is a real defect essentially every time; that is the whole
-  # reason it may gate. Today it matches two classes:
+  # TWO properties are the entrance fee, and they are different questions. (1)
+  # DETERMINISM — reverting the guarded fix reds the probe reliably, so a red here
+  # is a real defect essentially every time. (2) NO STARVATION-RED PATH — the probe
+  # holds no wall-clock budget of its own (no `withTimeout`, no `first { … }`, no
+  # timed CyclicBarrier), so a saturated runner makes it SLOWER, never REDDER, and
+  # the only real-time ceiling is the harness's shared 5-minute cap. Property 2 is
+  # the one that actually makes gating safe, and it is what divides this job from
+  # its non-blocking sibling: every probe left in `concurrency-probes` waits on
+  # `state.first { it is Torn }` or a timed barrier, so a starved box reds it for a
+  # reason that is not about the code (#1135 / #1158).
+  #
+  # ⚠ ONE MEMBER BELOW DOES NOT SATISFY PROPERTY 2, and it is recorded rather than
+  # quietly carried: ScopedCloseableCloseOnceCapabilityConcurrencyTest parks on a
+  # `CyclicBarrier.await(30 s)` per round and asserts `completedRounds == ROUNDS`,
+  # so a sufficiently starved runner CAN red it and block a merge. Its own failure
+  # message says as much (it prints systemLoadAverage next to availableProcessors
+  # so the artifact distinguishes the two cases). It predates this distinction
+  # being written down; it is not evidence that a timed barrier is acceptable here.
+  # `:kuilt-conformance`'s DelayedWovenSeamCloseOnceConcurrencyTest is structurally
+  # IDENTICAL — same barrier, same 30 s, same rig assertion — and is deliberately
+  # NON-gating, which is the inconsistency to resolve before adding a third of that
+  # shape. Do not use the ScopedCloseable member as precedent (#1768).
+  #
+  # Each member carries its receipt here. Today it matches three classes:
   #
   #   - CompositeCapabilityConcurrencyTest (#1767) — a lost-update race in
   #     CompositeSeam's capability rollup: two recomputes interleave and a stale
@@ -736,6 +757,31 @@ jobs:
   #     multi-threaded coordinators, letting two concurrent close() callers both
   #     run onClose() against its at-most-once contract. On the unguarded flag it
   #     reddens at 1336–1830 of 2000 rounds, worst count 8 of 8, in ~1 s per run.
+  #     ⚠ Carries the timed barrier described above — see that note.
+  #   - SeamStateGateLatchCapabilityConcurrencyTest (#1768) — the lost-terminal-Torn
+  #     race at the PRIMITIVE level: a derived `update()` surviving a concurrent
+  #     single-shot `tear()`. Graduated from the non-blocking job here; it was
+  #     `SeamStateGateConcurrencyTest` before.
+  #     WHY IT IS WORTH GATING: SeamStateGate backs SEVEN production types across
+  #     two modules — CompositeSeam, TieredSeam, MeshSeam, LinkSeam, RoomHubSeam in
+  #     :kuilt-core, plus :kuilt-multipeer's BridgePeerLink (jvmMain) and
+  #     MCSessionLink (appleMain). Those last two are the #1803 state-latch fixes
+  #     whose own probes are contention-sensitive and stay non-blocking, so before
+  #     this the gate did not pin them at all (kuilt-multipeer/build.gradle.kts
+  #     says so in as many words). It now pins the primitive they route through.
+  #     NOT pinned by it: :kuilt-nearby's NearbySeam, which keeps its own
+  #     MutableStateFlow.update/compareAndSet latch and does NOT use the gate.
+  #     RECEIPT (moving the `latched` read outside `lock.withLock` in `update` and
+  #     `tear` — the check-then-act SeamStateGate's KDoc names): RED 3/3,
+  #     tests=1 skipped=0 failures=1, AssertionError at iter=2/2/3 of 5000, in
+  #     0.666–0.690 s. Restored: GREEN 3/3, tests=1 skipped=0 failures=0,
+  #     1.114–1.476 s. Load 9.5–16.9 on a 16-core box, 2026-09-05.
+  #     PROPERTY 2, measured: no wall-clock budget of its own (its only rendezvous
+  #     is an unbounded CompletableDeferred). Under deliberate saturation it took
+  #     6.483 s at 1-min load 43.8→99.1 versus 1.114 s at load ~10 — 5.8× slower at
+  #     ~10× the load, still passing, still 46× clear of the 5-minute cap.
+  #     Both arms are workstation measurements; per the sibling job's rule, CI-runner
+  #     behaviour over a stated window is what a further graduation would need.
   #
   # Keep this list current when a class opts in: it is the load-bearing
   # justification for letting this job block merges at all, and a stale one tells

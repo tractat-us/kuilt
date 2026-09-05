@@ -56,7 +56,7 @@ import kotlin.test.assertIs
  * production code in it that a test can reach. So the window has to be hit by scheduling rather than
  * held open, which is what [arm 2][aPromotionCaughtMidFlightCannotStampWovenOverTheTerminalTorn]
  * does — the same instrument, and for the same reason, as `:kuilt-core`'s own
- * `SeamStateGateConcurrencyTest`.
+ * `SeamStateGateLatchCapabilityConcurrencyTest`.
  *
  * That makes the probe's own sensitivity a thing to state rather than assume, which is what
  * [arm 1][aPeerConnectedCallbackOnItsOwnPromotesTheSeamToWoven] is for: a stress arm that never
