@@ -7823,6 +7823,17 @@ val forbidBareSeamStateFlow by tasks.registering {
 // half-swept file must not red-light the branch doing the sweeping); a DANGLING key — one naming a
 // file no longer in scope — is not, because it would grandfather whatever next lands on that path.
 //
+// THE HOLE IN ANY COUNT RATCHET, stated rather than left to be found: the two mechanisms interact.
+// A marker subtracts its site from the file's count, so markering one baselined site frees a slot
+// for a new unmarked one and the file stays at its number. `forbidNotNullAssertionInUnresolvedSource`
+// has the same hole in its own shape (sweep one `!!`, add one), and for the same reason: failing on a
+// DECREASE would red-light the branch doing the sweeping. It is not closed here on purpose — the
+// machinery to close it would have to distinguish "swept" from "traded", which needs the baseline to
+// carry line identities rather than a count, and a baseline that specific goes stale on every
+// reformat. What DOES close it is the thing already required: a marker's reason has to be "this flow
+// completes", so a marker over a real pump is a false statement a reviewer can see, not a silent
+// exemption.
+//
 // ⚠ THE RATCHET IS A CLAIM ABOUT FILES THIS PR DOES NOT TOUCH, which is the #2630 coupling: a
 // sibling PR adding a `.launchIn(` to a baselined file is green against its own base, has zero file
 // overlap with this one, and reds `main` on merge. `forbidBareSeamStateFlow` above avoids this
