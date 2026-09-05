@@ -124,6 +124,9 @@ internal class NearbySeam(
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     // Starts Weaving; transitions to Woven when the first remote peer joins.
+    // ALLOW-bareSeamState: the promotion is an `update {}` CAS whose lambda re-reads `closed` as well
+    // as the state (#1879), so a tear landing in the window fails the CAS and the retry drops the
+    // promotion. The flow is itself the mutual exclusion; a gate's lock would be a second one.
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 

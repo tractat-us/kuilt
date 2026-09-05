@@ -108,6 +108,9 @@ public class DelayedWovenSeam internal constructor(
     private val loom: DelayedWovenLoom,
     policy: DeliveryPolicy,
 ) : Seam {
+    // ALLOW-bareSeamState: neither writer can lose a terminal write. [markWoven] is a
+    // `compareAndSet(Weaving, Woven)`, which fails outright once `Torn` is published; [close]'s
+    // `Torn` is the sole other write and sits behind the `closed.compareAndSet` close-once latch.
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 

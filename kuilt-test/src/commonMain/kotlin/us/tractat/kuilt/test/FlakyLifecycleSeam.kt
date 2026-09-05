@@ -73,6 +73,12 @@ public class FlakyLifecycleSeam(
     private val delegate: Seam,
     private val scope: CoroutineScope,
 ) : Seam {
+    // ALLOW-bareSeamState: the WEAKEST of this repo's exemptions, and recorded as such rather than
+    // dressed up. [enterWeaving], [recover] and [tear] are each a read-then-write with no lock, so on
+    // a multi-threaded dispatcher a `tear` really could be clobbered — this is not "cannot lose a
+    // write", it is "cannot lose one HERE". The class is a test-only harness driven exclusively from
+    // a confined single-threaded test dispatcher, which is what makes the window unmanifestable, and
+    // [enterWeaving]'s KDoc has said so since before this guard existed. Tracked in #2633.
     private val _state = MutableStateFlow<SeamState>(initialLifecycleState(delegate.state.value))
     private val _peers = MutableStateFlow(delegate.peers.value)
     private val mutex = Mutex()

@@ -82,6 +82,7 @@ internal class ManagedSeam(
 
     // This logical seam never tears — it outlives individual backing seams, which is
     // the reason it exists. Constant Woven.
+    // ALLOW-bareSeamState: a constant — nothing retains a handle to the flow, so it has no writer at all.
     override val state: StateFlow<SeamState> = MutableStateFlow(SeamState.Woven)
 
     private val _incoming: MutableSharedFlow<Swatch> =

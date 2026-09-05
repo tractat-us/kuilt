@@ -138,6 +138,8 @@ public class FakeRoom(
     private val _rosterPeers = MutableStateFlow(initialRoster.mapTo(mutableSetOf()) { it.id } + selfId)
 
     /** Seam state forwarded to channel views. Use [tearSeam] to simulate transport closure. */
+    // ALLOW-bareSeamState: one writer. [tearSeam] is the only site that writes it, and it is driven
+    // by the test rather than by a transport callback, so there is no concurrent second writer.
     private val _seamState = MutableStateFlow<SeamState>(SeamState.Woven)
 
     private val eventsChannel = Channel<MembershipEvent>(
