@@ -45,6 +45,12 @@ internal class DeliveringFakeMultipeerNativeLib(
     private var hostPeerStateCallback: MultipeerNativeLib.PeerStateCallback? = null
     private var joinerPeerStateCallback: MultipeerNativeLib.PeerStateCallback? = null
 
+    // Which side currently believes the other is connected — the JVM analogue of the Apple
+    // FakeMCSessionBus endpoint's `connected` list, and the only thing that lets [dropTransport]
+    // report how many links it ACTUALLY severed rather than assert that it severed some.
+    private var hostSeesJoiner = false
+    private var joinerSeesHost = false
+
     override fun kuilt_protocol_version(): Int = MultipeerNativeLib.EXPECTED_PROTOCOL_VERSION
 
     override fun mc_runtime_create(displayName: String, serviceType: String): Pointer = FAKE_RUNTIME
@@ -85,9 +91,47 @@ internal class DeliveringFakeMultipeerNativeLib(
      */
     override fun mc_session_close(session: Pointer?) {
         when (session) {
-            HOST_SESSION -> joinerPeerStateCallback?.invoke(hostPeerId, /* isConnected = */ 0)
-            JOINER_SESSION -> hostPeerStateCallback?.invoke(joinerPeerId, /* isConnected = */ 0)
+            HOST_SESSION -> {
+                // The closing side's own session is gone, and the survivor is told. Both links are
+                // dead afterwards, so a later [dropTransport] honestly reports nothing to sever.
+                hostSeesJoiner = false
+                joinerSeesHost = false
+                joinerPeerStateCallback?.invoke(hostPeerId, /* isConnected = */ 0)
+            }
+            JOINER_SESSION -> {
+                hostSeesJoiner = false
+                joinerSeesHost = false
+                hostPeerStateCallback?.invoke(joinerPeerId, /* isConnected = */ 0)
+            }
         }
+    }
+
+    /**
+     * Kill the transport under **both** ends with no `close()` anywhere: each side simply observes
+     * its remote go `isConnected = 0`, which is how a real `MCSession` dies when the radio drops
+     * rather than when the application asks. The twin of the Apple bus's
+     * `FakeMCSessionBus.dropTransport()`, at the JNA boundary instead of the `MCSession` one.
+     *
+     * `BridgePeerLink` drops the departed peer from `peers` and, once its last remote is gone,
+     * tears the seam down and completes `incoming` — the **remote-disconnect** half of the
+     * `incoming`-completes-on-`Torn` contract, which a local `close()` structurally cannot exercise.
+     *
+     * @return the number of links **actually** severed (0, 1 or 2), never a bare `true`. A count is
+     *   what makes the caller's claim checkable: the obligation this unblocks reads only *terminal*
+     *   state, so it would pass just as happily on a pair that was already dead, crediting a tear
+     *   this fake did not cause. Modelled on `FakeNwRadio.dropAllLinks`, which returns a count for
+     *   the same reason. Callbacks fire only after the flags are cleared, so a re-entrant close from
+     *   either side's teardown cannot be double-counted.
+     */
+    fun dropTransport(): Int {
+        val live = buildList {
+            hostPeerStateCallback?.takeIf { hostSeesJoiner }?.let { add(it to joinerPeerId) }
+            joinerPeerStateCallback?.takeIf { joinerSeesHost }?.let { add(it to hostPeerId) }
+        }
+        hostSeesJoiner = false
+        joinerSeesHost = false
+        live.forEach { (callback, departed) -> callback.invoke(departed, /* isConnected = */ 0) }
+        return live.size
     }
 
     /**
@@ -192,6 +236,8 @@ internal class DeliveringFakeMultipeerNativeLib(
         val joinerCb = joinerPeerStateCallback ?: return
         // Both BridgePeerLink constructors have run — the session is "connected".
         // Fire isConnected=1 for the remote peer on each side.
+        hostSeesJoiner = true
+        joinerSeesHost = true
         hostCb.invoke(joinerPeerId, /* isConnected = */ 1)
         joinerCb.invoke(hostPeerId, /* isConnected = */ 1)
     }

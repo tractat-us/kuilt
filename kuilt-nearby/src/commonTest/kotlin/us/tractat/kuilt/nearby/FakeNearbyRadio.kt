@@ -51,6 +51,14 @@ internal class FakeNearbyRadio {
     private var discoveryStarted = false
     private var acceptCount = 0
 
+    /**
+     * The endpoint ids currently carrying a live connection — one per side, each being that side's
+     * *own* handle for its remote. Populated when [onAcceptConnection] completes the virtual
+     * handshake and emptied by any disconnect, so [dropTransport] can report how many links it
+     * **actually** severed rather than assert that it severed some. See its KDoc for why a count.
+     */
+    private val connectedEndpoints = mutableSetOf<String>()
+
     // Shared api reference (set when FakeNearbyApi is created).
     private lateinit var api: FakeNearbyApi
 
@@ -96,9 +104,37 @@ internal class FakeNearbyRadio {
         acceptCount++
         if (acceptCount == 2) {
             acceptCount = 0
+            connectedEndpoints += ADVERTISER_SEES_DISCOVERER_AS
+            connectedEndpoints += DISCOVERER_SEES_ADVERTISER_AS
             api.emit(ConnectionResult(ADVERTISER_SEES_DISCOVERER_AS, success = true))
             api.emit(ConnectionResult(DISCOVERER_SEES_ADVERTISER_AS, success = true))
         }
+    }
+
+    /**
+     * Kill the transport under **both** sides with no `close()` anywhere: each [NearbySeam] simply
+     * observes its own endpoint go [EndpointDisconnected], which is how a Nearby connection dies
+     * when the radio drops rather than when the application asks. Each seam then loses its last
+     * endpoint, latches [us.tractat.kuilt.core.SeamState.Torn] and completes `incoming` — the shape
+     * `NearbySeamTearDownTest.lastEndpointDisconnectLatchesTornAndCompletesIncoming` pins at unit
+     * level, here driven through the whole loom (#1442).
+     *
+     * Note the ids: each endpoint id is that side's *own* handle for its remote
+     * ([ADVERTISER_SEES_DISCOVERER_AS] belongs to the advertiser, [DISCOVERER_SEES_ADVERTISER_AS] to
+     * the discoverer), and `NearbySeam.disconnectLoop` keys on exactly that, so emitting both is
+     * what tells both seams. Unlike [onDisconnect] — which models one side hanging up, so it flips
+     * the id to notify the *other* side — nobody hangs up here; the link simply dies under both.
+     *
+     * @return the number of live endpoints **actually** severed (0, 1 or 2), never a bare `true`.
+     *   The obligation this unblocks reads only *terminal* state, so it would pass just as happily
+     *   on a pair that was already dead, crediting a tear this fake did not cause. Modelled on
+     *   `FakeNwRadio.dropAllLinks`, which returns a count for the same reason.
+     */
+    suspend fun dropTransport(): Int {
+        val live = connectedEndpoints.toList()
+        connectedEndpoints.clear()
+        live.forEach { api.emit(EndpointDisconnected(it)) }
+        return live.size
     }
 
     /**
@@ -120,6 +156,9 @@ internal class FakeNearbyRadio {
             DISCOVERER_SEES_ADVERTISER_AS -> ADVERTISER_SEES_DISCOVERER_AS
             else -> return
         }
+        // One side hung up, so neither end of this 2-peer link is live any more — a later
+        // [dropTransport] must honestly report that it had nothing to sever.
+        connectedEndpoints.clear()
         api.emit(EndpointDisconnected(deliverAsEndpointId))
     }
 }
@@ -199,6 +238,12 @@ internal class FakeNearbyApi(radio: FakeNearbyRadio) : NearbyApi {
     internal fun emitRadioState(state: NearbyRadioState?) {
         _radioState.value = state
     }
+
+    /**
+     * Test hook for #1442: kill the transport under both seams. Delegates to
+     * [FakeNearbyRadio.dropTransport], whose KDoc carries the argument for the count it returns.
+     */
+    internal suspend fun dropTransport(): Int = _radio.dropTransport()
 
     // ── emit router (called by the radio) ─────────────────────────────────────
 

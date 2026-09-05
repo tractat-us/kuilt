@@ -7,6 +7,7 @@ import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
 
 /**
@@ -38,6 +39,9 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
         private const val JOINER_DISPLAY_NAME = "conformance-joiner"
         private const val FAKE_SERVICE_TYPE = "kuilt-test"
         private const val FAKE_HOST_HANDLE = "fake-host-handle"
+
+        /** Both sides of the 2-peer link — what a genuine transport death must sever. */
+        private const val BOTH_ENDS = 2
     }
 
     // The delivering fake backing the current pair, captured so injectSelfDial can fire a
@@ -88,6 +92,35 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
 
     /** Proven: this harness fires a genuine self-peer event through the fake, so no gap. */
     override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
+
+    /**
+     * Kill the transport under both ends with no `close()` anywhere: the delivering fake tells each
+     * `BridgePeerLink` its remote went `isConnected = 0`, which is how a real `MCSession` dies when
+     * the radio drops rather than when the application asks. Both links then reach their
+     * last-peer teardown, latch [us.tractat.kuilt.core.SeamState.Torn] and complete `incoming` — the
+     * twin of the `FakeMCSessionBus.dropTransport()` that already proves the Apple side (#1442).
+     *
+     * ## Why this returns a count rather than a bare `true`
+     *
+     * [SeamConformanceSuite.incomingCompletesOnInjectedMidSessionDeath] reads only *terminal* state,
+     * so it would pass just as happily on a pair that was already dead — crediting a tear this rig
+     * did not cause. Two guards make the injection prove it is the thing being observed: the `check`
+     * asserts both seams were live *before* the drop (the `dropBothEnds` pattern in
+     * `:kuilt-conformance`), and the fake reports how many links it **actually** severed (the
+     * `FakeNwRadio.dropAllLinks` pattern). Anything but both ends leaves this honestly `false`, so
+     * the harness reads as unproven and [midSessionDeathDeclaration] reds — never falsely green.
+     */
+    override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
+        check(host.state.value !is SeamState.Torn && joiner.state.value !is SeamState.Torn) {
+            "mid-session-death rig precondition: both seams must be live before the transport is " +
+                "dropped, or the obligation would pass on a tear this rig did not cause; got " +
+                "host=${host.state.value}, joiner=${joiner.state.value}"
+        }
+        return bus?.dropTransport() == BOTH_ENDS
+    }
+
+    /** Proven: this harness kills the transport under a live session, so no gap (#1442). */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /**
      * Every capability honoured but one — MultipeerConnectivity requires encryption
