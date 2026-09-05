@@ -5,6 +5,8 @@ import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 
 /**
  * Verifies that [NearbyLoom] satisfies every invariant in [SeamConformanceSuite]
@@ -50,10 +52,17 @@ class NearbyConformanceTest : SeamConformanceSuite() {
             bluetooth = NearbyRadioStatus.On,
             wifi = NearbyRadioStatus.On,
         )
+
+        /** Both sides of the 2-peer link — what a genuine transport death must sever. */
+        const val BOTH_ENDPOINTS = 2
     }
+
+    /** The fake backing the current pair, held so [injectMidSessionDeath] can drop the transport. */
+    private var api: FakeNearbyApi? = null
 
     override fun newLoomPair(): Pair<Loom, Loom> {
         val api = FakeNearbyApi(FakeNearbyRadio())
+        this.api = api
         // LOAD-BEARING (#1543/#1712): the radio observer is the only source of a non-Unknown
         // availability, and the suite's reportsLiveCapability branch AWAITS one. Delete this and the
         // suite hangs to timeout.
@@ -76,6 +85,33 @@ class NearbyConformanceTest : SeamConformanceSuite() {
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
 
     override fun capabilityGaps(): Map<String, String> = emptyMap()
+
+    /**
+     * Kill the transport under both seams with no `close()` anywhere: the fake radio fires
+     * [EndpointDisconnected] for each side's own endpoint, which is how a Nearby connection dies
+     * when the radio drops rather than when the application asks. Each seam loses its last
+     * endpoint, latches [SeamState.Torn] and completes `incoming` — the shape
+     * [NearbySeamTearDownTest.lastEndpointDisconnectLatchesTornAndCompletesIncoming] pins at unit
+     * level, driven here through the whole loom (#1442).
+     *
+     * ## Why this returns a count rather than a bare `true`
+     *
+     * [SeamConformanceSuite.incomingCompletesOnInjectedMidSessionDeath] reads only *terminal* state,
+     * so it would pass just as happily on a pair that was already dead — crediting a tear this rig
+     * did not cause. Two guards make the injection prove it is the thing being observed: the `check`
+     * asserts both seams were live *before* the drop (the `dropBothEnds` pattern in
+     * `:kuilt-conformance`), and the fake reports how many endpoints it **actually** severed (the
+     * `FakeNwRadio.dropAllLinks` pattern). Anything but both leaves this honestly `false`, so the
+     * harness reads as unproven and [midSessionDeathDeclaration] reds — never falsely green.
+     */
+    override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
+        check(host.state.value !is SeamState.Torn && joiner.state.value !is SeamState.Torn) {
+            "mid-session-death rig precondition: both seams must be live before the transport is " +
+                "dropped, or the obligation would pass on a tear this rig did not cause; got " +
+                "host=${host.state.value}, joiner=${joiner.state.value}"
+        }
+        return api?.dropTransport() == BOTH_ENDPOINTS
+    }
 
     /** Proven: this harness disconnects both endpoints under a live session, so no gap (#1442). */
     override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
