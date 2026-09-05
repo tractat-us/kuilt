@@ -188,6 +188,25 @@ public class GossipSeam(
 
     override val state: StateFlow<SeamState> get() = base.state
 
+    /**
+     * The base's budget less the relay header this overlay adds (#2058).
+     *
+     * Held back **unconditionally**, even though only one of the two send paths pays it: [broadcast]
+     * wraps the payload in a [GossipFrame] so receivers can dedup and re-flood it, while [sendTo]
+     * passes through to [base] unwrapped. [Seam.maxPayloadBytes] settles which of the two the
+     * published number follows — "subtract unconditionally, even when the overhead is only paid on
+     * some routes", because a budget that moved with the route is a TOCTOU trap for a caller that
+     * reads it and then sends.
+     *
+     * (#2058's own table filed this decorator under "adds no bytes". It does; the wrap above is it.)
+     *
+     * `null` stays `null` — a base that names no ceiling has told this overlay nothing — and the
+     * result is floored at zero, so a base tighter than the relay header publishes `0` rather than a
+     * negative budget. Read through per call: the base's number moves.
+     */
+    override val maxPayloadBytes: Int?
+        get() = base.maxPayloadBytes?.let { (it - GossipFrame.headerBytesFor(selfId)).coerceAtLeast(0) }
+
     /** Application frames only — heartbeat ping/pong frames are filtered out. */
     override val incoming: Flow<Swatch> = spool.incoming
 

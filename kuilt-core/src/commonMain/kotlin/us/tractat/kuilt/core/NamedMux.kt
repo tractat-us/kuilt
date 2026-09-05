@@ -99,6 +99,9 @@ private object NamedFraming : MuxFraming<String> {
     override fun forKey(key: String): ChannelFraming = object : ChannelFraming {
         private val nameBytes = key.encodeToByteArray()
 
+        /** The `[len:1][name UTF-8]` header, on every frame. */
+        override val overheadBytes: Int = NamedFrame.headerBytesFor(nameBytes)
+
         override fun wrap(payload: ByteArray): ByteArray = NamedFrame.encode(nameBytes, payload)
 
         override fun strip(swatch: Swatch): Swatch = NamedFrame.strip(swatch)

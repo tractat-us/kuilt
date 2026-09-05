@@ -163,8 +163,17 @@ public interface Seam {
      * the same failure into `removePeer`, evicting a healthy recipient as though its link had died.
      * Publishing a number nothing checks is worse than publishing none.
      *
-     * The TCK now holds every fabric that publishes a number to it at both edges. Still open under
-     * #2069: the decorators of #2058 that delegate to a bounded seam while reporting `null`.
+     * The TCK now holds every fabric that publishes a number to it at both edges.
+     *
+     * #2058 closed the *publishing* half for the decorators — a mux channel view, `TieredSeam`, a
+     * `CompositeSeam`, `RoomHubSeam`, a gossip overlay and its per-peer view all derive a number
+     * from what they wrap instead of reporting `null`. The **enforcing** half stays open under
+     * #2069: none of them pre-checks against its own value, so an over-budget send is still refused
+     * — by the seam underneath, against *its* budget — and the [PayloadTooLarge] a caller sees names
+     * a number larger than the decorator published, by exactly the framing the decorator reserved.
+     * That is a milder failure than the one this section describes (the refusal is synchronous and
+     * the send never reported success), and it errs toward refusing less than promised rather than
+     * more, but it is not the contract.
      *
      * `NwSeam` is where the distinction was drawn, and it is worth keeping. It enforced a 16 MiB
      * ceiling and refused above it while publishing nothing — deliberately, because publishing is a

@@ -165,7 +165,24 @@ public class MuxServerLoom(
         fun senderFor(channelName: String): OutboundSender = senderLock.withLock {
             senders.getOrPut(channelName) {
                 val nameBytes = channelName.encodeToByteArray()
-                OutboundSender { payload -> rawSeam.broadcast(NamedFrame.encode(nameBytes, payload)) }
+                object : OutboundSender {
+                    override suspend fun send(payload: ByteArray) =
+                        rawSeam.broadcast(NamedFrame.encode(nameBytes, payload))
+
+                    /**
+                     * This connection's ceiling, less the room header [send] prepends (#2058) — the
+                     * per-connection input to the hub's fold. Read live rather than captured: the
+                     * connection's seam publishes a number that can move under it.
+                     *
+                     * An object expression rather than the SAM lambda this used to be, because a
+                     * SAM conversion can only supply the abstract member and would leave the budget
+                     * at [OutboundSender]'s `null` default — the hub would then fold nothing, and a
+                     * room over a bounded fabric would keep reporting "unknown".
+                     */
+                    override val maxPayloadBytes: Int?
+                        get() = rawSeam.maxPayloadBytes
+                            ?.let { (it - NamedFrame.headerBytesFor(nameBytes)).coerceAtLeast(0) }
+                }
             }
         }
 

@@ -135,6 +135,24 @@ internal class TieredSeam(
     private val stateGate = SeamStateGate(rollup(localTier.state.value, peerTier.state.value))
     override val state: StateFlow<SeamState> = stateGate.state
 
+    /**
+     * The **tightest** budget across the two tiers, since one payload may take either — [broadcast]
+     * tees to both, and [sendTo] routes to whichever owns the addressed peer (#2058).
+     *
+     * The union adds no bytes of its own: both send paths hand the caller's `payload` to a tier
+     * verbatim, so there is nothing to subtract here. What it does owe is the minimum, because a
+     * frame that overflows one tier is over budget for this seam even when the other could carry it.
+     *
+     * A tier that names no ceiling is **skipped** rather than collapsing the answer to `null`, the
+     * same call `MeshSeam` makes across a mesh of one bounded and one unknown link: `null` means
+     * "unknown", so a union of one bounded and one unknown tier is still bounded by what it does
+     * know. Two unknown tiers report `null` — there is nothing to be bounded by.
+     *
+     * Read through per call, never captured: a tier's own number moves under it.
+     */
+    override val maxPayloadBytes: Int?
+        get() = listOfNotNull(localTier.maxPayloadBytes, peerTier.maxPayloadBytes).minOrNull()
+
     // Merged inbound. This seam is the SOLE collector of both tiers' incoming; the merged stream
     // is itself single-collection (Spool). Closed when both tiers' incoming complete (below).
     private val spool = Spool<Swatch>(policy)

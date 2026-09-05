@@ -20,6 +20,12 @@ internal object NamedFrame {
     /** Maximum UTF-8 byte length of a channel name — the 1-byte length prefix caps it at 255. */
     const val MAX_NAME_BYTES: Int = 255
 
+    /**
+     * How many bytes [encode] prepends for [nameBytes] — the reservation a layer that frames on
+     * this name holds back from the payload budget it publishes ([Seam.maxPayloadBytes], #2058).
+     */
+    fun headerBytesFor(nameBytes: ByteArray): Int = 1 + nameBytes.size
+
     /** Prefix [payload] with [nameBytes]'s length and bytes, yielding the on-wire framed bytes. */
     fun encode(nameBytes: ByteArray, payload: ByteArray): ByteArray {
         val framed = ByteArray(1 + nameBytes.size + payload.size)

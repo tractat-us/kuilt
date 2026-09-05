@@ -65,6 +65,16 @@ internal class GossipFrame private constructor(
         /** Fixed header bytes preceding an [originLen]-byte origin id and the payload. */
         private fun headerSize(originLen: Int): Int = ORIGIN_OFFSET + originLen + Long.SIZE_BYTES
 
+        /**
+         * What this header costs a broadcast originating at [origin] — the reservation
+         * [GossipSeam] holds back from the budget it publishes
+         * (`Seam.maxPayloadBytes`, #2058).
+         *
+         * Derived from [headerSize] rather than restated, so a wire change moves the reservation
+         * with it instead of leaving the published budget quietly wrong.
+         */
+        fun headerBytesFor(origin: PeerId): Int = headerSize(origin.value.encodeToByteArray().size)
+
         /** A fresh origin-stamped frame for a locally-initiated broadcast. */
         fun origin(origin: PeerId, seq: Long, ttl: Int, payload: ByteArray): GossipFrame =
             GossipFrame(origin, seq, ttl, payload)

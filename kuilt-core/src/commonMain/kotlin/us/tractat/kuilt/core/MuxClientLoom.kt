@@ -163,6 +163,35 @@ public class MuxClientLoom(
         override val state: StateFlow<SeamState> = FollowingStateFlow { it.state }
 
         /**
+         * The current generation's per-ply breakdown (#2393), following a heal exactly as [state]
+         * and [peers] do.
+         *
+         * A handle sits one hop above the channel view that actually forwards the base's plies, so
+         * without this the breakdown a `MuxClientLoom` consumer reads collapses back to the
+         * synthetic `{ PlyId.Sole: state }` the interface default synthesises — and the transitive
+         * forwarding stops short of the public entry point.
+         *
+         * [FollowingStateFlow] rather than a `get() = current().plies`, for the reason recorded
+         * there: a captured flow must switch to the fresh generation instead of pinning to the
+         * pre-heal one's terminal breakdown (#1387).
+         */
+        override val plies: StateFlow<Map<PlyId, SeamState>> = FollowingStateFlow { it.plies }
+
+        /**
+         * The current generation's channel budget (#2058) — already net of the [NamedMux] header
+         * that generation applies, since this handle is a view onto that channel view.
+         *
+         * Follows a heal for free: the generation is re-read per call, so a resume onto a fresh base
+         * publishes the fresh base's number rather than the pre-heal one.
+         *
+         * `null` before the first [weave], where [current] has nothing to read. That is the honest
+         * answer — an unwoven handle knows no ceiling — and it is deliberately a `null` rather than
+         * the `error(…)` [selfId] raises: a budget is read on the send path, and a property that
+         * throws would turn "I cannot tell you yet" into a crash.
+         */
+        override val maxPayloadBytes: Int? get() = delegate.value?.maxPayloadBytes
+
+        /**
          * Binds to the current generation **at collection start** and completes when *that*
          * generation reaches [SeamState.Torn]. Unlike [state]/[peers], it does **not** follow a
          * heal — a collection spanning a resume ends on the pre-heal generation. Re-collect
