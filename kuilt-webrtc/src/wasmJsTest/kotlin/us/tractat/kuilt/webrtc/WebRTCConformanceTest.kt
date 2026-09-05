@@ -1,6 +1,7 @@
 package us.tractat.kuilt.webrtc
 
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
+import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -98,6 +99,9 @@ class WebRTCConformanceTest : SeamConformanceSuite() {
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
 
     override fun capabilityGaps(): Map<String, String> = emptyMap()
+
+    /** Proven: this harness closes both data channels under a live session, so no gap (#1442). */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /**
      * #2591/#2605: the joiner's roster holds two entries before a byte moves, so the joiner arm
