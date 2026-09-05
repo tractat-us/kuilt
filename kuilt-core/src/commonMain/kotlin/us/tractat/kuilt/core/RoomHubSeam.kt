@@ -150,8 +150,8 @@ public class RoomHubSeam(
      *
      * A connection that names no ceiling is **skipped** rather than collapsing the answer to `null`,
      * the same call [us.tractat.kuilt.core.fabric.MeshSeam] makes across a mesh of one bounded and
-     * one unknown link. A hub nobody has joined reports `null`: there is nothing yet to be bounded
-     * by, and membership only grows from there.
+     * one unknown link. A hub nobody has joined reports `null`, and so does a closed one: with no
+     * registered connection there is nothing to be bounded by.
      *
      * So this **loosens and tightens over a room's life** — read it per send, never cache it. The
      * senders are snapshotted under [lock] and their budgets read **outside** it, exactly as

@@ -161,6 +161,56 @@ class CompositePayloadBudgetTest {
     }
 
     /**
+     * A ply that has latched `Torn` but is **still attached** must stop bounding the composite.
+     *
+     * Distinct from the detach arm above, and not covered by it: a ply is never detached *because*
+     * it tore — only a desired-set change detaches one — so a self-torn ply sits in the live map
+     * until the consumer re-reconciles, which it may never do. Both send paths already skip it, so
+     * counting its ceiling would peg the published budget to a transport the composite cannot put a
+     * byte on, for as long as the ply sits there.
+     */
+    @Test
+    fun aTornButStillAttachedPlyStopsBoundingTheComposite() = runTest {
+        val cramped = BudgetedLoom(InMemoryLoom(), NARROW_BUDGET)
+        val seam = CompositeLoom(
+            plies = listOf(
+                PlyId("roomy") to (BudgetedLoom(InMemoryLoom(), WIDE_BUDGET) as Loom),
+                PlyId("cramped") to (cramped as Loom),
+            ),
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+        ).host(Pattern("host"))
+        seam.state.first { it is SeamState.Woven }
+
+        val envelope = envelopeBytesFor(seam.selfId)
+        val whileCarrying = seam.maxPayloadBytes
+
+        cramped.wovenSeam().close()
+        seam.plies.first { it[PlyId("cramped")] is SeamState.Torn }
+        val afterTear = seam.maxPayloadBytes
+
+        assertAll(
+            {
+                assertEquals(
+                    setOf(PlyId("roomy"), PlyId("cramped")),
+                    seam.plies.value.keys,
+                    "rig: the torn ply must still be ATTACHED, or this is the detach case, not this one",
+                )
+            },
+            { assertEquals(NARROW_BUDGET - envelope, whileCarrying, "the narrow ply bounds the composite while it can carry") },
+            {
+                assertEquals(
+                    WIDE_BUDGET - envelope,
+                    afterTear,
+                    "a torn ply carries nothing, so it must stop bounding the composite — broadcast and " +
+                        "resolveSendTargets already skip it",
+                )
+            },
+        )
+
+        seam.close()
+    }
+
+    /**
      * A ply tighter than the envelope floors at **0**, not at a negative number: nothing this
      * composite can wrap fits, and 0 is how [Seam.maxPayloadBytes] says so.
      */
@@ -218,7 +268,13 @@ class CompositePayloadBudgetTest {
 
 /** A [Loom] whose woven seams publish [budget] and delegate everything else to [delegate]'s. */
 private class BudgetedLoom(private val delegate: Loom, private val budget: Int?) : Loom {
-    override suspend fun weave(rendezvous: Rendezvous): Seam = BudgetedPly(delegate.weave(rendezvous), budget)
+    private var last: Seam? = null
+
+    override suspend fun weave(rendezvous: Rendezvous): Seam =
+        BudgetedPly(delegate.weave(rendezvous), budget).also { last = it }
+
+    /** The ply seam this loom last handed the composite — the handle a test needs to tear it. */
+    fun wovenSeam(): Seam = checkNotNull(last) { "nothing woven yet" }
 
     override fun capability(): TransportCapability = delegate.capability()
 }

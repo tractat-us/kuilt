@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.fabric.MeshWire
@@ -16,7 +17,6 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
-import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -299,9 +299,9 @@ class DecoratorPayloadBudgetTest {
      * subtraction the *loom* performs is under test too, not just the hub's fold.
      */
     @Test
-    fun aRoomHubIsBoundedByTheTightestOfItsRegisteredConnections() =
-        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val dispatcher = coroutineContext[ContinuationInterceptor]!!
+    fun aRoomHubIsBoundedByTheTightestOfItsRegisteredConnections(): TestResult {
+        val dispatcher = StandardTestDispatcher()
+        return runTest(dispatcher, timeout = TEST_WEDGE_BACKSTOP) {
             val source = InMemoryConnectionSource()
             val serverLoom = MuxServerLoom(
                 source = source,
@@ -344,6 +344,7 @@ class DecoratorPayloadBudgetTest {
                 },
             )
         }
+    }
 
     /** A hub nobody has joined has no connection to be bounded by, and says so. */
     @Test

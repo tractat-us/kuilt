@@ -237,37 +237,50 @@ internal class CompositeSeam(
     private val dataEnvelopeBytes = PlyFrame.dataEnvelopeBytes(selfId)
 
     /**
-     * The **tightest** budget across the currently-attached plies, less this seam's own
+     * The **tightest** budget across the plies a send would actually reach, less this seam's own
      * [PlyFrame.Data] envelope (#2058).
      *
      * Both halves are load-bearing, and they fail differently. One payload is wrapped **once** and
-     * handed to *every* live ply on a [broadcast] — and to any of them in turn on a [sendTo]
+     * handed to *every* such ply on a [broadcast] — and to any of them in turn on a [sendTo]
      * fall-through — so a frame that overflows one ply is over budget for this seam; hence the
      * minimum. And the envelope is paid on every send, so its bytes come out of the caller's
      * allowance rather than being added to the wire.
      *
+     * **The target set is `live` *minus torn*, matching [broadcast] and [resolveSendTargets]** — not
+     * `live` alone. A ply is never detached because it tore: only a [desired] change detaches one,
+     * so a self-torn ply sits in [live] until the consumer re-reconciles, and counting it would peg
+     * the published budget to a transport this seam can no longer put a byte on — permanently, for a
+     * ply the consumer never removes. (Contrast [reachablePeersLocked], which deliberately does
+     * *not* screen a torn ply: there the mirrored roster of a conforming torn seam is already empty,
+     * so the screen would be redundant. Here a torn ply's *ceiling* is as real a number as any, and
+     * that is exactly why it has to be excluded.)
+     *
      * A ply that names no ceiling is **skipped** rather than collapsing the answer to `null`, the
      * call [us.tractat.kuilt.core.fabric.MeshSeam] already makes across its links: `null` means
      * "unknown", so a bond of one bounded and one unknown ply is still bounded by what it does know.
-     * A composite with no attached ply — or none that names a ceiling — reports `null`, because
-     * there is nothing yet to be bounded by. Floored at zero, so a ply tighter than the envelope
+     * A composite with no reachable ply — or none that names a ceiling — reports `null`, because
+     * there is nothing to be bounded by. Floored at zero, so a ply tighter than the envelope
      * publishes `0` rather than a negative budget.
      *
      * **Recomputed, never captured.** Unlike every other decorator in #2058 this seam's ply set is
-     * live, so the number moves as plies attach and detach: a detach that removes the tight ply
-     * loosens it, and an attach can tighten it. Read it per send.
+     * live, so the number moves as plies attach, tear and detach. Read it per send.
      *
-     * The ply handles are snapshotted under [lock] and their budgets read **outside** it, exactly as
-     * [broadcast] snapshots its targets and then reads `it.seam.state.value` — a ply's seam is
-     * foreign code, and this class never calls into one while holding the lock. Unlike
-     * [publishCapability] / [publishPeers] there is no mirrored field to read instead and no writer
-     * to serialise: this is a pull, evaluated on demand, with no [StateFlow] whose trigger could be
-     * lost.
+     * The ply handles are snapshotted under [lock] and both their state and their budgets read
+     * **outside** it, exactly as [broadcast] snapshots its targets and then reads
+     * `it.seam.state.value` — a ply's seam is foreign code, and this class never calls into one
+     * while holding the lock. Unlike [publishCapability] / [publishPeers] there is no mirrored field
+     * to read instead and no writer to serialise: this is a pull, evaluated on demand, with no
+     * [StateFlow] whose trigger could be lost. (Which is also why it reads the seam's live `state`
+     * rather than [PlyHandle.woven] — the mirror exists to give those folds a trigger, and this fold
+     * needs none.)
      */
     override val maxPayloadBytes: Int?
         get() {
             val targets = lock.withLock { live.values.toList() }
-            val tightest = targets.mapNotNull { it.seam.maxPayloadBytes }.minOrNull() ?: return null
+            val tightest = targets
+                .filter { it.seam.state.value !is SeamState.Torn }
+                .mapNotNull { it.seam.maxPayloadBytes }
+                .minOrNull() ?: return null
             return (tightest - dataEnvelopeBytes).coerceAtLeast(0)
         }
 
