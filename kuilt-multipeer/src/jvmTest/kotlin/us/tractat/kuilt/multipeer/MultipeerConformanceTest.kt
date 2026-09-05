@@ -89,6 +89,9 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
     /** Proven: this harness fires a genuine self-peer event through the fake, so no gap. */
     override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
+    /** Proven: this harness kills the transport under a live session, so no gap (#1442). */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
+
     /**
      * Every capability honoured but one — MultipeerConnectivity requires encryption
      * (MCEncryptionRequired) and is an N≤8 peer mesh. meshEvidence (Task 1.8 / #1408):
