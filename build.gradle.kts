@@ -7598,9 +7598,421 @@ val verifyTestResultParity by tasks.registering {
     }
 }
 
+// Guard: a production `MutableStateFlow<SeamState>` must be a `SeamStateGate` (#2627, part of #1803).
+//
+// A seam's lifecycle is published through one flow, and the close decision is a write to it. Keep
+// those as two steps — read a `closed` flag, then write — and a derived write already in flight
+// lands *after* the terminal `Torn` and erases it. `SeamStateGate`'s own KDoc says it outright:
+// **check-a-flag-then-write IS the race**, so the `if (!closed)` that looks like the fix is the
+// defect. It is not theoretical: with the hand-rolled latch restored, `BridgePeerLink` clobbered
+// `Torn` in 7 of 20,000 closes and `MCSessionLink` in 17 of 3,000 (#1803's receipts).
+//
+// #1803 records why a *general* Shape A detector is not viable — "assign a local from a locked
+// block" matches 145 production sites and is the repo's mandated idiom, so the blessed remedy is
+// textually identical to the defect. What it also records is the shape that IS viable, and it is
+// this one: enforce the **type**, not the shape. A `SeamStateGate` and a bare
+// `MutableStateFlow<SeamState>` are lexically distinct, and adopting the gate *removes the token* —
+// so the fix cannot be mistaken for the defect in either direction.
+//
+// ── Two spellings, and why the second one is not optional ────────────────────────────────────────
+// The population divides evenly between them, so a guard seeing only the obvious one would have
+// reported a clean two-thirds of the repo:
+//
+//   private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)          // type on the ctor
+//   override val state: StateFlow<SeamState> = MutableStateFlow(SeamState.Woven) // type on the property
+//
+// `ManagedSeam` and `ServerCluster`'s `PeerlessSeam` are both written the second way. Deliberately
+// NOT matched is `MutableStateFlow<Map<PlyId, SeamState>>` (`CompositeSeam`'s per-ply rollup): that
+// is a map of its *plies'* states, not this seam's own lifecycle, and it has no `Torn` to lose. The
+// type argument is therefore anchored — `<SeamState>` exactly, optionally qualified — rather than
+// "mentions SeamState somewhere".
+//
+// ── The population is TEN, and #2627 predicted six ───────────────────────────────────────────────
+// Derived by running this guard with no markers in the tree — which is the only way to derive it,
+// since a scanner that matches nothing produces a baseline identical to one that works. The six
+// #2627 names are all real; the four it missed are `DelayedWovenSeam`, `FakeRoom`, `ControllableLoom`
+// and `FlakyLifecycleSeam`, in `:kuilt-conformance`, `:kuilt-session-test` and `:kuilt-test`. Those
+// modules' `commonMain` is production source by every mechanical definition — published, `explicitApi`,
+// compiled to every target — and carving them out by module name would be exactly the free knob the
+// "Guard plumbing" note warns about, so they are in scope and marked like everything else. Nine of the
+// ten have a genuine argument; `FlakyLifecycleSeam`'s marker says outright that its is the weakest,
+// and #2633 tracks it.
+//
+// ── The exemption is a marker in the source, and that is load-bearing ────────────────────────────
+// `forbidProductionDispatcherInTests`' mechanism, for its reason plus one this guard cares about
+// more. The reason is that a reasonless exemption is worthless: the ten flows it marks are each
+// legitimately not a gate, and it is the *argument* — not the entry — that a reviewer needs. The
+// extra reason is COUPLING. A baseline held in this file is a claim about source in files this PR
+// does not touch, so a sibling PR adding a site lands green against its own base and reds `main`
+// after the merge — the #2630 shape, which cost a red `main` the morning this was written. A marker
+// lives in the same file as the site it excuses, so the offending line and its exemption can never
+// be split across two PRs.
+//
+// WHAT IT CANNOT SEE, stated rather than left to be discovered: a flow reached through a typealias
+// or built by a helper, and any owner that is not spelled with the `MutableStateFlow` token at all.
+// It buys the obvious case. The out-of-tree fabric — the actor that hand-rolled this latch four
+// times — is not reachable from here at all; that is what the `kuilt-primitives` route and
+// `SeamConformanceSuite.stateStaysTornAfterClose` are for (#2628).
+//
+// The stale direction is checked too, for `verifyModuleTable`'s reason: a marker whose site has
+// been swept to a `SeamStateGate` is a claim about code that is no longer there, and it would
+// silently excuse whatever next lands on that line.
+val forbidBareSeamStateFlow by tasks.registering {
+    group = "verification"
+    description =
+        "Fails if a production class owns a bare MutableStateFlow<SeamState> instead of a SeamStateGate (#2627)."
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") }, "*Main/**/*.kt")
+    inputs.files(sources).withPropertyName("kotlinProductionSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a pure function of file contents — there is no allowlist, the markers live in the sources
+    // themselves — so a RELATIVE fingerprint hit genuinely means "this exact source was verified".
+    val stamp = layout.buildDirectory.file("verification/forbid-bare-seam-state-flow.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val constructedForm = Regex("""MutableStateFlow\s*<\s*(?:[A-Za-z0-9_]+\.)*SeamState\s*>""")
+        val declaredForm = Regex(
+            """:\s*(?:Mutable)?StateFlow\s*<\s*(?:[A-Za-z0-9_]+\.)*SeamState\s*>\s*=\s*MutableStateFlow\s*\(""",
+        )
+        // Group 1 is everything after the colon; blank ⇒ a reasonless marker, itself a violation.
+        val marker = Regex("""//\s*ALLOW-bareSeamState:(.*)""")
+        val unmarked = mutableListOf<String>()
+        val reasonless = mutableListOf<String>()
+        val stale = mutableListOf<String>()
+        var exempt = 0
+        var scanned = 0
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            if ("SeamState" !in raw && "ALLOW-bareSeamState" !in raw) return@forEach
+            scanned++
+            val code = KotlinCodeScanner.stripNonCode(raw)
+            val rawLines = raw.lines()
+            fun linesOf(hits: Sequence<MatchResult>): Set<Int> =
+                hits.map { code.take(it.range.first).count { c -> c == '\n' } + 1 }.toSet()
+            // Deduped: `: StateFlow<SeamState> = MutableStateFlow<SeamState>(…)` is one site, not two.
+            val hits = linesOf(constructedForm.findAll(code)) + linesOf(declaredForm.findAll(code))
+            // The lines a marker for THIS site may live on: the declaration itself (a trailing
+            // marker) plus the contiguous run of `//` lines directly above it. Not a fixed-size
+            // lookback — these reasons are paragraphs, and a one-line window would force the
+            // argument out of the marker and into a neighbouring comment, where nothing checks it.
+            // Contiguity is what keeps it tight: the run stops at the first line that is not a `//`
+            // comment, so a marker attached to some other declaration cannot reach this one.
+            fun blockOf(line: Int): List<Int> {
+                val block = mutableListOf(line)
+                var above = line - 1
+                while (above >= 1 && rawLines.getOrElse(above - 1) { "" }.trim().startsWith("//")) {
+                    block += above
+                    above--
+                }
+                return block
+            }
+            val attached = mutableSetOf<Int>()
+            hits.sorted().forEach { line ->
+                val block = blockOf(line).also { attached += it }
+                val reasons = block.mapNotNull {
+                    marker.find(rawLines.getOrElse(it - 1) { "" })?.groupValues?.get(1)?.trim()
+                }
+                val where = "${file.relativeTo(rootPath)}:$line  " + rawLines.getOrElse(line - 1) { "" }.trim()
+                when {
+                    reasons.any { it.isNotEmpty() } -> exempt++
+                    reasons.isNotEmpty() -> reasonless += where
+                    else -> unmarked += where
+                }
+            }
+            // Any marker NOT in one of those blocks has nothing under it.
+            rawLines.forEachIndexed { index, text ->
+                if (!marker.containsMatchIn(text)) return@forEachIndexed
+                val at = index + 1
+                if (at !in attached) stale += "${file.relativeTo(rootPath)}:$at  ${text.trim()}"
+            }
+        }
+        if (unmarked.isNotEmpty() || reasonless.isNotEmpty() || stale.isNotEmpty()) {
+            val detail = buildString {
+                if (unmarked.isNotEmpty()) {
+                    append("\n  ").append(unmarked.joinToString("\n  "))
+                }
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-bareSeamState:` marker with an EMPTY reason is itself a ")
+                    append("violation — the reason IS the exemption. Ten flows in this repo are ")
+                    append("legitimately not gates and each says which of the five arguments it is ")
+                    append("relying on; a blank one says only that somebody wanted the build green:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+                if (stale.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-bareSeamState:` marker with no bare flow under it. The ")
+                    append("site has been swept to a `SeamStateGate` (or moved), so the marker is now ")
+                    append("a claim about code that is not there — and it would silently excuse ")
+                    append("whatever next lands on that line. THE FIX is to delete the marker:\n  ")
+                    append(stale.joinToString("\n  "))
+                }
+            }
+            error(
+                "A production class owns a bare `MutableStateFlow<SeamState>` (#2627, part of #1803).\n" +
+                    "  Publishing a seam's lifecycle through a raw flow leaves the close decision and " +
+                    "the flow write as two steps, so a derived write already in flight lands after the " +
+                    "terminal `Torn` and erases it. Guarding the write with `if (!closed)` does NOT fix " +
+                    "that — check-a-flag-then-write is the race. Measured with the hand-rolled latch " +
+                    "restored: 7 of 20,000 closes clobbered in `BridgePeerLink`, 17 of 3,000 in " +
+                    "`MCSessionLink`.\n" +
+                    "  THE FIX is `SeamStateGate` — " +
+                    "`kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/SeamStateGate.kt`, `public` " +
+                    "since #2620 so a fabric in any module can reach it:\n" +
+                    "      private val stateGate = SeamStateGate(SeamState.Weaving)\n" +
+                    "      override val state: StateFlow<SeamState> = stateGate.state\n" +
+                    "      stateGate.update(rolled)   // a derived/rollup publish; never `Torn`\n" +
+                    "      stateGate.tear(reason)     // the close decision, latched single-shot\n" +
+                    "  Worked examples in tree: `LinkSeam`, `MeshSeam`, `RoomHubSeam`, `TieredSeam`, " +
+                    "`CompositeSeam`, `MCSessionLink`, `BridgePeerLink`.\n" +
+                    "  If this flow genuinely cannot lose a write — every write under one shared lock, " +
+                    "an atomic `update {}` CAS, a single-threaded target, a single writer behind a " +
+                    "close-once latch, or a constant nothing retains a handle to — keep it and say " +
+                    "WHICH, trailing on this line or in the comment block directly above it:\n" +
+                    "      // ALLOW-bareSeamState: <why this flow cannot lose a write>" +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${sources.files.size} production source(s) scanned, $scanned read, " +
+                "$exempt marked bare flow(s)\n",
+        )
+    }
+}
+
+// Guard: no bare `.launchIn(` in production — a pump is launched through `pumpIn` (#1803 Shape B).
+//
+// Shape B is "an unguarded foreign or fallible call on a long-lived pump": one throw ends the
+// *pump*, permanently, rather than the operation. On Kotlin/Native it is worse than permanent — an
+// unhandled coroutine exception reaches the runtime default and **aborts the process** (measured on
+// #1788). `:kuilt-core`'s `pumpIn` is the remedy and it shipped; what was still missing, and is what
+// this adds, is the rule that makes it unavoidable.
+//
+// WHY THE HELPER ALONE WAS NOT ENOUGH is recorded one level up, in `SeamStateGate`'s history: that
+// remedy was correct, documented, and reachable, and four fabrics hand-rolled it anyway — three of
+// them writing the exact race its own KDoc bans. `PumpIn.kt`'s KDoc says the same thing about
+// itself: *"It cannot make a pump exist. Nothing stops a new site being written as a bare
+// `onEach { … }.launchIn(scope)`."* This is that sentence, executable.
+//
+// ── Why a `.launchIn(` is the thing to look for ──────────────────────────────────────────────────
+// A pump dies two ways and a hand-written `try` covers one. `flow.onEach { … }.launchIn(scope)`
+// desugars to `scope.launch { flow.onEach { … }.collect() }`, so a `try` inside the `onEach` sees
+// what the BODY throws and structurally cannot see a throw raised by the FLOW, which ends the flow
+// and escapes the `launch`. `pumpIn` owns both halves in one call and puts the distinction in the
+// signature (`PumpFailure.ITEM` / `UPSTREAM`) — plus a required `name`, without which a wedged pump
+// cannot even be attributed: `launchIn` keeps the lambda out of the continuation chain, so every
+// pump of this shape parks at the same frame with no kuilt frame in its stack at all (#1811).
+//
+// ── TWO mechanisms, because there are two different populations ──────────────────────────────────
+// This is NOT the belt-and-braces it looks like; each covers a case the other gets wrong.
+//
+//   * A `// ALLOW-bareLaunchIn: <reason>` marker, for a site that is genuinely NOT a pump — a
+//     bounded collection over a flow that completes, where "the pump dies" is not a failure mode.
+//     Unlike `!!` (which `forbidNotNullAssertionInUnresolvedSource` gives no hatch at all, because it
+//     is never right), a bare `launchIn` sometimes IS right, so a hatch has to exist or the next
+//     correct site has nowhere to go but the baseline.
+//   * A per-file COUNT ratchet, for the migration debt below. These are not exempt, they are
+//     unswept — and writing "reason: not migrated yet" into a marker would permanently bless them,
+//     which is the opposite of what a debt record should do. A count only ever moves down.
+//
+// Ratchet semantics are `forbidNotNullAssertionInUnresolvedSource`'s, and so are its reasons: a file
+// ALLOWLIST would exempt the file with the MOST pumps — the one whose local convention is teaching
+// the next contributor. Sweep a file all-or-none and delete its entry. A DECREASE is tolerated (a
+// half-swept file must not red-light the branch doing the sweeping); a DANGLING key — one naming a
+// file no longer in scope — is not, because it would grandfather whatever next lands on that path.
+//
+// THE HOLE IN ANY COUNT RATCHET, stated rather than left to be found: the two mechanisms interact.
+// A marker subtracts its site from the file's count, so markering one baselined site frees a slot
+// for a new unmarked one and the file stays at its number. `forbidNotNullAssertionInUnresolvedSource`
+// has the same hole in its own shape (sweep one `!!`, add one), and for the same reason: failing on a
+// DECREASE would red-light the branch doing the sweeping. It is not closed here on purpose — the
+// machinery to close it would have to distinguish "swept" from "traded", which needs the baseline to
+// carry line identities rather than a count, and a baseline that specific goes stale on every
+// reformat. What DOES close it is the thing already required: a marker's reason has to be "this flow
+// completes", so a marker over a real pump is a false statement a reviewer can see, not a silent
+// exemption.
+//
+// ⚠ THE RATCHET IS A CLAIM ABOUT FILES THIS PR DOES NOT TOUCH, which is the #2630 coupling: a
+// sibling PR adding a `.launchIn(` to a baselined file is green against its own base, has zero file
+// overlap with this one, and reds `main` on merge. `forbidBareSeamStateFlow` above avoids this
+// entirely by keeping its exemptions in the source; this guard cannot, for the reason in the second
+// bullet. So the baseline is the coupled half, deliberately, and the remedy is sequencing rather
+// than machinery — rebase a long-lived branch onto this before merging it.
+//
+// WHAT IT CANNOT SEE: a pump launched as a bare `scope.launch { flow.collect { … } }`, which is the
+// same defect spelled without the token. #1803 sizes the missing rule as "no bare `launchIn` outside
+// a pump helper" and that is what this is; the `launch { collect }` spelling stays uncovered, and is
+// worth saying out loud rather than leaving for someone to discover as a hole.
+val forbidBareLaunchIn by tasks.registering {
+    group = "verification"
+    description = "Fails on a bare .launchIn( in production source — a long-lived pump goes through pumpIn (#1803)."
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") }, "*Main/**/*.kt")
+    inputs.files(sources).withPropertyName("kotlinProductionSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a function of file PATHS (the baseline keys) and CONTENTS, both captured by a RELATIVE
+    // fingerprint.
+    val stamp = layout.buildDirectory.file("verification/forbid-bare-launch-in.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    // The baseline MUST stay a literal here. Per "Guard plumbing" above it is covered by the cache
+    // key only because it is folded into the task-action implementation hash; moving it to
+    // `gradle.properties` or a resource would silently drop it out and reintroduce the stale-green
+    // class the stamps were made safe against. Entries are paths relative to the root; counts are
+    // what the scanner reported when this guard landed. Regenerate with the scanner, never by hand.
+    //
+    // TWENTY sites across eleven files — measured by running this guard with the map emptied, not
+    // taken from #1803, whose body says 26 and whose STATUS block says 24. Both of those count raw
+    // `.launchIn(` occurrences including the four in PROSE: `PumpIn.kt`'s own KDoc names the token
+    // three times (it is the rule's subject) and `CompositeSeam` once. This scanner reads
+    // `KotlinCodeScanner.stripNonCode` output, so a token in a comment is not a site — which is why
+    // the number is lower than both, and why re-deriving it was the right move rather than trusting
+    // either figure.
+    val baseline = mapOf(
+        "demo/shared/src/commonMain/kotlin/us/tractat/kuilt/demo/PatchworkSession.kt" to 1,
+        "kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/TieredSeam.kt" to 4,
+        "kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt" to 1,
+        "kuilt-deal/src/commonMain/kotlin/us/tractat/kuilt/deal/DealSession.kt" to 1,
+        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/BoundedCounterTransferCoordinator.kt" to 2,
+        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/FugueGcCoordinator.kt" to 1,
+        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/MovableTreeGcCoordinator.kt" to 1,
+        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt" to 2,
+        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/RgaGcCoordinator.kt" to 1,
+        "kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/BobbinExchange.kt" to 1,
+        "kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt" to 5,
+    )
+    doLast {
+        val bareLaunchIn = Regex("""\.\s*launchIn\s*\(""")
+        // Group 1 is everything after the colon; blank ⇒ a reasonless marker, itself a violation.
+        val marker = Regex("""//\s*ALLOW-bareLaunchIn:(.*)""")
+        val found = sortedMapOf<String, List<Int>>()
+        val reasonless = mutableListOf<String>()
+        val stale = mutableListOf<String>()
+        var exempt = 0
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            if ("launchIn" !in raw && "ALLOW-bareLaunchIn" !in raw) return@forEach
+            val path = file.relativeTo(rootPath).invariantSeparatorsPath
+            val code = KotlinCodeScanner.stripNonCode(raw)
+            val rawLines = raw.lines()
+            val hits = bareLaunchIn.findAll(code)
+                .map { code.take(it.range.first).count { c -> c == '\n' } + 1 }
+                .toSet()
+            // Same attachment rule as `forbidBareSeamStateFlow`: the call's own line plus the
+            // contiguous `//` run directly above it. Contiguity is what keeps a marker from
+            // reaching past its own declaration.
+            fun blockOf(line: Int): List<Int> {
+                val block = mutableListOf(line)
+                var above = line - 1
+                while (above >= 1 && rawLines.getOrElse(above - 1) { "" }.trim().startsWith("//")) {
+                    block += above
+                    above--
+                }
+                return block
+            }
+            val attached = mutableSetOf<Int>()
+            val unexcused = hits.sorted().filter { line ->
+                val block = blockOf(line).also { attached += it }
+                val reasons = block.mapNotNull {
+                    marker.find(rawLines.getOrElse(it - 1) { "" })?.groupValues?.get(1)?.trim()
+                }
+                when {
+                    reasons.any { it.isNotEmpty() } -> { exempt++; false }
+                    reasons.isNotEmpty() -> {
+                        reasonless += "$path:$line  " + rawLines.getOrElse(line - 1) { "" }.trim()
+                        false
+                    }
+                    else -> true
+                }
+            }
+            if (unexcused.isNotEmpty()) found[path] = unexcused
+            rawLines.forEachIndexed { index, text ->
+                if (!marker.containsMatchIn(text)) return@forEachIndexed
+                val at = index + 1
+                if (at !in attached) stale += "$path:$at  ${text.trim()}"
+            }
+        }
+        val scannedPaths = sources.files.map { it.relativeTo(rootPath).invariantSeparatorsPath }.toSet()
+        val dangling = baseline.keys.filterNot { it in scannedPaths }
+        if (dangling.isNotEmpty()) {
+            error(
+                "The `.launchIn(` baseline grandfathers file(s) this guard no longer scans:\n    " +
+                    dangling.sorted().joinToString("\n    ") +
+                    "\n  Deleted, renamed, or moved out of a `*Main/` source set — either way the entry " +
+                    "is a claim about a file that is not there, and it would silently grandfather a NEW " +
+                    "file that later lands on the same path.\n" +
+                    "  THE FIX is to delete the entry (or re-key it to the new path with the count this " +
+                    "scanner reports).",
+            )
+        }
+        val regressions = found.filter { (path, hits) -> hits.size > (baseline[path] ?: 0) }
+        if (regressions.isNotEmpty() || reasonless.isNotEmpty() || stale.isNotEmpty()) {
+            val detail = buildString {
+                regressions.forEach { (path, hits) ->
+                    val was = baseline[path]
+                    val from = if (was == null) "no baseline (this file is new to the ratchet)" else "baseline $was"
+                    append("\n  $path — $from, now ${hits.size}\n    line(s): ${hits.joinToString(", ")}")
+                }
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-bareLaunchIn:` marker with an EMPTY reason is itself a ")
+                    append("violation — the reason IS the exemption, and the only reason that works is ")
+                    append("\"this flow completes, so there is no pump to lose\". \"Not migrated yet\" is ")
+                    append("not an exemption; that is what the ratchet is for:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+                if (stale.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-bareLaunchIn:` marker with no `.launchIn(` under it. The ")
+                    append("site has been migrated to `pumpIn` (or moved), so the marker is now a claim ")
+                    append("about code that is not there — and it would silently excuse whatever next ")
+                    append("lands on that line. THE FIX is to delete the marker:\n  ")
+                    append(stale.joinToString("\n  "))
+                }
+            }
+            error(
+                "A bare `.launchIn(` was written in production source (#1803 Shape B).\n" +
+                    "  `flow.onEach { … }.launchIn(scope)` desugars to " +
+                    "`scope.launch { flow.onEach { … }.collect() }`, so a `try` in the body sees what the " +
+                    "BODY throws and structurally cannot see a throw raised by the FLOW — that one ends " +
+                    "the flow and escapes the launch. A pump has no restart and no backstop, so either " +
+                    "throw kills it PERMANENTLY, and on Kotlin/Native an unhandled coroutine exception " +
+                    "reaches the runtime default and aborts the PROCESS (#1788).\n" +
+                    "  THE FIX is `pumpIn` — " +
+                    "`kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/PumpIn.kt`, `public` in " +
+                    "`:kuilt-core`, which owns both halves in one call:\n" +
+                    "      flow.pumpIn(\n" +
+                    "          scope = scope,\n" +
+                    "          onFailure = { phase, failure -> logger.warn(failure) { \"pump died: \$phase\" } },\n" +
+                    "          name = \"composite-ply-peers[\$plyId]\",   // distinct PER INSTANCE, not per site\n" +
+                    "      ) { item -> … }\n" +
+                    "  `onFailure` and `name` are required, not defaulted: a pump that absorbs in silence " +
+                    "is what this defect class is made of, and an anonymous pump is one whose death " +
+                    "cannot be attributed in a coroutine dump (#1811).\n" +
+                    "  If this flow COMPLETES — a bounded collection, where there is no long-lived pump " +
+                    "to lose — say so, trailing on this line or in the comment block directly above it:\n" +
+                    "      // ALLOW-bareLaunchIn: <why this flow terminates>\n" +
+                    "  Do NOT raise the baseline in `build.gradle.kts`: it is a per-file COUNT ratchet " +
+                    "over the sites that predate this guard, and a file already over baseline is not an " +
+                    "excuse to add one more. Sweep the file all-or-none and delete its entry." +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${sources.files.size} production source(s) scanned, ${found.size} file(s) at or " +
+                "below baseline (${found.values.sumOf { it.size }} unswept sites), $exempt marked\n",
+        )
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
+        dependsOn(rootProject.tasks.named("forbidBareSeamStateFlow"))
+        dependsOn(rootProject.tasks.named("forbidBareLaunchIn"))
         dependsOn(rootProject.tasks.named("verifyTestResultParity"))
         dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
         dependsOn(rootProject.tasks.named("forbidBoltRejoiningTheLattice"))

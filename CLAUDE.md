@@ -334,6 +334,15 @@ merge; the deterministic virtual-time siblings do.
     dispatcher may decide *where* work runs, but must never be the *only* thing preventing a data race.
     Exemplars: `Quilter`/`SeamRoom` (lock-guarded). The older `CompositeSeam`/`CompositeLoom`
     `limitedParallelism(1)` confinement is **legacy being migrated to primitives** — do not copy it.
+  - **A seam's `state` is a `SeamStateGate`, not a bare `MutableStateFlow<SeamState>`** (`:kuilt-core`,
+    `public`). The close decision and the flow write have to be one atomic step: guarding the write
+    with `if (!closed)` does not fix it, because **check-a-flag-then-write IS the race** — four fabrics
+    hand-rolled that latch and three wrote exactly it (#1803). `forbidBareSeamStateFlow` in the root
+    build enforces the **type**, since the general shape rule is not viable (#1803: "assign a local
+    from a locked block" matches 145 production sites and is the mandated idiom). Ten flows are
+    exempt, each carrying an `// ALLOW-bareSeamState: <reason>` marker naming its argument — one
+    shared lock, an atomic `update {}` CAS, a single-threaded target, a single writer behind a
+    close-once latch, or a constant with no retained handle. A blank reason is itself a violation.
 
 - **Exception discipline — never swallow cancellation.** Bare `runCatching` is banned in any
   `suspend`/coroutine context: it catches `CancellationException` and turns a structured-concurrency
@@ -441,9 +450,15 @@ merge; the deterministic virtual-time siblings do.
   an `internal` pump helper is a known-failed design. And **centralising the guard blinds the two
   lexical root guards** (`forbidRunCatchingCancellableUnderNonCancellable`,
   `forbidCancellationRethrowAroundBound`), both of which are already defeated by one helper hop — so
-  the discipline inside `pumpIn` is now reviewed once, in one file, instead of scanned for. What is
-  still missing is the rule that makes it unavoidable: *"no bare `launchIn` outside a pump helper"*,
-  sized in #1803 at 26 production sites and not yet written.
+  the discipline inside `pumpIn` is now reviewed once, in one file, instead of scanned for. The rule
+  that makes it unavoidable is `forbidBareLaunchIn` in the root build (#1803 Shape B): no bare
+  `.launchIn(` in production `*Main/` source. Its population is **20 sites across 11 files**, measured
+  by running it with its baseline emptied — #1803 says 26 in the body and 24 in the STATUS block, and
+  both count the token where it appears in *prose*, including three times in `PumpIn.kt`'s own KDoc.
+  Those 20 are a per-file **count ratchet**, i.e. migration debt that may only shrink; an
+  `// ALLOW-bareLaunchIn: <reason>` marker is for the different case of a flow that genuinely
+  *completes*, where there is no long-lived pump to lose. It cannot see a pump spelled as a bare
+  `scope.launch { flow.collect { … } }`.
 
 - **Keep the throwable on a log line. Drop it only where the failure is *routine* and the
   exception's type and message are the whole diagnosis.** The qualifying cases are narrow — an

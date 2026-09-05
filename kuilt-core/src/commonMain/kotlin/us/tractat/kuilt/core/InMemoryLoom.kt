@@ -200,6 +200,8 @@ private class InMemorySeam(
         factory.peers.latchingTo(latched = closed, terminal = setOf(selfId))
 
     // In-memory fabric is immediately live — no async link establishment.
+    // ALLOW-bareSeamState: one writer. `close()` is the only site that writes it, behind the
+    // `closed.compareAndSet` close-once latch, so there is no second write to lose the `Torn` to.
     private val _state = MutableStateFlow<SeamState>(Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 

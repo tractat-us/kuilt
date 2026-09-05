@@ -213,6 +213,8 @@ public class ControllableSeam internal constructor(
     override val peers: StateFlow<Set<PeerId>> =
         loom.peersState.latchingTo(latched = closed, terminal = setOf(selfId))
 
+    // ALLOW-bareSeamState: one writer. `close()` is the only site that writes it, behind the
+    // `closed.compareAndSet` close-once latch, so there is no second write to lose the `Torn` to.
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 

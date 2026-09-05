@@ -331,6 +331,7 @@ private fun localOverlay(self: PeerId, scope: CoroutineScope): OverlayServer =
  */
 private class PeerlessSeam(override val selfId: PeerId) : Seam {
     override val peers: StateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId))
+    // ALLOW-bareSeamState: a constant — nothing retains a handle to the flow, so it has no writer at all.
     override val state: StateFlow<SeamState> = MutableStateFlow(SeamState.Woven)
     override val incoming: Flow<Swatch> = MutableSharedFlow()
     override suspend fun broadcast(payload: ByteArray): Unit = Unit

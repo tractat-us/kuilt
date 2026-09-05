@@ -64,6 +64,9 @@ internal class WebRTCPeerLink(
     override val peers: StateFlow<Set<PeerId>> get() = _peers
 
     // WebRTC data channel is open at construction — fabric is immediately live.
+    // ALLOW-bareSeamState: a single-threaded target (wasmJs). [tear]'s read of `_state` and its write
+    // are synchronous with no suspension point between them, so nothing can interleave — see that
+    // function's KDoc, which argues the case and says not to copy the shape to a multithreaded fabric.
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     override val state: StateFlow<SeamState> get() = _state
 

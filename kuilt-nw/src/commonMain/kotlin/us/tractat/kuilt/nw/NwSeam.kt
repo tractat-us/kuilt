@@ -451,6 +451,9 @@ internal class NwSeam(
 
     // Weaving until the first remote peer resolves, then Woven; re-forms Woven→Weaving on last-remote
     // loss (recoverable, #1513); latches Torn ONLY on close()/weave-timeout, never on peer loss.
+    // ALLOW-bareSeamState: all three writers take this seam's own [lock] — `latchTorn`'s terminal
+    // `Torn`, `addRemotePeer`'s `Weaving → Woven` and `evictPeerLocked`'s `Woven → Weaving`. The
+    // check and the write are one critical section, which is the property the gate exists to add.
     private val _state = MutableStateFlow<SeamState>(SeamState.Weaving)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
 
