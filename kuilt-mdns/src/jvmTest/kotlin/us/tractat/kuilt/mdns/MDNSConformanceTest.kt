@@ -16,6 +16,7 @@ import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Tag
 import kotlin.test.AfterTest
@@ -186,6 +187,33 @@ class MDNSConformanceTest : SeamConformanceSuite() {
 
     /** Proven: the factory refuses to dial its own advertisement, so no gap. */
     override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
+
+    /**
+     * Inject a mid-session transport death by abruptly stopping the Netty server under the live
+     * session — the identical rig `WebSocketConformanceTest` already proves, one transport up. The
+     * byte path here IS a WebSocket (mDNS supplies only discovery, which this harness bypasses), so
+     * killing the server drops the underlying connection for both the host seam and the joiner seam
+     * without either calling `close()`. The server is per-test (fresh in [setUp]) and [tearDown]'s
+     * stop is idempotent, so this affects nothing else.
+     *
+     * ## Why the rig asserts its own precondition
+     *
+     * The `check` is the difference between a conversion and a false green (#1442). Returning `true`
+     * obliges [SeamConformanceSuite.incomingCompletesOnInjectedMidSessionDeath] to assert — but that
+     * assertion only reads *terminal* state, so it would pass just as happily on a pair that was
+     * already `Torn` before this ran, crediting a tear this rig did not cause. Asserting liveness
+     * first makes the injection prove it is the thing being observed. Same argument, same shape, as
+     * `dropBothEnds` in `:kuilt-conformance`.
+     */
+    override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
+        check(host.state.value !is SeamState.Torn && joiner.state.value !is SeamState.Torn) {
+            "mid-session-death rig precondition: both seams must be live before the server is " +
+                "stopped, or the obligation would pass on a tear this rig did not cause; got " +
+                "host=${host.state.value}, joiner=${joiner.state.value}"
+        }
+        server.stop(gracePeriodMillis = 0, timeoutMillis = 500)
+        return true
+    }
 
     /** Proven: this harness drops the transport by stopping the server, so no gap (#1442). */
     override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
