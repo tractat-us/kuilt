@@ -7782,10 +7782,226 @@ val forbidBareSeamStateFlow by tasks.registering {
     }
 }
 
+// Guard: no bare `.launchIn(` in production — a pump is launched through `pumpIn` (#1803 Shape B).
+//
+// Shape B is "an unguarded foreign or fallible call on a long-lived pump": one throw ends the
+// *pump*, permanently, rather than the operation. On Kotlin/Native it is worse than permanent — an
+// unhandled coroutine exception reaches the runtime default and **aborts the process** (measured on
+// #1788). `:kuilt-core`'s `pumpIn` is the remedy and it shipped; what was still missing, and is what
+// this adds, is the rule that makes it unavoidable.
+//
+// WHY THE HELPER ALONE WAS NOT ENOUGH is recorded one level up, in `SeamStateGate`'s history: that
+// remedy was correct, documented, and reachable, and four fabrics hand-rolled it anyway — three of
+// them writing the exact race its own KDoc bans. `PumpIn.kt`'s KDoc says the same thing about
+// itself: *"It cannot make a pump exist. Nothing stops a new site being written as a bare
+// `onEach { … }.launchIn(scope)`."* This is that sentence, executable.
+//
+// ── Why a `.launchIn(` is the thing to look for ──────────────────────────────────────────────────
+// A pump dies two ways and a hand-written `try` covers one. `flow.onEach { … }.launchIn(scope)`
+// desugars to `scope.launch { flow.onEach { … }.collect() }`, so a `try` inside the `onEach` sees
+// what the BODY throws and structurally cannot see a throw raised by the FLOW, which ends the flow
+// and escapes the `launch`. `pumpIn` owns both halves in one call and puts the distinction in the
+// signature (`PumpFailure.ITEM` / `UPSTREAM`) — plus a required `name`, without which a wedged pump
+// cannot even be attributed: `launchIn` keeps the lambda out of the continuation chain, so every
+// pump of this shape parks at the same frame with no kuilt frame in its stack at all (#1811).
+//
+// ── TWO mechanisms, because there are two different populations ──────────────────────────────────
+// This is NOT the belt-and-braces it looks like; each covers a case the other gets wrong.
+//
+//   * A `// ALLOW-bareLaunchIn: <reason>` marker, for a site that is genuinely NOT a pump — a
+//     bounded collection over a flow that completes, where "the pump dies" is not a failure mode.
+//     Unlike `!!` (which `forbidNotNullAssertionInUnresolvedSource` gives no hatch at all, because it
+//     is never right), a bare `launchIn` sometimes IS right, so a hatch has to exist or the next
+//     correct site has nowhere to go but the baseline.
+//   * A per-file COUNT ratchet, for the migration debt below. These are not exempt, they are
+//     unswept — and writing "reason: not migrated yet" into a marker would permanently bless them,
+//     which is the opposite of what a debt record should do. A count only ever moves down.
+//
+// Ratchet semantics are `forbidNotNullAssertionInUnresolvedSource`'s, and so are its reasons: a file
+// ALLOWLIST would exempt the file with the MOST pumps — the one whose local convention is teaching
+// the next contributor. Sweep a file all-or-none and delete its entry. A DECREASE is tolerated (a
+// half-swept file must not red-light the branch doing the sweeping); a DANGLING key — one naming a
+// file no longer in scope — is not, because it would grandfather whatever next lands on that path.
+//
+// ⚠ THE RATCHET IS A CLAIM ABOUT FILES THIS PR DOES NOT TOUCH, which is the #2630 coupling: a
+// sibling PR adding a `.launchIn(` to a baselined file is green against its own base, has zero file
+// overlap with this one, and reds `main` on merge. `forbidBareSeamStateFlow` above avoids this
+// entirely by keeping its exemptions in the source; this guard cannot, for the reason in the second
+// bullet. So the baseline is the coupled half, deliberately, and the remedy is sequencing rather
+// than machinery — rebase a long-lived branch onto this before merging it.
+//
+// WHAT IT CANNOT SEE: a pump launched as a bare `scope.launch { flow.collect { … } }`, which is the
+// same defect spelled without the token. #1803 sizes the missing rule as "no bare `launchIn` outside
+// a pump helper" and that is what this is; the `launch { collect }` spelling stays uncovered, and is
+// worth saying out loud rather than leaving for someone to discover as a hole.
+val forbidBareLaunchIn by tasks.registering {
+    group = "verification"
+    description = "Fails on a bare .launchIn( in production source — a long-lived pump goes through pumpIn (#1803)."
+    val sources = kotlinSourcesIn(subprojects.map { it.projectDir.resolve("src") }, "*Main/**/*.kt")
+    inputs.files(sources).withPropertyName("kotlinProductionSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a function of file PATHS (the baseline keys) and CONTENTS, both captured by a RELATIVE
+    // fingerprint.
+    val stamp = layout.buildDirectory.file("verification/forbid-bare-launch-in.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    // The baseline MUST stay a literal here. Per "Guard plumbing" above it is covered by the cache
+    // key only because it is folded into the task-action implementation hash; moving it to
+    // `gradle.properties` or a resource would silently drop it out and reintroduce the stale-green
+    // class the stamps were made safe against. Entries are paths relative to the root; counts are
+    // what the scanner reported when this guard landed. Regenerate with the scanner, never by hand.
+    //
+    // TWENTY sites across eleven files — measured by running this guard with the map emptied, not
+    // taken from #1803, whose body says 26 and whose STATUS block says 24. Both of those count raw
+    // `.launchIn(` occurrences including the four in PROSE: `PumpIn.kt`'s own KDoc names the token
+    // three times (it is the rule's subject) and `CompositeSeam` once. This scanner reads
+    // `KotlinCodeScanner.stripNonCode` output, so a token in a comment is not a site — which is why
+    // the number is lower than both, and why re-deriving it was the right move rather than trusting
+    // either figure.
+    val baseline = mapOf(
+        "demo/shared/src/commonMain/kotlin/us/tractat/kuilt/demo/PatchworkSession.kt" to 1,
+        "kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/TieredSeam.kt" to 4,
+        "kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt" to 1,
+        "kuilt-deal/src/commonMain/kotlin/us/tractat/kuilt/deal/DealSession.kt" to 1,
+        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/BoundedCounterTransferCoordinator.kt" to 2,
+        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/FugueGcCoordinator.kt" to 1,
+        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/MovableTreeGcCoordinator.kt" to 1,
+        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt" to 2,
+        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/RgaGcCoordinator.kt" to 1,
+        "kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/BobbinExchange.kt" to 1,
+        "kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt" to 5,
+    )
+    doLast {
+        val bareLaunchIn = Regex("""\.\s*launchIn\s*\(""")
+        // Group 1 is everything after the colon; blank ⇒ a reasonless marker, itself a violation.
+        val marker = Regex("""//\s*ALLOW-bareLaunchIn:(.*)""")
+        val found = sortedMapOf<String, List<Int>>()
+        val reasonless = mutableListOf<String>()
+        val stale = mutableListOf<String>()
+        var exempt = 0
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            if ("launchIn" !in raw && "ALLOW-bareLaunchIn" !in raw) return@forEach
+            val path = file.relativeTo(rootPath).invariantSeparatorsPath
+            val code = KotlinCodeScanner.stripNonCode(raw)
+            val rawLines = raw.lines()
+            val hits = bareLaunchIn.findAll(code)
+                .map { code.take(it.range.first).count { c -> c == '\n' } + 1 }
+                .toSet()
+            // Same attachment rule as `forbidBareSeamStateFlow`: the call's own line plus the
+            // contiguous `//` run directly above it. Contiguity is what keeps a marker from
+            // reaching past its own declaration.
+            fun blockOf(line: Int): List<Int> {
+                val block = mutableListOf(line)
+                var above = line - 1
+                while (above >= 1 && rawLines.getOrElse(above - 1) { "" }.trim().startsWith("//")) {
+                    block += above
+                    above--
+                }
+                return block
+            }
+            val attached = mutableSetOf<Int>()
+            val unexcused = hits.sorted().filter { line ->
+                val block = blockOf(line).also { attached += it }
+                val reasons = block.mapNotNull {
+                    marker.find(rawLines.getOrElse(it - 1) { "" })?.groupValues?.get(1)?.trim()
+                }
+                when {
+                    reasons.any { it.isNotEmpty() } -> { exempt++; false }
+                    reasons.isNotEmpty() -> {
+                        reasonless += "$path:$line  " + rawLines.getOrElse(line - 1) { "" }.trim()
+                        false
+                    }
+                    else -> true
+                }
+            }
+            if (unexcused.isNotEmpty()) found[path] = unexcused
+            rawLines.forEachIndexed { index, text ->
+                if (!marker.containsMatchIn(text)) return@forEachIndexed
+                val at = index + 1
+                if (at !in attached) stale += "$path:$at  ${text.trim()}"
+            }
+        }
+        val scannedPaths = sources.files.map { it.relativeTo(rootPath).invariantSeparatorsPath }.toSet()
+        val dangling = baseline.keys.filterNot { it in scannedPaths }
+        if (dangling.isNotEmpty()) {
+            error(
+                "The `.launchIn(` baseline grandfathers file(s) this guard no longer scans:\n    " +
+                    dangling.sorted().joinToString("\n    ") +
+                    "\n  Deleted, renamed, or moved out of a `*Main/` source set — either way the entry " +
+                    "is a claim about a file that is not there, and it would silently grandfather a NEW " +
+                    "file that later lands on the same path.\n" +
+                    "  THE FIX is to delete the entry (or re-key it to the new path with the count this " +
+                    "scanner reports).",
+            )
+        }
+        val regressions = found.filter { (path, hits) -> hits.size > (baseline[path] ?: 0) }
+        if (regressions.isNotEmpty() || reasonless.isNotEmpty() || stale.isNotEmpty()) {
+            val detail = buildString {
+                regressions.forEach { (path, hits) ->
+                    val was = baseline[path]
+                    val from = if (was == null) "no baseline (this file is new to the ratchet)" else "baseline $was"
+                    append("\n  $path — $from, now ${hits.size}\n    line(s): ${hits.joinToString(", ")}")
+                }
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-bareLaunchIn:` marker with an EMPTY reason is itself a ")
+                    append("violation — the reason IS the exemption, and the only reason that works is ")
+                    append("\"this flow completes, so there is no pump to lose\". \"Not migrated yet\" is ")
+                    append("not an exemption; that is what the ratchet is for:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+                if (stale.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-bareLaunchIn:` marker with no `.launchIn(` under it. The ")
+                    append("site has been migrated to `pumpIn` (or moved), so the marker is now a claim ")
+                    append("about code that is not there — and it would silently excuse whatever next ")
+                    append("lands on that line. THE FIX is to delete the marker:\n  ")
+                    append(stale.joinToString("\n  "))
+                }
+            }
+            error(
+                "A bare `.launchIn(` was written in production source (#1803 Shape B).\n" +
+                    "  `flow.onEach { … }.launchIn(scope)` desugars to " +
+                    "`scope.launch { flow.onEach { … }.collect() }`, so a `try` in the body sees what the " +
+                    "BODY throws and structurally cannot see a throw raised by the FLOW — that one ends " +
+                    "the flow and escapes the launch. A pump has no restart and no backstop, so either " +
+                    "throw kills it PERMANENTLY, and on Kotlin/Native an unhandled coroutine exception " +
+                    "reaches the runtime default and aborts the PROCESS (#1788).\n" +
+                    "  THE FIX is `pumpIn` — " +
+                    "`kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/PumpIn.kt`, `public` in " +
+                    "`:kuilt-core`, which owns both halves in one call:\n" +
+                    "      flow.pumpIn(\n" +
+                    "          scope = scope,\n" +
+                    "          onFailure = { phase, failure -> logger.warn(failure) { \"pump died: \$phase\" } },\n" +
+                    "          name = \"composite-ply-peers[\$plyId]\",   // distinct PER INSTANCE, not per site\n" +
+                    "      ) { item -> … }\n" +
+                    "  `onFailure` and `name` are required, not defaulted: a pump that absorbs in silence " +
+                    "is what this defect class is made of, and an anonymous pump is one whose death " +
+                    "cannot be attributed in a coroutine dump (#1811).\n" +
+                    "  If this flow COMPLETES — a bounded collection, where there is no long-lived pump " +
+                    "to lose — say so, trailing on this line or in the comment block directly above it:\n" +
+                    "      // ALLOW-bareLaunchIn: <why this flow terminates>\n" +
+                    "  Do NOT raise the baseline in `build.gradle.kts`: it is a per-file COUNT ratchet " +
+                    "over the sites that predate this guard, and a file already over baseline is not an " +
+                    "excuse to add one more. Sweep the file all-or-none and delete its entry." +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${sources.files.size} production source(s) scanned, ${found.size} file(s) at or " +
+                "below baseline (${found.values.sumOf { it.size }} unswept sites), $exempt marked\n",
+        )
+    }
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
         dependsOn(rootProject.tasks.named("forbidBareSeamStateFlow"))
+        dependsOn(rootProject.tasks.named("forbidBareLaunchIn"))
         dependsOn(rootProject.tasks.named("verifyTestResultParity"))
         dependsOn(rootProject.tasks.named("forbidUnboundedSwatchDelivery"))
         dependsOn(rootProject.tasks.named("forbidBoltRejoiningTheLattice"))
