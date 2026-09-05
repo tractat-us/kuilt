@@ -100,6 +100,27 @@ internal class MuxBase<K>(
         override val state: StateFlow<SeamState> get() = delegate.state
 
         /**
+         * The base seam's per-ply breakdown, verbatim (#2393).
+         *
+         * A pass-through, not a derivation: the plies of the base **are** the transport paths
+         * carrying this channel. Multiplexing changes how many logical sessions share a link, not
+         * how many links there are — it neither adds nor removes a path — so unlike
+         * [maxPayloadBytes] there is nothing here to hold back.
+         *
+         * Inheriting [Seam]'s default was silent information loss. That default synthesises
+         * `{ PlyId.Sole: state }`, so over a multi-ply
+         * [us.tractat.kuilt.core.composite.CompositeSeam] a channel view reported a *single* rolled-up
+         * entry and a holder could not tell a 3-ply composite from a single-ply fabric. Nothing red
+         * on it, because the [Seam.plies] invariant — `state` equals the rollup of `plies.values` —
+         * holds **trivially** for a one-entry map whose value *is* `state`; the same shape as the
+         * capability defect above (#1546).
+         *
+         * Delegated by reference, so the breakdown stays live across ply churn under the base rather
+         * than freezing at whatever was attached when this view was created.
+         */
+        override val plies: StateFlow<Map<PlyId, SeamState>> get() = delegate.plies
+
+        /**
          * The base seam's live verdict, verbatim — the per-session counterpart to
          * [MuxClientLoom.capability], which forwards the same way on the pre-connect surface.
          *

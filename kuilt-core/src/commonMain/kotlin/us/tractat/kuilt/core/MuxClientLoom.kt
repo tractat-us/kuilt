@@ -163,6 +163,21 @@ public class MuxClientLoom(
         override val state: StateFlow<SeamState> = FollowingStateFlow { it.state }
 
         /**
+         * The current generation's per-ply breakdown (#2393), following a heal exactly as [state]
+         * and [peers] do.
+         *
+         * A handle sits one hop above the channel view that actually forwards the base's plies, so
+         * without this the breakdown a `MuxClientLoom` consumer reads collapses back to the
+         * synthetic `{ PlyId.Sole: state }` the interface default synthesises — and the transitive
+         * forwarding stops short of the public entry point.
+         *
+         * [FollowingStateFlow] rather than a `get() = current().plies`, for the reason recorded
+         * there: a captured flow must switch to the fresh generation instead of pinning to the
+         * pre-heal one's terminal breakdown (#1387).
+         */
+        override val plies: StateFlow<Map<PlyId, SeamState>> = FollowingStateFlow { it.plies }
+
+        /**
          * The current generation's channel budget (#2058) — already net of the [NamedMux] header
          * that generation applies, since this handle is a view onto that channel view.
          *
