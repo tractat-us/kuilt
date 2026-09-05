@@ -61,7 +61,7 @@ evidence.
   *`tail`'s* status, so a timeout kill or a compile failure reports **exit 0 with no
   `BUILD SUCCESSFUL` line**. Assert on the output, never the status:
   ```bash
-  ./gradlew build --max-workers=6 2>&1 | tee /tmp/build.log | tail -30
+  ./gradlew build --max-workers="$N" 2>&1 | tee /tmp/build.log | tail -30   # N from your brief
   grep -q "BUILD SUCCESSFUL" /tmp/build.log && echo GREEN || echo "NOT GREEN"
   ```
   or `set -o pipefail`, or read `${PIPESTATUS[0]}`. This is the general shape *a success code from a
@@ -88,7 +88,12 @@ evidence.
 
 ## Sharing the machine
 
-Four or five workers build concurrently on one 16-core box.
+Several workers build concurrently on one 16-core box, and the budget is **shared across every
+session** — not just the ones your dispatcher started. Most kuilt change types require the *full*
+`./gradlew build` (module-scoped is a documented false green above), and a full multi-platform build
+— Kotlin/Native link phases especially — is several times heavier than the "builder" the older
+four-to-five figure was calibrated on. Treat **2–3 concurrent full-build workers** as the real
+ceiling.
 
 - **Never pattern-kill.** No `pkill -f`, no `killall`, no pattern of any kind. Isolation is a
   *filesystem* boundary, not a process one — every worker's Gradle daemons and test JVMs share one
@@ -110,7 +115,21 @@ Four or five workers build concurrently on one 16-core box.
   `Gradle build daemon has been stopped: stop command received`. It is distinctive — but a worker
   who meets it mid-mutation can easily bank it as a flake, which is how one agent's convenience
   becomes another's false verdict. If you see it, you were a victim: re-run, do not record.
-- **`--max-workers=6`**, always.
+- **`--max-workers=N`: use the value your brief gives you.** If the brief names none, use **2** and
+  say so in your report — that is the safe floor, not a good default.
+
+  **Do not treat any per-worker constant as correct, including one you read here.** The right value
+  depends on how many builders are running across *every* session, which no individual worker can
+  see. This line said "`--max-workers=6`, always" until 2026-09-05, when four workers each obeying it
+  put **24 Gradle workers on 16 cores** and drove the 5-minute load average to **57**. That was the
+  third recurrence of the same arithmetic error, and the first two were blamed on forgetfulness —
+  wrongly. The constant *was* the bug: a globally-defined quantity cannot be stated locally.
+
+  The dispatcher computes it from the live builder count
+  (`git -C <main-checkout> worktree list | grep -c 'agent-'`, which counts **all** sessions) and puts
+  it in the brief. Read the **5-minute** load average, never the 1-minute — when workers stall the
+  1-minute collapses within a couple of minutes and a post-mortem then shows a healthy-looking box,
+  hiding the cause.
 - **Check `uptime` before quoting any absolute timing**, and say the load alongside it. A saturated
   box distorts wall-clock by orders of magnitude and the distortion is invisible in the number.
   Prefer relative comparisons within one process; those survive contamination.
