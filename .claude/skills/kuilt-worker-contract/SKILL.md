@@ -47,6 +47,22 @@ worker reads them as advice addressed to someone else.
 4. **Do not enable auto-merge.** Open the PR and return to the dispatcher for review. The review is
    the gate, and it is not yours to skip.
 
+   **But auto-merge appearing on your PR afterwards — or the PR simply merging — is expected, and is
+   your dispatcher, not a rival session.** Do not disarm it, do not report it as an anomaly, and do
+   not infer an infrastructure hazard from it. Say at most one sentence noting you did not arm it.
+
+   This has now been misread **five times**, escalating each time: a worker reporting confusion, then
+   a worker inventing a non-existent "rogue auto-merge sweeper", then a worker recommending PRs be
+   opened **draft** to avoid it — which would have inverted an existing rule, since a draft run
+   leaves a stale `ci-required` FAILURE. On 2026-09-05 a worker went further and **actively disarmed
+   its dispatcher's arming**, which delays the merge indefinitely if nobody notices.
+
+   **You cannot settle this from GitHub, so do not try.** `enabledBy.login` is `keddie` for every
+   session, worker and human alike. And the *absence* of an `auto_merge_enabled` timeline event
+   proves nothing either: `gh-pr-wait --arm-auto` merges **directly** when the PR is already green
+   and `CLEAN`, creating no such event. Attribution exists only in the dispatcher's local poll log,
+   which you cannot see.
+
 5. **If scope balloons materially, stop.** Land at the last green checkpoint, push, open a draft, and
    return a re-plan — done / remaining / suggested split. Do not grind to a truncated marathon. A
    PR with three solid pieces and an honest re-plan is worth far more than six half-done ones, and
