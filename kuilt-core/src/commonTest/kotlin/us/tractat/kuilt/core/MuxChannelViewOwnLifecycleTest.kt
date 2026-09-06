@@ -97,10 +97,18 @@ class MuxChannelViewOwnLifecycleTest {
     }
 
     /**
-     * `stateStaysTornAfterClose`, on a view: post-close churn must not move the terminal state off
-     * `Torn`. The base is still publishing — it is `Woven` and its roster is still moving — so an
-     * unlatched mirror would be overwritten by the very next base emission, which is exactly the
-     * failure mode a plain `MutableStateFlow` would have.
+     * `stateStaysTornAfterClose`, on a view, **and its roster counterpart**: post-close churn on the
+     * base must move neither the terminal state nor the collapsed roster.
+     *
+     * The base is still publishing — it is `Woven` and its roster is still growing — so an unlatched
+     * mirror would be overwritten by the very next base emission, which is exactly the failure mode a
+     * plain `MutableStateFlow` would have.
+     *
+     * **The roster arm is here because a mutation found it missing.** Deleting the no-resurrection
+     * guard from the view's peers mirror left the whole suite green: every other case closes the view
+     * and *then* looks, so nothing was driving a base roster change **after** a tear, and the one case
+     * that was — this one — asserted only on `state`. A late joiner is the cheapest stimulus that
+     * makes a resurrection observable.
      */
     @Test
     fun theViewStaysTornWhileTheBaseKeepsPublishing() = runTest(UnconfinedTestDispatcher()) {
@@ -111,14 +119,32 @@ class MuxChannelViewOwnLifecycleTest {
 
         chat.close()
         val torn = assertIs<SeamState.Torn>(chat.state.value, "precondition: close() must latch Torn")
+        assertEquals(setOf(chat.selfId), chat.peers.value, "precondition: close() must collapse the roster")
 
         // A joiner arriving AFTER the close moves the base's roster and re-publishes its state —
-        // the churn that would clobber an unlatched terminal write.
+        // the churn that would clobber an unlatched terminal write, or resurrect a collapsed roster.
         val joiner = loom.join(InMemoryTag("late-joiner"))
         base.peers.first { joiner.selfId in it }
 
         val after = assertIs<SeamState.Torn>(chat.state.value, "the view must STAY Torn under base churn")
-        assertEquals(torn.reason, after.reason, "the terminal reason must not change under churn")
+        assertAll(
+            { assertEquals(torn.reason, after.reason, "the terminal reason must not change under churn") },
+            {
+                assertEquals(
+                    setOf(chat.selfId),
+                    chat.peers.value,
+                    "a torn view must NOT resurrect its roster from the base — the peer joined the base " +
+                        "after this view was closed and was never reachable on this channel",
+                )
+            },
+            {
+                assertTrue(
+                    joiner.selfId in mux.channel("cursors").peers.value,
+                    "rig: the base's roster really did grow, so the arm above is asserting against a " +
+                        "stimulus that landed rather than against nothing happening",
+                )
+            },
+        )
     }
 
     // ── peers collapses to { selfId } on the view's own close ────────────────
