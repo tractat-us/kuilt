@@ -26,7 +26,6 @@ import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.test.internal.initialLifecycleState
 import us.tractat.kuilt.test.internal.onEnterWeaving
 import us.tractat.kuilt.test.internal.onRecover
-import us.tractat.kuilt.test.internal.onTear
 import kotlin.math.roundToLong
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -216,9 +215,10 @@ public class FlakyLifecycleSeam(
         // value that `MutableStateFlow` conflates away. The one case where it is not equal is the
         // roster collector having clobbered it, which this repairs rather than preserves.
         _peers.value = setOf(selfId)
-        // Single-shot and atomic: the losing caller of two concurrent tears gets `false` and does not
-        // re-close the delegate, which is what the old `onTear(...) === current` pre-check bought
-        // non-atomically. `onTear` is now only exercised by its own unit tests.
+        // Single-shot and atomic: the losing caller of two concurrent tears gets `false` and does
+        // not re-close the delegate, which is what the old `onTear(…) === current` pre-check bought
+        // non-atomically. That pure helper is gone with this call — a terminal transition is a
+        // decision fused to its publish, not a function of the current state.
         if (!stateGate.tear(reason)) return
         scope.launch { delegate.close(reason) }
     }
