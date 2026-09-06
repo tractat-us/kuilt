@@ -364,10 +364,14 @@ private fun Cluster.onAppendEntries(m: ModelMsg.AppendEntries): Cluster {
     // `prevLogIndex` 0, which skips the §5.3 consistency check entirely, so a batch can begin at an
     // index that MATCHES while the divergence sits one entry later; the leader's own entry at that
     // index is then discarded and the follower's stale one survives underneath a matching suffix.
-    // Measured at 5 violations in 20 000 compaction-free 3-node trajectories of up to 200 actions
-    // The random surface does NOT pin this — the shipped unbounded properties never run long enough to
-    // reach it, and the bounded ones send one entry per frame, where "first" and "every" coincide. The
-    // pin is the directed `onAppendEntries truncates on a conflict later in the batch and not only on the first entry` self-check.
+    // Measured at 5 violations in 20 000 compaction-free 3-node trajectories of up to 200 actions,
+    // against zero once this scan replaced it (#2114).
+    //
+    // The random surface does NOT pin this, so do not read a green suite as evidence for it. The
+    // unbounded properties run 60-action trajectories, well under the length that reaches it, and the
+    // bounded ones carry ONE entry per frame, where "first" and "every" coincide by construction. The
+    // pin is the directed self-check `onAppendEntries truncates on a conflict later in the batch and
+    // not only on the first entry`, which builds the state outright.
     if (m.entries.isNotEmpty()) {
         var appendFrom = -1
         for ((i, entry) in m.entries.withIndex()) {

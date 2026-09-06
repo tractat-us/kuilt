@@ -136,14 +136,25 @@ class PureRaftModelTest {
      * Leader Completeness (Ongaro, Fig. 3.2): *"if a log entry is committed in a given term, then that
      * entry will be present in the logs of the leaders for all higher-numbered terms."*
      *
-     * **Keyed on the commit term, not the entry's own term.** Keying on `entry.term` states a strictly
-     * stronger proposition, and that proposition is **not a theorem of Raft** — it flags a correct
-     * trajectory. A stale leader is the witness: n2 wins term 2 with log `[1:t2]`, n1 goes on to lead
-     * term 3 with `[1:t1, 2:t3]` and commits index 1 by implication under §5.4.2. Index 1 is now
-     * committed *in term 3*, n2 is a leader for term 2, and 2 is not higher than 3 — so Raft promises
-     * nothing about n2, which is right, because a stale leader that no quorum will answer can never
-     * commit its conflicting entry. `entry.term` (1) is below n2's term (2), so the old spelling
-     * reported a violation there. Reached unmutated at try 13 224 of a 20 000-trajectory sweep (#2114).
+     * ## Keyed on the commit term. **Do not re-tighten this to `entry.term`.**
+     *
+     * This check used to read `if (committed.term >= leader.term) continue` — i.e. it keyed on the term
+     * the entry was *created* in. That states a strictly stronger proposition than Fig. 3.2, and the
+     * stronger proposition is **not a theorem of Raft**: it flags a trajectory in which nothing is
+     * wrong. The witness is an ordinary stale leader. n2 wins term 2 with log `[1:t2]`; n1 goes on to
+     * lead term 3 with `[1:t1, 2:t3]` and commits index 1 by implication under §5.4.2. Index 1 is now
+     * committed *in term 3*; n2 leads term 2; 2 is not higher than 3, so Raft promises nothing about
+     * n2 — correctly, because a stale leader no quorum will answer can never commit its conflicting
+     * entry. But `entry.term` is 1, which *is* below n2's term, so the old spelling reported a
+     * violation.
+     *
+     * Re-tightening is tempting precisely because it looks safer — a stricter invariant "can only catch
+     * more". It cannot: it catches a **false positive**, and one that hides. It needed an unbounded
+     * 200-action trajectory at try 13 224 of 20 000 to surface, several times past the shipped budget,
+     * so re-tightening it would leave a latent false-alarm generator that first fires on somebody
+     * else's unrelated change (#2114). `checkLeaderCompleteness ignores a stale leader below the term
+     * the entry was committed in` is the pin; if you are here to make this stricter, that test is the
+     * argument against it.
      *
      * [committedEntries] accumulates entries as they become committed anywhere in the cluster
      * (index → entry + commit term). It grows monotonically across steps.
@@ -473,33 +484,45 @@ class PureRaftModelTest {
         const val MAX_ENTRIES_PER_APPEND = 1
 
         /**
-         * Budget for the two bounded properties. Bigger than [MAX_ACTIONS] / [THREE_NODE_TRIES]
-         * because Figure 8 is a **three-election** shape — an entry replicated under one leader, a
-         * second leader that inherits it uncommitted, and a third that can still overwrite it — and a
-         * 60-action trajectory at the default delivery weight ends long before the third.
+         * Budget for the two bounded properties. Much longer trajectories than [MAX_ACTIONS], and
+         * fewer of them, because Figure 8 is a **three-election** shape — an entry replicated under one
+         * leader, a second leader that inherits it uncommitted, and a third that can still overwrite it
+         * — and a 60-action trajectory at the default delivery weight ends long before the third.
          *
-         * Each figure was measured rather than picked (#2114). Under the §5.4.2 mutation, at
-         * `maxEntriesPerAppend = 1`: 60 and 120 actions find nothing at any delivery weight, 200 finds
-         * it at try 1 954, and 400 at try 1 747 with 27 counterexamples per 30 000 trajectories. The
-         * 5-node arm needs 400 (first hit at try 1 668). Unmutated, 480 000 trajectories across the
-         * whole grid produce zero. All three figures reproduce **byte-identically** on `macosArm64` and
-         * `wasmJs` — same try indices, same messages — so nothing here walks a hash-ordered collection.
+         * **Length, not count, is what buys detection here, and by a wide margin.** Counterexamples per
+         * 30 000 trajectories under the §5.4.2 mutation, 5-node, at a fixed ~2 s of JVM time each:
+         * 400 actions → **4**; 800 → **15**; 1200 → **19**. Trading tries for length is therefore nearly
+         * free and worth roughly 5×, because a 5-node cluster spends most of a short trajectory just
+         * reaching its first commit. Shorter still finds nothing at all: 60 and 120 actions produce zero
+         * at every delivery weight and every budget tried, including 100× this one.
          *
-         * **What this costs, stated because the older budget above was deliberately sized for the
-         * slowest target.** The class goes from ~1 s to ~30 s on `macosArm64` (11 s for the 3-node arm,
-         * 18 s for the 5-node), against ~1.7 s on the JVM. That is the price of a §5.4.2 kill, and it is
-         * the reason `MAX_ACTIONS` / [THREE_NODE_TRIES] are left alone rather than raised for everyone.
+         * **Both arms are detectors — but they are not equally strong, and the budget is set by the
+         * weaker one.** Within this exact window the §5.4.2 mutation is caught by **11** distinct
+         * trajectories at 3 nodes (first at try 50) and **4** at 5 nodes (first at try 1 077). Those are
+         * enumerated hit indices, not an expected value computed from a density: an expectation can be
+         * comfortably above 1 while the actual count in the window is 0, and reporting one as the other
+         * is how a coin flip gets presented as a detector. Both arms are therefore genuine, and neither
+         * red rests on a single lucky trajectory.
          *
-         * **The two arms are not equally strong, and the 5-node one should not be read as margin.**
-         * Counterexample density under the mutation is ~1 per 1 100 trajectories at 3 nodes but ~1 per
-         * 7 500 at 5 nodes, so within this budget the 3-node arm carries the kill several times over
-         * while the 5-node arm expects **under one** — its hit at try 1 668 is close to a coincidence of
-         * this seed. Kept anyway, because Figure 8 is a five-server story and a 3-node cluster cannot
-         * exhibit its classic shape; but if a model change ever shifts the trajectories, expect the
-         * 5-node arm to go quiet first, and do not conclude from that alone that §5.4.2 is safe.
+         * The 3-node arm is nonetheless ~3× denser, so **if a model change ever shifts the trajectories,
+         * expect the 5-node arm to go quiet first** — that alone is not evidence §5.4.2 regressed. Do not
+         * cut [BOUNDED_TRIES] without re-enumerating both counts; an earlier revision ran 6 000 × 400,
+         * where the 5-node arm had **one** hit in the window and its red really was this seed's luck.
+         *
+         * Unmutated, **180 000 trajectories at this length across 3 and 5 nodes, bounded and unbounded,
+         * produce zero** — so the length is not buying false positives along with the true ones. Every
+         * figure reproduces **byte-identically** on `macosArm64` and `wasmJs` (same try indices, same
+         * messages), so nothing here walks a hash-ordered collection.
+         *
+         * **What it costs**, stated because the budget above was deliberately sized for the slowest
+         * target: ~1.5 s of the class's JVM time, and **~34 s on `macosArm64`** (~11 s for the 3-node
+         * arm, ~21 s for the 5-node) against ~1 s before. Measured on the target, not extrapolated from
+         * the JVM — scaling the JVM figure predicted ~27 s and was wrong by a quarter. That is the price
+         * of a §5.4.2 kill, and it is why [MAX_ACTIONS] / [THREE_NODE_TRIES] are left alone rather than
+         * raised for every property.
          */
-        const val BOUNDED_TRIES = 6_000
-        const val BOUNDED_MAX_ACTIONS = 400
+        const val BOUNDED_TRIES = 1_500
+        const val BOUNDED_MAX_ACTIONS = 1_200
         const val BOUNDED_DELIVER_WEIGHT = 12
     }
 }
