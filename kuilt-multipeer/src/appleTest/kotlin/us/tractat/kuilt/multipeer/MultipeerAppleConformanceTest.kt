@@ -133,7 +133,9 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
     override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /**
-     * Hand the host a connection whose remote identity is its own `MCPeerID` — the #1466 self-dial.
+     * Hand **each end** a connection whose remote identity is its own `MCPeerID` — the #1466
+     * self-dial, now at both ends (#2601). Both run `MCSessionLink`, so the joiner arm pins that the
+     * guard is reached on the joining device's path rather than that two guards agree.
      * [FakeMCSessionBus.injectSelfDial] both fires the `MCSessionStateConnected` callback and adds
      * the sighting to the session's `connectedPeers`, because on this fabric the delegate's roster
      * and the send targets are decoupled and only the second reaches the loopback.
@@ -146,7 +148,7 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
      * or not self was bound. [MCSessionLinkSelfDialTest] is what pins the delegate guard, via the
      * `state` a lone self-dialled link must not move.
      */
-    override suspend fun injectSelfDial(host: Seam): Boolean = pair?.injectSelfDial() ?: false
+    override suspend fun injectSelfDial(host: Seam, joiner: Seam): Boolean = pair?.injectSelfDial() ?: false
 
     /** Proven: this harness offers the host a connection to its own identity, so no gap. */
     override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
@@ -192,8 +194,18 @@ internal class MCSessionLinkLoomPair(private val testScope: TestScope?) {
         }
     }
 
-    /** Offer the host endpoint a connection to its own identity; `false` if no host link exists yet. */
-    fun injectSelfDial(): Boolean = bus.injectSelfDial(hostPeer)
+    /**
+     * Offer **each** endpoint a connection to its own identity; `false` unless both landed (#2601).
+     *
+     * The two calls are made unconditionally rather than `&&`-chained: short-circuiting would leave
+     * the joiner undialled whenever the host's endpoint was missing, and the caller would still be
+     * told `false`, so the only thing the chain could buy is a silently half-applied injection.
+     */
+    fun injectSelfDial(): Boolean {
+        val onHost = bus.injectSelfDial(hostPeer)
+        val onJoiner = bus.injectSelfDial(joinerPeer)
+        return onHost && onJoiner
+    }
 
     /**
      * Build one link over a bus endpoint and install its delegate, exactly as

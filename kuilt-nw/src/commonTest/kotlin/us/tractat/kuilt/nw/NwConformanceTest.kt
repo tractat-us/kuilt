@@ -56,6 +56,9 @@ class NwConformanceTest : SeamConformanceSuite() {
         const val SERVICE_TYPE = "_kuilt._tcp"
         const val HOST_DEVICE = "host"
 
+        /** The joining device's radio id — the second end #2601's self-dial obligation now covers. */
+        const val JOINER_DEVICE = "join"
+
         /**
          * A live, satisfied infrastructure-Wi-Fi path. Published on both fakes in [newLoomPair] to drive
          * the seams' #1541 path-observer loop, which since #1712 is the ONLY source of a
@@ -74,15 +77,15 @@ class NwConformanceTest : SeamConformanceSuite() {
         )
     }
 
-    // The radio backing the current pair, captured so injectSelfDial can drive the host device to dial
-    // its own advertised endpoint. Tests run one pair at a time, sequentially.
+    // The radio backing the current pair, captured so injectSelfDial can drive EACH device to dial its
+    // own advertised endpoint. Tests run one pair at a time, sequentially.
     private var radio: FakeNwRadio? = null
 
     override fun newLoomPair(): Pair<Loom, Loom> {
         val r = FakeNwRadio()
         radio = r
         val hostApi = FakeNwApi(r, deviceId = HOST_DEVICE, serviceName = "host")
-        val joinerApi = FakeNwApi(r, deviceId = "join", serviceName = "join")
+        val joinerApi = FakeNwApi(r, deviceId = JOINER_DEVICE, serviceName = JOINER_DEVICE)
         // LOAD-BEARING (#1712): the path observer is the only source of a non-Unknown availability, and
         // the suite's reportsLiveCapability branch AWAITS one. Delete these and the suite hangs to timeout.
         hostApi.emitPathState(SATISFIED_WIFI_PATH)
@@ -93,13 +96,21 @@ class NwConformanceTest : SeamConformanceSuite() {
     }
 
     /**
-     * Drive the host device to dial its OWN advertised endpoint (the #1466 self-dial). The two
-     * resulting connections both resolve to the host's `selfId`, which [NwSeam]'s self-connection guard
-     * must drop — proving [SeamConformanceSuite.selfDialIsRejected] on a live, already-woven seam.
+     * Drive **each** device to dial its OWN advertised endpoint (the #1466 self-dial). The two
+     * resulting connections both resolve to that device's `selfId`, which [NwSeam]'s self-connection
+     * guard must drop — proving [SeamConformanceSuite.selfDialIsRejected] on a live, already-woven
+     * seam at both ends (#2601).
+     *
+     * Both ends are genuinely dialled rather than one being assumed from the other: [FakeNwRadio]
+     * resolves a manually-constructed `ep-<deviceId>` endpoint back to its own device, so
+     * [JOINER_DEVICE] self-dials the joining `NwSeam` exactly as [HOST_DEVICE] self-dials the hosting
+     * one. Both are the same class here, so what this pins is that the guard is reached on the joining
+     * device's code path too — not that two independent guards agree.
      */
-    override suspend fun injectSelfDial(host: Seam): Boolean {
+    override suspend fun injectSelfDial(host: Seam, joiner: Seam): Boolean {
         val r = radio ?: return false
         r.injectSelfDial(HOST_DEVICE)
+        r.injectSelfDial(JOINER_DEVICE)
         return true
     }
 

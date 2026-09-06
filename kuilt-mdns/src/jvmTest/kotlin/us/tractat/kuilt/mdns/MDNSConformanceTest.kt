@@ -65,6 +65,12 @@ class MDNSConformanceTest : SeamConformanceSuite() {
     private var port: Int = 0
     private lateinit var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>
     private lateinit var hostFactory: MDNSPeerLinkFactory
+
+    // The joining factory backing the current pair, captured so injectSelfDial can drive the JOINING
+    // end's own copy of the self-discovery guard (#2601). Fresh per newLoomPair; tests run one pair at
+    // a time, sequentially. `null` until the first pair is built, which is the honest `false`.
+    private var joinerFactory: MDNSPeerLinkFactory? = null
+
     private val joinerClients = mutableListOf<HttpClient>()
     private val openSeams = mutableListOf<Seam>()
 
@@ -135,6 +141,7 @@ class MDNSConformanceTest : SeamConformanceSuite() {
             wsPath = joinerWsPath,
             httpClientFactory = { joinerClient },
         )
+        this.joinerFactory = joinerFactory
         return TrackingLoom(hostFactory) to TrackingLoom(joinerFactory)
     }
 
@@ -166,23 +173,37 @@ class MDNSConformanceTest : SeamConformanceSuite() {
      * fail-fast `require(serverPeerId != selfPeerId)` at [MDNSPeerLinkFactory.weave] (the choke
      * point where both ids are in scope; also exercised directly by [MDNSSelfDiscoveryFilterTest]).
      *
-     * We prove it by driving [hostFactory] to dial its OWN advertisement and asserting the refusal.
-     * Because the guard throws before any connection forms, the live host seam is untouched — so the
+     * We prove it by driving **each** factory to dial its OWN advertisement and asserting the refusal.
+     * Because the guard throws before any connection forms, the live seams are untouched — so the
      * suite's no-self-echo / peers-unchanged / stays-Woven assertions in [selfDialIsRejected] hold as
-     * required.
+     * required, at both ends.
+     *
+     * **The joining end is a real second site, not a formality (#2601).** `selfPeerId` is per-factory,
+     * so the joiner refuses a *different* id than the host does; and this is the one harness where the
+     * guard does not live in the seam at all, which is exactly why the joining end could have been
+     * left unguarded without any host-side symptom. What it is not is two independent implementations:
+     * both factories are `MDNSPeerLinkFactory`, so the arm pins that the joining call site reaches the
+     * `require`, not that a second guard exists.
      */
-    override suspend fun injectSelfDial(host: Seam): Boolean {
+    override suspend fun injectSelfDial(host: Seam, joiner: Seam): Boolean {
+        val joinerFactory = this.joinerFactory ?: return false
+        refuseToDialItself(hostFactory, hostWsPath)
+        refuseToDialItself(joinerFactory, joinerWsPath)
+        return true
+    }
+
+    /** Drive [factory] to dial an advertisement carrying its own `selfPeerId`, and require the refusal. */
+    private suspend fun refuseToDialItself(factory: MDNSPeerLinkFactory, wsPath: String) {
         val selfAdvertisement = MDNSAdvertisement(
             host = "localhost",
             port = port,
-            serverPeerId = hostFactory.selfPeerId,
-            sessionName = "host",
-            wsPath = hostWsPath,
+            serverPeerId = factory.selfPeerId,
+            sessionName = "self",
+            wsPath = wsPath,
         )
         assertFailsWith<IllegalArgumentException> {
-            hostFactory.weave(Rendezvous.Existing(selfAdvertisement))
+            factory.weave(Rendezvous.Existing(selfAdvertisement))
         }
-        return true
     }
 
     /** Proven: the factory refuses to dial its own advertisement, so no gap. */
