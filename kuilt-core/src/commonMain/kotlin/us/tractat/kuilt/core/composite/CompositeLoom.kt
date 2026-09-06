@@ -26,6 +26,20 @@ import kotlin.coroutines.CoroutineContext
  * are woven in, removed entries are detached. The list constructor is the
  * degenerate case of a never-changing flow.
  *
+ * **Already carries the universal knobs it can honour (#1430), and deliberately omits the two it
+ * cannot.** [dispatcher] and [policy] below are the canonical parameters, under the canonical
+ * names and defaults. The other two are absent on purpose:
+ *
+ * - **`selfId`** — a composite has no identity to give. The bonded seam's [Seam.selfId] is
+ *   *derived* from the plies that came up (`CompositeSeam.mintCompositeId` joins their ids), so a
+ *   loom-level identity would have to either overwrite that derivation — losing the record of
+ *   which transports this session is actually made of — or be accepted and dropped.
+ * - **`weaveTimeout`** — [weave] is a loop over `loom.weave(rendezvous)`, so its duration is
+ *   already the sum of each ply's own rendezvous. A clock here would either duplicate a bound the
+ *   ply enforces or silently pre-empt one, and because the weave is all-or-nothing the caller
+ *   could not tell *which* ply the deadline cut short. A consumer that needs a deadline puts it
+ *   on the ply that owns the slow rendezvous, where the failure is attributable.
+ *
  * @param plies The desired ply set; emit a new value to reconcile (attach/detach).
  * @param dispatcher Forwarded to each [CompositeSeam] as the scope for its internal
  *   coroutines (scheduling only — the woven seam's thread-safety is via a lock + atomics,
