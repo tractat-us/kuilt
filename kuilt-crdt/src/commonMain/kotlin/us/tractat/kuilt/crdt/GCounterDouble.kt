@@ -23,6 +23,7 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 public class GCounterDouble private constructor(
+    @Serializable(with = CanonicalMapSerializer::class)
     private val counts: Map<ReplicaId, Double>,
 ) : Quilted<GCounterDouble> {
 
