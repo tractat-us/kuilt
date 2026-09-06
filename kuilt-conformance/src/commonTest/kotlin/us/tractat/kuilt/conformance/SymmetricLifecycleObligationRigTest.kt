@@ -35,14 +35,15 @@ import kotlin.test.assertTrue
  *
  * ## Four of the slice's seven rows, and the other three are not forgotten
  *
- * `closeDrivesStateTornNormal`, `stateStaysTornAfterClose` and `peersCollapseToSelfIdWhenTorn` are
+ * `closeDrivesStateTornNormal`, `stateStaysTornAfterClose` and `peersCollapseToSelfIdWhenTorn` were
  * **held back on #2372**, not skipped: their joiner arms were written, run, and red on a real
- * in-tree harness. `MuxServerLoomConformanceTest`'s joiner is a `NamedMux` channel view whose
- * `close()` drains its own spool while `state` and `peers` keep delegating to a live base, so it
- * never reaches `Torn` and a *closed* view still advertises `PeerId(server)`. One value, read from
- * three places. Each of those obligations carries the measurement and the exact assertion to
- * restore; a rig pair belongs beside each of them, and lands with them. Adding a control here for
- * an assertion that is not in the suite would assert nothing.
+ * in-tree harness. `MuxServerLoomConformanceTest`'s joiner is a `NamedMux` channel view, and
+ * `MuxBase.ChannelView` used to keep `state` and `peers` delegating to a live base, so it never
+ * reached `Torn` and a *closed* view still advertised `PeerId(server)`. One value, read from three
+ * places. #2372 fixed it — a channel view now owns both — so the hold is discharged and the three
+ * arms land with #2601's remaining slice. Each of those obligations carries the measurement and the
+ * exact assertion to restore; a rig pair belongs beside each of them, and lands with them. Adding a
+ * control here for an assertion that is not yet in the suite would assert nothing.
  *
  * ## The shape, copied deliberately from [JoinerRosterObligationRigTest]
  *

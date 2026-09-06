@@ -33,13 +33,17 @@ import kotlinx.coroutines.CoroutineScope
  *
  * ## Per-channel close
  *
- * [ChannelView.close] stops delivery to **that view only** — its [Seam.incoming]
- * completes and further [Seam.broadcast]/[Seam.sendTo] calls become no-ops. The
- * base [Seam] remains live for all other channel views. The base closes only
- * when the owner calls [closeBase] (or closes the [delegate] directly). This
- * deliberate owner-driven design avoids fragile last-channel reference-counting
- * and keeps lifecycle ownership clear: the entity that opened the [delegate]
- * is the entity that closes it.
+ * Closing a channel view ends **that view only**: its [Seam.incoming] completes, its
+ * [Seam.state] latches [SeamState.Torn] and its [Seam.peers] collapses to `{ selfId }`,
+ * so a holder reading either learns the channel is gone. The base [Seam] remains live
+ * for all other channel views. The base closes only when the owner calls [closeBase]
+ * (or closes the [delegate] directly). This deliberate owner-driven design avoids
+ * fragile last-channel reference-counting and keeps lifecycle ownership clear: the
+ * entity that opened the [delegate] is the entity that closes it.
+ *
+ * A send on a closed view is **refused** with an [IllegalStateException], as [Seam]
+ * requires of any torn seam — it used to be swallowed, which was only defensible while
+ * the view still claimed to be [SeamState.Woven] (#2372).
  *
  * @param delegate the underlying [Seam] whose [Seam.incoming] this class owns.
  * @param scope a [CoroutineScope] for the shared upstream collector and per-view pipes.

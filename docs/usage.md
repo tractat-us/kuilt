@@ -311,6 +311,15 @@ collecting are not replayed. They are suitable for `Quilter`-grade consumers
 (which heal gaps via FullState + resend) but require application-level
 reliability for raw at-least-once consumers.
 
+**Closing one channel does not close the others.** `close()` on a channel view
+ends only that view: its `incoming` completes, its `state` becomes `Torn` and its
+`peers` collapses to just your own id, while the underlying `Seam` — and every
+other channel over it — stays live. Send on a closed view and you get an
+`IllegalStateException`, the same as on any torn seam; the shared transport
+closes only when you call `closeBase()` (or close the underlying `Seam`
+yourself). What the *other end* sees is unchanged, though: a per-channel close is
+local, so a peer holding the same channel name is not told about it.
+
 ## Writing your own fabric
 
 Implement `Loom` (and a private `Seam`), then **prove it conforms** by

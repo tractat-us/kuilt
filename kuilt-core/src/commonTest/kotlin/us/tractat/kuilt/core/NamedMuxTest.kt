@@ -324,13 +324,18 @@ class NamedMuxTest {
     }
 
     /**
-     * After close(), broadcast on the closed channel view is a no-op — does not
-     * send to remote peers and does not throw.
+     * After close(), broadcast on the closed channel view is **refused** — it reaches no remote peer,
+     * and it throws rather than swallowing.
+     *
+     * It used to swallow, and that was defensible only while the view also reported itself `Woven`.
+     * Since #2372 the view latches its own `Torn`, and `Seam`'s contract for a torn seam is explicit:
+     * the send throws [IllegalStateException] rather than silently dropping. The base-stays-live half
+     * — the point of this test and of #949 — is unchanged and still asserted below.
      */
     @Test
-    fun closedChannelBroadcastIsNoOp() = runTest(UnconfinedTestDispatcher()) {
+    fun closedChannelBroadcastIsRefused() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
-        val rawA = loom.host(Pattern("named-channel-close-noop-broadcast"))
+        val rawA = loom.host(Pattern("named-channel-close-refused-broadcast"))
         val rawB = loom.join(InMemoryTag("b"))
 
         val muxA = NamedMux(rawA, backgroundScope)
@@ -342,16 +347,18 @@ class NamedMuxTest {
         // A sentinel on "cursors" to prove the base is alive.
         val sentinel = async { muxB.channel("cursors").incoming.first() }
 
-        // Must not throw — the broadcast on the closed view is a no-op.
-        chatChannel.broadcast(byteArrayOf(99))
+        assertFailsWith<IllegalStateException>("a send on a closed channel view must be refused, not swallowed") {
+            chatChannel.broadcast(byteArrayOf(99))
+        }
 
         // The sentinel on "cursors" still works.
         muxA.channel("cursors").broadcast(byteArrayOf(1))
         sentinel.await()
 
-        // "chat" on peer B must have received nothing.
+        // "chat" on peer B must have received nothing — the refusal happens BEFORE the frame is
+        // handed to the base, so nothing was put on the wire either.
         val chatOnB = muxB.channel("chat").incoming.produceIn(this)
-        assertTrue(chatOnB.tryReceive().isFailure, "no-op broadcast must not reach peer B's chat channel")
+        assertTrue(chatOnB.tryReceive().isFailure, "the refused broadcast must not reach peer B's chat channel")
         chatOnB.cancel()
     }
 

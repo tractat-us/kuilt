@@ -153,9 +153,10 @@ class ObligationDeclarationRigTest {
         // THE CASE THIS RIG WAS MISSING, and its absence is why a vacuous arm shipped to review
         // (#2568). The refutation concludes from an ABSENCE of a tear, so a departure that never
         // happens produces the identical green as a topology that genuinely survives one. That is not
-        // hypothetical: MuxServerLoomConformanceTest's joiner is a NamedMux channel view whose close()
-        // drains its own spool and departs nobody (#2372), so the default stimulus was a no-op there
-        // and the arm was green by absence — inside the very PR built to stop arms being believed.
+        // hypothetical: MuxServerLoomConformanceTest's joiner is a NamedMux channel view, and a
+        // per-channel close is a local unsubscribe with no wire representation, so it departs nobody
+        // (#2665). The default stimulus was a no-op there and the arm was green by absence — inside
+        // the very PR built to stop arms being believed.
         val failure = assertFailsWith<AssertionError> {
             noOpDepartureHarness(NOT_CONSTRUCTIBLE).runMidSessionDeathDeclarationIsHonest(this)
         }
@@ -264,8 +265,8 @@ class ObligationDeclarationRigTest {
     /**
      * The reference mesh — on which [ObligationDeclaration.NotApplicable.NotConstructible] is honest —
      * with the departure stimulus replaced by a no-op. Stands in for the `NamedMux` channel view whose
-     * `close()` returns without departing anyone (#2372): everything downstream still passes, because
-     * the survivor stays live for the trivial reason that nothing was done to it.
+     * `close()` ends the view without departing anyone (#2665): everything downstream still passes,
+     * because the survivor stays live for the trivial reason that nothing was done to it.
      */
     private fun noOpDepartureHarness(declaration: ObligationDeclaration): SeamConformanceSuite =
         object : SeamConformanceSuite() {

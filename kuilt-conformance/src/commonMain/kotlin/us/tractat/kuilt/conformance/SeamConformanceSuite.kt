@@ -389,11 +389,16 @@ public abstract class SeamConformanceSuite {
      * Returns `true` if the harness performed a departure. The default closes [joiner], which is the
      * universal one — **but a harness whose handed-back joiner cannot depart by being closed MUST
      * override this with the stimulus its own declared reason names.** That is not hypothetical and it
-     * is why this hook exists: `MuxServerLoomConformanceTest` hands back a `NamedMux` channel view
-     * whose `close()` drains its own spool while `state`/`peers` keep delegating to a live base
-     * connection, so `joiner.close()` departs nobody (#2372) — and its reason names *"killing the
-     * client's base seam"*, a different stimulus entirely. Under the default the refutation would have
+     * is why this hook exists: `MuxServerLoomConformanceTest` hands back a `NamedMux` channel view,
+     * and a per-channel close is a **local unsubscribe with no wire representation** — it ends that
+     * view and reaches the base connection, and therefore the survivor, not at all. So
+     * `joiner.close()` departs nobody (#2665), and the harness's reason names *"killing the client's
+     * base seam"*, a different stimulus entirely. Under the default the refutation would have
      * concluded "the survivor stayed live" from a stimulus that never landed.
+     *
+     * (Under #2372 that view did not even reach `Torn`, so the hole was two deep; the view now latches
+     * its own terminal state, and this half of it — that closing one channel is invisible to the other
+     * end — survives untouched. Fixing the local half did not fix this one.)
      *
      * [midSessionDeathDeclarationIsHonest] therefore asserts the departure **was observed in the
      * survivor's roster** before concluding anything from the absence of a tear. A harness that cannot
@@ -877,36 +882,35 @@ public abstract class SeamConformanceSuite {
 
     // ── (9) close drives state to Torn(Normal) ──────────────────────────────
     //
-    // **STILL HOST-ONLY, and now for a measured reason rather than by omission (#2601).** `SeamState`
-    // is symmetric — there is no client/server split at this layer — and a joiner that never latches
-    // `Torn` wedges every `state.first { it is Torn }` waiter on the joining device while the host
-    // looks perfectly healthy. That is the first of the three shipped `:kuilt-nearby` symptoms #2591
-    // records. The joiner arm belongs here and is written; it does not land yet because one in-tree
-    // harness reds on it, and the red is a real defect that this suite must not paper over.
+    // **STILL HOST-ONLY, and now only because #2601 owns the edit (#2372).** `SeamState` is symmetric
+    // — there is no client/server split at this layer — and a joiner that never latches `Torn` wedges
+    // every `state.first { it is Torn }` waiter on the joining device while the host looks perfectly
+    // healthy. That is the first of the three shipped `:kuilt-nearby` symptoms #2591 records. The
+    // joiner arm belongs here and is written; it was held back because one in-tree harness reds on it
+    // and the red was a real defect this suite must not paper over.
     //
-    // `MuxServerLoomConformanceTest` hands back a `NamedMux` **channel view** as its joiner, and
-    // `MuxBase.ChannelView.close` closes its own delivery spool while `state` and `peers` keep
-    // delegating to a base connection that is still alive — so `joiner.state` reads `Woven` after
-    // `joiner.close()`. That is **#2372**, filed and open, and it is *blocked on a design decision*
-    // (does a channel view own its own `SeamState`?) rather than on anyone writing code.
-    //
-    // **What #2601 adds to #2372 is that the harness it asks for already exists.** That issue's
-    // acceptance criteria ask for "a `SeamConformanceSuite` subclass that puts a channel view in the
-    // **host** position, so ungated core actually covers it", and its comment records that such a
-    // harness was built, red on 6 rows, and not landed. Symmetrising *this* row reaches the same
-    // defect through the harness already in tree, in the position it already occupies — no new
-    // subclass required. Land the joiner arm with #2372's fix; the assertion is one line:
+    // **That defect is fixed.** `MuxServerLoomConformanceTest` hands back a `NamedMux` channel view as
+    // its joiner, and `MuxBase.ChannelView` used to delegate `state`/`peers` to a base connection that
+    // is still alive, so `joiner.state` read `Woven` after `joiner.close()`. Since #2372 a channel view
+    // owns its own `SeamState` and its own roster: its `close()` latches `Torn` and collapses `peers`
+    // to `{ selfId }`, while the base stays `Woven` for its other channels (#949). Nothing here blocks
+    // the joiner arm any more; landing it is #2601's slice, not #2372's, and the assertion is one line:
     //
     //     assertAll(
     //         { assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()") },
     //         { assertIs<SeamState.Torn>(joiner.state.value, "joiner state must be Torn after close()") },
     //     )
     //
-    // Two sibling rows are held back by the same one value, and only that one: `stateStaysTornAfterClose`
-    // and `peersCollapseToSelfIdWhenTorn`. Measured by neutralising the joiner-`Torn` assertions and
-    // re-running — every other joiner arm in this slice went green, including
-    // `incomingCompletesWhenSeamCloses`, whose joiner flow terminates correctly (the view does close
-    // its spool). So this is one defect, not four.
+    // Two sibling rows were held back by the same one value, and only that one:
+    // `stateStaysTornAfterClose` and `peersCollapseToSelfIdWhenTorn`. Measured by neutralising the
+    // joiner-`Torn` assertions and re-running — every other joiner arm in that slice went green,
+    // including `incomingCompletesWhenSeamCloses`, whose joiner flow terminates correctly (the view
+    // did close its spool even then). So it was one defect, not four, and all three unblock together.
+    //
+    // What the fix did NOT unblock is `survivorStopsAdvertisingADepartedPeer` on that harness: a
+    // per-channel close still has no wire representation, so the hub keeps advertising a client that
+    // told it nothing. Measured, and tracked separately as #2665 — do not read this paragraph as
+    // saying every mux gap is closed.
 
     internal suspend fun runCloseDrivesStateTornNormal(scope: TestScope): Unit =
         scope.connectedPair { host, _ ->
@@ -1212,10 +1216,10 @@ public abstract class SeamConformanceSuite {
     // even now `SeamStateGate` is `public` (#1803) and an out-of-tree fabric *can* reach for it —
     // reachability is not adoption, and this obligation is what catches a fabric that did not.
     //
-    // **STILL HOST-ONLY, blocked on the same one value as `closeDrivesStateTornNormal` — see that
-    // obligation's comment for the argument and the measurement (#2601 / #2372).** The joiner arm
-    // here needs the joiner to reach `Torn` at all before "does it STAY Torn" means anything, and
-    // `MuxBase.ChannelView` never does. Its shape when it lands is the mirror image of round one:
+    // **STILL HOST-ONLY, and no longer blocked — see `closeDrivesStateTornNormal`'s comment for the
+    // argument and the measurement (#2601 / #2372).** The joiner arm here needs the joiner to reach
+    // `Torn` at all before "does it STAY Torn" means anything; `MuxBase.ChannelView` never did, and
+    // since #2372 it does. Landing the arm is #2601's slice. Its shape is the mirror image of round one:
     // assert the joiner's own `Torn` as a precondition after its close, then drive frames from the
     // host toward the torn joiner plus a redundant close on each end, then assert both terminals
     // and both reasons are unchanged. A second `close()` is where an idempotent-close path most
@@ -1439,11 +1443,11 @@ public abstract class SeamConformanceSuite {
                 { assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()") },
                 // There is deliberately NO `assertIs<Torn>(joiner.state.value)` arm here, and the
                 // asymmetry is tracked rather than silent: it would duplicate the claim
-                // `closeDrivesStateTornNormal` owns, and that row's joiner arm is held back on #2372.
-                // Landing it here as well would report ONE defect (a `NamedMux` channel view's
-                // `state` delegating to a live base) as reds on two rows, which is exactly the
-                // diagnosability #2601 asks a per-row split to preserve. Add it when #2372 lands and
-                // `closeDrivesStateTornNormal` gains its joiner arm — not before, and not instead.
+                // `closeDrivesStateTornNormal` owns, and reporting one defect as reds on two rows is
+                // exactly the diagnosability #2601 asks a per-row split to preserve. That is a
+                // permanent reason, not the #2372 hold it used to also carry: the channel view now
+                // latches its own `Torn`, so the arm would pass — it still belongs on the row that
+                // owns the claim, added there by #2601 and not here.
             )
         }
     }
@@ -1596,19 +1600,20 @@ public abstract class SeamConformanceSuite {
     //
     // Gated on `collapsesPeersOnTear`; every `false` is a tracked bug, not a by-design gap.
     //
-    // **STILL HOST-ONLY, blocked on #2372 — and this row measured the SECOND half of that issue
+    // **STILL HOST-ONLY, and no longer blocked — this row is what measured the SECOND half of #2372
     // (#2601).** `Seam.peers` is symmetric — that is the whole argument #2591 turned on — and the
     // consumer this protects, `CompositeSeam`'s reachability fold, folds whichever seam it was
     // given: a joiner freezing its pre-tear roster leaves a composite on the joining device
     // advertising a peer only `sendTo` can disprove. The joiner arm belongs here.
     //
-    // It does not land yet because `MuxServerLoomConformanceTest`'s joiner is a `NamedMux` channel
-    // view whose `peers` delegates to a still-live base, so a *closed* view advertises
-    // `PeerId(server)` — measured, not argued. #2372 raises exactly this as its open second
-    // question ("Same question for `peers`: a closed view advertises the base's roster, i.e. peers
-    // it will no longer deliver to — the lie `Seam.peers`' KDoc forbids") and had no property that
-    // could reach it. This row is that property, and it reds. See `closeDrivesStateTornNormal` for
-    // why all three held-back rows are one defect.
+    // It was held back because `MuxServerLoomConformanceTest`'s joiner is a `NamedMux` channel view
+    // whose `peers` delegated to a still-live base, so a *closed* view advertised `PeerId(server)` —
+    // measured, not argued. #2372 raised exactly that as its open second question ("Same question for
+    // `peers`: a closed view advertises the base's roster, i.e. peers it will no longer deliver to —
+    // the lie `Seam.peers`' KDoc forbids") and had no property that could reach it. This row was that
+    // property, it red, and the fix collapses a torn view's roster to `{ selfId }` inside the same
+    // critical section as the latch. Landing the arm is #2601's slice. See
+    // `closeDrivesStateTornNormal` for why all three held-back rows were one defect.
     //
     // **When it lands, note where the joiner PRECONDITION is weak, which is not where the
     // obligation is.** `joiner.peers.size >= 2` before the tear is satisfied by the fixture on any
@@ -2504,10 +2509,11 @@ public abstract class SeamConformanceSuite {
          * review). The refutation concludes from the ABSENCE of a tear — so if the departure stimulus
          * never lands, the survivor stays live because nothing happened, and the arm is green by
          * absence. `MuxServerLoomConformanceTest` is the real instance: the joiner it hands back is a
-         * `NamedMux` channel view whose `close()` drains its own spool while `state`/`peers` keep
-         * delegating to a live base connection, so no peer departs at all (#2372). A rig that cannot
-         * be seen to fire is exactly what [dropBothEnds] and `FakeNwRadio.dropAllLinks` assert against
-         * one level down; this is the same assertion for this one.
+         * `NamedMux` channel view, and a per-channel close is a local unsubscribe with no wire
+         * representation — it ends that view and the base connection carries on, so no peer departs at
+         * all (#2665). A rig that cannot be seen to fire is exactly what [dropBothEnds] and
+         * `FakeNwRadio.dropAllLinks` assert against one level down; this is the same assertion for
+         * this one.
          */
         const val DEPARTURE_STIMULUS_NEVER_LANDED =
             "the refutation's stimulus never landed: departCounterpart did not remove the counterpart " +

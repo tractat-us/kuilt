@@ -59,7 +59,7 @@ package us.tractat.kuilt.conformance
  *    `SeamConformanceSuite.departCounterpart` is a hook rather than a hardcoded `joiner.close()`. The
  *    no-tear conclusion is identical whether the topology survived a departure or *no departure ever
  *    happened*: `MuxServerLoomConformanceTest`'s joiner is a channel view whose `close()` departs
- *    nobody (#2372), so the arm was green by absence. The suite now asserts the counterpart really left
+ *    nobody (#2665), so the arm was green by absence. The suite now asserts the counterpart really left
  *    the survivor's roster first, and a harness whose counterpart cannot be made to depart may not use
  *    this arm at all.
  *  - [NotApplicable.ContractDiffers]'s deviation check is a **bounded negative observation**
