@@ -321,7 +321,7 @@ class PureRaftModelTest {
      * bounded ones carry one entry per frame, where the two readings coincide by construction (#2114).
      */
     @Test
-    fun `onAppendEntries truncates on a conflict later in the batch, not only the first entry`() {
+    fun `onAppendEntries truncates on a conflict later in the batch and not only on the first entry`() {
         val n1 = NodeId("n1")
         val n2 = NodeId("n2")
         val shared = LogEntry(index = 1L, term = 1L, command = byteArrayOf())

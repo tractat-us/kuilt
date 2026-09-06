@@ -367,7 +367,7 @@ private fun Cluster.onAppendEntries(m: ModelMsg.AppendEntries): Cluster {
     // Measured at 5 violations in 20 000 compaction-free 3-node trajectories of up to 200 actions
     // The random surface does NOT pin this — the shipped unbounded properties never run long enough to
     // reach it, and the bounded ones send one entry per frame, where "first" and "every" coincide. The
-    // pin is the directed `onAppendEntries truncates on a conflict later in the batch` self-check.
+    // pin is the directed `onAppendEntries truncates on a conflict later in the batch and not only on the first entry` self-check.
     if (m.entries.isNotEmpty()) {
         var appendFrom = -1
         for ((i, entry) in m.entries.withIndex()) {
