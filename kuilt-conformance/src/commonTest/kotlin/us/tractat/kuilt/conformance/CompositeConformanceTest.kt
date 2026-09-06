@@ -5,6 +5,8 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PlyId
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.composite.CompositeLoom
 
 /**
@@ -55,6 +57,41 @@ class CompositeConformanceTest : SeamConformanceSuite() {
             "the Announce round-trip's output. Honest weakness: the ply underneath is one shared InMemoryLoom, " +
             "so transport reachability IS shared construction — only the composite layer is proven here.",
         )
+
+    /**
+     * Drain the joiner from the composite's reachability fold: closing the joiner's composite seam
+     * closes its `mem` ply seam, which removes it from the shared [InMemoryLoom] roster the host's
+     * own ply seam observes. The host's ply seam is never closed, so the union stays
+     * [us.tractat.kuilt.core.SeamState.Woven] and the fold simply un-maps the departed
+     * `(plyId, transportPeer)` — `peers` shrinks under a live survivor. That is a membership drain,
+     * distinct from a transport tear (where the host's ply would latch `Torn` too), and it is the
+     * event [midSessionDeathDeclaration] names as the one this topology CAN produce.
+     *
+     * **The rig asserts its own precondition** — the survivor must be live *and already holding the
+     * counterpart* — so the obligation cannot pass on a departure this rig did not cause (e.g. a
+     * joiner that was never mapped into the fold, where `peers.first { drained !in it }` would be
+     * satisfied by the opening roster and assert nothing).
+     *
+     * **It returns what it actually accomplished**, not an unconditional `true`: the stimulus is
+     * "the counterpart genuinely departs", so the return keys on the joiner having reached `Torn`.
+     * A close that left the joiner live severed nothing, and the harness then reads as honestly
+     * unproven rather than falsely green. (The *survivor's* reaction — roster shrink, state stays
+     * Woven — is the obligation's assertion, deliberately not duplicated here.)
+     */
+    override suspend fun injectMembershipDrain(host: Seam, joiner: Seam): Boolean {
+        check(host.state.value is SeamState.Woven && joiner.state.value is SeamState.Woven) {
+            "membership-drain rig precondition: both composite seams must be live before the joiner " +
+                "departs, or the obligation would pass on a departure this rig did not cause; got " +
+                "host=${host.state.value}, joiner=${joiner.state.value}"
+        }
+        check(joiner.selfId in host.peers.value) {
+            "membership-drain rig precondition: the survivor must already hold the counterpart, or " +
+                "`peers.first { drained !in it }` is satisfied by the opening roster and asserts " +
+                "nothing; got host.peers=${host.peers.value}, joiner=${joiner.selfId}"
+        }
+        joiner.close()
+        return joiner.state.value is SeamState.Torn
+    }
 
     /** Proven: this harness drains a peer without tearing the survivor, so no gap. */
     override fun membershipDrainDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
