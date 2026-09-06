@@ -373,10 +373,19 @@ merge; the deterministic virtual-time siblings do.
     target. Sort at the point the generator walks it (`state.store.entries.keys.sorted()` in
     `CausalDotMapConvergenceTest`, `chargersIn` in `EntitlementLedgerConservationTest`) — in the
     **test**, not in the production accessor, which has no reason to pay for it.
-    The hazard is not limited to an explicit `HashSet`: any draw or branch keyed on `Map.keys`,
-    `Set` iteration or `groupBy` output over a hash-backed collection has it, and **that set is not
-    greppable by container name**. The tell is a `.random(`/`.first()`/`[i]` whose receiver came out
-    of a `Set` or a `Map`'s entries rather than out of a `List` the test built.
+    `forbidHashOrderedSeededDraw` in the root build (wired into `check`) catches the greppable
+    half — a `.random(`/`.shuffled(` whose receiver came, inline or via a local two lines up, from a
+    `Map` view or a `HashSet` — with no baseline (there is nothing to grandfather) and an
+    `// ALLOW-hashOrderedDraw: <reason>` escape hatch whose reason is mandatory. **Its green is
+    evidence about explicit `Set`/`Map`-view draws and nothing else.** The hazard is not limited to
+    an explicit `HashSet`: any draw or branch keyed on `Map.keys`, `Set` iteration or `groupBy`
+    output over a hash-backed collection has it, and **that set is not greppable by container
+    name** — `groupBy` returns a `LinkedHashMap`, so its non-determinism lives one hop away in its
+    input, where no scan can see it. Taint also does not cross a helper or a function return, and
+    `.first()`/`.last()`/`[i]` are deliberately not treated as draws (measured: including them took
+    the population from 1 real site to 15, the other 14 benign). So the tell you still have to spot
+    by eye is a `.random(`/`.first()`/`[i]` whose receiver came out of a `Set` or a `Map`'s entries
+    rather than out of a `List` the test built.
     Two properties make this the nastiest failure shape in the repo. **It is invisible in the
     number** — nothing about `0 / 80` hints the walk is target-dependent — and **it inverts the
     usual asymmetry**: "green on JVM, red on native" normally means a native bug; here it means the
