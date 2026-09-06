@@ -27,6 +27,7 @@ import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftTraceEvent
 import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -68,7 +69,7 @@ class FederatedCoreAdmissionTest {
      * learns of **only** from follower S2's roster frame; P2 is never in S1's own `seam.peers`.
      */
     @Test
-    fun leaderAdmitsAPlayerKnownOnlyViaARemoteCoreRoster() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun leaderAdmitsAPlayerKnownOnlyViaARemoteCoreRoster() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val s1Seat = loom.host(Pattern("fed-admit"))
         val s2Seat = loom.join(InMemoryTag("fed-admit"))
@@ -109,7 +110,7 @@ class FederatedCoreAdmissionTest {
      * vacuously.
      */
     @Test
-    fun aRosterFrameFromANonCoreSenderIsRejected() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aRosterFrameFromANonCoreSenderIsRejected() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val s1Seat = loom.host(Pattern("fed-spoof"))
         val s2Seat = loom.join(InMemoryTag("fed-spoof"))
@@ -154,7 +155,7 @@ class FederatedCoreAdmissionTest {
      * P-only, the leader admits it once, then the identical roster is re-sent; no second admit.
      */
     @Test
-    fun aRepublishedIdenticalRosterDoesNotReAdmit() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aRepublishedIdenticalRosterDoesNotReAdmit() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val s1Seat = loom.host(Pattern("fed-idem"))
         val s2Seat = loom.join(InMemoryTag("fed-idem"))
@@ -195,7 +196,7 @@ class FederatedCoreAdmissionTest {
      * never blind. S1 holds P-far, S2 holds P-near; leadership moves S1 → S2, and S2 admits P-far.
      */
     @Test
-    fun aNewLeaderStillAdmitsThePlayerBehindTheOtherServer() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aNewLeaderStillAdmitsThePlayerBehindTheOtherServer() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val s1Seat = loom.host(Pattern("fed-failover"))
         val s2Seat = loom.join(InMemoryTag("fed-failover"))
@@ -237,7 +238,7 @@ class FederatedCoreAdmissionTest {
      * (the follower/publisher FIRST, the leader SECOND).
      */
     @Test
-    fun aSimultaneousBootWithThePlayerPreAttachedStillAdmitsIt() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aSimultaneousBootWithThePlayerPreAttachedStillAdmitsIt() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val s1Seat = loom.host(Pattern("fed-boot"))
         val s2Seat = loom.join(InMemoryTag("fed-boot"))

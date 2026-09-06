@@ -50,7 +50,7 @@ class VoterReconnectionSupervisorTest {
     )
 
     @Test
-    fun redialsADroppedPeerAndStopsWhenItReturns() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun redialsADroppedPeerAndStopsWhenItReturns() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val mesh = FakeMesh(self, initialPeers = setOf(p))
         val job = superviseVoterReconnection(
             mesh = mesh,
@@ -81,7 +81,7 @@ class VoterReconnectionSupervisorTest {
     }
 
     @Test
-    fun keepsRetryingWhenAddLinkDoesNotBringThePeerBack() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun keepsRetryingWhenAddLinkDoesNotBringThePeerBack() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Lost-to-corpse: addLink does NOT republish the peer, so the redial loop must keep firing.
         val mesh = FakeMesh(self, initialPeers = setOf(p), republishOnAddLink = false)
         val job = superviseVoterReconnection(
@@ -111,7 +111,7 @@ class VoterReconnectionSupervisorTest {
     }
 
     @Test
-    fun aHungDialIsBoundedAndDoesNotWedgeTheRedialLoop() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun aHungDialIsBoundedAndDoesNotWedgeTheRedialLoop() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Regression for #1463: a redial fired the instant a peer drops routinely lands on a peer still
         // unreachable in a byte-dropping way (a half-open corpse, a black-holing firewall), so the
         // WebSocket negotiation never completes. The redial loop is single-flight — it suspends INSIDE
@@ -199,7 +199,7 @@ class VoterReconnectionSupervisorTest {
         }
 
     @Test
-    fun neverDialsAPeerNotInDialTargets() = runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+    fun neverDialsAPeerNotInDialTargets() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Dial target is p (present the whole test); we drop a DIFFERENT peer q the supervisor ignores.
         val mesh = FakeMesh(self, initialPeers = setOf(p, q))
         val job = superviseVoterReconnection(

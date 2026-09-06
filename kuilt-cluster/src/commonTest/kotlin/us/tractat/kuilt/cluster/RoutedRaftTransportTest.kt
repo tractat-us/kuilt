@@ -18,12 +18,12 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftTransport
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * The security-critical core of the cross-core Raft relay: [RoutedRaftTransport]
@@ -31,17 +31,18 @@ import kotlin.time.Duration.Companion.seconds
  * intact, and rejects a spoofed origin before it can reach any engine.
  *
  * Like [RoutedUnicastRouterTest] these drive real [Seam]s ([InMemoryLoom]) under
- * `UnconfinedTestDispatcher` with a tight timeout — no Raft cluster, so no
- * `MultiNodeRaftSim`; the transport itself is the unit under test. The inner
- * transport is a controllable [FakeInnerTransport] fake so each routing decision
- * is asserted structurally.
+ * `UnconfinedTestDispatcher` — no Raft cluster, so no `MultiNodeRaftSim`, and the
+ * `runTest` budget is [TEST_WEDGE_BACKSTOP], a wall-clock backstop for a wedge
+ * rather than a performance assertion; the transport itself is the unit under
+ * test. The inner transport is a controllable [FakeInnerTransport] fake so each
+ * routing decision is asserted structurally.
  */
 class RoutedRaftTransportTest {
 
     // ── Routing decisions ────────────────────────────────────────────────────
 
     @Test
-    fun directPeerGoesToInnerUnchanged() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun directPeerGoesToInnerUnchanged() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val (relay, _) = relayLoomWith("self", "other")
         val self = NodeId("n-self")
         val x = NodeId("n-x")
@@ -59,7 +60,7 @@ class RoutedRaftTransportTest {
     }
 
     @Test
-    fun remotePlayerRelayedViaAttachment() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun remotePlayerRelayedViaAttachment() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // S1 holds a frame for a player behind S2. Next hop = attachment(player) = S2.
         val (s1Relay, peers) = relayLoomWith("s1", "s2")
         val s1 = NodeId(s1Relay.selfId.value)
@@ -82,7 +83,7 @@ class RoutedRaftTransportTest {
     }
 
     @Test
-    fun remoteCoreServerRelayedToThatSeamPeer() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun remoteCoreServerRelayedToThatSeamPeer() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // S1 holds a frame for core server S2 (not a direct inner peer): send to S2 over the core.
         val (s1Relay, peers) = relayLoomWith("s1", "s2")
         val s1 = NodeId(s1Relay.selfId.value)
@@ -100,7 +101,7 @@ class RoutedRaftTransportTest {
     }
 
     @Test
-    fun playerAlwaysForwardsToItsOneServer() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun playerAlwaysForwardsToItsOneServer() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // A player's relay channel has exactly one other peer — its server. A frame for
         // any node it cannot reach directly (e.g. the leader) is relayed to that server.
         val (pRelay, peers) = relayLoomWith("player", "server")
@@ -126,7 +127,7 @@ class RoutedRaftTransportTest {
     // ── from-preservation ────────────────────────────────────────────────────
 
     @Test
-    fun relayedFrameSurfacesWithTrueOriginAsFrom() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun relayedFrameSurfacesWithTrueOriginAsFrom() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // S2 (a core peer) relays a frame that originated at a player behind it, destined
         // for S1. S1's engine must see from = the player (origin), NEVER S2 (the relay).
         val (s1Relay, peers) = relayLoomWith("s1", "s2")
@@ -150,7 +151,7 @@ class RoutedRaftTransportTest {
     // ── Happy-path forwarding ────────────────────────────────────────────────
 
     @Test
-    fun serverForwardsCoreFrameDownToLocalPlayer() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun serverForwardsCoreFrameDownToLocalPlayer() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // S2 relays a frame across the core to S1 for a player P that is local to S1.
         // S1 forwards it down to P, origin preserved, and does NOT hand it to its own engine.
         val (s1Relay, peers) = relayLoomWith("s1", "s2", "p")
@@ -176,7 +177,7 @@ class RoutedRaftTransportTest {
     }
 
     @Test
-    fun serverTakesOneCoreHopForSpokeFrame() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun serverTakesOneCoreHopForSpokeFrame() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // A local spoke P sends a frame (for itself) destined for a player behind S2.
         // S1 takes one core hop to S2 = attachment(dest).
         val (s1Relay, peers) = relayLoomWith("s1", "s2", "p")
@@ -209,7 +210,7 @@ class RoutedRaftTransportTest {
 
     @Test
     fun c_playerAcceptsDownFrameWhoseOriginIsAVoterEvenIfTheRelayIsNotAVoter() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // R2 pin: the relay server's id is NOT a voter (mirrors ConcurrentAdmissionE2ETest's
             // non-voter relay id). A down-frame whose true origin IS a voter must still surface —
             // the old sender-based rule would reject it (sender ∉ core) and the client would hang.
@@ -231,7 +232,7 @@ class RoutedRaftTransportTest {
 
     @Test
     fun c_playerRejectsDownFrameWhoseOriginIsNotAVoter_strictlyTighter() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Fellow-spoke pin (proves C strictly tighter than the sender rule): the server relays
             // down a frame whose origin is a STRANGER learner (∉ voters). Under the old sender-based
             // rule (sender = server ∈ core) this would surface — a forged AppendEntries the victim's
@@ -254,7 +255,7 @@ class RoutedRaftTransportTest {
 
     @Test
     fun c_playerReadsVotersPerFrame_membershipGrowthIsHonoured() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Live-growth: the voters provider is read PER FRAME, never captured at construction.
             // A frame from v2 is dropped while voters = {v1}; after the set grows to {v1, v2}, the
             // next v2 frame surfaces — proving the per-frame read.
@@ -282,7 +283,7 @@ class RoutedRaftTransportTest {
     // ── G5: origin-spoofing rejected (commit-safety) ─────────────────────────
 
     @Test
-    fun g5_spokeSpoofingAnotherOriginIsRejected() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun g5_spokeSpoofingAnotherOriginIsRejected() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // A spoke P forges origin = S1 (the leader) on a frame destined for S1. It must
         // reach NO engine. A subsequent legitimate core frame proves the pipeline still
         // works — only the forgery was dropped.
@@ -309,7 +310,7 @@ class RoutedRaftTransportTest {
     }
 
     @Test
-    fun g5_nonCoreSenderForgingCoreOriginIsRejectedAndNotForwarded() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun g5_nonCoreSenderForgingCoreOriginIsRejectedAndNotForwarded() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // A spoke P forges origin = S2 (a core member) on a frame destined for a remote
         // player. It must neither surface locally NOR be forwarded onto the core.
         val (s1Relay, peers) = relayLoomWith("s1", "s2", "p")
@@ -335,7 +336,7 @@ class RoutedRaftTransportTest {
     }
 
     @Test
-    fun g5_coreFrameForNonLocalDestIsNotReforwarded_loopGuard() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun g5_coreFrameForNonLocalDestIsNotReforwarded_loopGuard() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // A frame arriving from the core whose destination is neither this server nor a
         // local player must be DROPPED — never re-forwarded onto the core (the loop guard).
         val (s1Relay, peers) = relayLoomWith("s1", "s2", "s3")
@@ -363,7 +364,7 @@ class RoutedRaftTransportTest {
     // ── G6: strict no-op off federation ──────────────────────────────────────
 
     @Test
-    fun g6_noRelayFrameWhenAllPeersAreLocal() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun g6_noRelayFrameWhenAllPeersAreLocal() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Every addressee is a direct inner peer: sendTo delegates to inner and NO relay
         // frame is ever emitted on the relay channel.
         val (relay, _) = relayLoomWith("self", "other")
@@ -386,7 +387,7 @@ class RoutedRaftTransportTest {
     // ── G7: payload budget ───────────────────────────────────────────────────
 
     @Test
-    fun g7_payloadBudgetLeavesRoomForEnvelope() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun g7_payloadBudgetLeavesRoomForEnvelope() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val (relay, _) = relayLoomWith("self", "other")
         val self = NodeId("node-self-with-a-realistic-length-id")
         val innerLimit = 32_768
@@ -404,7 +405,7 @@ class RoutedRaftTransportTest {
     }
 
     @Test
-    fun g7_unboundedInnerStaysUnbounded() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun g7_unboundedInnerStaysUnbounded() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val (relay, _) = relayLoomWith("self", "other")
         val self = NodeId("n-self")
         val inner = FakeInnerTransport(selfId = self, peers = setOf(self), maxPayloadBytes = null)

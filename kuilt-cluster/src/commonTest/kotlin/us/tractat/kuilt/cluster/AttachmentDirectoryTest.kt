@@ -9,11 +9,11 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * The attachment directory replicates over a plain [us.tractat.kuilt.core.Seam]
@@ -21,7 +21,9 @@ import kotlin.time.Duration.Companion.seconds
  * driven by a real [us.tractat.kuilt.quilter.Quilter] under
  * `UnconfinedTestDispatcher` — the established replicator-test harness (see
  * `:kuilt-quilter`'s `QuilterTest`). No Raft cluster is involved, so no
- * `MultiNodeRaftSim` is needed; the timeout keeps a non-converging run fast to fail.
+ * `MultiNodeRaftSim` is needed. The `runTest` budget is [TEST_WEDGE_BACKSTOP] — a
+ * generous wall-clock backstop for a wedge, not a performance assertion; a
+ * non-converging run fails fast on the bounded virtual-time assertions in the body.
  */
 class AttachmentDirectoryTest {
 
@@ -34,7 +36,7 @@ class AttachmentDirectoryTest {
     private val cfg = QuilterConfig(expectVirtualTime = true)
 
     @Test
-    fun attachmentReplicatesToOtherServersAndFeedsTwoTier() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun attachmentReplicatesToOtherServersAndFeedsTwoTier() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val s1Seam = loom.host(Pattern("core"))
         val s2Seam = loom.join(InMemoryTag("s2"))
@@ -72,7 +74,7 @@ class AttachmentDirectoryTest {
     }
 
     @Test
-    fun detachTombstoneRemovesTheEntryEverywhere() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun detachTombstoneRemovesTheEntryEverywhere() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
         val s1Seam = loom.host(Pattern("core"))
         val s2Seam = loom.join(InMemoryTag("s2"))
