@@ -35,7 +35,6 @@ import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -950,13 +949,58 @@ public abstract class SeamConformanceSuite {
         runTest { runCloseDrivesStateTornNormal(this) }
 
     // ── (10) sendTo an absent peer throws PeerNotConnected ───────────────────
+    //
+    // UNGATED CORE. An id no fabric has ever heard of must be reported as absent, not delivered to
+    // whoever happens to be reachable.
+    //
+    // **Both ends are checked (#2601), and the joiner half is the one with a shipped counterexample.**
+    // `sendToSelfIsRefused`'s comment records what a 2-peer link did before #2428: `LinkSeam` and
+    // `WebRTCPeerLink` resolved "somebody" to *the remote*, because a link's wire has exactly one
+    // addressee and no fabric-level roster stood between the call and the write. That is a **joiner**
+    // shape — a role-split fabric hosts a `MeshSeam`, whose fan-out is keyed by id and structurally
+    // cannot misdeliver, and joins a `LinkSeam`, whose write is unaddressed. So the half this row
+    // never asserted is exactly the half where the failure lives.
+    //
+    // **Where the joiner arm can fail.** Nothing in a fixture supplies a refusal: it is the joiner's
+    // own `peer !in _peers` guard, and there is no roster any harness can seed that contains
+    // `phantom`. That makes this row unlike the roster obligations, whose joiner arms a shared
+    // registry satisfies by construction ([JoinerRosterOrigin]) — a fixture can hand a joiner the
+    // host's id, it cannot hand it a refusal. The arm is *weak* only in the narrower sense that a
+    // harness whose two ends are one class re-proves the host's guard on a second instance, and
+    // strongest where the joiner is a different implementation from the host.
 
     internal suspend fun runSendToAbsentPeerThrows(scope: TestScope): Unit =
-        scope.connectedPair { host, _ ->
+        scope.connectedPair { host, joiner ->
             val phantom = PeerId("phantom-peer-not-in-session")
-            assertFailsWith<PeerNotConnected> {
-                host.sendTo(phantom, byteArrayOf(1))
-            }
+
+            // Captured rather than wrapped in `assertFailsWith`, for the reason
+            // `runSendToSelfIsRefused` gives: [assertAll] takes plain (non-suspend) lambdas, so the
+            // sends happen out here — and a seam that *completes* the send then reads as `null`
+            // ("completed successfully"), which is the actual misdelivery this row forbids, rather
+            // than as an opaque wrong-type mismatch. The host arm's meaning is unchanged: it still
+            // says "the failure is a PeerNotConnected".
+            val hostFailure = failureOf { host.sendTo(phantom, byteArrayOf(1)) }
+            val joinerFailure = failureOf { joiner.sendTo(phantom, byteArrayOf(2)) }
+
+            assertAll(
+                {
+                    assertIs<PeerNotConnected>(
+                        hostFailure,
+                        "sendTo an id that is in no roster must throw PeerNotConnected on the host. " +
+                            "Got: ${hostFailure ?: "no exception — the send completed"}",
+                    )
+                },
+                {
+                    assertIs<PeerNotConnected>(
+                        joinerFailure,
+                        "sendTo an unaddressable id must throw PeerNotConnected on the JOINER too " +
+                            "(#2601) — a role-split fabric joins a 2-peer link whose wire has exactly " +
+                            "one addressee, so an unguarded joiner delivers the frame to the host and " +
+                            "reports success. Got: " +
+                            "${joinerFailure ?: "no exception — the send completed, i.e. it was misdelivered"}",
+                    )
+                },
+            )
         }
 
     @Test
@@ -1567,7 +1611,8 @@ public abstract class SeamConformanceSuite {
     //  - Reds on THIS clause (the guard is what separates tear from blame): `LinkSeam` (Handshaking,
     //    Identified, Tcp, WebSocket, MDNS), `MeshSeam`, `RoomHubSeam`, `CompositeSeam`, `TieredSeam`,
     //    `NwSeam` (all three harnesses), `MCSessionLink`. Thirteen.
-    //  - Reds on the PRE-EXISTING `assertFailsWith` instead, because deleting the guard lets the send
+    //  - Reds on the PRE-EXISTING `IllegalStateException` arm instead (spelled `assertFailsWith` when
+    //    this was measured), because deleting the guard lets the send
     //    COMPLETE: `InMemoryLoom`, `ControllableSeam`, `GossipSeam` (pure delegation to an InMemoryLoom
     //    base — it has no Torn check of its own), `NearbySeam`, `BridgePeerLink`, `WebRTCPeerLink`. Six.
     //
@@ -1603,50 +1648,119 @@ public abstract class SeamConformanceSuite {
     // `PeerNotConnected` from a non-`Torn` seam and never reaches this property at all — #2454, and
     // out of reach of any assertion keyed on `Torn`.
 
+    // **Both ends are checked (#2601).** The clause the previous paragraphs are all about — report the
+    // TEAR, not the addressee — is a statement about the ORDER of two guards inside one `sendTo`, and
+    // a role-split fabric writes that method twice. The measured split above is itself the argument:
+    // thirteen implementations red on the identity clause and six on the older one, and `LinkSeam` (the
+    // JOINER on websocket, mdns, tcp and handshaking) is in a different list from `MeshSeam` (their
+    // HOST). Asserting on the host alone picked one of those two lists per harness, arbitrarily.
+    //
+    // **The joiner half is a second phase appended AFTER the host half, whose sequence is left
+    // byte-identical** — the shape `stateStaysTornAfterClose` adopted, for the reason #2601's delivery
+    // slice recorded: in-place strengthening of an existing arm is what produced a false red there.
+    // The host's two sends still happen, in the same order, before anything new runs.
+    //
+    // **Its precondition is asserted, not assumed.** By the time the joiner closes, a role-split
+    // fabric has usually already torn it from the host's close — which is fine, the obligation is
+    // "a Torn seam refuses", not "a locally-closed seam refuses" — but a joiner that reached this
+    // point still live would satisfy nothing, so `Torn` is pinned first and reds as its own arm.
+    //
+    // **Where the joiner arm can fail.** Nothing in a fixture supplies a refusal; it is the joiner's
+    // own `check(state !is Torn)`, and the identity clause additionally requires that check to sit
+    // *ahead of* its roster lookup. The joiner's roster has by then collapsed to `{ selfId }` on
+    // every fabric honouring `peersCollapseToSelfIdWhenTorn`, so a joiner that consults the roster
+    // first has a live counterexample to hand: it blames the host for its own death. That is the same
+    // stimulus the host arm applies, applied to the other implementation.
+
+    internal suspend fun runSendOnTornSeamThrows(scope: TestScope) {
+        if (!capabilities().throwsOnSendToTorn) return
+        scope.connectedPair { host, joiner ->
+            host.close()
+            assertIs<SeamState.Torn>(host.state.value, "host must be Torn after close()")
+
+            // Captured rather than wrapped in `assertFailsWith`, for the reason
+            // `runSendToSelfIsRefused` gives: [assertAll] takes plain (non-suspend) lambdas, so the
+            // sends happen out here — and a seam that *completes* the send then reads as `null`
+            // ("completed successfully") rather than as an opaque wrong-type mismatch. Sequential
+            // asserts also cost a reader two thirds of the diagnosis: a fabric failing the broadcast
+            // obligation never reached the addressed ones.
+            val loopback = failureOf { host.broadcast(byteArrayOf(1)) }
+            val addressed = failureOf { host.sendTo(joiner.selfId, byteArrayOf(2)) }
+
+            // ── the joiner half (#2601) ──
+            joiner.close()
+            val joinerState = joiner.state.value
+            val joinerLoopback = failureOf { joiner.broadcast(byteArrayOf(3)) }
+            val joinerAddressed = failureOf { joiner.sendTo(host.selfId, byteArrayOf(4)) }
+
+            assertAll(
+                {
+                    assertIs<IllegalStateException>(
+                        loopback,
+                        "broadcast on a Torn seam must throw — a torn transport cannot deliver, and " +
+                            "swallowing the send hides the failure. Got: " +
+                            "${loopback ?: "no exception — the send completed"}",
+                    )
+                },
+                {
+                    assertIs<IllegalStateException>(
+                        addressed,
+                        "sendTo on a Torn seam must throw. Got: " +
+                            "${addressed ?: "no exception — the send completed"}",
+                    )
+                },
+                {
+                    assertFalse(
+                        addressed is PeerNotConnected,
+                        "sendTo on a Torn seam must report the TEAR, not blame the addressee — " +
+                            "PeerNotConnected is a claim about the PEER, and a caller that believes " +
+                            "it re-resolves the roster and retries against a corpse. Move the Torn " +
+                            "check ahead of the roster lookup",
+                    )
+                },
+                {
+                    assertIs<SeamState.Torn>(
+                        joinerState,
+                        "precondition: the JOINER's close() must latch Torn before 'a Torn seam " +
+                            "refuses' means anything here — that is `closeDrivesStateTornNormal`'s " +
+                            "obligation, and a joiner still reporting $joinerState fails this row " +
+                            "for its reason rather than for this one",
+                    )
+                },
+                {
+                    assertIs<IllegalStateException>(
+                        joinerLoopback,
+                        "broadcast on a Torn JOINER must throw too (#2601) — a role-split fabric " +
+                            "ships a different Seam on each end, and a joiner that warn-drops leaves " +
+                            "the joining device believing every send after the tear was delivered. " +
+                            "Got: ${joinerLoopback ?: "no exception — the send completed"}",
+                    )
+                },
+                {
+                    assertIs<IllegalStateException>(
+                        joinerAddressed,
+                        "sendTo on a Torn JOINER must throw too (#2601). Got: " +
+                            "${joinerAddressed ?: "no exception — the send completed"}",
+                    )
+                },
+                {
+                    assertFalse(
+                        joinerAddressed is PeerNotConnected,
+                        "the JOINER's sendTo on a Torn seam must report the TEAR, not blame the host " +
+                            "(#2601) — the joiner's roster has collapsed to { selfId } by now, so a " +
+                            "joiner that consults it before its own Torn check answers a dead seam " +
+                            "with a claim about a healthy peer. Move the Torn check ahead of the " +
+                            "roster lookup on THIS end too",
+                    )
+                },
+            )
+        }
+    }
+
     @Test
     public fun sendOnTornSeamThrows(): TestResult =
         runTest {
-            if (!capabilities().throwsOnSendToTorn) return@runTest
-            connectedPair { host, joiner ->
-                host.close()
-                assertIs<SeamState.Torn>(host.state.value, "host must be Torn after close()")
-
-                // Captured rather than wrapped in `assertFailsWith`, for the reason
-                // `runSendToSelfIsRefused` gives: [assertAll] takes plain (non-suspend) lambdas, so the
-                // sends happen out here — and a seam that *completes* the send then reads as `null`
-                // ("completed successfully") rather than as an opaque wrong-type mismatch. Sequential
-                // asserts also cost a reader two thirds of the diagnosis: a fabric failing the broadcast
-                // obligation never reached the addressed ones.
-                val loopback = failureOf { host.broadcast(byteArrayOf(1)) }
-                val addressed = failureOf { host.sendTo(joiner.selfId, byteArrayOf(2)) }
-
-                assertAll(
-                    {
-                        assertIs<IllegalStateException>(
-                            loopback,
-                            "broadcast on a Torn seam must throw — a torn transport cannot deliver, and " +
-                                "swallowing the send hides the failure. Got: " +
-                                "${loopback ?: "no exception — the send completed"}",
-                        )
-                    },
-                    {
-                        assertIs<IllegalStateException>(
-                            addressed,
-                            "sendTo on a Torn seam must throw. Got: " +
-                                "${addressed ?: "no exception — the send completed"}",
-                        )
-                    },
-                    {
-                        assertFalse(
-                            addressed is PeerNotConnected,
-                            "sendTo on a Torn seam must report the TEAR, not blame the addressee — " +
-                                "PeerNotConnected is a claim about the PEER, and a caller that believes " +
-                                "it re-resolves the roster and retries against a corpse. Move the Torn " +
-                                "check ahead of the roster lookup",
-                        )
-                    },
-                )
-            }
+            runSendOnTornSeamThrows(this)
         }
 
     // ── (13e) a Torn seam's peers collapses to { selfId } ────────────────────
@@ -2484,42 +2598,113 @@ public abstract class SeamConformanceSuite {
      * — the frame is then refused by the fabric's own machinery, at a limit the caller could not see
      * and did not agree to. `null` means unknown, so a fabric that names nothing skips: it promised
      * nothing to break.
+     *
+     * **Both ends are checked (#2601), and each reads its OWN published number.** `maxPayloadBytes`
+     * is declared on `Seam`, so a role-split fabric publishes it twice, from two implementations, and
+     * the two need not agree: a `LinkSeam` joiner forwards its connection's `maxFrameBytes` while a
+     * `MeshSeam` host folds every ply's. A joiner whose own number overstates its own wire is
+     * invisible to any assertion that sends the *host's* budget, which is what this row did.
+     *
+     * **The joiner phase gates on `joiner.maxPayloadBytes` separately**, for the same reason the row
+     * gates on the host's: a fabric whose joiner names nothing has promised nothing on that end.
+     * [payloadBudgetObligationIsTrackedWhenUnpublished] reads the *host*, so an end that publishes
+     * nothing would be a **silent skip** — this row's own gating shape, one end over, and #2601's
+     * named failure mode. It is measured rather than assumed: a probe reversing the gate (red when
+     * the joiner *does* publish) named every harness that reaches these arms — `TcpConformanceTest`
+     * (16777215 B), `NwConformanceTest` (jvm and macosArm64), `NwBridgeLoopbackConformanceTest` and
+     * `NwLoopbackConformanceTest` (16777216 B) — and the complementary probe (red when the host
+     * publishes and the joiner does not) reddened **nothing**, so no in-tree fabric is asymmetric and
+     * no joiner arm is silently skipped. Widening the accountability hook to both ends is its own
+     * change; asserting symmetry here would make this row depend on a contract claim `Seam` does not
+     * make, which is the prescription #2601's terminal-state slice refused.
+     *
+     * **Where the joiner arm can fail.** Nothing in a fixture carries a frame — the at-budget payload
+     * has to traverse the joiner's own outbound framing, which is where a fabric truncates, splits, or
+     * refuses at a ceiling one byte below the one it published. On a harness whose two ends share one
+     * in-process backend both directions run the same code and the arm is weak ([joinerRosterOrigin]
+     * records that shape); every harness that actually reaches these arms is real-IO — a TCP socket
+     * or Network.framework, role-split or loopback — so the joiner's write path is its own.
      */
     @Test
     public fun payloadOfExactlyTheBudgetIsCarried(): TestResult =
-        runTest {
-            connectedPair { host, joiner ->
-                val budget = host.maxPayloadBytes ?: return@connectedPair
-                val atBudget = ByteArray(budget) { (it % PAYLOAD_FILL_MODULUS).toByte() }
-                val received = async { joiner.incoming.first() }
+        runTest { runPayloadOfExactlyTheBudgetIsCarried(this) }
 
-                host.broadcast(atBudget)
+    internal suspend fun runPayloadOfExactlyTheBudgetIsCarried(scope: TestScope): Unit =
+        scope.connectedPair { host, joiner ->
+            val budget = host.maxPayloadBytes ?: return@connectedPair
+            val atBudget = ByteArray(budget) { (it % PAYLOAD_FILL_MODULUS).toByte() }
+            val received = async { joiner.incoming.first() }
 
-                // Unbounded, like every other delivery obligation here: `runTest`'s own ceiling is the
-                // backstop. An inner `withTimeout` would be measured in VIRTUAL time, which a real-IO
-                // fabric does not advance — the clock jumps the whole bound while the socket is still
-                // carrying the frame, and the obligation fails on a fabric that was working fine.
-                val swatch = received.await()
-                assertAll(
-                    {
-                        assertEquals(
-                            budget,
-                            swatch.payloadSize,
-                            "a payload of exactly maxPayloadBytes ($budget B) must cross whole — the " +
-                                "number is a promise, not a hint",
-                        )
-                    },
-                    {
-                        // The fill is non-uniform, so a truncate-and-zero-pad cannot pass the size
-                        // check above by accident: the last byte is the one such a fabric loses.
-                        assertEquals(
-                            atBudget[budget - 1],
-                            swatch.byteAt(budget - 1),
-                            "the payload's last byte must survive, not be zero-padded back to length",
-                        )
-                    },
-                )
+            host.broadcast(atBudget)
+
+            // Unbounded, like every other delivery obligation here: `runTest`'s own ceiling is the
+            // backstop. An inner `withTimeout` would be measured in VIRTUAL time, which a real-IO
+            // fabric does not advance — the clock jumps the whole bound while the socket is still
+            // carrying the frame, and the obligation fails on a fabric that was working fine.
+            val swatch = received.await()
+
+            // ── the joiner half (#2601) ──
+            //
+            // Started only after the forward direction has settled, so each direction gets its own
+            // trajectory — the sequencing the three delivery rows adopted. The host's collector drops
+            // this harness's declared join-handshake frames first: a hub that admits a connection on
+            // its first frame has one sitting at the head of `incoming`, and reading it as the payload
+            // is the measurement bug wearing a defect's clothes that #2601's delivery slice hit.
+            val joinerBudget = joiner.maxPayloadBytes
+            val joinerAtBudget = ByteArray(joinerBudget ?: 0) { (it % PAYLOAD_FILL_MODULUS).toByte() }
+            val receivedByHost = if (joinerBudget == null) {
+                null
+            } else {
+                val collector = async { host.incoming.drop(joinHandshakeFramesAtHost()).first() }
+                joiner.broadcast(joinerAtBudget)
+                collector.await()
             }
+
+            assertAll(
+                {
+                    assertEquals(
+                        budget,
+                        swatch.payloadSize,
+                        "a payload of exactly maxPayloadBytes ($budget B) must cross whole — the " +
+                            "number is a promise, not a hint",
+                    )
+                },
+                {
+                    // The fill is non-uniform, so a truncate-and-zero-pad cannot pass the size
+                    // check above by accident: the last byte is the one such a fabric loses.
+                    assertEquals(
+                        atBudget[budget - 1],
+                        swatch.byteAt(budget - 1),
+                        "the payload's last byte must survive, not be zero-padded back to length",
+                    )
+                },
+                {
+                    if (joinerBudget != null) {
+                        assertEquals(
+                            joinerBudget,
+                            receivedByHost?.payloadSize,
+                            "a payload of exactly the JOINER's own maxPayloadBytes ($joinerBudget B) " +
+                                "must cross whole to the host too (#2601) — a role-split fabric ships " +
+                                "a different Seam on each end, each publishing its own number, and the " +
+                                "host's promise says nothing about the joiner's",
+                        )
+                    }
+                },
+                {
+                    if (joinerBudget != null) {
+                        // Bounds-guarded rather than indexed blind: a truncating joiner is exactly the
+                        // defect this arm names, and an IndexOutOfBounds out of the arm would become
+                        // `assertAll`'s *primary* throwable, replacing every named failure with a
+                        // stack trace. `null` reads as "the last byte never arrived".
+                        assertEquals(
+                            joinerAtBudget[joinerBudget - 1],
+                            receivedByHost?.takeIf { it.payloadSize >= joinerBudget }?.byteAt(joinerBudget - 1),
+                            "the JOINER's at-budget payload must keep its last byte too (#2601), not " +
+                                "be truncated and zero-padded back to length",
+                        )
+                    }
+                },
+            )
         }
 
     /**
@@ -2533,28 +2718,83 @@ public abstract class SeamConformanceSuite {
      *
      * Gated on [SeamCapabilities.supportsSendTo]: `broadcast` is best-effort and *drops* an
      * over-budget payload by contract, so only the addressed send has a refusal to observe.
+     *
+     * **Both ends are checked (#2601), each against its OWN published number**, for the reason
+     * [payloadOfExactlyTheBudgetIsCarried] gives: `maxPayloadBytes` is a `Seam` member, so a
+     * role-split fabric publishes it from two implementations and enforces it in two places.
+     *
+     * **Where the joiner arm can fail, and why it is the sharper half.** The failure this row exists
+     * to forbid is *published but unenforced*: the send returns success and the frame dies later in
+     * the write loop, which cannot tell an oversize frame from a dead wire and tears the whole
+     * session down — the shape `LinkSeam`'s own comment records. `LinkSeam` is the **joiner** on
+     * every role-split harness here, so the guard whose absence is most destructive is the one this
+     * row never asserted. Nothing in a fixture supplies a refusal; it is the joiner's own
+     * `oversizeOrNull` check, ahead of its enqueue.
      */
     @Test
     public fun overBudgetAddressedSendIsRefusedNotLeaked(): TestResult =
-        runTest {
-            connectedPair { host, joiner ->
-                val budget = host.maxPayloadBytes ?: return@connectedPair
-                if (!capabilities().supportsSendTo) return@connectedPair
-                // A budget at Int.MAX_VALUE has no representable "one byte over" to test.
-                if (budget == Int.MAX_VALUE) return@connectedPair
+        runTest { runOverBudgetAddressedSendIsRefused(this) }
 
-                val refusal = assertFailsWith<PayloadTooLarge>(
-                    "a seam that publishes maxPayloadBytes ($budget B) must refuse one byte more " +
-                        "with PayloadTooLarge, not let its fabric's own frame error out",
-                ) {
-                    host.sendTo(joiner.selfId, ByteArray(budget + 1))
-                }
-                assertEquals(
-                    budget,
-                    refusal.budgetBytes,
-                    "the refusal must name the same budget the seam publishes",
-                )
+    internal suspend fun runOverBudgetAddressedSendIsRefused(scope: TestScope): Unit =
+        scope.connectedPair { host, joiner ->
+            val budget = host.maxPayloadBytes ?: return@connectedPair
+            if (!capabilities().supportsSendTo) return@connectedPair
+            // A budget at Int.MAX_VALUE has no representable "one byte over" to test.
+            if (budget == Int.MAX_VALUE) return@connectedPair
+
+            // Captured rather than wrapped in `assertFailsWith` so the joiner arm can be batched
+            // alongside — the reason `runSendToSelfIsRefused` gives. A send that *completes* reads as
+            // `null` ("no exception — the send was accepted"), which is precisely the
+            // published-but-unenforced failure this row names, rather than as a type mismatch.
+            val hostRefusal = failureOf { host.sendTo(joiner.selfId, ByteArray(budget + 1)) }
+
+            // ── the joiner half (#2601) ──
+            val joinerBudget = joiner.maxPayloadBytes?.takeIf { it != Int.MAX_VALUE }
+            val joinerRefusal = joinerBudget?.let {
+                failureOf { joiner.sendTo(host.selfId, ByteArray(it + 1)) }
             }
+
+            assertAll(
+                {
+                    assertIs<PayloadTooLarge>(
+                        hostRefusal,
+                        "a seam that publishes maxPayloadBytes ($budget B) must refuse one byte more " +
+                            "with PayloadTooLarge, not let its fabric's own frame error out. Got: " +
+                            "${hostRefusal ?: "no exception — the send was accepted"}",
+                    )
+                },
+                {
+                    assertEquals(
+                        budget,
+                        (hostRefusal as? PayloadTooLarge)?.budgetBytes,
+                        "the refusal must name the same budget the seam publishes",
+                    )
+                },
+                {
+                    if (joinerBudget != null) {
+                        assertIs<PayloadTooLarge>(
+                            joinerRefusal,
+                            "the JOINER must refuse one byte over its OWN maxPayloadBytes " +
+                                "($joinerBudget B) with PayloadTooLarge too (#2601) — a joiner that " +
+                                "accepts the send loses the frame later in its write loop, which " +
+                                "cannot tell an oversize frame from a dead wire and tears the whole " +
+                                "session down. Got: " +
+                                "${joinerRefusal ?: "no exception — the send was accepted"}",
+                        )
+                    }
+                },
+                {
+                    if (joinerBudget != null) {
+                        assertEquals(
+                            joinerBudget,
+                            (joinerRefusal as? PayloadTooLarge)?.budgetBytes,
+                            "the JOINER's refusal must name the budget the JOINER publishes (#2601), " +
+                                "not the host's — a caller on the joining device can only read its " +
+                                "own seam's number",
+                        )
+                    }
+                },
+            )
         }
 
     // ── (20) an unpublished payload budget must be declared, not silently absent ──
