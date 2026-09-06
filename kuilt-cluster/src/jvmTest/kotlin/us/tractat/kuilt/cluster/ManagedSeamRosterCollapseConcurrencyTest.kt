@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
@@ -198,8 +197,8 @@ class ManagedSeamRosterCollapseConcurrencyTest {
      * land afterwards.
      *
      * **Two claims, counted separately, because they are separate consequences.** The *live-view*
-     * claim is that nothing published after `swap` returns may name the endpoint the swap left — a
-     * seam whose only route is now the new server, advertising the old one, which
+     * claim is that no sample of `peers` taken after `swap` returns may name the endpoint the swap
+     * left — a seam whose only route is now the new server, advertising the old one, which
      * `RoutedRaftTransport.playerServerHop` reads as two candidate hops where the wiring promises
      * exactly one, dropping every relayed send it makes in that window. The *permanence* claim is
      * that the seam does not **settle** there.
@@ -207,10 +206,10 @@ class ManagedSeamRosterCollapseConcurrencyTest {
      * They were expected to diverge sharply — the incoming seam's own tracker subscribes
      * microseconds later and republishes the correct roster, so the late write looked like it would
      * almost always be healed. It is not: measured on the unfixed code the two counts are within a
-     * few percent of each other (e.g. 1 139 live-view against 1 127 settled, of 3 000), because the
-     * incoming tracker's first publish is the value `swap` already primed and `StateFlow` dedups it
-     * away — there is no second write left to do the healing. Kept as two assertions anyway, so a
-     * future change that heals one without the other cannot hide behind the merged count.
+     * few percent of each other, because the incoming tracker's first publish is the value `swap`
+     * already primed and `StateFlow` dedups it away — there is no second write left to do the
+     * healing. Kept as two assertions anyway, so a future change that heals one without the other
+     * cannot hide behind the merged count.
      */
     @Test
     fun anOutgoingTrackerCaughtMidFlightCannotRepublishTheEndpointTheSwapLeft() = runConcurrencyStress { stage ->
@@ -221,19 +220,12 @@ class ManagedSeamRosterCollapseConcurrencyTest {
         val churnRounds = AtomicLong()
         repeat(SWAP_ITERATIONS) { iter ->
             val relayScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-            val monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             val managed = ManagedSeam(scope = relayScope, selfId = stableId)
             val outgoing = ChurningBackingSeam(BACKING_SELF, initialRemotes())
             val incoming = ChurningBackingSeam(INCOMING_SELF, setOf(INCOMING_REMOTE))
             managed.swap(outgoing)
 
-            // A StateFlow collector conflates, so this observes a SUBSET of the emissions. That can
-            // only weaken detection, never manufacture one: every entry it does record was really
-            // published.
-            val observed = CopyOnWriteArrayList<Set<PeerId>>()
-            monitorScope.launch { managed.peers.collect { observed += it } }
-
-            stage.at("iter=$iter race") { "iter=$iter observed=${observed.size}" }
+            stage.at("iter=$iter race") { "iter=$iter managed=${managed.peers.value.size}" }
             coroutineScope {
                 val churner = churn(outgoing)
                 val hot = withTimeoutOrNull(HOT_BUDGET) {
@@ -242,32 +234,33 @@ class ManagedSeamRosterCollapseConcurrencyTest {
                 if (hot) relayHot.incrementAndGet()
 
                 managed.swap(incoming)
-                // The landmark. Everything the monitor appends at or after this index was published
-                // AFTER `swap` returned — read from this thread, after the call, so an entry already
-                // in the list cannot land at or beyond it. It errs by MISSING post-swap emissions,
-                // never by counting a pre-swap one, which is the safe direction for an arm that
-                // reports what it found.
+                // Sampled HERE, on this thread, after `swap` has returned — so every sample is
+                // totally ordered after the swap and a hit is unambiguous.
                 //
-                // Keyed to the swap's return rather than to the first OBSERVED incoming roster,
-                // which was the first draft and was wrong: `StateFlow` conflates, so the very
-                // clobber under test — a stale write landing immediately after the priming write —
-                // *erases* the incoming roster from the observed stream, and an arm keyed to
-                // observing it reports the defect as a broken rig instead of as a red.
-                val mark = observed.size
+                // The first draft used a collector on another thread and treated `observed.size`,
+                // read after the swap, as the landmark. It was wrong, and the fix caught it rather
+                // than the other way round: the index bounds APPENDS, not publishes, so a collector
+                // holding a value it read before the swap can append it afterwards. That instrument
+                // reported 3 of 3 000 "post-swap" emissions against the FIXED code, where the guard
+                // makes a late outgoing write structurally impossible — a false positive rate of
+                // exactly the shape that gets read as a residual defect.
+                var offending: Set<PeerId>? = null
+                repeat(LIVE_SAMPLES) {
+                    val sample = managed.peers.value
+                    if (offending == null && sample.any { it.namesOldEndpoint() }) offending = sample
+                }
                 // The outgoing seam is no longer this seam's business, but the churner is still
                 // hammering it; tearing it is what stops the churner and models the real failover,
                 // where the old transport is already dead.
                 outgoing.close(CloseReason.Normal)
                 churnRounds.addAndGet(churner.await().toLong())
 
-                stage.at("iter=$iter quiesce") { "iter=$iter observed=${observed.size}" }
+                stage.at("iter=$iter quiesce") { "iter=$iter managed=${managed.peers.value.size}" }
                 relayScope.coroutineContext.job.cancelAndJoin()
-                monitorScope.coroutineContext.job.cancelAndJoin()
 
-                val offending = observed.drop(mark).filter { roster -> roster.any { it.namesOldEndpoint() } }
-                if (offending.isNotEmpty()) {
-                    regressions += "iter=$iter ${offending.size} post-swap emission(s) named the old " +
-                        "endpoint, e.g. ${offending.first().take(3).map { it.value }}"
+                offending?.let {
+                    regressions += "iter=$iter live view named the old endpoint after the swap " +
+                        "returned, e.g. ${it.take(3).map { p -> p.value }}"
                 }
                 val settled = managed.peers.value
                 if (settled.any { it.namesOldEndpoint() }) {
@@ -483,6 +476,13 @@ class ManagedSeamRosterCollapseConcurrencyTest {
          * silently tolerated.
          */
         val HOT_BUDGET = 10.seconds
+
+        /**
+         * Samples of the live `peers` view taken on the test thread immediately after `swap`
+         * returns. A tight loop of volatile reads costs microseconds; the count only has to cover
+         * the moment a stale write would land, which is nanoseconds after the swap.
+         */
+        const val LIVE_SAMPLES = 2_000
 
         /** Cap on the failure message only; the collected size still reports the true total. */
         const val MAX_REPORTED_SURVIVORS = 10
