@@ -29,6 +29,21 @@ public class LWWRegister<V> private constructor(
     /**
      * Write [value] tagged with ([timestamp], [replica]).
      *
+     * **The write goes through [piece], so it can only move this register *up*
+     * the lattice** (`X <= X.set(…)`, #2087). A write whose tag loses to the one
+     * already held is dropped where it is made, rather than showing up locally
+     * until the next merge takes it away. Convergence is unchanged either way —
+     * the join was always going to discard it — so what this buys is that a
+     * mutator never contradicts the join, and every delta-mutator law over this
+     * type holds unconditionally instead of on a carved-out domain.
+     *
+     * A consequence worth knowing: a write at a tag *equal* to the one held
+     * keeps the **incumbent**, exactly as that same cell arriving off the wire
+     * would, because [piece]'s tie-break is `else -> this`. That case is a
+     * violation of the precondition below, where nothing was ever promised; the
+     * change is that the outcome no longer depends on whether the second value
+     * was written locally or received.
+     *
      * **Precondition — tag uniqueness.** The `(replica, timestamp)` pair MUST
      * uniquely identify this write. Calling `set(r, ts, v1)` and then
      * `set(r, ts, v2)` with the *same* `(replica, timestamp)` violates this
@@ -42,7 +57,7 @@ public class LWWRegister<V> private constructor(
      * `(replica, timestamp)` pair. This is not enforced at runtime.
      */
     public fun set(replica: ReplicaId, timestamp: Long, value: V): LWWRegister<V> =
-        LWWRegister(timestamp, replica, value)
+        piece(LWWRegister(timestamp, replica, value))
 
     /**
      * Clear the value tagged with ([timestamp], [replica]) — a last-writer-wins
@@ -50,11 +65,17 @@ public class LWWRegister<V> private constructor(
      * later tag hides an earlier value, and a set at a later tag revives the
      * register. After an unset wins, [value] reads `null`.
      *
+     * It is a **write**, not a clear: unsetting an *empty* register still
+     * records `(timestamp, replica, null)`, which is what beats a concurrent
+     * earlier [set] arriving later. Like [set] it goes through [piece] and so is
+     * inflationary — it refuses to lose, it does not refuse to write.
+     *
      * The tag-uniqueness precondition on [set] applies equally here: never reuse
      * a `(replica, timestamp)` pair across writes.
      */
     public fun unset(replica: ReplicaId, timestamp: Long): LWWRegister<V> =
-        LWWRegister(timestamp, replica, null)
+        piece(LWWRegister(timestamp, replica, null))
+
 
     /** The join: pick the larger `(timestamp, replicaId)` tag. */
     override fun piece(other: LWWRegister<V>): LWWRegister<V> = when {
@@ -85,5 +106,27 @@ public class LWWRegister<V> private constructor(
 
         /** An empty register. Any [set] supersedes it. */
         public fun <V> empty(): LWWRegister<V> = LWWRegister(Long.MIN_VALUE, BOTTOM_REPLICA, null)
+
+        /**
+         * The bare tagged cell, with **no join** against any prior state — the
+         * assigning form [set] and [unset] had before #2087.
+         *
+         * Deliberately internal, and deliberately kept rather than deleted. Three
+         * callers need it:
+         *
+         * - [LWWMap.setWhole]/[LWWMap.removeWhole] are the *assigning* reference
+         *   `LWWMapDeltaMutatorLawTest` and `LWWMapTest` drive to reach states
+         *   strictly **below** their own starting point. A joined mutator cannot
+         *   produce one, so routing them through [set] would silently retire that
+         *   whole search region — see [LWWMap.setWhole]'s own KDoc.
+         * - `LWWMap`'s one-cell patches, where spelling the cell outright is what
+         *   the comment above them used to have to explain.
+         * - [Gauge.observe], which documents itself as returning *just this tagged
+         *   observation*, for the caller to absorb with `piece`. That is a
+         *   delta-mutator contract rather than [set]'s, and #2087 deliberately did
+         *   not widen to it.
+         */
+        internal fun <V> tagged(replica: ReplicaId, timestamp: Long, value: V?): LWWRegister<V> =
+            LWWRegister(timestamp, replica, value)
     }
 }
