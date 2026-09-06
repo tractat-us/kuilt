@@ -2,6 +2,8 @@ package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestResult
@@ -173,6 +175,28 @@ class SymmetricDeliveryObligationRigTest {
         reference().runSendToDeliversToNamedPeer(this)
     }
 
+    /**
+     * The row's eager precondition, which is not decoration but *diagnosis*: a joiner whose roster
+     * never named the host would fail the delivery arms on a fabric whose addressing is fine.
+     *
+     * The stimulus is [JoinerRosterObligationRigTest]'s shipped `:kuilt-nearby` observable — a live,
+     * otherwise-working joiner whose roster names nobody but itself. `InMemoryLoom.sendTo` checks the
+     * *factory's* registry rather than the seam's flow, so without the precondition the send would
+     * succeed and this row would be **green on a joiner that cannot name its counterparty**. That is
+     * what the arm is worth, and why the mutation table has a row for it.
+     */
+    @Test
+    fun aJoinerBlindToTheHostFailsTheDirectedSendPrecondition(): TestResult = runTest {
+        val failure = assertFailsWith<AssertionError>(
+            "a joiner whose roster does not name the host must FAIL the precondition, not the " +
+                "delivery arms — the two diagnoses are different",
+        ) {
+            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamBlindToTheHost))
+                .runSendToDeliversToNamedPeer(this)
+        }
+        assertRedOn("precondition: the JOINER must NAME the host", failure)
+    }
+
     /** As [aJoinerThatDropsEveryBroadcastWedges], for the directed-send path. */
     @Test
     fun aJoinerThatDropsEverySendToWedges(): TestResult = runTest {
@@ -334,6 +358,11 @@ class SymmetricDeliveryObligationRigTest {
         override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
             delegate.sendTo(peer, payload + CORRUPTION)
         }
+    }
+
+    /** A live, otherwise-working joiner whose roster names nobody but itself. */
+    private class SeamBlindToTheHost(delegate: Seam) : Seam by delegate {
+        override val peers: StateFlow<Set<PeerId>> = MutableStateFlow(setOf(delegate.selfId))
     }
 
     /** A joiner whose directed send is accepted and never arrives. */
