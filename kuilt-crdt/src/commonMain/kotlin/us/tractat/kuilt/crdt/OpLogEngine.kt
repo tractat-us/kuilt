@@ -42,9 +42,13 @@ public sealed interface LogOp<out Id> {
  * - [dotOf] projects an [Id] to its causal [Dot] `(replica, seq)`.
  *
  * Everything the engine exposes — [purge], [purgeAndRecord], [causalDots],
- * [maxSeqByReplica] — is defined in terms of those two adapters, so the two CRDTs
- * share one implementation of the delivery-frontier and dense-seq logic (including
+ * [maxSeqByReplica], [foldMaxSeq] — is defined in terms of those two adapters, so the two
+ * CRDTs share one implementation of the delivery-frontier and dense-seq logic (including
  * the GC-survives-a-self-compaction subtlety, #639) rather than duplicating it.
+ *
+ * The pairing to keep whole is [maxSeqByReplica] and [foldMaxSeq]: a whole-log recompute and
+ * the incremental fold a derived cache threads forward. Both route through [deliveredDots], so
+ * they cannot disagree; a caller that hand-writes the incremental half instead re-opens #2173.
  *
  * @param Id the element-identity type (`RgaId` / `FugueId`).
  * @param Op the op type (`RgaOp<V>` / `FugueOp<V>`).

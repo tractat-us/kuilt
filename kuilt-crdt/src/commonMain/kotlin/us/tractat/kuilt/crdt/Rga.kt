@@ -279,9 +279,17 @@ public class Rga<V> private constructor(
     }
 
     /**
-     * Ceiling of the [RgaId.seq] seen per [ReplicaId], incremented O(1) on each
-     * insert and merged on [piece]. Powers [nextSeqFor] without scanning the op-log.
+     * Ceiling of the [RgaId.seq] seen per [ReplicaId], incremented O(1) on each insert, folded
+     * from a [RgaOp.Compact]'s recorded dots on the compact paths, raised off the floor by
+     * `cacheAfterFloor`, and merged on [piece]. Powers [nextSeqFor] without scanning the op-log.
      * Exposed as `internal` for test verification.
+     *
+     * **A ceiling, never a suppressor.** Unlike [compactedBelow] — which is downward-closed and
+     * makes [apply] *discard* an op whose dot it covers — this map gates nothing; [nextSeqFor],
+     * for the replica being minted as, is its sole reader. That is why a `Compact` may raise a
+     * **foreign** author's entry here while `withCompactedBelow` warns against raising one in the
+     * floor: this claims only "these specific dots were minted", never a range over dots nobody
+     * has minted yet, and raising a foreign entry changes no behaviour on this replica at all.
      */
     internal val maxSeqByReplica: Map<ReplicaId, Long> by lazy {
         cache?.maxSeqByReplica ?: computeMaxSeqByReplica()
@@ -1034,10 +1042,19 @@ public class Rga<V> private constructor(
         val rawTombstones = tombstones + other.tombstones
         val mergedTombstones = if (!suppresses) rawTombstones
             else rawTombstones.filterTo(mutableSetOf(), survives)
-        // No fold of `mergedFloor` here: every construction site maintains
-        // `maxSeqByReplica[r] >= compactedBelow[r]` (the cacheless base cases resolve through
-        // computeMaxSeqByReplica, which folds the floor), so `a.maxSeq ⊔ b.maxSeq` already
-        // dominates `F_a ⊔ F_b`. Adding one back would be dead code, not defence in depth.
+        // No fold of `mergedFloor` OR of the union's Compact dots here, and both elisions rest on
+        // the same construction-site invariant: each side's `maxSeqByReplica` already dominates
+        // every dot that side has delivered — its floor (`maxSeqByReplica[r] >= compactedBelow[r]`)
+        // and its Compacts' recorded dots alike. The union's floor is `F_a ⊔ F_b` and its Compacts
+        // are the union of both sides', so `a.maxSeq ⊔ b.maxSeq` dominates both. Adding a fold back
+        // would be dead code, not defence in depth.
+        //
+        // The Compact half of that premise was false until #2173 — `withCompactCaches` passed the
+        // map through, so a state that had absorbed a Compact above its high-water carried the low
+        // value into this merge and out the other side. `mergeMax` cannot repair an input, so this
+        // line carries no pin of its own: what holds it up is the fold at each construction site,
+        // and `RgaCacheTest.cachedStateEqualsFromScratchAfterACompactAboveTheHighWater` is where
+        // that is checked.
         val mergedMaxSeq = maxSeqByReplica.mergeMax(other.maxSeqByReplica)
         val mergedOps = if (!suppresses) rawUnion
             else purgeBelow(purge(rawUnion, mergedCompactedIds), mergedFloor)
