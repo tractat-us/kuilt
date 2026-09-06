@@ -265,6 +265,10 @@ class RaftSimulation(
      * duplicate or behind-commit snapshot arriving at a caught-up follower — the safety regressions
      * in #1219 (stale duplicate below the compaction floor) and #1220 (behind-commit retain-suffix).
      * The frame names no leader; the transport-level [from] is the sender the receiver reads.
+     *
+     * [config] is the snapshot's membership payload — the field a real `sendSnapshotChunk` copies from
+     * [us.tractat.kuilt.raft.SnapshotMeta] onto **every** chunk, and the second of this issue's two
+     * wire routes for a config the recipient adopts without appending an entry (#2663).
      */
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     suspend fun deliverInstallSnapshot(
@@ -276,6 +280,7 @@ class RaftSimulation(
         data: ByteArray = byteArrayOf(0),
         done: Boolean = true,
         round: Long = 0L,
+        config: ConfigPayload? = null,
     ) {
         val bytes = Cbor.encodeToByteArray<RaftMessage>(
             RaftMessage.InstallSnapshot(
@@ -286,6 +291,7 @@ class RaftSimulation(
                 data = data,
                 done = done,
                 round = round,
+                config = config,
             )
         )
         network.deliver(from = from, to = to, bytes = bytes)
