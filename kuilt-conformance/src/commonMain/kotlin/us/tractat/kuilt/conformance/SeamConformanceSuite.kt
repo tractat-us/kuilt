@@ -1696,6 +1696,18 @@ public abstract class SeamConformanceSuite {
     // shape that cannot collapse unless the seam collapses it — so the obligation is strongest
     // exactly where its precondition is weakest.
     //
+    // **And on a SHARED-REGISTRY harness the collapse itself is supplied by the fixture — measured,
+    // not argued (#2601).** The two ends of `InMemoryLoom` read one registry, and this row closes the
+    // **host** first, which removes the host from it: the joiner's roster is already `{ selfId }`
+    // before the joiner tears at all. So on those harnesses the joiner arm reads a terminal value the
+    // *host's departure* produced, and would stay green on a joiner with no collapse-on-tear
+    // whatsoever. That is the [JoinerRosterOrigin.FilledByConstruction] shape one level over, and it
+    // is what a rig for this row runs into: a decorator freezing the joiner's roster at its close
+    // does not red, because there is nothing left to freeze. Closing the joiner first would only move
+    // the launder onto the host arm, symmetrically — a 2-peer suite over one shared registry cannot
+    // put both ends on the strong side of this. The role-split fabrics are where the arm bites, and
+    // they are the ones that ship two implementations.
+    //
     // **BOTH preconditions are sampled before EITHER close, and that ordering is load-bearing.** On a
     // role-split fabric the host's `close()` reaches the joiner remotely, so a `joiner.peers` read
     // taken after it may legitimately have collapsed already — and a precondition that the tear
