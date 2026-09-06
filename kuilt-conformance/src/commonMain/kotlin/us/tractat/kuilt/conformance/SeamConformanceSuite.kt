@@ -531,19 +531,87 @@ public abstract class SeamConformanceSuite {
     public fun hostYieldsUsableSeamWithNonEmptySelfId(): TestResult =
         runTest { runHostYieldsUsableSeam(this) }
 
-    // ── (2) broadcast from host delivers to a joined peer ───────────────────
+    // ── (2) broadcast delivers to the counterparty — in BOTH directions ─────
+    //
+    // **Both directions are checked (#2601), for the reason `sendToSelfIsRefused` gives:** a
+    // role-split fabric is two different implementations behind one suite (websocket hosts a
+    // `MeshSeam` and joins a `LinkSeam`), so a host-only broadcast proves at most half of what the
+    // harness under test ships — and the untested half is the one a joining phone runs. Until this
+    // row gained its second direction, no in-tree harness had ever carried a frame *from* a joiner.
+    //
+    // **The method keeps its `FromHost` name deliberately.** It is the identifier #2591 and #2601
+    // name this row by, and a fabric's gap declarations and this suite's own cross-references key on
+    // it; renaming it for accuracy would trade traceability for prose. The body is the contract.
+    //
+    // **Where the joiner arm can fail.** Nothing in any fixture delivers a frame — one has to
+    // traverse whatever the joiner's outbound path is, and on every role-split fabric that path is
+    // different code from the host's (a `LinkSeam` writes its socket; a `MeshSeam` fans out over a
+    // registry). On a harness whose two ends share one in-process backend both directions run the
+    // same dispatch, so the arm is *weak* there — not vacuous, since it is still the only thing
+    // exercising the joiner's own send-side guards and its sender attribution, but weak, and
+    // [joinerRosterOrigin]'s `FilledByConstruction` is where a harness says so.
+    //
+    // **Honest limit: a joiner that delivers NOTHING wedges rather than reds.** The await is
+    // unbounded on purpose. A virtual-time bound here is the trap #2601's lifecycle slice hit on
+    // `NwBridgeLoopbackConformanceTest`, whose weave runs on a real dispatcher: while the collector
+    // waits on a real socket callback `runTest` finds nothing to run, spends the entire budget, and
+    // reds a seam that was never broken. So a silent drop reports as `runTest`'s wedge backstop
+    // rather than as a named assertion — proven, not merely claimed, by the wedge probes in
+    // `SymmetricDeliveryObligationRigTest`.
 
     internal suspend fun runBroadcastDeliversToJoinedPeer(scope: TestScope): Unit =
         scope.connectedPair { host, joiner ->
-            val received = async { joiner.incoming.take(1).toList() }
+            val receivedByJoiner = async { joiner.incoming.take(1).toList() }
 
-            val payload = byteArrayOf(10, 20, 30)
-            host.broadcast(payload)
+            val toJoiner = byteArrayOf(10, 20, 30)
+            host.broadcast(toJoiner)
+            val joinerFrames = receivedByJoiner.await()
 
-            val frames = received.await()
-            assertEquals(1, frames.size)
-            assertTrue(frames[0].toByteArray().contentEquals(payload), "payload must match")
-            assertEquals(host.selfId, frames[0].sender)
+            // The reverse collector starts only after the forward direction has settled, so each
+            // direction gets its own trajectory — the sequencing `incomingCompletesWhenSeamCloses`
+            // adopted for the same reason. Distinct payloads keep a cross-direction leak visible.
+            val receivedByHost = async { host.incoming.take(1).toList() }
+
+            val toHost = byteArrayOf(40, 50, 60)
+            joiner.broadcast(toHost)
+            val hostFrames = receivedByHost.await()
+
+            // Batched: a fabric failing the host direction would otherwise never reach the joiner
+            // arms that are the point of this row. Indexed reads are null-safe so a short list reds
+            // its own arm instead of throwing out of the batch.
+            assertAll(
+                { assertEquals(1, joinerFrames.size, "the host's broadcast must deliver exactly one frame") },
+                {
+                    assertTrue(
+                        joinerFrames.firstOrNull()?.toByteArray()?.contentEquals(toJoiner) == true,
+                        "payload must match",
+                    )
+                },
+                { assertEquals(host.selfId, joinerFrames.firstOrNull()?.sender, "sender must be the host") },
+                {
+                    assertEquals(
+                        1,
+                        hostFrames.size,
+                        "the JOINER's broadcast must reach the host — exactly one frame; got ${hostFrames.size}",
+                    )
+                },
+                {
+                    assertTrue(
+                        hostFrames.firstOrNull()?.toByteArray()?.contentEquals(toHost) == true,
+                        "the JOINER's broadcast must carry its payload to the host — a role-split " +
+                            "fabric ships a different Seam on each end, so the host's outbound path " +
+                            "proves nothing about this one (#2601). Got " +
+                            "${hostFrames.firstOrNull()?.toByteArray()?.toList()}",
+                    )
+                },
+                {
+                    assertEquals(
+                        joiner.selfId,
+                        hostFrames.firstOrNull()?.sender,
+                        "the JOINER's broadcast must be attributed to the joiner at the host",
+                    )
+                },
+            )
         }
 
     @Test
@@ -564,15 +632,60 @@ public abstract class SeamConformanceSuite {
     // consumer that must reorder them has been handed a different data structure. No in-tree fabric
     // declared it `false`. A fabric that cannot deliver in order is non-conforming, full stop.
 
+    //
+    // **Both directions are checked (#2601).** Ordering is a property of a *write path*, and a
+    // role-split fabric has two of them: a client's single socket write loop and a server's per-peer
+    // fan-out are different code, and one can batch, coalesce or parallelise while the other stays
+    // FIFO. Asserting only host→joiner leaves the direction a joining phone actually drives untested.
+    //
+    // **Where the joiner arm can fail.** Sequence and delivery order are minted by the *receiving*
+    // side's spool and produced by the *sending* side's write path, neither of which any fixture
+    // supplies; on a role-split fabric the reverse path is a different implementation. The arm is
+    // weak on a shared in-process harness, where both directions run one dispatch under one lock —
+    // that is the [joinerRosterOrigin] vacuity shape one level over, and the same declaration
+    // records it.
+    //
+    // **Same honest limit as (2):** the awaits are unbounded, so a joiner that delivers *nothing*
+    // wedges rather than reds. See (2) for why a virtual-time bound is not the fix.
+
     internal suspend fun runIncomingPreservesSendOrder(scope: TestScope): Unit =
         scope.connectedPair { host, joiner ->
-            val received = async { joiner.incoming.take(5).toList() }
+            val receivedByJoiner = async { joiner.incoming.take(5).toList() }
 
             repeat(5) { i -> host.broadcast(byteArrayOf(i.toByte())) }
+            val joinerFrames = receivedByJoiner.await()
 
-            val frames = received.await()
-            assertEquals(5, frames.size)
-            frames.forEachIndexed { i, f -> assertTrue(f.toByteArray().contentEquals(byteArrayOf(i.toByte())), "frame $i payload") }
+            // Reverse direction, started after the forward one settles — see (2). The payloads are
+            // offset by [REVERSE_ORDER_BASE] so a frame that leaked across directions is legible in
+            // the failure message rather than passing as the right index.
+            val receivedByHost = async { host.incoming.take(5).toList() }
+
+            repeat(5) { i -> joiner.broadcast(byteArrayOf((REVERSE_ORDER_BASE + i).toByte())) }
+            val hostFrames = receivedByHost.await()
+
+            assertAll(
+                { assertEquals(5, joinerFrames.size, "the host's five broadcasts must all arrive") },
+                {
+                    joinerFrames.forEachIndexed { i, f ->
+                        assertTrue(
+                            f.toByteArray().contentEquals(byteArrayOf(i.toByte())),
+                            "host→joiner frame $i payload",
+                        )
+                    }
+                },
+                { assertEquals(5, hostFrames.size, "the joiner's five broadcasts must all arrive at the host") },
+                {
+                    hostFrames.forEachIndexed { i, f ->
+                        assertTrue(
+                            f.toByteArray().contentEquals(byteArrayOf((REVERSE_ORDER_BASE + i).toByte())),
+                            "joiner→host frame $i payload — Seam.incoming is one ordered flow of frames " +
+                                "from one session on BOTH ends, and the joiner's write path is a " +
+                                "different implementation from the host's on every role-split fabric " +
+                                "(#2601). Got ${f.toByteArray().toList()}",
+                        )
+                    }
+                },
+            )
         }
 
     @Test
@@ -1111,23 +1224,98 @@ public abstract class SeamConformanceSuite {
     // The positive counterpart to `sendToAbsentPeerThrowsPeerNotConnected`: a `sendTo` addressed to
     // a peer that IS in the session delivers exactly that payload to that peer, attributed to the
     // sender. Gated on `supportsSendTo` because a fabric without directed addressing cannot honour it.
-
+    //
     // The gate lives **inside** the body helper, never in the `@Test` wrapper — [SeamConformanceUngatedCoreTest]
     // drives the `run*` helpers rather than the wrappers, so a gate in a wrapper would be invisible to
     // it, and a rig driving the body would silently run an obligation the harness had opted out of.
+    //
+    // **Both directions are checked (#2601).** Directed addressing is where the two ends of a
+    // role-split fabric differ most: a hub resolves a `PeerId` to one of many links, a leaf has
+    // exactly one place to put a frame and can "resolve" any address to it. A joiner that quietly
+    // treats every `sendTo` as a broadcast, or drops it, is conformant to a host-only assertion.
+    //
+    // **Where the joiner arm can fail.** The frame has to traverse the joiner's own outbound path;
+    // no fixture supplies a delivery. The arm is weak on a shared in-process harness for the reason
+    // (2) gives, and weakest of all on a 2-peer link, where "addressed to the host" and "sent to my
+    // only counterparty" are the same instruction — which is exactly the fabric shape the row cannot
+    // distinguish and should not pretend to.
+    //
+    // **The reverse arm's precondition is asserted EAGERLY, and that ordering is the point.** A
+    // conforming fabric refuses a send addressed to a peer its roster does not name
+    // ([PeerNotConnected], the obligation `sendToAbsentPeerThrowsPeerNotConnected` owns), so a joiner
+    // that never learned the host's id would fail this row with a *roster* defect wearing a delivery
+    // defect's clothes. Checking it before the send keeps the two diagnoses apart, at the price of
+    // aborting before the batch below — deliberate: there is nothing to batch a throw with.
+    //
+    // The **host** arms deliberately gain no matching precondition. Leaving them byte-identical to
+    // the host-only form is what makes a red here attributable to the new direction; #2601's
+    // lifecycle slice found a false red born of exactly that kind of edit to an existing arm.
+    //
+    // **Same honest limit as (2):** the awaits are unbounded, so a joiner whose directed send never
+    // arrives wedges rather than reds.
 
     internal suspend fun runSendToDeliversToNamedPeer(scope: TestScope) {
         if (!capabilities().supportsSendTo) return
         scope.connectedPair { host, joiner ->
-            val received = async { joiner.incoming.take(1).toList() }
+            val receivedByJoiner = async { joiner.incoming.take(1).toList() }
 
-            val payload = byteArrayOf(5, 6, 7)
-            host.sendTo(joiner.selfId, payload)
+            val toJoiner = byteArrayOf(5, 6, 7)
+            host.sendTo(joiner.selfId, toJoiner)
+            val joinerFrames = receivedByJoiner.await()
 
-            val frames = received.await()
-            assertEquals(1, frames.size, "directed send must deliver exactly one frame")
-            assertTrue(frames[0].toByteArray().contentEquals(payload), "directed payload must match")
-            assertEquals(host.selfId, frames[0].sender, "sender must be the directed-send originator")
+            assertTrue(
+                host.selfId in joiner.peers.value,
+                "precondition: the JOINER must NAME the host in its own roster before a directed send " +
+                    "to it can mean anything — an unnamed addressee is refused with PeerNotConnected, " +
+                    "which would red this row for a roster reason rather than a delivery one (#2601). " +
+                    "Got ${joiner.peers.value.map { it.value }}, host selfId ${host.selfId.value}",
+            )
+
+            val receivedByHost = async { host.incoming.take(1).toList() }
+
+            val toHost = byteArrayOf(8, 9, 10)
+            joiner.sendTo(host.selfId, toHost)
+            val hostFrames = receivedByHost.await()
+
+            assertAll(
+                { assertEquals(1, joinerFrames.size, "directed send must deliver exactly one frame") },
+                {
+                    assertTrue(
+                        joinerFrames.firstOrNull()?.toByteArray()?.contentEquals(toJoiner) == true,
+                        "directed payload must match",
+                    )
+                },
+                {
+                    assertEquals(
+                        host.selfId,
+                        joinerFrames.firstOrNull()?.sender,
+                        "sender must be the directed-send originator",
+                    )
+                },
+                {
+                    assertEquals(
+                        1,
+                        hostFrames.size,
+                        "the JOINER's directed send must deliver exactly one frame to the host; got " +
+                            "${hostFrames.size}",
+                    )
+                },
+                {
+                    assertTrue(
+                        hostFrames.firstOrNull()?.toByteArray()?.contentEquals(toHost) == true,
+                        "the JOINER's directed payload must match — a role-split fabric ships a " +
+                            "different Seam on each end, so the host's addressing proves nothing about " +
+                            "this one (#2601). Got ${hostFrames.firstOrNull()?.toByteArray()?.toList()}",
+                    )
+                },
+                {
+                    assertEquals(
+                        joiner.selfId,
+                        hostFrames.firstOrNull()?.sender,
+                        "the host must attribute the JOINER's directed send to the joiner",
+                    )
+                },
+            )
         }
     }
 
@@ -2226,6 +2414,13 @@ public abstract class SeamConformanceSuite {
     private companion object {
         /** Non-uniform fill for the at-budget payload, so a truncation cannot pass as a zero-fill. */
         const val PAYLOAD_FILL_MODULUS = 251
+
+        /**
+         * Offset for the joiner→host frames in `runIncomingPreservesSendOrder`, so the two
+         * directions' payloads cannot be confused: a frame that leaked across directions reads as
+         * `0` where `100` was expected instead of arriving at the index it was sent for.
+         */
+        const val REVERSE_ORDER_BASE = 100
 
         /**
          * How long a by-design declaration's **negative** observation waits before concluding the
