@@ -856,4 +856,226 @@ class CanonicalSerializationTest {
             },
         )
     }
+
+    // ── Histogram / DDSketch / GCounterDouble (#1979) ──────────────────────────
+
+    /**
+     * Bucket boundaries wide enough that a [Histogram] can hold bucket **0** and bucket **16** at
+     * the same time. Seventeen upper bounds define eighteen buckets.
+     *
+     * The width is not decoration — see [histogramIsMergeOrderIndependent] for why those two
+     * indices in particular are the pair worth reaching.
+     */
+    private val wideBoundaries: List<Double> = List(17) { (it + 1) * 10.0 }
+
+    /** A value inside [Histogram] bucket 0 — at or below `wideBoundaries[0]`. */
+    private val inBucketZero = 5.0
+
+    /** A value inside [Histogram] bucket 16 — above `wideBoundaries[15]`, at or below `[16]`. */
+    private val inBucketSixteen = 165.0
+
+    /**
+     * Two replicas that reached the **same** [GCounterDouble] by merging the same slots in
+     * different orders must serialize to identical bytes.
+     *
+     * `GCounterDouble.piece` is `counts.mergeMax(other.counts)`, which builds a `HashMap`; `equals`
+     * compares the maps, which is order-insensitive. So every equality assertion in the zoo stays
+     * green while the encodings differ — the shape of #1957, on a type that sweep missed.
+     *
+     * **This probe's power is target-dependent, and that is the point of the issue.** On
+     * Kotlin/Native and wasmJs a `HashMap` iterates in insertion order, which here *is* the merge
+     * order, so the two encodings differ and this reds. On the JVM `HashMap` iterates in bucket
+     * order — largely a function of the key set alone — so in general it can pass on a type that is
+     * not canonical at all. With *these* three keys it does red on the JVM as well (measured before
+     * the fix: `zulu`/`mike` transposed, `alpha` unmoved), which is a property of the keys and the
+     * table capacity rather than of the type. Do not read that as licence to trust a green
+     * `jvmTest`; [gCounterDoubleIsInsertionOrderIndependent] is the arm that reds everywhere by
+     * construction.
+     */
+    @Test
+    fun gCounterDoubleIsMergeOrderIndependent() {
+        val alpha = GCounterDouble.ZERO.piece(GCounterDouble.ZERO.inc(ReplicaId("alpha"), 1.5))
+        val zulu = GCounterDouble.ZERO.piece(GCounterDouble.ZERO.inc(ReplicaId("zulu"), 2.5))
+        val mike = GCounterDouble.ZERO.piece(GCounterDouble.ZERO.inc(ReplicaId("mike"), 3.5))
+
+        val alphaFirst = alpha.piece(zulu).piece(mike)
+        val mikeFirst = mike.piece(zulu).piece(alpha)
+        val ser = GCounterDouble.serializer()
+
+        assertAll(
+            {
+                assertEquals(
+                    7.5, alphaFirst.value,
+                    "the probe is vacuous unless all three slots landed: $alphaFirst",
+                )
+            },
+            { assertEquals(alphaFirst, mikeFirst, "sanity: both replicas reached the same counter") },
+            {
+                assertEquals(
+                    json.encodeToString(ser, alphaFirst),
+                    json.encodeToString(ser, mikeFirst),
+                    "GCounterDouble JSON must be merge-order-independent",
+                )
+            },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, alphaFirst).toList(),
+                    cbor.encodeToByteArray(ser, mikeFirst).toList(),
+                    "GCounterDouble CBOR must be merge-order-independent",
+                )
+            },
+        )
+    }
+
+    /**
+     * A [GCounterDouble] built **directly** from a differently-ordered map must encode identically
+     * too — and unlike [gCounterDoubleIsMergeOrderIndependent] this reds on **every** target,
+     * including the JVM.
+     *
+     * `GCounterDouble.of` is `pairs.toMap()`, which yields a `LinkedHashMap` in argument order, and
+     * a `LinkedHashMap` is insertion-ordered everywhere. So the two counters below differ in
+     * iteration order on JVM, Android, Kotlin/Native and wasmJs alike, and the probe has the same
+     * power on all of them. That is worth having on its own terms: it is the arm a JVM-only run can
+     * see, and it pins the fix at the **encoder**, which is where every entry point —
+     * [GCounterDouble.of], the private constructor, and `piece` — is covered at once.
+     */
+    @Test
+    fun gCounterDoubleIsInsertionOrderIndependent() {
+        val forward = GCounterDouble.of(ReplicaId("alpha") to 1.5, ReplicaId("zulu") to 2.5)
+        val reverse = GCounterDouble.of(ReplicaId("zulu") to 2.5, ReplicaId("alpha") to 1.5)
+        val ser = GCounterDouble.serializer()
+
+        assertAll(
+            { assertEquals(forward, reverse, "sanity: the two counters are the same value") },
+            {
+                assertEquals(
+                    json.encodeToString(ser, forward),
+                    json.encodeToString(ser, reverse),
+                    "GCounterDouble JSON must be insertion-order-independent",
+                )
+            },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, forward).toList(),
+                    cbor.encodeToByteArray(ser, reverse).toList(),
+                    "GCounterDouble CBOR must be insertion-order-independent",
+                )
+            },
+        )
+    }
+
+    /**
+     * Two replicas that recorded the same values into the same [Histogram] and merged in opposite
+     * orders must serialize to identical bytes.
+     *
+     * `Histogram.piece` merges `buckets: Map<Int, GCounter>` through `mergeValues`, which builds a
+     * `HashMap`, and its `equals` compares the maps — so, as everywhere in #1979, the value
+     * converges and the bytes need not.
+     *
+     * **Buckets 0 and 16, deliberately.** [Histogram] exposes only the dense [Histogram.bucketCounts]
+     * list, so a test cannot read the backing map's iteration order and assert directly that the two
+     * replicas differ in it. What it can do is choose keys for which the JVM's own iteration is
+     * *known* to follow insertion: `java.util.HashMap` walks each bin head→tail and appends on put,
+     * and `0 and (n-1) == 16 and (n-1) == 0` for every table size `n <= 16`, so these two boxed
+     * `Int` keys share a bin at every capacity this map reaches. That is what makes the probe
+     * non-vacuous on the JVM as well as on Kotlin/Native and wasmJs, where insertion order is the
+     * whole iteration order and any two keys would do.
+     *
+     * The JVM half rests on a `HashMap` implementation detail, and if a future JDK stops colliding
+     * these two the probe degrades to **vacuous on the JVM** — never to flaky, since the assertion
+     * is that the bytes *agree*. The load-bearing evidence stays the Kotlin/Native and wasmJs runs.
+     */
+    @Test
+    fun histogramIsMergeOrderIndependent() {
+        val empty = Histogram.empty(wideBoundaries)
+        val low = empty.piece(empty.record(a, inBucketZero))
+        val high = empty.piece(empty.record(b, inBucketSixteen))
+
+        val lowFirst = low.piece(high)
+        val highFirst = high.piece(low)
+        val ser = Histogram.serializer()
+
+        assertAll(
+            {
+                assertTrue(
+                    lowFirst.bucketCounts[0] > 0L && lowFirst.bucketCounts[16] > 0L,
+                    "the probe is vacuous unless BOTH buckets are populated — a one-key map has " +
+                        "exactly one iteration order and pins nothing: ${lowFirst.bucketCounts}",
+                )
+            },
+            { assertEquals(lowFirst, highFirst, "sanity: both replicas reached the same histogram") },
+            {
+                assertEquals(
+                    json.encodeToString(ser, lowFirst),
+                    json.encodeToString(ser, highFirst),
+                    "Histogram JSON must be merge-order-independent",
+                )
+            },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, lowFirst).toList(),
+                    cbor.encodeToByteArray(ser, highFirst).toList(),
+                    "Histogram CBOR must be merge-order-independent",
+                )
+            },
+        )
+    }
+
+    /**
+     * The same for [DDSketch], whose `positive` and `negative` stores are two more
+     * `Map<Int, GCounter>` fields merged through `mergeValues`.
+     *
+     * Unlike [Histogram], [DDSketch] *does* expose its store — [DDSketch.positiveBuckets] is
+     * `positive.mapValues { … }`, and `mapValues` returns a `LinkedHashMap` in the receiver's
+     * iteration order — so the bucket keys are asserted directly rather than inferred. Bucket 0 and
+     * bucket 16 again, for [histogramIsMergeOrderIndependent]'s bin-collision reason; the two
+     * magnitudes are chosen against the default `γ = (1+α)/(1−α)`, and the assertion below is what
+     * says so, so a change to [DDSketch]'s indexing reds this loudly rather than quietly moving the
+     * probe onto two keys that do not collide.
+     *
+     * Both signs are populated: the negative store is a second, independent non-canonical map, and
+     * an all-positive probe would leave it unencoded and untested.
+     */
+    @Test
+    fun ddSketchIsMergeOrderIndependent() {
+        val empty = DDSketch.empty()
+        val low = empty.piece(empty.add(a, 1.0)).let { it.piece(it.add(a, -1.0)) }
+        val high = empty.piece(empty.add(b, 1.36)).let { it.piece(it.add(b, -1.36)) }
+
+        val lowFirst = low.piece(high)
+        val highFirst = high.piece(low)
+        val ser = DDSketch.serializer()
+
+        assertAll(
+            {
+                assertEquals(
+                    setOf(0, 16), lowFirst.positiveBuckets.keys,
+                    "the probe is vacuous unless the two magnitudes land in buckets 0 and 16 — a " +
+                        "one-key map has exactly one iteration order, and a non-colliding pair is " +
+                        "invisible on the JVM",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(0, 16), lowFirst.negativeBuckets.keys,
+                    "the negative store must be populated too, else half the fix is untested",
+                )
+            },
+            { assertEquals(lowFirst, highFirst, "sanity: both replicas reached the same sketch") },
+            {
+                assertEquals(
+                    json.encodeToString(ser, lowFirst),
+                    json.encodeToString(ser, highFirst),
+                    "DDSketch JSON must be merge-order-independent",
+                )
+            },
+            {
+                assertEquals(
+                    cbor.encodeToByteArray(ser, lowFirst).toList(),
+                    cbor.encodeToByteArray(ser, highFirst).toList(),
+                    "DDSketch CBOR must be merge-order-independent",
+                )
+            },
+        )
+    }
 }
