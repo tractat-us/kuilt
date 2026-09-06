@@ -4,11 +4,13 @@ package us.tractat.kuilt.cluster
 
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -21,9 +23,11 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.Mesh
+import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.core.util.ExponentialBackoff
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -196,6 +200,63 @@ class VoterReconnectionSupervisorTest {
             )
 
             job.cancel()
+        }
+
+    /**
+     * A redial cancelled **mid-handshake** must still close the conn it dialed (#2587).
+     *
+     * The supervisor's own guard is `runCatchingCancellable { mesh.addLink(conn) }.onFailure { close }`,
+     * which by construction rethrows a `CancellationException` before `onFailure` can run — so the close
+     * covers a *throw* and not a *cancel*. The cancel is the ordinary path, not an exotic one:
+     * `VoterMesh.close()` begins with `scope.cancel()`, and the supervisors run on that scope. Nothing
+     * observes the leak either — `assembleVoterMesh` passes no `onDialFailure`, and neither file has a
+     * logger.
+     *
+     * This arm uses a **real** [hubMesh] rather than [FakeMesh] deliberately: the obligation now lives
+     * inside `handshakeLink`, so a fake `addLink` that merely suspends would stay red after the fix and
+     * would be measuring the wrong frame. The far end of the pair is never driven, so the preamble
+     * `send` completes and the `firstFrame` read suspends forever — exactly a peer that accepted the
+     * connection and then went silent.
+     *
+     * Note this leak is **unreachable** on [SeverableInMemoryVoterFabric], whose severed `openLink`
+     * suspends *before* `connectionPair()`: no conn is ever created there, so "nothing was closed" is
+     * true of a rig that never fired. Hence the explicit precondition below.
+     */
+    @Test
+    fun aRedialCancelledMidHandshakeClosesItsDialedConn() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            // A real, start-empty mesh: `p` is absent from t0, so the supervisor redials immediately and
+            // then suspends inside the real MeshHello exchange.
+            val mesh = hubMesh(self, emptyList(), dispatcher, Random(7))
+            val (mine, theirs) = connectionPair()
+            val dialed = CloseRecordingConnection(mine)
+
+            val job = superviseVoterReconnection(
+                mesh = mesh,
+                dialTargets = setOf(p),
+                dial = { dialed },
+                backoff = backoff(),
+                dialTimeout = 10.seconds,
+            )
+            runCurrent()
+
+            // Rig-fired precondition: a conn really exists, it really reached the wire, and the link was
+            // never published — i.e. the redial is suspended inside the handshake right now.
+            val preamble = theirs.incoming.first()
+            assertAll(
+                { assertTrue(preamble.isNotEmpty(), "the far end received the redial's MeshHello preamble") },
+                { assertTrue(p !in mesh.peers.value, "the handshake never completed, so $p is not in the roster") },
+                { assertEquals(0, dialed.closeCalls, "nothing has closed the dialed conn yet") },
+            )
+
+            job.cancelAndJoin()
+
+            assertTrue(
+                dialed.closed.isCompleted,
+                "a redial cancelled mid-handshake must close its dialed conn; the supervisor's own " +
+                    "onFailure close is skipped because runCatchingCancellable rethrows the cancellation",
+            )
         }
 
     @Test
