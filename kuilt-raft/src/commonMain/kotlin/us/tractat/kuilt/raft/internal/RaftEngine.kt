@@ -947,6 +947,41 @@ internal class RaftEngine(
     }
 
     /**
+     * True iff [config] names **no voters on a currently-active side** — the one shape of
+     * [ConfigPayload] that no honest producer in this engine can emit, and the one that disarms
+     * [onMessage]'s §5.2 leader-authority gate when adopted (#2676).
+     *
+     * **Why an empty `new` is the dangerous one.** The gate is conditioned on
+     * `membershipState.voters.isNotEmpty()` — a deliberate carve-out for the pre-bootstrap learner
+     * seed, which must accept a leader's frames to catch up at all. That carve-out was reasoned about
+     * in the *arming* direction only; a config that un-seats every voter puts an **established** node
+     * back into the unarmed state, for every subsequent sender. What follows is not term inflation: the
+     * log path does no `from` validation, so any non-voter's `AppendEntries` then truncates the
+     * victim's committed log and installs itself as `_leader`.
+     *
+     * **Why an empty `old` is bounded too, though it fails differently.** [MembershipState.Joint]'s
+     * `voters` is the *union*, so an empty `old` leaves §5.2 armed. It takes out quorum instead —
+     * [MembershipState.voterQuorumReached] and [MembershipState.committedIndex] take **independent**
+     * majorities of each side, and a majority of the empty set is unreachable. Either side alone is
+     * sufficient damage, so both are checked.
+     *
+     * **No honest producer emits one.** [onChangeMembership] refuses an empty target voter set, so
+     * every in-tree [ConfigPayload] is built from a non-empty one, and `old` is a settled `Simple`
+     * config held by a *leader* — which a node with no voters can never become
+     * ([MembershipState.electionTargets] is empty and it cannot self-credit). The learner seed is a
+     * `bootstrapConfig`, never a payload, which is why this predicate is not a `require` on
+     * [ClusterConfig]: one there would make the seed unconstructible.
+     *
+     * Reads only the payload and never local state, so it is the *well-formedness* half #1880
+     * identified as locally checkable, not the *content* check that issue weighed and rejected
+     * ("is this config reachable from what I last committed" cannot work — a long-absent node must be
+     * catchable-up to an arbitrarily distant config). #1898's staleness relaxation is untouched: a node
+     * holding `{A,B,X}` still adopts `{X,C,D}`. Authorization remains open under #1907.
+     */
+    private fun namesNoActiveVoters(config: ConfigPayload): Boolean =
+        config.new.voters.isEmpty() || (config.old != null && config.old.voters.isEmpty())
+
+    /**
      * Returns [meta] if a real node could have stored it; otherwise refuses to start (#1887).
      *
      * The sibling of [checkedRestoredTerm] for the snapshot baseline. #1855 bounded the restored term and
@@ -970,14 +1005,16 @@ internal class RaftEngine(
      * [snapshotChunkRefusal], and inclusive for the same reason: a pure plausibility filter with no
      * progress obligation creates no fixed point at the boundary.
      *
-     * **`config` is NOT bounded here, and that is open under #2676.** The wire routes by which a peer
-     * could plant a degenerate one are closed ([configPayloadRefusal], #2663), but a snapshot written
-     * before that landed, by an older peer, or by a torn store still restores its `config` verbatim into
-     * [RaftState.snapshotConfig] — and an empty voter set there un-arms [onMessage]'s §5.2 gate for the
-     * whole life of the process. It is deliberately not fixed alongside the wire half: the disposition
-     * is a different decision, because a config has a third option the two bounds below do not (fall
-     * back to `bootstrapConfig`, which [recomputeMembership] already does for a null config), and
-     * because refusing to start would strand a node whose snapshot predates the wire fix.
+     * **`config` IS bounded here, and by a different disposition from the two numeric halves — see
+     * the section below.** The wire routes by which a peer could plant a degenerate one are closed
+     * ([configPayloadRefusal], #2663); a snapshot written before that landed, by an older peer, or by a
+     * torn store would otherwise still restore its `config` verbatim into [RaftState.snapshotConfig],
+     * and an empty voter set there un-arms [onMessage]'s §5.2 gate for the whole life of the process.
+     * That half was split out of the wire fix rather than landed with it, because its *disposition* is a
+     * different decision: a config has a third option the two bounds below do not (fall back to
+     * `bootstrapConfig`, which [recomputeMembership] already does for a null config), and refusing to
+     * start would strand a node whose snapshot predates the wire fix. What remains open under #2676 is
+     * only the `bootstrapConfig` residue named at the end of this KDoc.
      *
      * **Refuse, don't repair** — the disposition [checkedRestoredTerm] argues for, and the reason it also
      * applies to the alternative available *here* but not there. A trailing corrupt suffix could in
@@ -986,6 +1023,35 @@ internal class RaftEngine(
      * `loadSnapshot()`, so that safety predicate is computed from the corrupt input it is meant to police.
      * A node that refuses to start on a poisoned durable *term* and silently repairs a poisoned *entry
      * term* would be incoherent besides.
+     *
+     * ### `config` is the one field this *does* repair (#2676)
+     *
+     * A [SnapshotMeta.config] that [namesNoActiveVoters] is **dropped**, not refused — the only
+     * departure from the paragraph above, and it turns on the one thing that makes `config` unlike the
+     * two numeric halves: **it has a fallback they do not**. `recomputeMembership` already resolves a
+     * snapshot carrying no config to `Simple(bootstrapConfig)`, which is the documented meaning of
+     * `SnapshotMeta.config == null` — "the covered prefix carried no config change". So nulling one
+     * lands the node in a state the engine reaches routinely on every cluster that never changed
+     * membership, rather than one invented for the occasion; the two are measurably identical, which
+     * `RestoredConfigValidationTest.snapshotWithNoConfig_alreadyFallsBackToBootstrapWithTheGateArmed`
+     * pins beside the repaired arm. Nothing real is lost, because [namesNoActiveVoters] is exactly the
+     * shape no honest producer can emit — this is not the "silently losing every committed membership
+     * change" that `MembershipTest.installSnapshot_adoptsConfigCompactedAwayFromTheLog` guards, since
+     * the discarded value never encoded a committed membership.
+     *
+     * Refusing to start instead would **strand any node whose snapshot predates the wire fix**: the
+     * `InstallSnapshot` route wrote such payloads to disk before #2663 closed it, so a node would stop
+     * booting on data that was legitimate when written, with no in-place remedy but re-provisioning.
+     * That is a worse trade than a fallback into an already-reachable state, and it is why this half was
+     * split out of #2663 rather than landed with it.
+     *
+     * **What this now rests on: `bootstrapConfig` being non-empty.** The fallback is only a repair
+     * while the config it falls back *to* seats voters. A consumer may pass
+     * `ClusterConfig(voters = emptySet(), learners = emptySet())`, which nothing validates, and such a
+     * node boots disarmed with or without this bound — measured, not assumed. That is the same accepted
+     * exposure as the deliberate learner seed rather than a new one (both are `voters.isEmpty()`, and
+     * both arm the instant they learn a real config), but it is load-bearing here and is the residue
+     * left open under #2676.
      */
     private fun checkedRestoredSnapshotMeta(meta: SnapshotMeta): SnapshotMeta {
         if (meta.lastIncludedTerm < 0L || meta.lastIncludedTerm > MAX_PLAUSIBLE_TERM) {
@@ -1007,6 +1073,20 @@ internal class RaftEngine(
                     "adapter's persisted snapshot metadata, then repair it or re-provision this node from " +
                     "empty state.",
             )
+        }
+        val config = meta.config
+        if (config != null && namesNoActiveVoters(config)) {
+            // Dropped rather than refused — see the `config` section of this function's KDoc. Logged at
+            // debug rather than traced for the reason [checkedRestoredTerm]'s restore gives: neither the
+            // actor nor its `trace` flow exists yet at this point in `init`.
+            debug {
+                "init-restore: DISCARD snapshot config $config — it names no voters on a " +
+                    "currently-active side, which no honest producer emits and which would un-arm the " +
+                    "§5.2 leader-authority gate for the life of this process. Falling back to " +
+                    "bootstrapConfig ($bootstrapConfig), the same resolution a snapshot carrying no " +
+                    "config takes."
+            }
+            return meta.copy(config = null)
         }
         return meta
     }
@@ -1040,8 +1120,23 @@ internal class RaftEngine(
      *   decreases, and conflict resolution truncates a suffix rather than rewriting the middle — so terms
      *   run non-decreasing along any real log. §5.3's fast-backup search and the Log Matching argument
      *   both assume it.
+     * - **A `config` that seats voters on every active side** (#2676). `recomputeMembership` resolves the
+     *   *highest-index config entry in the live log* ahead of the snapshot's, so this is the **dominant**
+     *   of the two durable routes by which a degenerate [ConfigPayload] reaches [membershipState] — a
+     *   bound on the snapshot half alone would be guarding the losing branch. See [namesNoActiveVoters]
+     *   for what the shape costs and why no honest producer emits it.
      *
-     * Disposition and its rejected alternative: see [checkedRestoredSnapshotMeta].
+     * Disposition and its rejected alternative: see [checkedRestoredSnapshotMeta] — including why the
+     * `config` arm here **refuses** while that function's `config` arm drops. The asymmetry is not an
+     * oversight: a snapshot's config is local metadata this engine alone owns, so nulling it reproduces a
+     * state the engine already reaches whenever a snapshot carries none. A log entry is **replicated
+     * content**. This node can become leader and serve that entry onward, so repairing the field in
+     * memory would have it publish a different config at a committed `(index, term)` than the rest of the
+     * cluster holds — a divergence Log Matching is keyed on `(index, term)` and would not notice. The
+     * stranding cost that argues *against* refusing on the snapshot half is also much smaller here: the
+     * `AppendEntries` lane is self-healing (the attacker's own truncation removes the poisoned entry, as
+     * #2663 measured), so the window in which one survives to disk is narrow, where a poisoned snapshot
+     * has no fallback and is permanent.
      */
     private fun checkedRestoredEntries(entries: List<LogEntry>): List<LogEntry> {
         var previousTerm = state.snapshotTerm
@@ -1087,6 +1182,18 @@ internal class RaftEngine(
                         "and both the fast-backup search and the Log Matching argument assume it. Inspect " +
                         "the storage adapter's persisted log, then repair it or re-provision this node " +
                         "from empty state.",
+                )
+            }
+            val config = entry.config
+            if (config != null && namesNoActiveVoters(config)) {
+                throw CorruptDurableStateException(
+                    "RaftStorage returned a restored log entry whose config names no voters on a " +
+                        "currently-active side (index=${entry.index}, term=${entry.term}, config=$config). " +
+                        "Refusing to start ${transport.selfId.value} — adopting it would leave this node " +
+                        "with an empty voter set, which un-arms the §5.2 leader-authority gate for the " +
+                        "life of the process and lets any peer's AppendEntries truncate this log and " +
+                        "replace it. No honest leader emits such a config. Inspect the storage adapter's " +
+                        "persisted log, then repair it or re-provision this node from empty state.",
                 )
             }
             previousTerm = entry.term
