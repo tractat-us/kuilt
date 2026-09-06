@@ -424,17 +424,6 @@ class SymmetricLifecycleObligationRigTest {
     }
 
     /**
-     * A joiner whose `state` never leaves [SeamState.Woven] — the shape `MuxBase.ChannelView` had
-     * before #2372, where `state` delegated to a base connection that is still alive.
-     *
-     * The real close still runs underneath, so the joiner genuinely tears; only what it *reports*
-     * is wrong, which is the defect a consumer meets.
-     */
-    private class SeamWhoseStateNeverTears(delegate: Seam) : Seam by delegate {
-        override val state: StateFlow<SeamState> = MutableStateFlow(SeamState.Woven)
-    }
-
-    /**
      * A joiner that reaches [SeamState.Torn] and then overwrites it on a **second** `close()` — the
      * multi-writer clobber `stateStaysTornAfterClose` exists to keep dead.
      *
