@@ -1,5 +1,4 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-@file:Suppress("ForbiddenImport") // deliberate: BinaryenWasmOptimizer needs a real dispatcher for its wasm-opt subprocess — the sanctioned real-threading exception (see BinaryenWasmOptimizerTest / ChicoryWasmRuntime). The sim's gossip still runs on StandardTestDispatcher; only the wasm-opt exec and Chicory executor are real, bridged into virtual time below.
 
 package us.tractat.kuilt.warp
 

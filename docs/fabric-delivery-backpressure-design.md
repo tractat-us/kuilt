@@ -110,8 +110,9 @@ suspends the caller when full. **The send must be performed outside any lock** �
 assigns sequence numbers and snapshots its target set under its existing lock, releases it,
 then `deliver`s. This is the same "I/O outside the lock" rule `Quilter`/`SeamRoom` already follow.
 
-A detekt rule (or convention-plugin check) forbids `Channel(... UNLIMITED ...)` in fabric
-`commonMain`/test-double sources, so the class cannot reappear.
+A root-build source-scan guard (the shape every other check-wired guard uses — the repo has no
+linter) forbids `Channel(... UNLIMITED ...)` in fabric `commonMain`/test-double sources, so the
+class cannot reappear.
 
 ### Deadlock: the trap and the escape
 
@@ -152,7 +153,7 @@ Grouped for phasing. Each adopts `Spool` + a sensible default policy.
 Per the EPIC convention — one behaviour move per PR, each independently revertable.
 
 - **Phase 0 (planning sub-issue):** land this spec + the implementation plan + the `DeliveryPolicy`
-  / `Spool` primitive + the detekt guard. Closes the *planning* sub-issue (not the epic).
+  / `Spool` primitive + the scan guard. Closes the *planning* sub-issue (not the epic).
 - **Phase 1:** `InMemoryLoom` → `Spool` (`Reliable`). Acceptance: the 16 MB-heap experiment
   passes; decides generous-bound-vs-pump for `SUSPEND`.
 - **Phases 2…k:** one production fabric per PR; `CompositeSeam`'s phase also retires

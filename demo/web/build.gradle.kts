@@ -11,15 +11,6 @@ import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 // publishing, wasmJs only. Listed in kuilt-bom's `deliberatelyUnpublished` set.
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
-    // Declared LAST so it applies after the Kotlin Multiplatform plugin — see the ordering
-    // note in `kuilt.detekt-kmp`. This module is wasmJs-only, so it lands in that plugin's
-    // PARSE-ONLY tier: `detektAll` reaches `detektWasmJsMain`, but detekt resolves types
-    // only against a JVM classpath, so config/detekt/detekt.yml's four nullability rules
-    // cannot fire here. Read that plugin's tier comment before assuming a green means more
-    // than it does (#2016). The one rule that matters most is covered anyway, from outside
-    // detekt: `forbidNotNullAssertionInUnresolvedSource` in the root build bans `!!` in every
-    // source set no type-resolved detekt task reaches, this one included (#2039).
-    id("kuilt.detekt-kmp")
 }
 
 kotlin {

@@ -141,13 +141,6 @@ afterEvaluate {
     }
 }
 
-// Detekt — the KMP source-set folding + `detektAll` entry point live in their own
-// convention plugin so a plain KMP module (`:demo-shared`, `:demo-web`) that deliberately
-// does not apply THIS plugin can get identical lint coverage with one line (#2016).
-// Applied here rather than in the `plugins { }` block above so it lands AFTER the Kotlin
-// Multiplatform plugin — see the ordering note in `kuilt.detekt-kmp`.
-apply(plugin = "kuilt.detekt-kmp")
-
 // Generate the shared wasmJs Mocha/Karma timeout configuration into the build
 // directory so that every module gets an adequate per-test and socket budget by
 // default. The Gradle `useMocha { timeout }` DSL does NOT reach the wasmJs

@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // real-network TCP scaling test — needs real IO dispatcher
-
 package us.tractat.kuilt.scale
 
 import io.ktor.network.selector.SelectorManager

@@ -708,7 +708,7 @@ sub-issue per slice (§7).
   raced-retire + reparent + through-spend + reconcile injected, asserting
   `minted = Σ holdings + Σ effLeafSpent` and per-edge safety after **every** step and
   **every** partial-delivery merge.
-- **Cross-platform determinism:** `:kuilt-heddle:build detektAll --rerun-tasks` (native +
+- **Cross-platform determinism:** `:kuilt-heddle:build --rerun-tasks` (native +
   Android variants), and because reconcile is consensus *behaviour*, the full
   `./gradlew build` incl. `:examples`/cluster E2E (CLAUDE.md gate).
 - **Join-law suite** extended to the two new components (the zoo lattice-law property

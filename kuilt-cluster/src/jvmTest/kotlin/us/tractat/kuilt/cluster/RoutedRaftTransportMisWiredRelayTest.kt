@@ -93,7 +93,7 @@ class RoutedRaftTransportMisWiredRelayTest {
 
     private companion object {
         fun attachCapture(): Pair<Logger, ListAppender<ILoggingEvent>> {
-            @Suppress("CastNullableToNonNullableType") // SLF4J returns non-null; logback is the bound impl.
+            // SLF4J returns non-null; logback is the bound impl.
             val logger = LoggerFactory.getLogger("us.tractat.kuilt.cluster.RoutedRaftTransport") as Logger
             logger.level = Level.DEBUG
             val appender = ListAppender<ILoggingEvent>().apply { start() }

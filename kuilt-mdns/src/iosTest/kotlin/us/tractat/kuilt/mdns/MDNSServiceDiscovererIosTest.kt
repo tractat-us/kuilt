@@ -1,8 +1,5 @@
 @file:OptIn(ExperimentalForeignApi::class)
-@file:Suppress(
-    "DEPRECATION",
-    "ForbiddenImport", // deliberate: real-time mDNS flow integration test on iOS — Dispatchers.Default needed because NSNetServiceBrowser requires the main run-loop (not virtual time)
-)
+@file:Suppress("DEPRECATION")
 
 package us.tractat.kuilt.mdns
 

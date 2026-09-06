@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // real-network loopback conformance harness — a real Network.framework socket driven through the dylib needs a real IO dispatcher; there is no virtual-time option here
-
 package us.tractat.kuilt.nw
 
 import com.sun.jna.Pointer

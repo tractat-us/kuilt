@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // real-network TCP mesh — sockets need a real IO dispatcher
-
 package us.tractat.kuilt.scale
 
 import io.ktor.network.selector.SelectorManager

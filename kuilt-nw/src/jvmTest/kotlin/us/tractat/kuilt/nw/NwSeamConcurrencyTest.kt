@@ -1,5 +1,3 @@
-@file:Suppress("ForbiddenImport") // deliberate: real OS-thread concurrency stress harness — NwSeam's registry/conns/draining races only manifest under genuine cross-thread access, so this probe needs a real multi-threaded dispatcher, not a virtual one.
-
 package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.CancellationException
