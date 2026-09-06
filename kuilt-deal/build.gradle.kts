@@ -17,6 +17,7 @@ kotlin {
             implementation(libs.kotlinx.serialization.cbor)
             implementation(libs.ionspin.bignum)
             implementation(libs.kotlincrypto.hash.sha2)
+            implementation(libs.kotlin.logging)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
@@ -26,6 +27,12 @@ kotlin {
         jvmTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlin.testJunit)
+            // Compile scope, not runtimeOnly: FairRandomMalformedFrameAttributionTest captures the
+            // real log emission through a Logback ListAppender rather than an injected spy.
+            implementation(libs.logback)
+        }
+        androidUnitTest.dependencies {
+            runtimeOnly(libs.logback)
         }
     }
 }

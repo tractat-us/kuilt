@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.deal
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -14,6 +15,8 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamCollapsedException
 import us.tractat.kuilt.core.raceCollapse
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.deal.FairRandom")
 
 /**
  * Two-phase commit-reveal protocol for deriving a shared random [Long] seed.
@@ -46,8 +49,11 @@ import us.tractat.kuilt.core.raceCollapse
  * [SeamCollapsedException] rather than stalling, so no outer timeout is required. (A peer
  * that stays connected but simply withholds its reveal is a distinct, application-level
  * concern — see "Abort resistance" above — and still requires game-layer forfeit handling.
- * A peer that sends a *malformed* reveal falls into that same case: the frame is dropped,
- * so it is indistinguishable from one that never arrived. See [FairRandomMessage.Reveal].)
+ * A peer that sends a *malformed* reveal falls into that same case **as far as the protocol is
+ * concerned**: the frame is dropped, so the round cannot tell it from one that never arrived.
+ * Operationally the two are no longer identical — the drop is logged and names its sender, once
+ * at `warn` per participant and at `debug` thereafter (#2666) — but that is a diagnostic, not a
+ * signal a caller can act on. See [FairRandomMessage.Reveal].)
  *
  * ## Usage
  *
@@ -103,6 +109,15 @@ public class FairRandom(
         val commits = Channel<Pair<PeerId, FairRandomMessage.Commit>>(Channel.UNLIMITED)
         val reveals = Channel<Pair<PeerId, FairRandomMessage.Reveal>>(Channel.UNLIMITED)
 
+        // One warn per participant that sends a malformed frame, then debug (#2666). The collector
+        // sees every frame on the seam, from any peer, with no consensus or rate limit in front of
+        // it, so an unconditional warn would hand a hostile peer a log amplifier for as long as the
+        // round lasts. A non-participant never enters the set, so it is bounded by `peers` — the
+        // rate limit cannot itself become the unbounded thing. Confined to the single collector
+        // coroutine below: `Flow.collect` is sequential, so the lambda never runs concurrently with
+        // itself and this needs no lock (it is a local, not shared state reached from elsewhere).
+        val warnedMalformed = mutableSetOf<PeerId>()
+
         val collectorJob = launch {
             seam.incoming.collect { swatch ->
                 val sender = swatch.sender ?: return@collect
@@ -110,7 +125,7 @@ public class FairRandom(
                     swatch.decode(Cbor, FairRandomMessage.serializer())
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: IllegalArgumentException) {
+                } catch (refusal: IllegalArgumentException) {
                     // Two refusals arrive here, and one arm covers both because
                     // SerializationException IS an IllegalArgumentException: bytes CBOR cannot
                     // parse, and bytes it can parse into values FairRandomMessage.Reveal will not
@@ -119,6 +134,22 @@ public class FairRandom(
                     // the width check moved onto the wire type (#2650): an escaping throw here
                     // would end this collector and leave the round permanently deaf with no tear
                     // to observe, which is strictly worse than dropping the frame (#1819's shape).
+                    //
+                    // No currentCoroutineContext().ensureActive() here, and the arm is narrow
+                    // enough for that to be a fact rather than a judgement: CancellationException
+                    // is an IllegalStateException, a *sibling* of IllegalArgumentException, so
+                    // neither our own cancel nor a callee-minted one can reach this arm at all.
+                    // The explicit rethrow arm above it says the same thing a second time.
+                    //
+                    // Interpolated, not attached: a malformed frame from a peer is routine on an
+                    // open fabric, its type and message are the whole diagnosis, and the trace
+                    // under it is the same CBOR framework frames every time (the WarpOtlpBridge /
+                    // HeddleControlPlane convention).
+                    if (sender in peers && warnedMalformed.add(sender)) {
+                        logger.warn { malformedFrame(myId, sender, refusal) }
+                    } else {
+                        logger.debug { malformedFrame(myId, sender, refusal) }
+                    }
                     return@collect
                 }
                 when (msg) {
@@ -215,6 +246,20 @@ public class FairRandom(
         verifyCommitment(myId, mySecret, myNonce, checkNotNull(allCommits[myId]))
         return result
     }
+
+    /**
+     * The one line a dropped frame leaves behind.
+     *
+     * Names [sender] because the identity is in scope at the drop site and nothing downstream will
+     * ever see this peer's contribution again this round — [awaitAllReveals] cannot report it, since
+     * the frame never became a [FairRandomMessage] to attribute. Says what the loss *is*, too: the
+     * peer is now indistinguishable from one that withheld, which is the abort case the game layer
+     * handles, so a reader knows which lever applies.
+     */
+    private fun malformedFrame(self: PeerId, sender: PeerId, refusal: Throwable): String =
+        "[fairRandom:${self.value}] dropping a malformed frame from peer '${sender.value}' — it " +
+            "contributes nothing to this round, so that peer is indistinguishable from one that " +
+            "withheld its reveal. Refusal: $refusal"
 
     private fun verifyCommitment(peer: PeerId, secret: ByteArray, nonce: ByteArray, expectedHash: ByteArray) {
         val actualHash = commitment(secret, nonce)
@@ -335,12 +380,18 @@ internal sealed class FairRandomMessage {
      *
      * The visible consequence is that a wrong-width reveal is now **dropped** by
      * [FairRandom.roll]'s frame path rather than converted into a [CommitmentViolation] naming its
-     * sender — the type refuses to materialise, so the handler never sees a peer to accuse. That
-     * is the correct disposition and a slightly weaker signal: a peer who sends one becomes
-     * indistinguishable from a peer who withholds its reveal, which is the abort case documented
-     * on [FairRandom] and handled at the game layer. (The `CommitmentViolation` it replaced was
-     * itself a fabricated diagnosis — it reported an empty `actualHash`, because on this path the
-     * commitment typically *does* verify.)
+     * sender — the type refuses to materialise, so [FairRandom.awaitAllReveals] never sees a peer
+     * to accuse. That is the correct disposition and a weaker signal: to the *protocol* a peer who
+     * sends one is indistinguishable from a peer who withholds its reveal, which is the abort case
+     * documented on [FairRandom] and handled at the game layer. (The `CommitmentViolation` it
+     * replaced was itself a fabricated diagnosis — it reported an empty `actualHash`, because on
+     * this path the commitment typically *does* verify.)
+     *
+     * The **attribution** is not lost with it, though it was for a while (#2666): `roll()`'s
+     * collector binds `swatch.sender` before it attempts the decode, so the drop site still knows
+     * exactly who sent the frame and logs it. What no caller can yet observe is a *structured*
+     * signal — a game layer can forfeit a peer that goes quiet, but not one that repeatedly sends
+     * garbage. That remains open.
      */
     @Serializable
     internal data class Reveal(val secret: ByteArray, val nonce: ByteArray) : FairRandomMessage() {
