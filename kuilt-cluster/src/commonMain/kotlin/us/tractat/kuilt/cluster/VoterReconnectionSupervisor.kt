@@ -40,6 +40,13 @@ import kotlin.time.Duration
  * [runCatchingCancellable] (correctly) re-throws as cancellation, which would kill the redial coroutine
  * instead of retrying. `withTimeoutOrNull` turns the timeout into a plain `null` the loop can act on.
  *
+ * **[dial] must be cancellation-clean** — see `assembleVoterMesh`'s `@param dial`. A redial is
+ * cancelled on the *ordinary* shutdown path ([VoterMesh.close] begins by cancelling the scope these
+ * loops run on), and once `dial` has returned the conn is disposed of either by the `onFailure` arm
+ * below (on a throw) or by the mesh's own handshake frame (on a cancel, #2587). What neither can
+ * reach is a dial cancelled *as it resumes*: the continuation takes the cancellation instead of the
+ * connection, so no handle ever reaches this file.
+ *
  * The next step, `mesh.addLink`, has its own unbounded read — it blocks on the `MeshHello` first frame
  * of the handshake — so a sever mid-`addLink` (after `dial` returns `101` but before the hello arrives)
  * could wedge the single-flight loop just as a hung `dial` would. That read is not `dialTimeout`-bounded,
