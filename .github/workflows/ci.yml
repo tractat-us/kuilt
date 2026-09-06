@@ -959,6 +959,15 @@ jobs:
           ./gradlew :kuilt-multipeer:jvmTest -Pconcurrency.stress.tests=true
           --tests "*ConcurrencyTest"
 
+      # `:kuilt-cluster`'s and `:kuilt-mdns`' roster probes (#2655). Own step, same reason the two
+      # above have one: a red in another module must not hide these.
+      - name: Run :kuilt-cluster / :kuilt-mdns concurrency probes (isolated runner, NON-BLOCKING)
+        if: always()
+        run: >-
+          ./gradlew :kuilt-cluster:jvmTest :kuilt-mdns:jvmTest
+          -Pconcurrency.stress.tests=true
+          --tests "*ConcurrencyTest"
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -973,6 +982,10 @@ jobs:
             kuilt-multipeer/build/test-results/
             kuilt-conformance/build/reports/tests/
             kuilt-conformance/build/test-results/
+            kuilt-cluster/build/reports/tests/
+            kuilt-cluster/build/test-results/
+            kuilt-mdns/build/reports/tests/
+            kuilt-mdns/build/test-results/
 
   # ── nw-concurrency-probes ───────────────────────────────────────────────────
   # `:kuilt-nw`'s real-threaded probes (#2481). Same shape as concurrency-probes
