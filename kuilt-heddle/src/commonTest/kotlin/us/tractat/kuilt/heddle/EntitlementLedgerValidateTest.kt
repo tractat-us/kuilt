@@ -7,6 +7,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -1363,6 +1364,55 @@ class EntitlementLedgerValidateTest {
                     smallerBase.piece(amnesiacCarry).validate().isEmpty(),
                     "a base row smaller than the carried one is MASKED and the state goes silent: " +
                         "${smallerBase.piece(amnesiacCarry).validate()}",
+                )
+            },
+        )
+    }
+
+    /**
+     * The residual is summed over its **positive** cells, never netted — and the arm exists because
+     * the two spellings differ only on a state no other arm reaches, so netting was green across the
+     * whole suite.
+     *
+     * A negative cell is a `transferRelocOut` observed without the `transferRelocIn` it cancels: an
+     * observer-completeness break (§6.4), reachable on a partially-delivered state. Netting it
+     * against a live positive cell elsewhere lets an incomplete delivery **retire a real refusal** —
+     * which is why both halves are asserted here. `EntitlementLedger.relocationPatch` reads the same
+     * `carriedResidualTotal`, so the mis-spelling would not merely lose a report: it would let the
+     * move proceed and reassign `bob`'s credit to the donor upstream of `alice`, the #2366 defect the
+     * whole refusal exists to prevent.
+     */
+    @Test
+    fun aNegativeCellFromAPartialDeliveryDoesNotCancelALiveResidualElsewhere() {
+        val partiallyDelivered = carryFrozenOnADeadGeneration().piece(
+            // `Out` for a recipient whose matching `In` has not arrived: −50 against the live +40.
+            EntitlementLedger.of(
+                transferRelocOut = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(carol to 50L))),
+            ),
+        )
+        assertAll(
+            {
+                assertEquals(
+                    40L to -50L,
+                    partiallyDelivered.carriedResidualOn(e2, alice, bob) to
+                        partiallyDelivered.carriedResidualOn(e2, alice, carol),
+                    "rig: one live cell and one negative one, netting to −10 — the state that separates " +
+                        "a positive-cells sum from a net",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 40L)),
+                    partiallyDelivered.validate().filterIsInstance<LedgerConflict.FrozenCarriedHandoff>(),
+                    "the live 40 is still frozen and still reported — an undelivered cancellation " +
+                        "elsewhere does not pay for it",
+                )
+            },
+            {
+                assertIs<Relocation.Refused>(
+                    partiallyDelivered.relocationPatch(e3, mapOf(e2 to mapOf(bob to SlotFinals.ZERO))),
+                    "…and the refusal that shares the same helper still refuses, so a partial delivery " +
+                        "cannot retire it",
                 )
             },
         )
