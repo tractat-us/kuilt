@@ -271,6 +271,15 @@ class LeaderPinUnarmedWindowTest {
             val committed = sim.proposeOnLeader(byteArrayOf(0x42))
             sim.awaitCommit(committed.index, on = setOf(victimId))   // an honest frame WAS admitted
 
+            // The only step here that advances virtual time, so it is the only one that could have
+            // moved the term out from under the injections. Asserted rather than assumed: at a stale
+            // term the forged frames would take the §5.1 reply instead of this gate, and the arm would
+            // fail below with nothing saying why.
+            assertEquals(
+                term, sim.storages.getValue(victimId).term(),
+                "premise: the honest round-trip must not have moved the victim's term",
+            )
+
             forge(WEDGE_SUSPECTED_RUN - 1)
             assertTrue(
                 denials().isEmpty(),
