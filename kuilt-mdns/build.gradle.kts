@@ -38,15 +38,34 @@ tasks.withType<Test>().configureEach {
     }
 }
 
-// Forward -Pmdns.multicast.tests=true to the iOS K/N simulator test binary as
-// the environment variable MDNS_MULTICAST_TESTS, readable via platform.posix.getenv.
-// K/N test binaries don't support JVM system properties — env vars are the
-// standard mechanism.
-val mdnsFlag = providers.gradleProperty("mdns.multicast.tests").orNull
-if (mdnsFlag != null) {
-    tasks
-        .withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest>()
-        .configureEach { environment("MDNS_MULTICAST_TESTS", mdnsFlag) }
+// The Kotlin/Native half of -Pmdns.multicast.tests. K/N test binaries don't support JVM system
+// properties, so the JVM `Assume.assumeTrue` the multicast tests above use is not available there
+// either — the gating has to be at the **task** level.
+//
+// ⚠ This REPLACES an `MDNS_MULTICAST_TESTS` env var the test read with `platform.posix.getenv` and
+// self-skipped on (#2621). The gating decision was right; the mechanism was unsound as a *reporting*
+// device: a `@Test` that returns early reports **passed**, not `skipped`, so a green results XML
+// could not distinguish "drove live Bonjour end to end" from "never ran". `build-native` in ci.yml
+// runs `iosSimulatorArm64Test` WITHOUT this flag, so that self-skip reported a green testcase on
+// every `ci-required` build. An excluded test is *absent* from the XML instead. Duration is no
+// substitute either: Kotlin/Native reports `time="0.0"` for runs that provably completed thousands
+// of iterations, so the clock cannot tell the two states apart.
+//
+// `AbstractTestTask`, NOT `Test`: `KotlinNativeSimulatorTest` is not a `Test` task, so a
+// `withType<Test>` exclusion would silently miss `iosSimulatorArm64Test` — the whole population here.
+// `filter.excludeTestsMatching(...)` rather than `filter { … }`, because the Action-taking overload
+// is declared on `Test` and the lambda form resolves to `CopySpec.filter` on this receiver.
+//
+// The cost, stated rather than discovered later: unlike the `*ConcurrencyTest` contract above this
+// names ONE class, because nothing in the name marks it as multicast-gated and renaming it would
+// churn four KDoc links. A second real-Bonjour native probe added tomorrow would NOT be covered —
+// but it also cannot silently self-skip, because `forbidRuntimeSelfSkippingProbe` in the root build
+// fails on a `getenv` gate in a test source, so the next author is forced to this line.
+val runMulticastTests = providers.gradleProperty("mdns.multicast.tests").orNull == "true"
+tasks.withType<AbstractTestTask>().configureEach {
+    if (!runMulticastTests) {
+        filter.excludeTestsMatching("*MDNSServiceDiscovererIosTest")
+    }
 }
 
 kotlin {

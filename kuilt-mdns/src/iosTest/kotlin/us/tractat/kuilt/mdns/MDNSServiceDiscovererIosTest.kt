@@ -4,7 +4,6 @@
 package us.tractat.kuilt.mdns
 
 import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.toKString
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-time mDNS flow integration test on iOS — Dispatchers.Default needed because NSNetServiceBrowser requires the main run-loop (not virtual time)
 import kotlinx.coroutines.SupervisorJob
@@ -21,7 +20,6 @@ import platform.Foundation.NSString
 import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.dataUsingEncoding
 import platform.darwin.NSObject
-import platform.posix.getenv
 import us.tractat.kuilt.core.PeerId
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -32,15 +30,18 @@ import kotlin.time.TimeSource
 /**
  * iOS integration test for [MDNSServiceDiscoverer]'s callback→flow path.
  *
- * **Opt-in:** skipped unless the environment variable `MDNS_MULTICAST_TESTS`
- * is set to `true`. Run with:
+ * **Opt-in:** excluded from every test task unless `-Pmdns.multicast.tests=true` is passed. Run with:
  *
  * ```
- * ./gradlew :transport-mdns:iosSimulatorArm64Test -Pmdns.multicast.tests=true
+ * ./gradlew :kuilt-mdns:iosSimulatorArm64Test -Pmdns.multicast.tests=true
  * ```
  *
- * (The `:transport-mdns` build file forwards the Gradle property to an env var
- * so the K/N test binary can read it via `platform.posix.getenv`.)
+ * The gating is at the **task** level (see this module's `build.gradle.kts`), so an un-run probe is
+ * **absent** from the results XML. It used to be an `MDNS_MULTICAST_TESTS` env var read here with
+ * `platform.posix.getenv`, with an early `return` when it was missing — and a `@Test` that returns
+ * early reports **passed**, not `skipped`, so a green XML row could not distinguish "drove live
+ * Bonjour end to end" from "never ran" (#2621). Nor can the clock settle it: Kotlin/Native reports
+ * `time="0.0"` for runs that provably completed thousands of iterations.
  *
  * **What this covers that the fake-based tests cannot.** A `BonjourBrowser` seam now exists, so
  * `MDNSDiscoverySourceConformanceIosTest` drives the flow logic against a fake browser and
@@ -88,8 +89,6 @@ class MDNSServiceDiscovererIosTest {
      */
     @Test
     fun discoverer_emits_advertisement_from_local_nsnetservice() {
-        if (!isGated()) return
-
         val expectedPeerId = PeerId("ios-test-peer-9820")
         advertiseService(peerId = expectedPeerId)
 
@@ -119,9 +118,6 @@ class MDNSServiceDiscovererIosTest {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    /** Returns `true` when [GATE_ENV_VAR] is `"true"`. */
-    private fun isGated(): Boolean = getenv(GATE_ENV_VAR)?.toKString() == "true"
 
     /**
      * Creates and publishes an [NSNetService] on [NSRunLoop.mainRunLoop] that
@@ -177,12 +173,6 @@ class MDNSServiceDiscovererIosTest {
     }
 
     private companion object {
-        /**
-         * Env var name forwarded from `-Pmdns.multicast.tests=true` by
-         * `:transport-mdns`'s `build.gradle.kts`.
-         */
-        const val GATE_ENV_VAR = "MDNS_MULTICAST_TESTS"
-
         /**
          * Canonical service type (no suffix) — passed to [MDNSServiceType].
          * The platform-specific suffix (`"."`) is applied by [MDNSServiceType.forNsNetServiceBrowser].
