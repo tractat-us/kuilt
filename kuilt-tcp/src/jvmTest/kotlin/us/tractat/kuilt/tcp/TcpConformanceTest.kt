@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loop
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
+import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
 import us.tractat.kuilt.conformance.SeamConformanceSuite
 import us.tractat.kuilt.core.Loom
@@ -74,6 +75,9 @@ class TcpConformanceTest : SeamConformanceSuite() {
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
     )
+
+    /** Proven: this harness closes the accepted socket under a live pair, so no gap (#1442). */
+    override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
     override fun joinerRosterOrigin(): JoinerRosterOrigin =
