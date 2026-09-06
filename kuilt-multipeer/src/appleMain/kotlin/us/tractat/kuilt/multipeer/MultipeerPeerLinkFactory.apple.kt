@@ -19,7 +19,6 @@ import platform.MultipeerConnectivity.MCPeerID
 import platform.MultipeerConnectivity.MCSession
 import platform.darwin.NSObject
 import us.tractat.kuilt.core.ActiveSeamSlot
-import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
@@ -65,7 +64,6 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     displayName: String,
     serviceType: String,
     selfId: PeerId,
-    private val policy: DeliveryPolicy,
 ) : Loom {
     internal val displayName: String = displayName
     internal val serviceType: String = serviceType
@@ -183,7 +181,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
                     encryptionPreference = MCEncryptionRequired,
                 )
             log.info { "mc.session.create localPeer=$displayName serviceType=$serviceType path=host" }
-            val link = MCSessionLink(localPeerId, session, policy)
+            val link = MCSessionLink(localPeerId, session)
             session.delegate = link.delegate
 
             val acceptAll = AcceptAllAdvertiserDelegate(link)
@@ -225,7 +223,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
                     encryptionPreference = MCEncryptionRequired,
                 )
             log.info { "mc.session.create localPeer=$displayName serviceType=$serviceType path=join" }
-            val link = MCSessionLink(localPeerId, session, policy)
+            val link = MCSessionLink(localPeerId, session)
             session.delegate = link.delegate
 
             log.info {

@@ -1,6 +1,5 @@
 package us.tractat.kuilt.multipeer
 
-import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.freshPeerId
 
@@ -32,9 +31,9 @@ import us.tractat.kuilt.core.freshPeerId
  * exposes no other cross-process handle — which is why the two share one 63-byte
  * budget and why a long display name is trimmed.
  *
- * Two knobs the convention names are **deliberately absent**, because this fabric
- * cannot honour them, and an argument that is accepted and then ignored is worse
- * than one that does not exist:
+ * Three knobs the convention names are **deliberately absent**. An argument that is
+ * accepted and then ignored — or whose arrival no test can witness — is worse than
+ * one that does not exist:
  *
  * - **`weaveTimeout`** — no clock bounds `weave` on either path. Hosting starts an
  *   advertiser and returns immediately; joining sends `invitePeer` and returns
@@ -43,12 +42,21 @@ import us.tractat.kuilt.core.freshPeerId
  *   handshake timeout, not a weave timeout — the distinction `:kuilt-nearby` drew
  *   in #2333. Renaming it would publish a bound on `weave` that no path delivers.
  *
- * - **`dispatcher`** — it would mean two different things on the two real actuals.
- *   On Apple it schedules the seam's delivery drain. On the JVM the seam lives
- *   *inside* the macOS dylib, and a dispatcher passed here could only schedule the
- *   JNA-side half of the pipeline; the native half's scope is not reachable across
- *   the cdecl ABI. One name for two different halves is the shared-bag mistake one
- *   level down, so it is omitted until the ABI can carry it.
+ * - **`policy`** — genuinely honoured at the layer below: `MCSessionLink` and
+ *   `BridgePeerLink` both take a [us.tractat.kuilt.core.DeliveryPolicy] and both
+ *   factories drop it, so every multipeer seam is pinned to `Reliable` today. It is
+ *   omitted here anyway because it cannot yet be *shown* to arrive: both seams also
+ *   hardcode `Dispatchers.Default` for their delivery drain, so a lossy-policy
+ *   assertion through a woven seam races that drain instead of observing it. `policy`
+ *   and `dispatcher` therefore have to land together, with a test like
+ *   `NearbyLoomKnobsTest.deliveryPolicyReachesTheWovenSeamsInboundBuffer`. Adding an
+ *   argument whose arrival no test can witness is the same defect as one that never
+ *   arrives — the reader cannot tell them apart.
+ *
+ * - **`dispatcher`** — deferred with `policy`, and additionally awkward on the JVM:
+ *   the seam lives *inside* the macOS dylib, so a dispatcher passed here schedules
+ *   only the JNA-side half of the pipeline; the native half's scope is not reachable
+ *   across the cdecl ABI.
  *
  * @param serviceType MultipeerConnectivity service-type string. 1–15 ASCII letters,
  *   digits or hyphens (Bonjour's `_service._tcp.` rules minus underscores). Both
@@ -61,20 +69,14 @@ import us.tractat.kuilt.core.freshPeerId
  *   to a fresh random one, distinct on every call. Must not contain `#` and must be
  *   short enough to leave room for a display name; a violation throws from this
  *   call, not from a later `weave`.
- * @param policy Governs the woven seam's inbox — capacity and what happens when a
- *   slow consumer lets it fill. Genuinely honoured on both real platforms; it was
- *   pinned to [DeliveryPolicy.Reliable] before #1430 only because the factory never
- *   forwarded the value its own seam already accepted.
  */
 public fun multipeerLoom(
     serviceType: String,
     displayName: String,
     selfId: PeerId = freshPeerId(),
-    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ): MultipeerPeerLinkFactory =
     MultipeerPeerLinkFactory(
         displayName = displayName,
         serviceType = serviceType,
         selfId = selfId,
-        policy = policy,
     )

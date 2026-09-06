@@ -53,6 +53,20 @@ class MultipeerPeerIdentityTest {
         }
 
     @Test
+    fun `multipeerLoom threads selfId and displayName through to the advertised name`() {
+        // Also the guard on the factory's argument ORDER: `serviceType` and `displayName`
+        // are both `String`, so a swap compiles silently — and would put the service type
+        // where a human name belongs, in front of every nearby device.
+        val selfId = freshPeerId()
+        val loom = multipeerLoom(serviceType = "kuilt-t1430", displayName = "Iain's iPhone", selfId = selfId)
+        val wire = loom.localPeerId.displayName
+        assertAll(
+            { assertEquals(selfId, MultipeerPeerId.peerId(wire)) },
+            { assertEquals("Iain's iPhone", MultipeerPeerId.humanName(wire)) },
+        )
+    }
+
+    @Test
     fun `two same-named devices advertise distinct ids`() {
         val idA = freshPeerId()
         val idB = freshPeerId()

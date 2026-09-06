@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.ActiveSeamSlot
 import us.tractat.kuilt.core.CloseReason
-import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
@@ -39,7 +38,6 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     private val displayName: String,
     internal val serviceType: String,
     private val selfId: PeerId,
-    private val policy: DeliveryPolicy,
 ) : Loom {
     /**
      * Internal constructor for unit tests: accepts a pre-built [MultipeerNativeLib]
@@ -52,8 +50,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         injectedLib: MultipeerNativeLib?,
         injectedRuntimeHandle: Pointer?,
         selfId: PeerId = freshPeerId(),
-        policy: DeliveryPolicy = DeliveryPolicy.Reliable,
-    ) : this(displayName, serviceType, selfId, policy) {
+    ) : this(displayName, serviceType, selfId) {
         nativeLibField = injectedLib
         runtimeHandleField = injectedRuntimeHandle
     }
@@ -168,7 +165,6 @@ public actual class MultipeerPeerLinkFactory actual constructor(
                 nativeLib = lib,
                 sessionHandle = session,
                 selfId = resolveSelfId(lib, runtime),
-                policy = policy,
             )
         }
     }

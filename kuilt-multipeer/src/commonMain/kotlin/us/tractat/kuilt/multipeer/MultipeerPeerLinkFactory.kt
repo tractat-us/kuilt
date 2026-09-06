@@ -1,7 +1,6 @@
 package us.tractat.kuilt.multipeer
 
 import kotlinx.coroutines.flow.StateFlow
-import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
@@ -37,15 +36,11 @@ import us.tractat.kuilt.core.freshPeerId
  *   must be short enough to leave room for a display name — a `freshPeerId()` UUID
  *   costs 37 of the 63 bytes. A violation throws from **this constructor**, not from
  *   [weave].
- * @param policy Governs the inbound seam's spool capacity and overflow behaviour.
- *   Previously pinned to [DeliveryPolicy.Reliable] — the seam always accepted the
- *   knob, the factory simply never forwarded it.
  */
 public expect class MultipeerPeerLinkFactory(
     displayName: String,
     serviceType: String,
     selfId: PeerId = freshPeerId(),
-    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Loom {
     override suspend fun weave(rendezvous: Rendezvous): Seam
 
