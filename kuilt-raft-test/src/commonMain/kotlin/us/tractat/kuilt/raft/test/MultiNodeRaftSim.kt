@@ -330,11 +330,16 @@ public class MultiNodeRaftSim(
     public fun appliedState(id: NodeId): ByteArray = stateMachines.getValue(id).bytes()
 
     /**
-     * Render a per-node diagnostic snapshot — roles, terms, commit indices, log ranges, and an
-     * election-event histogram (Timeout / BecomeLeader / BecomeFollower) that makes leadership
-     * thrash and term inflation visible at a glance. Used as the body of the [AssertionError]
-     * thrown by the bounded await helpers on non-convergence, and callable directly from a
-     * failing test assertion.
+     * Render a per-node diagnostic snapshot — roles, terms, commit indices, the durable per-term
+     * leader **pin**, log ranges, and an election-event histogram (Timeout / BecomeLeader /
+     * BecomeFollower) that makes leadership thrash and term inflation visible at a glance. Used as
+     * the body of the [AssertionError] thrown by the bounded await helpers on non-convergence, and
+     * callable directly from a failing test assertion.
+     *
+     * `pin=` is [RaftStorage.leaderForTerm], and it is here because it is the one piece of refusing
+     * state nothing else shows (#2674): a node denied by `RefusalGate.ForgedLeaderForTerm` renders as
+     * `leader=null` after a restart — the restore brings back the pin but not `_leader` — so a dump
+     * without it says only "this node is stuck" and hides the value that is doing the sticking.
      */
     public suspend fun dumpState(reason: String): String = buildString {
         appendLine("MultiNodeRaftSim state dump — $reason")
@@ -401,7 +406,7 @@ public class MultiNodeRaftSim(
         val state = if (node == null) "CRASHED" else {
             "role=${node.role.value::class.simpleName} leader=${node.leader.value} commitIndex=${node.commitIndex.value}"
         }
-        return "  $id: $state log=${logRange(id)} ${eventCounts(ring)}"
+        return "  $id: $state pin=${storages.getValue(id).leaderForTerm()} log=${logRange(id)} ${eventCounts(ring)}"
     }
 
     private suspend fun logRange(id: NodeId): String {

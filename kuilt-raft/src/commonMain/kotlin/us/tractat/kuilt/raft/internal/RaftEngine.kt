@@ -35,6 +35,7 @@ import us.tractat.kuilt.raft.ConfigPayload
 import us.tractat.kuilt.raft.CorruptDurableStateException
 import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.DenyReason
+import us.tractat.kuilt.raft.LeaderForTerm
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LeadershipTransferAbandonReason
 import us.tractat.kuilt.raft.LeadershipTransferException
@@ -382,6 +383,23 @@ internal class RaftEngine(
      */
     private var wedgeReportedAtVoters: Set<NodeId>? = null
 
+    /**
+     * How many same-term leader→peer frames [adoptLeaderForTerm] has refused in a row at
+     * [RefusalGate.ForgedLeaderForTerm], reset by any frame it *admits*. Read by
+     * [noteLeaderPinRefusal] (#2674).
+     *
+     * Separate from [refusedLeaderFrameRun] rather than shared with it, and that is forced rather
+     * than chosen: [onMessage] zeroes that counter for every leader→peer frame clearing both dispatch
+     * gates, which is every frame that reaches this gate at all. See [noteLeaderPinRefusal].
+     */
+    private var leaderPinRefusalRun: Int = 0
+
+    /**
+     * The `(term, established)` pin [noteLeaderPinRefusal] last reported under, or `null` if it never
+     * has — the latch key, giving one report per pin epoch. See [noteLeaderPinRefusal].
+     */
+    private var leaderPinDenialReportedFor: LeaderForTerm? = null
+
     // ── Per-term leader identity (#1906) ──────────────────────────────────────
     /**
      * The term [leaderForTermId] was recorded for, or `-1` before any leader has been recorded.
@@ -492,12 +510,41 @@ internal class RaftEngine(
      * **Residual exposure: the pin is first-claim-wins, and that is not authorization.** Which of the
      * two candidates gets established is decided by arrival order, not by evidence. A forger that lands
      * the *first* leader-contact of a term pins itself, and this node then drops the real leader's
-     * frames for the rest of that term — quietly, since neither side is told. That is not an escalation
-     * over the pre-fix behaviour (before this, the forger simply overwrote the belief whenever it liked,
-     * and additionally unlocked `onTimeoutNow`), and it is inherent to deciding between two
-     * unauthenticated claims from local state alone: **a local predicate cannot substitute for
-     * authorization** when the attack value is also a reachable legitimate value (#1880). Closing it
-     * needs the mechanism tracked in #1907, not a better local check.
+     * frames for the rest of that term — quietly, since neither side is told. It is inherent to
+     * deciding between two unauthenticated claims from local state alone: **a local predicate cannot
+     * substitute for authorization** when the attack value is also a reachable legitimate value
+     * (#1880). Closing it needs the mechanism tracked in #1907, not a better local check.
+     *
+     * Where the forger must be a **current voter** — i.e. wherever [onMessage]'s §5.2/§8 gate is armed
+     * — that costs nothing against the behaviour this rule replaced: before it, such a peer simply
+     * overwrote the belief whenever it liked, and additionally unlocked [onTimeoutNow]. Whether
+     * first-come is nevertheless the right disposition *there* is a live §5.2 question and stays open
+     * under #2674; §5.2 at least makes the conflict locally **detectable**, which is what this rule
+     * spends.
+     *
+     * **The unarmed window is the exception, and the comparison inverts in it (#2674).** While
+     * `state.membershipState.voters` is empty this node holds no witness at all: [onMessage]'s gate
+     * carves itself out so a pre-bootstrap learner seed can be caught up by a leader it has no way to
+     * recognise, and *every* peer that can put a frame on the fabric is therefore eligible to be
+     * first. A pin taken there would be a durable commitment made on no evidence whatsoever, and the
+     * damage is not the mild belief-corruption the paragraph above weighs — it is a **denial of the
+     * join**: the seed drops the honest leader's every frame for the term, never applies a config,
+     * never arms the gate, and (the pin being written through to [RaftStorage.saveLeaderForTerm])
+     * comes back holding the same refusal after a restart. Only a *cluster* term advance ends it,
+     * which is precisely what a healthy cluster is built never to do. Measured on this repo's own
+     * harness: with the early return in [onAppendEntries] removed — the pre-#1906 shape — the same
+     * scenario catches up and is promoted.
+     *
+     * So in that window the frame is **admitted without pinning**. Nothing protective is given up:
+     * the pin's two consumers are this rule and [onTimeoutNow], and a node with no voters has no
+     * election to be robbed of — `electionTargets` is empty, so it cannot win one — while
+     * [onTimeoutNow] now refuses at [RefusalGate.TimeoutNowSenderNotEstablishedLeader] rather than
+     * matching an identity a stranger chose, which is *stricter* than what the pin bought there. The
+     * instant this node applies a config that seats voters, the gate arms, the next leader-contact
+     * pins normally, and everything above resumes. Deliberately **not** a relaxation of the
+     * *enforcement* side: a pin that exists while unarmed was established while this node did hold a
+     * witness (or was restored from its own storage), and refusing a mismatching sender against it is
+     * the same protection the armed case gets.
      *
      * Logged at `debug`, like its sibling drops, deliberately: the caller is an unauthenticated remote
      * peer that can repeat the frame at will, so a `warn` here would be a log-flood lever. Since #2033
@@ -515,7 +562,17 @@ internal class RaftEngine(
     private suspend fun adoptLeaderForTerm(from: NodeId, rpc: String): RefusalGate? {
         val established = leaderForTerm
         if (established == null) {
-            pinLeaderForTerm(from)
+            // #2674 — the unarmed window: no voter witness, so no durable commitment. See the KDoc.
+            if (state.membershipState.voters.isEmpty()) {
+                debug {
+                    "$rpc($from): admitted WITHOUT pinning — this node knows no voters, so every sender " +
+                        "is eligible to be first and a pin here would be a durable denial of join taken " +
+                        "on no evidence (#2674). The next leader-contact after a config seats voters pins."
+                }
+            } else {
+                pinLeaderForTerm(from)
+            }
+            leaderPinRefusalRun = 0
             return null
         }
         if (established != from) {
@@ -524,9 +581,83 @@ internal class RaftEngine(
                     "${state.currentTerm}; §5.2 permits one leader per term, so one of the two is " +
                     "forged — which one is not locally decidable, and the pin is first-claim-wins"
             }
+            noteLeaderPinRefusal(established, from)
             return RefusalGate.ForgedLeaderForTerm
         }
+        leaderPinRefusalRun = 0
         return null
+    }
+
+    /**
+     * Observe one frame refused at [RefusalGate.ForgedLeaderForTerm], and name the denial once the run
+     * has gone on long enough to be a condition rather than an incident (#2674).
+     *
+     * **Changes no decision**, exactly like [noteRefusedLeaderFrame]: the frame is dropped either way
+     * and that stays correct, because which of the two same-term claimants is honest is not locally
+     * decidable. Read it as *"I am refusing everything the node I pinned did not send"*, never as
+     * *"the pinned node is hostile"*.
+     *
+     * ### Why this cannot be [RaftMetric.WedgeSuspected]
+     *
+     * It is the same shape of report and it is deliberately a different one. `WedgeSuspected` is
+     * raised only by the two gates at [onMessage]'s **dispatch boundary**, and [onMessage] zeroes
+     * `refusedLeaderFrameRun` for every leader→peer frame at or above our term that clears *both* of
+     * them — which every frame reaching a handler has done by definition. So the run is reset
+     * immediately before this gate ever sees a frame, and a report built on that counter
+     * **structurally cannot fire here**: measured at 5001 refusals with an empty metric list.
+     * [RefusalGate.wedgeGate] records the same conclusion from the other side. This carries its own
+     * counter for that reason, and its own identities: a wedge report says which voter set is doing
+     * the refusing, which is meaningless here — what a reader needs is *who is pinned* and *who is
+     * being refused*, and those two together are the whole diagnosis.
+     *
+     * ### The run, and the latch
+     *
+     * The run is reset by [adoptLeaderForTerm] **admitting** a frame — a fresh adoption, or one from
+     * the node already established — which is the exact negation of the condition: a node the term's
+     * established leader is reaching is not being denied by its own pin. A commit-index clause would
+     * be a second, weaker way of saying the same thing (a node refusing every leader frame commits
+     * nothing), so it is not added.
+     *
+     * Latched per **pin epoch** — the `(term, established)` pair — for [RaftMetric.WedgeSuspected]'s
+     * reason: everything reported is a function of that pair, and a finer latch (per refused sender,
+     * say) would be a log-amplification lever handed to the peer this refusal exists to contain. The
+     * pin is write-once within a term, so one report per epoch is exactly one per denial episode. A
+     * peer cannot mint epochs cheaply either: re-arming needs our term to move, and once our term is
+     * *above* the honest leader's its frames take the §5.1 stale-term reply instead of this gate, so
+     * each extra report costs the attacker a full cluster term advance — which is also the one thing
+     * that ends the denial.
+     *
+     * Never throws: reached from the actor loop on a path a remote frame controls, so a `require`
+     * here would convert one hostile frame into permanent node death (#1818).
+     */
+    private fun noteLeaderPinRefusal(established: NodeId, from: NodeId) {
+        leaderPinRefusalRun++
+        if (leaderPinRefusalRun < WEDGE_SUSPECTED_RUN) return
+        val epoch = LeaderForTerm(state.currentTerm, established)
+        if (epoch == leaderPinDenialReportedFor) return
+        leaderPinDenialReportedFor = epoch
+
+        emitMetric(
+            RaftMetric.LeaderPinDenial(
+                pinnedLeader = established,
+                refusedSender = from,
+                term = state.currentTerm,
+                run = leaderPinRefusalRun,
+            )
+        )
+        logger.warn {
+            "[raft:${transport.selfId}] LEADER PIN DENIAL — refused $leaderPinRefusalRun same-term " +
+                "leader→peer frames in a row (threshold $WEDGE_SUSPECTED_RUN) because term " +
+                "${state.currentTerm} is pinned to ${established.value}, and the latest was from " +
+                "${from.value}. §5.2 permits one leader per term, so one of the two is forged and which " +
+                "one is NOT locally decidable — the pin is first-claim-wins. Nothing local clears this: " +
+                "only a cluster term advance re-opens adoption, and the pin is durable, so restarting " +
+                "this node brings it back. If ${from.value} is in fact the leader, this node can no " +
+                "longer be caught up in place; bring it back as a NEW member — a fresh NodeId over " +
+                "EMPTY storage, admitted by an ordinary single-server membership change. Do NOT wipe " +
+                "storage under the same NodeId: it returns having forgotten a term it already voted in " +
+                "and votes again, which is a §5.2 Election Safety violation (#2674)."
+        }
     }
 
     // ── Client-proposal forwarding state (§8) — actor-teardown-touched ─────────
@@ -3795,6 +3926,14 @@ internal class RaftEngine(
         // voters is by definition not a voter, and the issue is a *voter's* log integrity.
         // It exposes no leadership either: such a node has none to transfer, and [onTimeoutNow]
         // refuses to campaign as a Learner regardless.
+        // Both of those hold, and neither is the whole account: this argument is about what a frame
+        // admitted HERE can take, and says nothing about what one can COMMIT this node to a screen
+        // later. It could — [adoptLeaderForTerm] used to pin its sender as the term's leader durably,
+        // so a stranger's single frame denied the honest leader the whole term and survived a restart
+        // (#2674). That is fixed where it lives, in the pin, not by narrowing this carve-out: the
+        // carve-out is load-bearing for the join and both halves of the composition were separately
+        // sound. If a new commitment is added downstream of this gate, it is this paragraph's job to
+        // ask the same question again.
         // The instant it applies the config entry that seats voters, the gate arms and
         // every subsequent leader→peer frame is validated. Mirrors RoutedRaftTransport's
         // player-side `origin ∈ voters()` check (the relay-side half of #1383).

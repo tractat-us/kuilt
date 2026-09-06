@@ -577,10 +577,16 @@ class RaftSimulation(
     fun followers(): List<RaftNode> = nodes.values.filter { it.role.value is RaftRole.Follower }
 
     /**
-     * Render a per-node diagnostic: role, term, commitIndex, log range, and the trace-event
-     * histogram (Timeout / BecomeLeader / BecomeFollower) that makes leadership thrash and
-     * term inflation obvious at a glance. Used as the message of the [AssertionError] thrown
-     * by the await helpers on timeout, and callable directly from a failing assertion.
+     * Render a per-node diagnostic: role, term, commitIndex, the durable per-term leader **pin**,
+     * log range, and the trace-event histogram (Timeout / BecomeLeader / BecomeFollower) that makes
+     * leadership thrash and term inflation obvious at a glance. Used as the message of the
+     * [AssertionError] thrown by the await helpers on timeout, and callable directly from a failing
+     * assertion.
+     *
+     * `pin=` is [RaftStorage.leaderForTerm], and it is here because it is the one piece of refusing
+     * state nothing else shows (#2674): a node denied by `RefusalGate.ForgedLeaderForTerm` renders as
+     * `leader=null` after a restart — the restore brings back the pin but not `_leader` — so a dump
+     * without it says only "this node is stuck" and hides the value that is doing the sticking.
      */
     suspend fun dumpState(reason: String): String = buildString {
         appendLine("RaftSimulation state dump — $reason")
@@ -600,7 +606,7 @@ class RaftSimulation(
             val role = node.role.value::class.simpleName
             "role=$role leader=${node.leader.value} commitIndex=${node.commitIndex.value}"
         }
-        return "  $id: $state log=${logRange(id)} ${eventCounts(ring)}"
+        return "  $id: $state pin=${storages.getValue(id).leaderForTerm()} log=${logRange(id)} ${eventCounts(ring)}"
     }
 
     private suspend fun logRange(id: NodeId): String {

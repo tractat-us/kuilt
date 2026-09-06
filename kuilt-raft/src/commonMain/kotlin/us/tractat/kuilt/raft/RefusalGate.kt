@@ -327,6 +327,13 @@ public enum class RefusalGate {
      * emits `BecomeFollower` *only* if this node was still Leader or Candidate; reaching it as an
      * ordinary Follower — the overwhelmingly common case — the refusal produced **nothing at all**, and
      * the dropped frame was indistinguishable from one the §5.3 consistency check drops a screen later.
+     *
+     * #2033 closed the *per-frame* half of that gap, and left the *sustained* half open: a node whose
+     * term is pinned to the wrong identity refuses the real leader's every frame forever, and the
+     * report that exists to name a node in exactly that state — [RaftMetric.WedgeSuspected] — cannot
+     * fire for it (see [wedgeGate], and the measurement there). A run of refusals at this gate is now
+     * reported as [RaftMetric.LeaderPinDenial] instead, off a counter of its own, carrying the pinned
+     * identity and the refused sender rather than a voter set.
      */
     ForgedLeaderForTerm,
     ;
@@ -356,7 +363,13 @@ public enum class RefusalGate {
      * reaches a handler has cleared both by definition. So the run is reset immediately before each of
      * these gates sees the frame, and `noteRefusedLeaderFrame` could never accumulate the
      * `WEDGE_SUSPECTED_RUN` consecutive refusals a report requires. Naming a wedge gate here would
-     * declare a report that structurally cannot fire.
+     * declare a report that structurally cannot fire. Measured rather than argued (#2674): 5001
+     * refusals at [ForgedLeaderForTerm] against an empty metric list.
+     *
+     * `null` here therefore means *"no **wedge** report"*, never *"no report"*. The jammed state that
+     * reading describes is real, and it is reported by [RaftMetric.LeaderPinDenial] off a counter
+     * `RaftEngine.adoptLeaderForTerm` owns — which is the whole reason that counter is separate from
+     * `refusedLeaderFrameRun` rather than shared with it.
      *
      * [ImplausibleNegativeTerm] maps to [RaftMetric.WedgeSuspected.Gate.TermJump] because that is
      * where it is reported today — it shared an `if` with [ImplausibleTermJump] before #1989 split

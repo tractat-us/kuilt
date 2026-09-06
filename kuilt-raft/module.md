@@ -155,10 +155,25 @@ third (surviving a liar), are in
   the whole of the rule's safety: a pin belongs to a term, so any term change re-opens adoption
   and nothing honest is refused. What it does **not** do is decide *which* of two claimants is
   the real one — the pin is first-claim-wins, so a forger that lands the first leader-contact of
-  a term pins itself and the honest leader's frames are the ones dropped for that term. That is
-  no worse than the pre-fix behaviour and it is not fixable here: the attack value is also a
-  reachable legitimate value, so no predicate over local state separates them. It is an
-  **accepted exposure** pending the authorization mechanism in #1907. The pin is **durable**
+  a term pins itself and the honest leader's frames are the ones dropped for that term. It is not
+  fixable here: the attack value is also a reachable legitimate value, so no predicate over local
+  state separates them. Where the forger must already be a **voter** — i.e. wherever the §5.2/§8
+  gate above is armed — that is no worse than the pre-fix behaviour, since such a peer previously
+  overwrote the belief at will *and* unlocked `TimeoutNow`; it is an **accepted exposure** pending
+  the authorization mechanism in #1907, and whether first-come is the right disposition even there
+  is reopened by #2674.
+  ⚠ **The comparison inverts while the gate is unarmed, and that half was a regression** (#2674).
+  With `voters` empty every peer is eligible to be first, so a stranger's single empty
+  `AppendEntries` pinned itself on a pre-bootstrap joiner and the honest leader was refused for the
+  term — the join never completed, the node never applied a config, never armed the gate, and the
+  durable pin brought the same refusal back after a restart. Only a *cluster* term advance ended
+  it. That is strictly worse than the behaviour the pin replaced, which was last-write-wins and so
+  self-corrected on the leader's next heartbeat (verified by running the pre-pin shape against the
+  reproduction, not inferred from history). `adoptLeaderForTerm` therefore **admits without pinning
+  while `voters` is empty**: no witness, no durable commitment. Nothing protective is given up — a
+  node with no voters cannot win an election, and `TimeoutNow` then refuses outright rather than
+  matching an identity a stranger chose. The *enforcement* side is unchanged, in that window and
+  every other. The pin is **durable**
   (`RaftStorage.saveLeaderForTerm`, restored on start-up), which is what closes the restart window
   the pin used to leave open: a node that establishes a leader for term T and restarts inside T
   comes back holding that identity, so `TimeoutNow` requires a match outright rather than admitting
