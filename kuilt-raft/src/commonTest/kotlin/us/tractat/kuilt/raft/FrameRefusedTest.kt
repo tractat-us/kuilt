@@ -756,7 +756,9 @@ class FrameRefusedTest {
      * deleted from under an entry that still exists.
      *
      * Deliberately a set comparison against [RefusalGate.entries] rather than a hand-written list, so
-     * adding a ninth gate turns it red without anyone remembering to come back here.
+     * adding *any* further gate turns it red without anyone remembering to come back here. It said "a
+     * ninth" until #2663 added the sixteenth — a count in prose is a claim that rots on the next commit
+     * and nothing fails when it does, so the property is stated without one.
      */
     @Test
     fun everyRefusalGateIsReachable() = raftRunTest {
