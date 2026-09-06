@@ -81,8 +81,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
  * facing a newer one that added a single defaulted field would drop **every** frame from it — a node
  * that is up, traced, emitting [RaftTraceEvent.FrameUndecodable], and completely unable to
  * participate. Forward-compatibility is load-bearing on its own; the crash was never the argument.
+ *
+ * **`internal` rather than `private` so `RaftWireGoldenVectorTest` pins *this* instance.** A golden
+ * vector encoded through a codec the test restates would leave the config itself unpinned — every
+ * vector stays green while every real frame moves.
  */
-private val raftCbor = Cbor { ignoreUnknownKeys = true }
+internal val raftCbor = Cbor { ignoreUnknownKeys = true }
 
 /**
  * How long a run of refused leader→peer frames has to get before [noteRefusedLeaderFrame]
