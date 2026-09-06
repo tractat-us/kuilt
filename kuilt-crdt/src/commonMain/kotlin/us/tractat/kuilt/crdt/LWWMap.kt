@@ -119,26 +119,28 @@ public class LWWMap<K, V> private constructor(
      *   Assigning can move a replica **down** the lattice (#2087); joining cannot. Delete this
      *   and that whole region stops being searchable — the associativity sweeps over #2087
      *   down-moves would silently start asserting over well-behaved inputs only.
+     *
+     * Since #2087 that is not a figure of speech: [LWWRegister.set] itself now goes through the
+     * join, so this pair — via [LWWRegister.tagged] — is the **only** remaining way to reach a
+     * regressed `LWWMap`. Routing it back through [LWWRegister.set] would leave every test above
+     * green while asserting over nothing but well-behaved inputs.
      */
-    internal fun setWhole(replica: ReplicaId, timestamp: Long, key: K, value: V): LWWMap<K, V> {
-        val current = cells[key] ?: LWWRegister.empty()
-        return LWWMap(cells + (key to current.set(replica, timestamp, value)))
-    }
+    internal fun setWhole(replica: ReplicaId, timestamp: Long, key: K, value: V): LWWMap<K, V> =
+        LWWMap(cells + (key to LWWRegister.tagged(replica, timestamp, value)))
 
     /** The whole map a [remove] produces. Internal for the same reason as [setWhole]. */
-    internal fun removeWhole(replica: ReplicaId, timestamp: Long, key: K): LWWMap<K, V> {
-        val current = cells[key] ?: LWWRegister.empty()
-        return LWWMap(cells + (key to current.unset(replica, timestamp)))
-    }
+    internal fun removeWhole(replica: ReplicaId, timestamp: Long, key: K): LWWMap<K, V> =
+        LWWMap(cells + (key to LWWRegister.tagged<V>(replica, timestamp, null)))
 
-    // [LWWRegister.set]/[LWWRegister.unset] replace rather than merge, so the cell built from an
-    // empty register is the very cell an assigning mutator would write — the delta needs no
-    // local state.
+    // A delta is one bare tagged cell — [LWWRegister.tagged], the assigning form — so it needs no
+    // local state. Since #2087 the public [LWWRegister.set]/[LWWRegister.unset] go through the
+    // join instead, which for a cell built on the empty register lands in the same place; naming
+    // the assigning form says which of the two this depends on.
     private fun setPatch(replica: ReplicaId, timestamp: Long, key: K, value: V): Patch<LWWMap<K, V>> =
-        Patch(LWWMap(mapOf(key to LWWRegister.empty<V>().set(replica, timestamp, value))))
+        Patch(LWWMap(mapOf(key to LWWRegister.tagged(replica, timestamp, value))))
 
     private fun removePatch(replica: ReplicaId, timestamp: Long, key: K): Patch<LWWMap<K, V>> =
-        Patch(LWWMap(mapOf(key to LWWRegister.empty<V>().unset(replica, timestamp))))
+        Patch(LWWMap(mapOf(key to LWWRegister.tagged<V>(replica, timestamp, null))))
 
     /** The join: per-key max-tag of the underlying registers. */
     override fun piece(other: LWWMap<K, V>): LWWMap<K, V> =

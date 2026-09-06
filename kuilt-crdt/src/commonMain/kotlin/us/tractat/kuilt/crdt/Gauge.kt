@@ -55,11 +55,19 @@ public class Gauge private constructor(
      * The `(replica, timestamp)` pair must uniquely identify this observation —
      * see [LWWRegister.set] for the tag-uniqueness contract.
      *
+     * **Not the same shape as [LWWRegister.set], deliberately.** #2087 made that
+     * one go through the join, so a losing write can no longer move the writer
+     * down the lattice. This one keeps the *delta* contract stated above — it
+     * hands back the bare observation, whatever the gauge already holds — so an
+     * `observe` at a losing timestamp still reads below the state it came from
+     * until the prescribed `piece` absorbs it. Whether a gauge should adopt
+     * `set`'s shape instead is #2712, filed rather than folded in here.
+     *
      * @throws IllegalArgumentException if [value] is NaN or infinite.
      */
     public fun observe(replica: ReplicaId, timestamp: Long, value: Double): Gauge {
         require(value.isFinite()) { "Gauge observations must be finite, was $value" }
-        return Gauge(register.set(replica, timestamp, value))
+        return Gauge(LWWRegister.tagged(replica, timestamp, value))
     }
 
     /** The join: the observation with the larger `(timestamp, replicaId)` tag wins. */
