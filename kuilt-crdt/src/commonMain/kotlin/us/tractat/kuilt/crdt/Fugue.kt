@@ -709,7 +709,11 @@ public class Fugue<V> private constructor(
             tombstones = tombstones - gcIds,
             compactedIds = compactedIds + gcIds,
             compactPositions = compactPositions + compactOp.positions,
-            maxSeqByReplica = maxSeqByReplica,
+            // Folded through the engine, not passed through (#2173) — see [Rga.withCompactCaches]
+            // for the argument. [computeMaxSeqByReplica] folds a `Compact`'s dots through the same
+            // [OpLogEngine], so a `Compact` above the local high-water parted the two paths here
+            // exactly as it did there; [Fugue] holds no floor, so this is its only such site.
+            maxSeqByReplica = engine<V>().foldMaxSeq(maxSeqByReplica, compactOp),
         )
         return Fugue(newOps, lamport, newCache)
     }

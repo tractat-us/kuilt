@@ -908,7 +908,17 @@ public class Rga<V> private constructor(
     ): Rga<V> {
         val newCache = RgaCache(
             insertsById = insertsById - gcIds,
-            maxSeqByReplica = maxSeqByReplica,
+            // Folded through the engine, not passed through (#2173). A `Compact` records the
+            // dots it collected, and those dots were minted — the same evidence [cacheAfterFloor]
+            // reads out of a raised floor. Passing the map through left a remote `Compact` whose
+            // dots sat *above* this replica's high-water disagreeing with
+            // [computeMaxSeqByReplica], which folds the very same dots via [OpLogEngine]; the two
+            // then handed [nextSeqFor] different answers for one `equals`-identical state.
+            // Folding here is sound for a *foreign* author's entry too, which the floor's
+            // equivalent is not: this map suppresses nothing and is read only by [nextSeqFor] for
+            // the replica being minted as, and a `Compact` names specific delivered dots rather
+            // than claiming a downward-closed range over dots nobody has minted yet.
+            maxSeqByReplica = engine<V>().foldMaxSeq(maxSeqByReplica, compactOp),
             tombstones = tombstones - gcIds,
             compactedIds = compactedIds + gcIds,
             compactPositions = compactPositions + compactOp.positions,
