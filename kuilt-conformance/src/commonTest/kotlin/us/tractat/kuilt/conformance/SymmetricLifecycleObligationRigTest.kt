@@ -273,8 +273,8 @@ class SymmetricLifecycleObligationRigTest {
         }
         assertAll(
             { assertRedOn("the JOINER must advertise NO reachable remote peer once Torn", failure) },
-            // Two host arms and two joiner arms; the frozen roster still contains selfId, so the
-            // joiner's collapsed-too-far arm must stay green. One of four.
+            // Two host arms and two joiner arms; the phantom is added ALONGSIDE selfId rather than
+            // replacing it, so the joiner's collapsed-too-far arm must stay green. One of four.
             { assertArmCount(1, failure) },
         )
     }
