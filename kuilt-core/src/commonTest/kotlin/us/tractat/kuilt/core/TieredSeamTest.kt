@@ -406,7 +406,8 @@ class TieredSeamTest {
      * exercised at all. [tear] is the conforming half (collapse the roster, then latch `Torn`, in that
      * order); [reviveToWoven] and [admitWhileTorn] are the two violations, each named for what it
      * breaks so no future reader mistakes this for a general-purpose fake. Use [FakeSeam] for
-     * everything else — it refuses both of these on purpose (#2622).
+     * everything else: it refuses [reviveToWoven]'s equivalent (`weave()` after a tear) since #2622,
+     * and [admitWhileTorn]'s roster twin is the door recorded on #2546.
      */
     private class NonTerminalTier(
         override val selfId: PeerId,
