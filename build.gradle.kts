@@ -312,15 +312,25 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 //
 // ANCHOR EVERY CATALOG/TOML KEY LOOKUP WITH `(?m)^\s*` — mandatory for any future scanner, not a
 // style preference. A key regex is a *line* lookup, and unanchored it matches as a SUBSTRING, so a
-// neighbour alias ENDING in the scanned one (`legacy-android-gradlePlugin`) satisfies it, `find`
-// takes the leftmost hit, and the guard confirms itself against an entry the build never applies.
-// Note the direction: a RESPELLING of the real key returns null and fails loudly, which is safe and
-// already handled; the substring hit is a GREEN, and no `error` can reach it. Three hands wrote the
-// three scanners below and two picked the wrong default (#2701), so this is written down rather than
-// left to be re-derived. `KotlinCatalogScanner` is the reference shape (#2700); copy it. The same
-// applies to the `version.ref` → `[versions]` resolution, which all three already anchor. Where a
-// real parser exists, prefer it outright — `forbidCleanGateMeasurementSkew` reads `gradle.properties`
-// through `java.util.Properties` and so has no substring exposure at all.
+// neighbour alias ENDING in the scanned one (`legacy-android-gradlePlugin`) satisfies it and `find`
+// takes the leftmost hit.
+//
+// BE PRECISE ABOUT WHAT THAT COSTS, because the three scanners below were all written and reviewed
+// under a wrong severity claim (#2701, #2702: "a false GREEN"), and a decoy measurement reds. What
+// each scanner returns feeds ONLY its own confirmation comparison and the text of the messages —
+// never the verdict, which is computed from the `libs.versions.*` accessor and the resolved probe.
+// So the substring hit's real cost is a MISLEADING RED: the guard fails naming the cause its error
+// text names (a plugin adopted under a new alias), when the cause is a neighbour alias, and sends
+// the reader at the wrong fix. The silent case is narrower — a neighbour that happens to agree with
+// the accessor exactly makes the confirmation VACUOUS, which matters only when the real entry has
+// also moved, i.e. in exactly the drift the confirmation exists to catch. Both are worth the anchor;
+// neither is the false green three separate write-ups asserted. Trace a value to its USE before
+// writing down what its being wrong would do.
+//
+// `KotlinCatalogScanner` is the reference shape (#2700); copy it. The same applies to the
+// `version.ref` → `[versions]` resolution, which all three already anchor. Where a real parser
+// exists, prefer it outright — `forbidCleanGateMeasurementSkew` reads `gradle.properties` through
+// `java.util.Properties` and so has no substring exposure at all.
 fun kotlinSourcesIn(roots: List<java.io.File>, pattern: String = "**/*.kt"): FileTree =
     files(roots).asFileTree.matching { include(pattern) }
 
@@ -6572,9 +6582,11 @@ object DetektCatalogScanner {
     fun pluginCoordinate(toml: String): Pair<String, String>? {
         // `(?m)^\s*` is MANDATORY, not decoration — see "Guard plumbing" above. Unanchored, the
         // alias matches as a SUBSTRING, so a neighbour ending in it (`legacy-detekt-gradlePlugin`)
-        // satisfies the pattern; `find` takes the leftmost hit, and this guard then confirms itself
-        // against an entry the build never applies. That is a GREEN, which is the one direction the
-        // `error` on a null return cannot cover. Measured with a decoy alias (#2701).
+        // satisfies the pattern and `find` takes the leftmost hit. What that returns reaches only
+        // the confirmation below and the message text, never the verdict, so the cost is a
+        // MISLEADING RED — the guard fails blaming the detekt-2.x-under-a-new-alias cause its own
+        // error text names. (Silent only if the neighbour agrees with `libs.versions.detekt`
+        // exactly, which makes the confirmation vacuous.) Measured with a decoy alias (#2701).
         val entry = Regex(
             """(?m)^\s*detekt-gradlePlugin\s*=\s*\{[^}]*module\s*=\s*""" +
                 """"([^:"]+):detekt-gradle-plugin"[^}]*version\.ref\s*=\s*"([^"]+)"""",
@@ -6780,8 +6792,10 @@ object AgpCatalogScanner {
     fun pluginVersion(toml: String): String? {
         // `(?m)^\s*` is MANDATORY, not decoration — see "Guard plumbing" above, and the same note
         // at `DetektCatalogScanner`. Unanchored, `legacy-android-gradlePlugin` satisfies the
-        // pattern and this guard confirms itself against an AGP the build never applies — a green,
-        // not the loud `error` a respelling gets. Measured with a decoy alias (#2701).
+        // pattern. What it returns reaches only the confirmation below and the message text, never
+        // the verdict, so the cost is a MISLEADING RED against `agpCatalogVersion` — pointing the
+        // reader at `agpCatalogVersion` when the real cause is a neighbour alias. Measured with a
+        // decoy alias (#2701).
         val entry = Regex(
             """(?m)^\s*android-gradlePlugin\s*=\s*\{[^}]*module\s*=\s*""" +
                 """"com\.android\.tools\.build:gradle"[^}]*version\.ref\s*=\s*"([^"]+)"""",
@@ -6964,9 +6978,11 @@ object KotlinCatalogScanner {
         // ANCHORED to the start of a line, as both sibling scanners now are — this one got there
         // first (#2700) and they were brought into line by #2701. Without `(?m)^\s*` the alias is
         // matched as a SUBSTRING, so a differently-prefixed neighbour (`xkotlin-gradlePlugin`)
-        // would satisfy it and this guard would confirm itself against an entry the build never
-        // applies — a green, which is the failure mode that matters here. See "Guard plumbing"
-        // above, which is where the rule for a FOURTH scanner lives.
+        // would satisfy it. This comment used to call that "a green, which is the failure mode that
+        // matters here"; it was wrong, and re-asserting it is what carried the error into #2701 and
+        // #2702. `applied` reaches only the confirmation below and the message text, never the
+        // verdict, so the cost is a MISLEADING RED. See "Guard plumbing" above, which carries the
+        // full outcome analysis and the rule for a FOURTH scanner.
         val entry = Regex(
             """(?m)^\s*kotlin-gradlePlugin\s*=\s*\{[^}]*module\s*=\s*""" +
                 """"org\.jetbrains\.kotlin:kotlin-gradle-plugin"[^}]*version\.ref\s*=\s*"([^"]+)"""",
