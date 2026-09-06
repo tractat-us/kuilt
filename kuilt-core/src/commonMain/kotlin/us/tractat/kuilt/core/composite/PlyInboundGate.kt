@@ -119,6 +119,22 @@ internal class PlyInboundGate(private val maxBuffered: Int = 16) {
     private val admittedBySource = mutableMapOf<Pair<PlyId, PeerId?>, Int>()
 
     /**
+     * Origins admitted over this gate's lifetime, and source buckets held — the two sides of the
+     * invariant `admittedBySource.size <= nextExpected.size` that bounds the map this fix adds.
+     *
+     * Test-visible because that bound is otherwise **unobservable**: an entry inserted on the
+     * *refusal* path (a `getOrPut` where the code above reads `?: 0`) changes no verdict any
+     * behavioural test can see, and would let a source-rotating flood grow the map without limit —
+     * #1814's defect one level up, in the very fix for it. Measured: with the read written as
+     * `getOrPut`, every one of the other tests in `PlyInboundGatePerSourceBudgetTest` stays green.
+     * Nothing in production reads either of these.
+     */
+    val admittedOriginCount: Int get() = nextExpected.size
+
+    /** @see admittedOriginCount */
+    val sourceBucketCount: Int get() = admittedBySource.size
+
+    /**
      * Returns the payloads to deliver now, in order. Empty for a duplicate.
      *
      * The per-origin state this consults is keyed by [PlyFrame.Data.originId] **alone**, across

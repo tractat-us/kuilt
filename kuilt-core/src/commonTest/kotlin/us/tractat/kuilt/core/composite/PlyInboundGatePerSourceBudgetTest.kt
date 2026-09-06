@@ -26,6 +26,11 @@ import kotlin.test.assertTrue
  * [oneSourceCannotSpendTheWholePoolWhichIsStillSeamWideBounded] reds in *both* directions: on the
  * left if there is no per-source dimension, on the right if the per-source share made the table
  * unbounded — which would be #1814's hole one level up.
+ *
+ * The last two are about the fix rather than the property.
+ * [refusedSourcesGetNoBucketSoTheFixesOwnTableStaysBounded] covers the one hole no behavioural test
+ * here can see, and [theSameOriginOverTwoPliesIsStillDeduplicated] the one thing a per-source key
+ * would have destroyed.
  */
 class PlyInboundGatePerSourceBudgetTest {
     private fun data(seq: Long, origin: String, payload: Byte = seq.toByte()) =
@@ -189,6 +194,61 @@ class PlyInboundGatePerSourceBudgetTest {
     }
 
     /**
+     * The other thing the fix is unpinned on, and the one that needed an accessor to see at all.
+     *
+     * `admittedBySource` is bounded only because an entry is written on the **admission** path and
+     * never on the refusal path. Write it with a `getOrPut` instead — the obvious spelling — and a
+     * flood rotating its *transport identity* after the pool is spent grows that map without limit
+     * while every behavioural test in this class stays green (measured). So this asserts the
+     * invariant directly: source buckets can never outnumber the admissions that created them.
+     */
+    @Test
+    fun refusedSourcesGetNoBucketSoTheFixesOwnTableStaysBounded() {
+        val gate = PlyInboundGate(maxBuffered = 8)
+
+        // Spend the seam-wide pool first, so every probe below can only ever be refused.
+        var poolSources = 0
+        while (poolSources < SOURCE_PROBE_CEILING) {
+            if (gate.floodShareOf(PLY_A, PeerId("flooder-$poolSources"), tag = "s$poolSources").admitted == 0) break
+            poolSources++
+        }
+        val admittedWhenSpent = gate.admittedOriginCount
+        val bucketsWhenSpent = gate.sourceBucketCount
+
+        var refused = 0
+        repeat(REFUSAL_PROBE_SOURCES) { i ->
+            try {
+                gate.accept(PLY_A, PeerId("rotating-$i"), data(seq = 0, origin = "rot-$i"))
+                // ALLOW-ise: nothing in the `try` can suspend — this test and `accept` are both non-`suspend`
+            } catch (_: IllegalStateException) {
+                refused++
+            }
+        }
+
+        assertAll(
+            // Rig: the pool really was spent, and every probe really was refused. Either failing
+            // would make the invariant below hold vacuously.
+            { assertTrue(poolSources in 1 until SOURCE_PROBE_CEILING, "rig: the pool must spend within the probe ceiling, took $poolSources sources") },
+            { assertEquals(REFUSAL_PROBE_SOURCES, refused, "rig: every rotating source must have been refused") },
+            { assertEquals(admittedWhenSpent, gate.admittedOriginCount, "a refusal must record nothing") },
+            {
+                assertEquals(
+                    bucketsWhenSpent,
+                    gate.sourceBucketCount,
+                    "$REFUSAL_PROBE_SOURCES refused sources added buckets: the source table grows on the refusal path",
+                )
+            },
+            {
+                assertTrue(
+                    gate.sourceBucketCount <= gate.admittedOriginCount,
+                    "${gate.sourceBucketCount} source buckets for ${gate.admittedOriginCount} admitted origins: " +
+                        "the table the per-source share adds is not bounded by the ceiling that bounds admissions",
+                )
+            },
+        )
+    }
+
+    /**
      * Non-regression, and the reason the per-source dimension is *accounting* rather than a finer key
      * on the state maps. The gate exists to collapse the same `(originId, originSeq)` arriving over
      * several plies; partitioning [PlyInboundGate]'s per-origin state by source would give one origin
@@ -237,5 +297,12 @@ class PlyInboundGatePerSourceBudgetTest {
          * "ran to the ceiling" can only mean fresh sources are admitted without limit.
          */
         const val SOURCE_PROBE_CEILING = 1024
+
+        /**
+         * Distinct transport identities offered *after* the pool is spent. Only has to exceed the
+         * number of buckets a spent pool legitimately holds (the seam-wide cap divided by the
+         * per-source share) by enough that an accidental insert is unmistakable.
+         */
+        const val REFUSAL_PROBE_SOURCES = 512
     }
 }

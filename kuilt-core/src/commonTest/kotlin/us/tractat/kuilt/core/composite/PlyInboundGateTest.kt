@@ -105,6 +105,12 @@ class PlyInboundGateTest {
      * `originId` is chosen by the *sending* peer and read straight off the wire, so the number of
      * per-origin entries the gate holds is remote-controlled. Every frame below is well-formed —
      * the growth needed no malformed input at all, which is what made it reachable (#1814).
+     *
+     * **What this no longer covers, since #1874 gave one source its own share.** Driving a single
+     * source, the cap that stops this probe is now the *per-source* one, so deleting the seam-wide
+     * ceiling entirely leaves this test green (measured). The seam-wide bound is pinned by
+     * `PlyInboundGatePerSourceBudgetTest.oneSourceCannotSpendTheWholePoolWhichIsStillSeamWideBounded`,
+     * which drives many sources; do not read a green here as evidence about it.
      */
     @Test
     fun theOriginTableIsBounded() {
