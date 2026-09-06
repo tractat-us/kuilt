@@ -5,6 +5,7 @@ package us.tractat.kuilt.websocket
 import io.ktor.websocket.DefaultWebSocketSession
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.StateFlow
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.TransportCapability
@@ -42,6 +43,12 @@ import kotlin.coroutines.CoroutineContext
  *   different question from "can it be used right now" (#1712).
  * @param connectivity The live reachability observer whose readings become
  *   [TransportCapability.availability]. Defaults, at the loom, to [UnobservedConnectivity].
+ * @param policy Governs the seam inbox's capacity and overflow behaviour, forwarded verbatim to
+ *   [identified]. Until #2686 this parameter did not exist and `identified` was called without
+ *   one, so every WebSocket seam's inbox was hard-wired to [DeliveryPolicy.Reliable] and a
+ *   `policy` knob on a WebSocket loom would have been an argument accepted and then ignored —
+ *   the failure the #1430 shape convention exists to prevent. The bound stops at the seam: the
+ *   Ktor session's own frame channel one hop below is not governed by it.
  */
 internal fun WebSocketSeam(
     selfId: PeerId,
@@ -50,8 +57,9 @@ internal fun WebSocketSeam(
     dispatcher: CoroutineContext,
     roles: Set<TransportRole>,
     connectivity: ConnectivityObserver,
+    policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ): Seam = ObservedCapabilitySeam(
-    inner = identified(WebSocketConnection(session), selfId, remoteId, dispatcher),
+    inner = identified(WebSocketConnection(session), selfId, remoteId, dispatcher, policy),
     capability = ReachabilityCapability(connectivity.reachability, roles),
 )
 

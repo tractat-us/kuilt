@@ -6,6 +6,7 @@ import io.ktor.client.request.header
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.TransportCapability
@@ -13,8 +14,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Weft
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
+import us.tractat.kuilt.core.freshPeerId
 
 /**
  * Client-side [Loom] backed by Ktor WebSockets.
@@ -64,14 +64,19 @@ import kotlin.uuid.Uuid
  *   `androidConnectivityObserver(context)` on Android or `browserConnectivityObserver()` on wasmJs;
  *   the desktop JVM has no portable observer and is meant to be left unwired (see
  *   [ConnectivityObserver]).
+ * @param policy Bounds every woven seam's inbox — capacity and overflow strategy. Defaults to
+ *   [DeliveryPolicy.Reliable] (bounded, backpressured, lossless). Appended **last** deliberately:
+ *   the parameter arrived with #2686, and inserting it among the existing ones would silently
+ *   re-bind any positional caller. [webSocketLoomJoin] is the surface that carries the #1430
+ *   argument order; this constructor keeps its own older one and stays the DI/test surface.
  */
-@OptIn(ExperimentalUuidApi::class)
 public class KtorClientLoom(
     private val httpClient: HttpClient,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    public val selfPeerId: PeerId = PeerId(Uuid.random().toString()),
+    public val selfPeerId: PeerId = freshPeerId(),
     private val weft: Weft<WebSocketDialContext> = { WebSocketDialContext() },
     private val connectivity: ConnectivityObserver = UnobservedConnectivity,
+    private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Loom {
     /**
      * The **pre-connect** report, deliberately unchanged by #1725: it answers "can this fabric be
@@ -124,6 +129,7 @@ public class KtorClientLoom(
                     dispatcher = dispatcher.limitedParallelism(1),
                     roles = RELAY_ROLES,
                     connectivity = connectivity,
+                    policy = policy,
                 )
             }
         }
