@@ -197,7 +197,9 @@ public class FairRandom(
             // split that hashes identically yet contributes a different secret to the
             // seed — a post-commit bias attack. Fixed lengths make the preimage
             // unambiguous.
-            if (msg.secret.size != SECRET_BYTES || msg.nonce.size != NONCE_BYTES) {
+            if (msg.secret.size != FairRandomMessage.Reveal.SECRET_BYTES ||
+                msg.nonce.size != FairRandomMessage.Reveal.NONCE_BYTES
+            ) {
                 throw CommitmentViolation(
                     sender,
                     allCommits[sender] ?: ByteArray(0),
@@ -243,15 +245,17 @@ public class FairRandom(
 
     private fun resolveSecret(): ByteArray {
         if (fixedSecret != null) return fixedSecret
-        val bytes = secureRandomBytes(SECRET_BYTES)
-        require(bytes.size == SECRET_BYTES) { "secureRandomBytes returned ${bytes.size} bytes; expected $SECRET_BYTES" }
+        val width = FairRandomMessage.Reveal.SECRET_BYTES
+        val bytes = secureRandomBytes(width)
+        require(bytes.size == width) { "secureRandomBytes returned ${bytes.size} bytes; expected $width" }
         return bytes
     }
 
     private fun resolveNonce(): ByteArray {
         if (fixedNonce != null) return fixedNonce
-        val bytes = secureRandomBytes(NONCE_BYTES)
-        require(bytes.size == NONCE_BYTES) { "secureRandomBytes returned ${bytes.size} bytes; expected $NONCE_BYTES" }
+        val width = FairRandomMessage.Reveal.NONCE_BYTES
+        val bytes = secureRandomBytes(width)
+        require(bytes.size == width) { "secureRandomBytes returned ${bytes.size} bytes; expected $width" }
         return bytes
     }
 
@@ -259,9 +263,6 @@ public class FairRandom(
         secret.copyOf().also { it[0] = (it[0].toInt() xor 0xFF).toByte() }
 
     internal companion object {
-        internal const val SECRET_BYTES = 32
-        internal const val NONCE_BYTES = 16
-
         internal fun sha256(input: ByteArray): ByteArray = SHA256().digest(input)
     }
 }
@@ -306,5 +307,13 @@ internal sealed class FairRandomMessage {
         override fun equals(other: Any?): Boolean =
             other is Reveal && secret.contentEquals(other.secret) && nonce.contentEquals(other.nonce)
         override fun hashCode(): Int = 31 * secret.contentHashCode() + nonce.contentHashCode()
+
+        internal companion object {
+            /** Width of a revealed secret, in bytes. Both the generator and the check use this. */
+            internal const val SECRET_BYTES = 32
+
+            /** Width of a revealed nonce, in bytes. Both the generator and the check use this. */
+            internal const val NONCE_BYTES = 16
+        }
     }
 }
