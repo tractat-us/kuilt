@@ -50,20 +50,21 @@ membership view without an extra handshake message.
 ## mDNS discovery (`kuilt-mdns`, JVM/Android)
 
 mDNS helps peers find each other on a local network. It is discovery, not
-transport: the session still runs over WebSocket. `MDNSPeerLinkFactory`
-registers an mDNS service on `host()` and resolves an `MDNSAdvertisement` to a
-WebSocket join on `join()`. Discover peers separately with
+transport: the session still runs over WebSocket. `mdnsLoom(…)` builds a loom
+that registers an mDNS service on `host()` and resolves an `MDNSAdvertisement`
+to a WebSocket join on `join()`. Discover peers separately with
 `MDNSServiceDiscoverer`:
 
 ```kotlin
 val jmdns = JmDNS.create()
+val serviceType = MDNSServiceType("_myapp._tcp")
 
 // Host: registers the mDNS service and starts the WebSocket server.
-val host = MDNSPeerLinkFactory(application, jmdns, port = 8080, httpClientFactory = { HttpClient { } })
+val host = mdnsLoom(serviceType, application, jmdns, port = 8080) { HttpClient { } }
 val hostSeam = host.host(Pattern("alice's game"))
 
 // Joiner: discover then join.
-val joiner = MDNSPeerLinkFactory(application, jmdns, port = 8080, httpClientFactory = { HttpClient { } })
+val joiner = mdnsLoom(serviceType, application, jmdns, port = 8080) { HttpClient { } }
 val discoverer = MDNSServiceDiscoverer(jmdns)
 val ad = discoverer.discoveries().first()
 val joinerSeam = joiner.join(ad)
