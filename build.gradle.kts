@@ -7647,16 +7647,23 @@ val verifyTestResultParity by tasks.registering {
 // type argument is therefore anchored — `<SeamState>` exactly, optionally qualified — rather than
 // "mentions SeamState somewhere".
 //
-// ── The population is TEN, and #2627 predicted six ───────────────────────────────────────────────
+// ── The population was TEN, and is NINE ──────────────────────────────────────────────────────────
 // Derived by running this guard with no markers in the tree — which is the only way to derive it,
-// since a scanner that matches nothing produces a baseline identical to one that works. The six
-// #2627 names are all real; the four it missed are `DelayedWovenSeam`, `FakeRoom`, `ControllableLoom`
-// and `FlakyLifecycleSeam`, in `:kuilt-conformance`, `:kuilt-session-test` and `:kuilt-test`. Those
-// modules' `commonMain` is production source by every mechanical definition — published, `explicitApi`,
-// compiled to every target — and carving them out by module name would be exactly the free knob the
-// "Guard plumbing" note warns about, so they are in scope and marked like everything else. Nine of the
-// ten have a genuine argument; `FlakyLifecycleSeam`'s marker says outright that its is the weakest,
-// and #2633 tracks it.
+// since a scanner that matches nothing produces a baseline identical to one that works. #2627
+// predicted six and all six are real; the four it missed were `DelayedWovenSeam`, `FakeRoom`,
+// `ControllableLoom` and `FlakyLifecycleSeam`, in `:kuilt-conformance`, `:kuilt-session-test` and
+// `:kuilt-test`. Those modules' `commonMain` is production source by every mechanical definition —
+// published, `explicitApi`, compiled to every target — and carving them out by module name would be
+// exactly the free knob the "Guard plumbing" note warns about, so they are in scope and marked like
+// everything else.
+//
+// Nine of the ten had a genuine argument. `FlakyLifecycleSeam` was the tenth: its marker said in as
+// many words that its exemption was the weakest in the repo — "cannot lose a write HERE", resting on
+// the confined single-threaded test dispatcher it happens to be driven from rather than on any local
+// property of the field. #2633 swept it to a `SeamStateGate` and deleted the marker, so the
+// population is NINE and every remaining member's argument is one of the five below. **Do not read
+// that as a floor to defend.** The exemptions are individually reviewable claims, not a quota; if
+// another one stops being true, sweep it and drop this number by one.
 //
 // ── The exemption is a marker in the source, and that is load-bearing ────────────────────────────
 // `forbidProductionDispatcherInTests`' mechanism, for its reason plus one this guard cares about
@@ -7755,7 +7762,7 @@ val forbidBareSeamStateFlow by tasks.registering {
                 }
                 if (reasonless.isNotEmpty()) {
                     append("\n\n  An `// ALLOW-bareSeamState:` marker with an EMPTY reason is itself a ")
-                    append("violation — the reason IS the exemption. Ten flows in this repo are ")
+                    append("violation — the reason IS the exemption. Nine flows in this repo are ")
                     append("legitimately not gates and each says which of the five arguments it is ")
                     append("relying on; a blank one says only that somebody wanted the build green:\n  ")
                     append(reasonless.joinToString("\n  "))

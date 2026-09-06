@@ -19,13 +19,13 @@ import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.test.internal.initialLifecycleState
 import us.tractat.kuilt.test.internal.onEnterWeaving
 import us.tractat.kuilt.test.internal.onRecover
+import us.tractat.kuilt.test.internal.onTear
 import kotlin.math.roundToLong
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -73,31 +73,26 @@ public class FlakyLifecycleSeam(
     private val delegate: Seam,
     private val scope: CoroutineScope,
 ) : Seam {
-    private val stateGate = SeamStateGate(initialLifecycleState(delegate.state.value))
+    // ALLOW-bareSeamState: the WEAKEST of this repo's exemptions, and recorded as such rather than
+    // dressed up. [enterWeaving], [recover] and [tear] are each a read-then-write with no lock, so on
+    // a multi-threaded dispatcher a `tear` really could be clobbered — this is not "cannot lose a
+    // write", it is "cannot lose one HERE". The class is a test-only harness driven exclusively from
+    // a confined single-threaded test dispatcher, which is what makes the window unmanifestable, and
+    // [enterWeaving]'s KDoc has said so since before this guard existed. Tracked in #2633.
+    private val _state = MutableStateFlow<SeamState>(initialLifecycleState(delegate.state.value))
     private val _peers = MutableStateFlow(delegate.peers.value)
     private val mutex = Mutex()
 
-    private val isTorn: Boolean get() = stateGate.state.value is SeamState.Torn
+    private val isTorn: Boolean get() = _state.value is SeamState.Torn
 
     init {
-        // A delegate that is ALREADY `Torn` starts this wrapper terminal — and a gate constructed
-        // with a `Torn` initial is not *latched*, which is the quieter half of the bug the gate
-        // exists to close ([SeamStateGate.update]'s KDoc names it): the state reads terminal while
-        // the next `update` would still revive it. Latching here makes "born torn" and "torn by
-        // [tear]" the same state. `tear` republishes an equal `Torn(reason)`, and `MutableStateFlow`
-        // conflates equal values, so no spurious emission is produced.
-        (stateGate.state.value as? SeamState.Torn)?.let { stateGate.tear(it.reason) }
-
         // While Woven, forward delegate membership changes to _peers.
-        // The Woven check is evaluated only once per emission (the collector lambda has no
-        // suspension point), so under a single-threaded or confined dispatcher this is atomic with
-        // respect to the enterWeaving/recover `_peers` writes. NOTE the scope of that claim: it is
-        // about `_peers`, which is NOT a `SeamState` flow and is deliberately out of this class's
-        // migration to [SeamStateGate] — the terminal `SeamState` can no longer be lost on any
-        // dispatcher, while this roster collector's check-then-write is unchanged (#2633).
+        // The Woven check is evaluated only once per emission (the collector lambda
+        // has no suspension point), so under a single-threaded or confined dispatcher
+        // this is atomic with respect to enterWeaving/recover writes.
         scope.launch {
             delegate.peers.collect { delegatePeers ->
-                if (stateGate.state.value is SeamState.Woven) _peers.value = delegatePeers
+                if (_state.value is SeamState.Woven) _peers.value = delegatePeers
             }
         }
     }
@@ -108,14 +103,14 @@ public class FlakyLifecycleSeam(
 
     override val peers: StateFlow<Set<PeerId>> get() = _peers.asStateFlow()
 
-    override val state: StateFlow<SeamState> = stateGate.state
+    override val state: StateFlow<SeamState> get() = _state.asStateFlow()
 
     /**
      * Frames from [delegate.incoming], filtered by this seam's lifecycle state.
      *
      * Frames arriving while [SeamState.Weaving] are **dropped** — not buffered.
      * The gate check runs in the **consumer's coroutine** (not a background pipe),
-     * so [state] is read at the correct point relative to lifecycle transitions.
+     * so [_state] is read at the correct point relative to lifecycle transitions.
      *
      * The flow completes after [tear] is called: [tear] schedules
      * [delegate.close] in [scope], causing [delegate.incoming] to terminate,
@@ -126,14 +121,14 @@ public class FlakyLifecycleSeam(
      */
     override val incoming: Flow<Swatch> = flow {
         delegate.incoming.collect { frame ->
-            val deliver = mutex.withLock { !isTorn && stateGate.state.value is SeamState.Woven }
+            val deliver = mutex.withLock { !isTorn && _state.value is SeamState.Woven }
             if (deliver) emit(frame)
         }
     }
 
     override suspend fun broadcast(payload: ByteArray) {
         mutex.withLock { checkNotTorn() }
-        if (stateGate.state.value is SeamState.Weaving || _peers.value.size <= 1) return
+        if (_state.value is SeamState.Weaving || _peers.value.size <= 1) return
         delegate.broadcast(payload)
     }
 
@@ -158,24 +153,19 @@ public class FlakyLifecycleSeam(
      *
      * No-op if already [SeamState.Weaving] or [SeamState.Torn].
      *
-     * Publishes the state before `_peers` so that the delegate-peers collector, on its next
-     * emission, sees [SeamState.Weaving] and skips — **narrowing** the roster dual-write window.
-     *
-     * The state write itself goes through [SeamStateGate.update], so a concurrent [tear] can no
-     * longer be clobbered by this transition **on any dispatcher**: once [tear] latches, this
-     * `update` is a no-op. That is the whole of #2633; what remains is the narrower `_peers` window
-     * described in the constructor, which is about the roster and not about the terminal state.
-     *
-     * `onEnterWeaving` returns its argument *identically* for every non-transition — already
-     * [SeamState.Weaving], or terminal [SeamState.Torn] — so `next !== current` narrows `next` to
-     * [SeamState.Weaving] and [SeamStateGate.update]'s `Torn` rejection is unreachable here by
-     * construction, not by convention.
+     * Writes `_state` before `_peers` so that the delegate-peers collector, on
+     * its next emission, sees [SeamState.Weaving] and skips — **narrowing** the
+     * dual-write window. The race is in any case unmanifestable on the confined
+     * single-threaded test dispatcher this class is always used with: the
+     * collector's check-and-write is a single lambda with no suspension point,
+     * so it is atomic there. Full elimination on a multi-threaded dispatcher
+     * would require locking the collector's check+write together; unnecessary
+     * for this test-only class.
      */
     public fun enterWeaving() {
-        val current = stateGate.state.value
-        val next = onEnterWeaving(current)
-        if (next === current) return
-        stateGate.update(next)
+        val next = onEnterWeaving(_state.value)
+        if (next === _state.value) return
+        _state.value = next
         _peers.value = setOf(selfId)
     }
 
@@ -183,17 +173,13 @@ public class FlakyLifecycleSeam(
      * Transition `Weaving → Woven`. Inbound delivery and [peers] resume from
      * the delegate.
      *
-     * No-op if already [SeamState.Woven] or [SeamState.Torn] — and, like [enterWeaving], a no-op
-     * once [tear] has latched the gate, whichever dispatcher the two ran on. `onRecover` returns its
-     * argument identically for every non-transition, so `next !== current` narrows `next` to
-     * [SeamState.Woven] and [SeamStateGate.update] can never be handed a `Torn`.
+     * No-op if already [SeamState.Woven] or [SeamState.Torn].
      */
     public fun recover() {
-        val current = stateGate.state.value
-        val next = onRecover(current)
-        if (next === current) return
+        val next = onRecover(_state.value)
+        if (next === _state.value) return
         _peers.value = delegate.peers.value
-        stateGate.update(next)
+        _state.value = next
     }
 
     /**
@@ -206,20 +192,14 @@ public class FlakyLifecycleSeam(
      * terminates, which lets the [incoming] flow exit cleanly.
      */
     public fun tear(reason: CloseReason = CloseReason.Unreachable) {
+        val next = onTear(_state.value, reason)
+        if (next === _state.value) return
         // `{ selfId }`, never `emptySet()`: `Seam.peers` always includes this peer's own id, so a Torn
         // roster collapses to exactly `{ selfId }` — the same collapse [enterWeaving] already performs.
-        // Written before the terminal publish so a consumer woken by `Torn` cannot read the pre-tear
-        // roster (#1854). It is UNCONDITIONAL — [SeamStateGate.tear] fuses the "already torn?" check
-        // with the publish, so there is no pre-check left to hang this write behind, and none is
-        // wanted: after a tear `_peers` is stably `{ selfId }`, so a second call re-writes an equal
-        // value that `MutableStateFlow` conflates away. The one case where it is not equal is the
-        // roster collector having clobbered it, which this repairs rather than preserves.
+        // Written before `_state` so a consumer woken by the terminal `Torn` cannot read the pre-tear
+        // roster (#1854).
         _peers.value = setOf(selfId)
-        // Single-shot and atomic: the losing caller of two concurrent tears gets `false` and does
-        // not re-close the delegate, which is what the old `onTear(…) === current` pre-check bought
-        // non-atomically. That pure helper is gone with this call — a terminal transition is a
-        // decision fused to its publish, not a function of the current state.
-        if (!stateGate.tear(reason)) return
+        _state.value = next
         scope.launch { delegate.close(reason) }
     }
 
