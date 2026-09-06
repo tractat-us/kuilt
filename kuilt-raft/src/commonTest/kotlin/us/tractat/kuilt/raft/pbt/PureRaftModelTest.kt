@@ -482,7 +482,21 @@ class PureRaftModelTest {
          * `maxEntriesPerAppend = 1`: 60 and 120 actions find nothing at any delivery weight, 200 finds
          * it at try 1 954, and 400 at try 1 747 with 27 counterexamples per 30 000 trajectories. The
          * 5-node arm needs 400 (first hit at try 1 668). Unmutated, 480 000 trajectories across the
-         * whole grid produce zero.
+         * whole grid produce zero. All three figures reproduce **byte-identically** on `macosArm64` and
+         * `wasmJs` — same try indices, same messages — so nothing here walks a hash-ordered collection.
+         *
+         * **What this costs, stated because the older budget above was deliberately sized for the
+         * slowest target.** The class goes from ~1 s to ~30 s on `macosArm64` (11 s for the 3-node arm,
+         * 18 s for the 5-node), against ~1.7 s on the JVM. That is the price of a §5.4.2 kill, and it is
+         * the reason `MAX_ACTIONS` / [THREE_NODE_TRIES] are left alone rather than raised for everyone.
+         *
+         * **The two arms are not equally strong, and the 5-node one should not be read as margin.**
+         * Counterexample density under the mutation is ~1 per 1 100 trajectories at 3 nodes but ~1 per
+         * 7 500 at 5 nodes, so within this budget the 3-node arm carries the kill several times over
+         * while the 5-node arm expects **under one** — its hit at try 1 668 is close to a coincidence of
+         * this seed. Kept anyway, because Figure 8 is a five-server story and a 3-node cluster cannot
+         * exhibit its classic shape; but if a model change ever shifts the trajectories, expect the
+         * 5-node arm to go quiet first, and do not conclude from that alone that §5.4.2 is safe.
          */
         const val BOUNDED_TRIES = 6_000
         const val BOUNDED_MAX_ACTIONS = 400
