@@ -182,7 +182,10 @@ class FairRandomMalformedFrameAttributionTest {
         aliceCommit: ByteArray,
         aliceFrames: List<ByteArray>,
     ): Result<Long> {
-        val bob = PeerId("${alice.value}-bob")
+        // Deliberately NOT derived from Alice's id: the line also names the LOCAL peer, so an id
+        // of which Alice's is a substring would let "the sender is named" pass on a line that in
+        // fact named only Bob.
+        val bob = PeerId(alice.value.replace("alice", "bob"))
         val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
         val (_, bobSeam) = fakeSeamPair(alice, bob)
         val bobDef = scope.async {
