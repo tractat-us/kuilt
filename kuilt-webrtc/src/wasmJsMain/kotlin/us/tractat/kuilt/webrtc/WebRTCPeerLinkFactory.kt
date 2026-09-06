@@ -31,6 +31,38 @@ import kotlin.random.Random
  * the room is already pinned by this factory.
  *
  * Wasm-only at launch.
+ *
+ * ## Where this stands against the universal factory convention (#1430)
+ *
+ * This is a [Loom] with a public constructor, so the convention's four shared knobs — `selfId`,
+ * `policy`, `weaveTimeout`, `dispatcher` — do apply to it. One of them is a genuine exemption; the
+ * other three are **honoured internally but unreachable through [weave]**, which is a gap rather
+ * than an exemption. Recorded here so the next reader does not mistake the second group for the
+ * first:
+ *
+ * - **`selfId` — exempt.** Identity is minted per weave inside `connect`, from the rendezvous's own
+ *   `sessionName` (`"<displayName>-<8 random letters>"`), and that prefix is what labels this peer
+ *   at the far end once the id frame crosses the data channel. A loom-level `selfId` would either
+ *   be overwritten per weave — the silently-ignored argument the convention exists to prevent — or
+ *   would displace the display-name labelling this fabric's [Loom.join] contract promises. Determinism
+ *   for tests already has its seam here: the `random` parameter.
+ * - **`policy` — honoured, unreachable.** `buildLink` takes a [DeliveryPolicy] and feeds it to the
+ *   user-payload [Spool], but its single call site passes nothing, so every seam this factory
+ *   weaves is pinned to [DeliveryPolicy.Reliable].
+ * - **`dispatcher` — honoured, unreachable.** [WebRTCPeerLink] accepts a dispatcher for its
+ *   internal scope; this factory constructs it without one, pinning it to
+ *   [kotlinx.coroutines.Dispatchers.Default].
+ * - **`weaveTimeout` — honoured, unreachable, and the gap is user-visible.** The handshake clock is
+ *   real: `HandshakeRunner.awaitConnected` wraps the data-channel wait in a `withTimeout`, and
+ *   [us.tractat.kuilt.core.LoomDefaults.WEAVE_TIMEOUT] is the same 30 s this fabric already chose.
+ *   But [weave] calls `connect` without a timeout, so it always takes that default, and the only
+ *   public surface that can widen it is [openWithServerRoleResult] — which additionally requires a
+ *   [WebSocketSignalingChannel]. So a consumer arriving through the plain [Loom] contract cannot
+ *   change it, even though `DEFAULT_HANDSHAKE_TIMEOUT_MS`'s own documentation says two WASM tabs
+ *   may stagger by 30–60 s during bundle load and that such callers *should* pass a larger value.
+ *   Note the clock also starts late — it covers the offer/answer/ICE exchange but not the
+ *   preceding `signaling.open(room)` dial — so it bounds the fabric's handshake rather than the
+ *   whole rendezvous that constant describes.
  */
 public class WebRTCPeerLinkFactory
     internal constructor(
