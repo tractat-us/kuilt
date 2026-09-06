@@ -38,8 +38,10 @@ import kotlin.test.assertTrue
  *
  * **What this does NOT establish.** The floor stops a *low*-term forgery and a stale/replayed/buggy
  * sender. The §5.4.1 domination lever of #1876 wants a *high* `lastIncludedTerm` and the attacker
- * picks the term, so this is bounded hardening, not a fix for the Byzantine case (#1876/#1907), and
- * not the leader-identity check that is blocked on #1906.
+ * picks the term, so this is bounded hardening, not a fix for the Byzantine case — whose
+ * authorization half is still open under #1907 (#1876, the unauthenticated-metadata half, is
+ * closed) — and not the leader-identity check, which landed separately as `RaftStorage.leaderForTerm`
+ * (#1906) and is what `RefusalGate` authenticates a sender against.
  */
 internal class SnapshotCommittedTermFloorTest {
 
