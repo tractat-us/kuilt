@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -165,6 +166,20 @@ internal class OneShotConnectionSource(private val first: Connection) : Connecti
  *
  * The count is what separates "closed once" from "closed again by an over-reaching teardown" — a
  * [CompletableDeferred] latches, so [closed] alone cannot see a second close.
+ *
+ * ## Its [close] **suspends** first, and that is what pins the `NonCancellable` shield
+ *
+ * Every real transport close suspends; [connectionPair]'s does not (`Spool.close` is a plain channel
+ * close), and neither does the [singleCollection] wrapper's own bookkeeping. Measured on this branch:
+ * with a non-suspending recorder both arms above stayed **green after `withContext(NonCancellable)`
+ * was deleted from `handshakeLink`** — the close ran to completion on an already-cancelled job simply
+ * because it never reached a suspension point. That would have left the fix's whole design decision
+ * (a shield, rather than `closeBestEffort`'s live `ensureActive`) unmeasured, and it is the "fixture
+ * configured at exactly the value where the property cannot fail" shape.
+ *
+ * The [yield] is placed **before** the recording deliberately: on a cancelled job an unshielded close
+ * throws there, so nothing is recorded and the arm reds. It is not a delay — no virtual time is
+ * involved — so it adds no timing sensitivity.
  */
 internal class CloseCountingConnection(private val raw: Connection) : Connection {
     private val calls = atomic(0)
@@ -179,9 +194,10 @@ internal class CloseCountingConnection(private val raw: Connection) : Connection
     override val incoming: Flow<ByteArray> get() = raw.incoming
     override suspend fun send(frame: ByteArray) = raw.send(frame)
 
-    /** Records the call **before** delegating: the obligation is that we were closed, not that the
-     *  underlying spool accepted it (every close on this path is best-effort and swallows a refusal). */
+    /** Records the call **before** delegating (the obligation is that we were closed, not that the
+     *  underlying spool accepted it) but **after** one suspension point — see the class KDoc. */
     override suspend fun close() {
+        yield()
         calls.incrementAndGet()
         closed.complete(Unit)
         raw.close()

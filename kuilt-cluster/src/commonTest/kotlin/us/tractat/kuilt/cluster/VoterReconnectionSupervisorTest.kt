@@ -221,6 +221,12 @@ class VoterReconnectionSupervisorTest {
      * Note this leak is **unreachable** on [SeverableInMemoryVoterFabric], whose severed `openLink`
      * suspends *before* `connectionPair()`: no conn is ever created there, so "nothing was closed" is
      * true of a rig that never fired. Hence the explicit precondition below.
+     *
+     * What this arm does **not** pin is the `NonCancellable` shield around that close:
+     * [CloseRecordingConnection]'s `close` never suspends, so it completes on an already-cancelled job
+     * whether or not the shield is there. `MeshHandshakeCancellationCloseTest` in `:kuilt-core` pins
+     * the shield, with a recorder that suspends first; this arm pins the obligation reaching the
+     * supervisor's own path.
      */
     @Test
     fun aRedialCancelledMidHandshakeClosesItsDialedConn() =

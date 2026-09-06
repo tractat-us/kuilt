@@ -121,6 +121,11 @@ class VoterMeshFormationTimeoutTest {
      *
      * The published end's `closeCalls == 1` is the over-reach arm, and it is not a formality: it is
      * green today (the seam closes it once), stays green under the fix, and reds under the wrong fix.
+     * It reads the **dialer** end of a handshake this test asserts *succeeded*, so it is deliberately
+     * blind to what happens on the abandoned ends — and since #2587 each of those is closed twice, by
+     * `handshakeLink` and then by the teardown's register. That double is contract-legal
+     * (`Connection.close` is idempotent) and intended; the two closes cover different slices of the
+     * window between `dial` returning and `addLink` returning, so neither subsumes the other.
      */
     @Test
     fun formationTimeoutClosesTheDialsAbandonedMidHandshake() =

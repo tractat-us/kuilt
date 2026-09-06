@@ -86,6 +86,18 @@ import kotlin.time.Duration
  * @param dial Opens one outbound link: given the dialing voter and the target peer, returns a live
  *   [Connection]. Both the initial formation dial and every redial route through this. The transport
  *   (WebSocket, loopback, …) and any per-peer address mapping live entirely on the caller's side.
+ *
+ *   **It must be cancellation-clean: if the dial is cancelled at any point, every transport resource
+ *   it opened is closed before the `CancellationException` propagates** (#2587). Once `dial` returns,
+ *   the connection is kuilt's to dispose of — a formation dial is closed by the failure teardown
+ *   below, and a handshake abandoned mid-preamble is closed by the mesh itself. But kuilt's ownership
+ *   **cannot begin before `dial` returns**: a coroutine cancelled *as* `dial` resumes takes the
+ *   cancellation instead of the connection, so the continuation never yields a handle anyone here
+ *   could close. Nothing weaker than a guarantee on this side of the boundary closes that hole, and
+ *   it is a real one — a redial is cancelled on the ordinary shutdown path, since [VoterMesh.close]
+ *   begins by cancelling the scope the supervisors run on. This is **documented, not enforced**: no
+ *   in-tree fabric can even demonstrate the window (the in-memory ones do not suspend inside `dial`
+ *   at all, so it is zero-width in every harness and non-zero only over a real socket).
  * @param dispatcher Scheduler for each mesh's per-link read loops (scheduling only — the mesh guards
  *   its own state with primitives). Production passes `Dispatchers.Default`; tests pass a dispatcher
  *   derived from the test scheduler.
@@ -156,8 +168,16 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
 
     // Formation dials this function has opened that no seam has taken ownership of YET. Joined
     // immediately after `dial` returns and left the instant `addLink` returns, so membership means
-    // exactly "the MeshHello exchange is still running" — which on the failure path below means
-    // "abandoned mid-handshake, and nothing but this function can close it" (#2587).
+    // exactly "`addLink` has not returned yet" — which on the failure path below means "abandoned
+    // before any seam took ownership" (#2587).
+    //
+    // **This register is still load-bearing after `handshakeLink` learned to close its own conn.**
+    // The two cover different slices of the same window: `handshakeLink` owns the preamble exchange
+    // (both suspension points), while this register also spans what happens *after* it returns a
+    // Link and before `addLink` does — admission, the dedup lottery, publication. A cancellation
+    // landing in that tail leaves a conn no frame is holding, so removing the register would
+    // reintroduce a narrower version of the same leak. The overlap costs one extra `close()` on a
+    // conn abandoned mid-preamble, which is contract-legal (`Connection.close` is idempotent).
     //
     // Neither boundary can be skipped by a cancellation: no suspension point separates `dial`
     // returning from the join, or `addLink` returning from the leave, and a coroutine is only
@@ -261,16 +281,19 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
                     // Best-effort: one seam refusing to close must not strand its siblings open.
                 }
             }
-            // And the dials no seam ever learned about (#2587). The loop above closes every link a seam
-            // PUBLISHED; a dial still exchanging its MeshHello when the timeout fired never got that far
-            // — `addLink` suspends inside the handshake and the cancellation propagates out of it — so
-            // the seam close provably cannot reach it, and neither can `meshScope.cancel()`: the conn
-            // belongs to the caller's transport, not to any scope this function owns. Left open it is a
-            // live session per stalled dial (over WebSockets, one held until the caller-owned HttpClient
-            // is closed, with the peer seeing an ESTABLISHED session from a voter that has given up) —
-            // the same zombie shape the seam close prevents, one layer down. A stalled dial is not an
-            // edge case: it is what a crashed or slow voter produces, i.e. the ordinary formation
-            // timeout.
+            // And the dials no seam ever took ownership of (#2587). The loop above closes every link a
+            // seam PUBLISHED; a dial the timeout caught before `addLink` returned never got that far, so
+            // the seam close cannot reach it, and neither can `meshScope.cancel()`: the conn belongs to
+            // the caller's transport, not to any scope this function owns. Left open it is a live session
+            // per stalled dial (over WebSockets, one held until the caller-owned HttpClient is closed,
+            // with the peer seeing an ESTABLISHED session from a voter that has given up) — the same
+            // zombie shape the seam close prevents, one layer down. A stalled dial is not an edge case:
+            // it is what a crashed or slow voter produces, i.e. the ordinary formation timeout.
+            //
+            // Since #2587 `handshakeLink` also closes a conn abandoned during the MeshHello exchange
+            // itself, so for the common stall this close is the second one on that conn (idempotent, and
+            // deliberate). It is not redundant: see the register's own comment above for the slice of the
+            // window — after the handshake returns a Link, before `addLink` does — that only this reaches.
             //
             // ONLY the abandoned ones. A conn leaves the register the instant `addLink` returns, so a
             // published link is never in it. That boundary is the point, not an optimisation: closing a

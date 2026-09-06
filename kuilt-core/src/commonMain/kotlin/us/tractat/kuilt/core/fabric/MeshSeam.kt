@@ -78,6 +78,13 @@ public interface Mesh : Seam, PrincipalRoster {
      *   so the preamble read and the read loop share ONE collection of [Connection.incoming] — a cold,
      *   single-collection conn (a stream fabric's `framed()`) works as well as a hot channel-backed
      *   one, exactly as construction does.
+     *
+     *   **A call cancelled during the preamble exchange closes [conn] before the cancellation
+     *   propagates** (#2587) — the mesh does not hand back a connection it abandoned mid-handshake. The
+     *   caller therefore owes nothing on that exit, and a caller that closes it anyway is harmless
+     *   ([Connection.close] is idempotent). Cancellation is the *ordinary* exit here, not an exotic one:
+     *   it is what a formation timeout and every scope teardown deliver, and it is precisely the exit a
+     *   caller-side `runCatching`-style guard cannot see, since those rethrow cancellation by design.
      */
     public suspend fun addLink(conn: Connection)
 }
@@ -489,23 +496,63 @@ private suspend fun buildMesh(
  * later collects the SAME single upstream collection — cold, single-collection connections (a stream
  * fabric's `framed()`) work, not just hot channel-backed ones. The wrapper conn is what the [Link]
  * carries, so dedup/teardown closes and the read loop all operate on it.
+ *
+ * **Any exit without a [Link] closes the connection (#2587).** This frame is the only one that holds
+ * [conn] across both of the preamble's suspension points, so it is the only place that can discharge
+ * the obligation on every exit. The caller-side closes that already exist are all keyed on a *throw* —
+ * [acceptPump]'s `runCatchingCancellable { handle(conn) }.onFailure { conn.close() }` and the voter
+ * reconnection supervisor's identical shape — and [runCatchingCancellable] **rethrows** a
+ * `CancellationException` by construction, so `onFailure` never runs on a cancel. The two sets of
+ * exits are disjoint, and cancellation is the ordinary one: a formation timeout, a `meshScope.cancel()`
+ * and a plain `VoterMesh.close()` all deliver it. Left open the conn is a live session the peer still
+ * sees as ESTABLISHED — over WebSockets, held until the caller-owned `HttpClient` is closed.
+ *
+ * **The close is `NonCancellable`-shielded, and [closeBestEffort] is the wrong tool here.** That
+ * helper's whole design (see its KDoc) is the *unshielded* case, where `ensureActive` is the live
+ * discriminator that lets the caller's own cancellation keep propagating. Here the leaking exit *is*
+ * that cancellation, so without a shield the close would never run at all; and inside a shield this
+ * job cannot be cancelled, so `ensureActive` would be dead code and a rethrow would abort the one
+ * piece of cleanup the shield exists to guarantee. A plain per-item `try`/`catch (Throwable)` inside
+ * the shield is the pattern (`NwLoom.discardUnreturnedSeam`, `CompositeSeam.discardOrphanedPly`).
+ * The original throwable is rethrown *outside* the shield, unconditionally, so a real cancellation
+ * still propagates once the conn is disposed of.
+ *
+ * **[single], not [conn].** The wrapper owns a pump coroutine on its own unparented `SupervisorJob`;
+ * closing it cancels that pump and then closes the delegate, so one close discharges both. Callers
+ * that also close [conn] on their own failure arms therefore close it twice — which is contract-legal
+ * ([Connection.close] is documented *"Idempotent"*) and already happens on the admission-rejection
+ * route today.
  */
 private suspend fun handshakeLink(selfId: PeerId, conn: Connection, dispatcher: CoroutineContext, random: Random): Link {
     // Read the attestation off the ORIGINAL connection before wrapping — the singleCollection
     // wrapper is a plain Connection and would hide the PrincipalAttested marker.
     val principal = (conn as? PrincipalAttested)?.principal
     val single = conn.singleCollection(dispatcher)
-    val myNonce = random.nextBytes(NONCE_BYTES)
-    single.send(MeshWire.encodeHello(selfId, myNonce))
-    // Classification is by TYPE, not by position (#2474). The preamble used to be "whatever the first
-    // frame is", so a peer that opened with data had those bytes fed to `MeshHello.decode`; now the
-    // frame says what it is and anything other than a hello here is refused by name.
-    val remote = when (val first = MeshWire.decode(single.firstFrame())) {
-        is MeshWireFrame.Hello -> first.hello
-        MeshWireFrame.Data, MeshWireFrame.Goodbye ->
-            throw MeshWireOutOfOrderException("mesh handshake: expected a HELLO frame first, got $first")
+    try {
+        val myNonce = random.nextBytes(NONCE_BYTES)
+        single.send(MeshWire.encodeHello(selfId, myNonce))
+        // Classification is by TYPE, not by position (#2474). The preamble used to be "whatever the
+        // first frame is", so a peer that opened with data had those bytes fed to `MeshHello.decode`;
+        // now the frame says what it is and anything other than a hello here is refused by name.
+        val remote = when (val first = MeshWire.decode(single.firstFrame())) {
+            is MeshWireFrame.Hello -> first.hello
+            MeshWireFrame.Data, MeshWireFrame.Goodbye ->
+                throw MeshWireOutOfOrderException("mesh handshake: expected a HELLO frame first, got $first")
+        }
+        return Link(remote.peerId, single, canonicalLinkNonce(myNonce, remote.nonce), principal)
+    } catch (failure: Throwable) {
+        // Shielded so this runs when `failure` IS the cancellation; a plain catch inside, because in
+        // here a CancellationException can only be one the conn's own close minted, and rethrowing it
+        // would skip the rethrow below (#1803/#1824).
+        withContext(NonCancellable) {
+            try {
+                single.close()
+            } catch (_: Throwable) {
+                // Best-effort: the conn refusing to close must not replace the failure being reported.
+            }
+        }
+        throw failure
     }
-    return Link(remote.peerId, single, canonicalLinkNonce(myNonce, remote.nonce), principal)
 }
 
 /** A frame whose type is known but whose POSITION is not one this build accepts — see [MeshWire]. */
