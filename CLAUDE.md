@@ -264,6 +264,19 @@ merge; the deterministic virtual-time siblings do.
   for where a principle was established — it is a claim only when it says the work is outstanding.
   So the closing step is to grep for the **concept** you changed rather than the files you edited,
   and re-read every claim and open-issue citation that lands.
+  The **citation** half has a backstop: `.github/workflows/citation-staleness.yml` runs
+  `.github/scripts/stale-citations.sh` nightly and opens a tracking issue when a comment says work
+  is outstanding under an issue that has since closed. It is deliberately **not** in `ci-required` —
+  the verdict needs GitHub's issue state, which no offline Gradle task can resolve, and a stale
+  citation is not a reason to block someone else's merge. It triggers only on the four verbs that
+  take an issue as their grammatical object (`tracked by`, `blocked on`, `deferred to`,
+  `stays open under`); the looser "openness word near a number" formulation was measured at ~57%
+  precision on this tree, every false positive being `open` attached to a *seam* or a *gap*, so it
+  is not the trigger. A deliberate provenance citation to a closed issue clears with a line-tight
+  `ALLOW-staleCitation: <reason>`, reason mandatory. **It does not see the larger half** — the
+  `Seam.kt` shape above, a claim falsified while its issue is still OPEN, and any outstanding-work
+  claim phrased some other way. Grepping the concept is still the mechanism; this automates only
+  the cheap half, and the script's header lists what it misses.
 - Test methods: no `test` prefix (the `@Test` annotation suffices); multi-assert
   tests use `assertAll()`.
 - **Coroutine test determinism:** types that own a `CoroutineScope` take an
