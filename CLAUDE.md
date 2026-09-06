@@ -170,9 +170,23 @@ source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem
 
 **A cross-target CLAIM needs a cross-target RUN — `jvmTest` is not merely incomplete here, it is misleading (#2592).** Any statement of the form *"this arm never fires"*, *"this tolerance is inert"*, *"this branch is unreachable"* or *"`prefixSafety` is 0 across 80 runs"* is a claim about **every** target, and only `allTests` (or at least one native target plus `wasmJs`) can back it. The three cases above are about *compiling*; this one is about **executing a different trajectory**: a seeded property generator that walks a hash-ordered collection reaches different states on JVM and Kotlin/Native from the same seed (see the seeded-generator rule under *Coroutine test determinism*). So a clean, well-run, 80-sample JVM measurement can be a *correct measurement of the wrong trajectory*, and nothing in the number says so. The near-miss that produced this rule: a JVM measurement of `0 / 80` justified deleting a tolerance, and `:kuilt-heddle:build` reddened on `iosSimulatorArm64` where the same seed reaches breach 17. Before deleting a tolerance, pinning a zero, or removing an "unreachable" arm on the strength of a measurement, run it on a native target too.
 
-The mDNS multicast suite is opt-in because it sends real multicast packets; the
-`-P` flag is forwarded to JVM tests as a system property and to K/N simulator
-tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
+The mDNS multicast suite is opt-in because it sends real multicast packets. The `-P` flag is
+forwarded to JVM tests as a system property, where a JUnit assumption skips them honestly; the K/N
+simulator probe is **excluded at the task level** instead, because Kotlin/Native has no assumption
+API and a `@Test` that reads a gate and returns early reports **passed**, not `skipped` (#2621). See
+`kuilt-mdns/build.gradle.kts`.
+
+**A `-P`-gated probe must never decide at runtime whether to run.** A self-skipping `@Test` is a
+green XML row that says the same thing whether it did the work or none of it, which defeats the one
+check that catches an un-run rig — count the test in `build/test-results/`. Duration is not the
+fallback: `macosArm64Test` reports `time="0.0"` for a Kotlin/Native run that provably completed 3 000
+iterations, so on the one target where a gate *must* be an env var the clock is not a witness at all.
+Gate at the **task** level over `AbstractTestTask` (`Test` silently misses every native target — a
+`KotlinNativeHostTest` is not a `Test` task) so an un-run probe is *absent* from the XML, or on the
+JVM use `Assume.assumeTrue`, which is recorded as `skipped`. `forbidRuntimeSelfSkippingProbe` in the
+root build enforces it. Separately, **every stress probe asserts its own iteration count** — on K/N
+that is the only witness that the body ran, and it is what stops an arm asserting an *absence* from
+passing by never having executed.
 
 Absent `-Pcluster.realsocket.tests=true`, `WebSocketVoterMeshReconnectionTest` and
 `WebSocketVoterMeshFormationTimeoutTest` still compile but self-skip at runtime, so `./gradlew build`
