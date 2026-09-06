@@ -28,6 +28,12 @@ internal interface MultipeerNativeLib : Library {
      * Returns `null` if the underlying ObjC objects could not be created
      * (e.g. invalid arguments).
      *
+     * [selfId] is this device's wire identity — the `PeerId.value` every remote
+     * peer will observe. It is baked into the advertised `MCPeerID.displayName`
+     * (ABI **2**, #1430). Before that the runtime minted its own nonce and the
+     * JVM caller could not know its own id; the parameter is what makes a
+     * JVM-supplied `selfId` real rather than silently ignored.
+     *
      * The caller owns the handle: pair every successful create with exactly
      * one [mc_runtime_destroy].
      */
@@ -35,6 +41,7 @@ internal interface MultipeerNativeLib : Library {
     fun mc_runtime_create(
         displayName: String,
         serviceType: String,
+        selfId: String,
     ): Pointer?
 
     /**
@@ -239,8 +246,11 @@ internal interface MultipeerNativeLib : Library {
          * `PROTOCOL_VERSION` constant compiled into `Bridge.kt` on the
          * macOS K/N side. A mismatch indicates a stale or wrong-arch dylib
          * is on the classpath — almost certainly a Gradle config bug.
+         *
+         * **2** since #1430: [mc_runtime_create] gained a third `const char*`,
+         * the caller-supplied wire identity.
          */
-        const val EXPECTED_PROTOCOL_VERSION: Int = 1
+        const val EXPECTED_PROTOCOL_VERSION: Int = 2
 
         /**
          * Loads the dylib if available, else returns `null`. Idempotent —

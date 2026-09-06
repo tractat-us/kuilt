@@ -27,9 +27,10 @@ import kotlin.native.CName
 public fun kuilt_protocol_version(): Int = PROTOCOL_VERSION
 
 /**
- * Bridge ABI version. The JVM side expects `1`; mismatch is a build error.
+ * Bridge ABI version. The JVM side expects `2`; mismatch is a build error.
  *
  * Bump only when an existing cdecl signature changes. Adding new exports
- * does not require a bump.
+ * does not require a bump. `1` → `2` (#1430): `mc_runtime_create` gained a
+ * third `const char*` argument, the caller-supplied wire identity.
  */
-private const val PROTOCOL_VERSION: Int = 1
+private const val PROTOCOL_VERSION: Int = 2

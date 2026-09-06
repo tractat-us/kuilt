@@ -2,8 +2,10 @@ package us.tractat.kuilt.multipeer
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.TransportCapability
@@ -11,10 +13,18 @@ import us.tractat.kuilt.core.TransportCapability
 /**
  * Android unavailability stub. MultipeerConnectivity is an Apple-platform API
  * and is not available on Android.
+ *
+ * Every constructor argument is ignored, including `selfId` and `policy`. That is
+ * not the silently-ignored-parameter defect #1430 exists to prevent: [weave] throws
+ * unconditionally, so this class never mints a seam for an identity to name or a
+ * delivery policy to govern. The parameters exist only because an `actual` must
+ * match its `expect`.
  */
 public actual class MultipeerPeerLinkFactory actual constructor(
-    displayName: String,
-    serviceType: String,
+    @Suppress("UNUSED_PARAMETER") displayName: String,
+    @Suppress("UNUSED_PARAMETER") serviceType: String,
+    @Suppress("UNUSED_PARAMETER") selfId: PeerId,
+    @Suppress("UNUSED_PARAMETER") policy: DeliveryPolicy,
 ) : Loom {
     /**
      * [FabricAvailability.Unavailable], not the roleless [FabricAvailability.Available] this used to

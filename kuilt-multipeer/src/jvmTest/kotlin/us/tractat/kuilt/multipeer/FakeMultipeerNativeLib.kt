@@ -26,6 +26,7 @@ internal class FakeMultipeerNativeLib : MultipeerNativeLib {
     override fun mc_runtime_create(
         displayName: String,
         serviceType: String,
+        selfId: String,
     ): Pointer = Pointer(0x1L)
 
     override fun mc_runtime_destroy(handle: Pointer?) = Unit

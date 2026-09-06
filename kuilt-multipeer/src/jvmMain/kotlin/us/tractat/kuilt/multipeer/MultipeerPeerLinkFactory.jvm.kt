@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.ActiveSeamSlot
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
@@ -15,8 +16,10 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.freshPeerId
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.multipeer.internal.BridgePeerLink
+import us.tractat.kuilt.multipeer.internal.MultipeerPeerId
 
 /**
  * JVM-side `MultipeerPeerLinkFactory`, backed by [MultipeerNativeLib] and
@@ -35,6 +38,8 @@ import us.tractat.kuilt.multipeer.internal.BridgePeerLink
 public actual class MultipeerPeerLinkFactory actual constructor(
     private val displayName: String,
     internal val serviceType: String,
+    private val selfId: PeerId,
+    private val policy: DeliveryPolicy,
 ) : Loom {
     /**
      * Internal constructor for unit tests: accepts a pre-built [MultipeerNativeLib]
@@ -46,7 +51,9 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         serviceType: String,
         injectedLib: MultipeerNativeLib?,
         injectedRuntimeHandle: Pointer?,
-    ) : this(displayName, serviceType) {
+        selfId: PeerId = freshPeerId(),
+        policy: DeliveryPolicy = DeliveryPolicy.Reliable,
+    ) : this(displayName, serviceType, selfId, policy) {
         nativeLibField = injectedLib
         runtimeHandleField = injectedRuntimeHandle
     }
@@ -61,7 +68,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     }
 
     private val runtimeHandle: Pointer? by lazy {
-        runtimeHandleField ?: nativeLib?.mc_runtime_create(displayName, serviceType)
+        runtimeHandleField ?: nativeLib?.mc_runtime_create(displayName, serviceType, selfId.value)
     }
 
     /**
@@ -161,17 +168,27 @@ public actual class MultipeerPeerLinkFactory actual constructor(
                 nativeLib = lib,
                 sessionHandle = session,
                 selfId = resolveSelfId(lib, runtime),
+                policy = policy,
             )
         }
     }
 
     /**
-     * The wire [PeerId] for this device. The native runtime decorates the
-     * advertised `MCPeerID.displayName` with a per-device nonce (collision
-     * resistance, #1494), so `selfId` MUST come from the native wire name to
-     * match what remote peers observe — not the raw constructor [displayName].
-     * A fake native lib writes nothing (`<= 0`); in that case fall back to the
-     * raw name so the fake-backed conformance path stays consistent.
+     * The wire [PeerId] for this device, read back **out of the native runtime**
+     * rather than assumed from [selfId].
+     *
+     * The runtime bakes the identity into the advertised `MCPeerID.displayName`
+     * (#1494), and every remote derives its `PeerId` from that string, so this side
+     * has to derive it the same way — [MultipeerPeerId.peerId], the one mapping the
+     * Apple half also uses. Since #1430 the identity in that name is the [selfId]
+     * passed to `mc_runtime_create`, so the round-trip returns [selfId]; going
+     * through the wire name anyway is what makes that a *checked* property instead
+     * of an assumed one, and is the only thing that would catch a dylib whose
+     * `mc_runtime_create` predates the identity parameter.
+     *
+     * A fake native lib writes nothing (`<= 0`); in that case fall back to [selfId]
+     * directly, which is what such a lib would have advertised had it advertised
+     * anything.
      */
     private fun resolveSelfId(
         lib: MultipeerNativeLib,
@@ -179,8 +196,8 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     ): PeerId {
         val buf = ByteArray(SELF_NAME_BUFFER_BYTES)
         val written = lib.mc_runtime_display_name(runtime, buf, buf.size)
-        val name = if (written > 0) String(buf, 0, written, Charsets.UTF_8) else displayName
-        return PeerId(name)
+        if (written <= 0) return selfId
+        return MultipeerPeerId.peerId(String(buf, 0, written, Charsets.UTF_8))
     }
 
     private companion object {

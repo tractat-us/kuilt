@@ -9,6 +9,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.core.freshPeerId
 
 /**
  * Verifies that [MultipeerPeerLinkFactory] satisfies every invariant in
@@ -49,9 +50,15 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
     private var bus: DeliveringFakeMultipeerNativeLib? = null
 
     override fun newLoomPair(): Pair<Loom, Loom> {
+        // The identities the two ends will actually carry. Since #1430 a factory's
+        // `selfId` is an INPUT, so the bus has to be told the same two values rather
+        // than assuming the display names double as ids — which is what they used to
+        // do, back when the wire PeerId was the whole decorated display name.
+        val hostId = freshPeerId()
+        val joinerId = freshPeerId()
         val bus = DeliveringFakeMultipeerNativeLib(
-            hostPeerId = HOST_DISPLAY_NAME,
-            joinerPeerId = JOINER_DISPLAY_NAME,
+            hostPeerId = hostId.value,
+            joinerPeerId = joinerId.value,
         )
         this.bus = bus
         val hostFactory = MultipeerPeerLinkFactory(
@@ -59,12 +66,14 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
             serviceType = FAKE_SERVICE_TYPE,
             injectedLib = bus,
             injectedRuntimeHandle = DeliveringFakeMultipeerNativeLib.HOST_SESSION,
+            selfId = hostId,
         )
         val joinerFactory = MultipeerPeerLinkFactory(
             displayName = JOINER_DISPLAY_NAME,
             serviceType = FAKE_SERVICE_TYPE,
             injectedLib = bus,
             injectedRuntimeHandle = DeliveringFakeMultipeerNativeLib.JOINER_SESSION,
+            selfId = joinerId,
         )
         return hostFactory to joinerFactory
     }

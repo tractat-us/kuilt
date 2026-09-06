@@ -2,6 +2,9 @@ package us.tractat.kuilt.multipeer
 
 import org.junit.Assume.assumeTrue
 import us.tractat.kuilt.core.discovery.DiscoveryKind
+import us.tractat.kuilt.core.freshPeerId
+import us.tractat.kuilt.multipeer.internal.MultipeerPeerId
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -34,7 +37,7 @@ class MultipeerNativeLibTest {
     }
 
     @Test
-    fun `runtime create + display-name round-trip + destroy on macOS`() {
+    fun `runtime create + selfId round-trip + destroy on macOS`() {
         assumeTrue(
             "libkuilt.dylib is macOS-only; this test no-ops elsewhere.",
             isMacOs(),
@@ -42,22 +45,22 @@ class MultipeerNativeLibTest {
         val lib = MultipeerNativeLib.load()
         assertNotNull(lib, "Native.load returned null on macOS")
 
-        val handle = lib.mc_runtime_create("Test Mac", "kuilt-test")
+        // The end-to-end proof of #1430 on the JVM path: a caller-chosen PeerId
+        // crosses the cdecl ABI, is baked by the K/N runtime into a real ObjC
+        // MCPeerID.displayName, and comes back out the same. Nothing else here can
+        // establish that the JVM-supplied selfId is not silently overridden native-side.
+        val selfId = freshPeerId()
+        val handle = lib.mc_runtime_create("Test Mac", "kuilt-test", selfId.value)
         assertNotNull(handle, "mc_runtime_create returned null for valid args")
         try {
-            // Round-trip the WIRE self-name through the cdecl ABI. The runtime
-            // decorates the display name with a per-device nonce for collision
-            // resistance (#1494), so the round-trip is "Test Mac#<nonce>", and
-            // MultipeerPeerId.humanName recovers the original "Test Mac".
             val buf = ByteArray(64)
             val written = lib.mc_runtime_display_name(handle, buf, buf.size)
             assertTrue(written > 0, "mc_runtime_display_name returned $written; expected positive")
             val name = String(buf, 0, written, Charsets.UTF_8)
-            assertTrue(name.startsWith("Test Mac#"), "expected a nonce-decorated wire name, got '$name'")
-            assertEquals(
-                "Test Mac",
-                us.tractat.kuilt.multipeer.internal.MultipeerPeerId.humanName(name),
-                "human name must round-trip out of the decorated wire name",
+            assertAll(
+                { assertEquals("Test Mac#${selfId.value}", name, "the runtime must advertise the caller's identity") },
+                { assertEquals(selfId, MultipeerPeerId.peerId(name), "the wire PeerId must BE the caller's selfId") },
+                { assertEquals("Test Mac", MultipeerPeerId.humanName(name), "the human name must still round-trip") },
             )
         } finally {
             lib.mc_runtime_destroy(handle)
@@ -110,7 +113,7 @@ class MultipeerNativeLibTest {
         val lib = MultipeerNativeLib.load()
         assertNotNull(lib, "Native.load returned null on macOS")
 
-        val runtime = lib.mc_runtime_create("Host Smoke", "kuilt-test")
+        val runtime = lib.mc_runtime_create("Host Smoke", "kuilt-test", freshPeerId().value)
         assertNotNull(runtime, "mc_runtime_create returned null")
         try {
             // Open a host session — starts advertising on the LAN. We don't
