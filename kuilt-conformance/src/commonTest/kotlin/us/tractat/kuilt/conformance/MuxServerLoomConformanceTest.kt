@@ -80,19 +80,23 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
      * `collapsesPeersOnTear = true` is the obligation this harness exists to pin — it was untrue
      * of `RoomHubSeam` until #1869, and nothing in the suite could see it.
      *
-     * `reportsPeerLoss = false` is a **harness** gap, and unusually it understates the fabric —
-     * `RoomHubSeam` reports peer loss correctly, and this very harness proves it: its
-     * [injectMembershipDrain] closes the client's underlying connection and
-     * [SeamConformanceSuite.peersDrainWithoutTearOnInjectedMembershipDrain] then observes the hub
-     * deregister the peer while staying Woven. What cannot be shown is
-     * [SeamConformanceSuite.survivorStopsAdvertisingADepartedPeer], because that obligation departs
-     * by closing the **joiner seam this harness hands back**, which is a `NamedMux` *channel view*:
-     * `MuxBase.ChannelView.close` closes its own delivery spool and returns, while `state` and `peers`
-     * keep delegating to a base connection that is still very much alive. So no peer departs, the hub
-     * is right to keep advertising it, and the obligation's Torn precondition names that rather than
-     * wedging. Declaring the gap here is the honest record; #2372 tracks the underlying question —
-     * whether a channel view that never reaches [us.tractat.kuilt.core.SeamState.Torn] on `close()`
-     * satisfies `Seam` at all, given `closeDrivesStateTornNormal` is ungated core.
+     * `reportsPeerLoss = false` and it understates the fabric — `RoomHubSeam` reports peer loss
+     * correctly, and this very harness proves it: its [injectMembershipDrain] closes the client's
+     * underlying connection and [SeamConformanceSuite.peersDrainWithoutTearOnInjectedMembershipDrain]
+     * then observes the hub deregister the peer while staying Woven. What cannot be shown is
+     * [SeamConformanceSuite.survivorStopsAdvertisingADepartedPeer], because that obligation departs by
+     * closing the **joiner seam this harness hands back**, which is a `NamedMux` *channel view*.
+     *
+     * **The reason changed under #2372 and the flag did not, which is the interesting part.** It used
+     * to be that a closed view never reached [us.tractat.kuilt.core.SeamState.Torn] at all, so the
+     * obligation's Torn precondition fired and named the cause. #2372 fixed that: a closed view now
+     * latches its own `Torn` and collapses its own roster. Dropping the flag was then measured, and
+     * the obligation **wedges** — 30 of 31 green, `survivorStopsAdvertisingADepartedPeer` running to
+     * `runTest`'s ceiling. The precondition passes and the obligation itself never becomes true,
+     * because a per-channel close has **no wire representation**: nothing is emitted, the hub
+     * deregisters a spoke only when the underlying link tears, and so it is *correctly* still
+     * advertising a client that told it nothing. That residue is #2665, and this gap points there
+     * rather than at #2372, whose half is done.
      *
      * (Precedent for a flag describing the *harness* rather than the fabric: `NwConformanceTest`
      * declares `securesTransport = false` for a fabric whose real transport is TLS-PSK, because the
@@ -109,7 +113,9 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
         "securesTransport" to CapabilityGaps.SECURES_TRANSPORT,
         "meshDelivery" to CapabilityGaps.MESH_DELIVERY,
         "reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY,
-        "reportsPeerLoss" to "https://github.com/tractat-us/kuilt/issues/2372",
+        // A *fabric's own* blocking issue at the declaration site, which is what
+        // `CapabilityGaps`' KDoc asks for; the shared constants stay docs anchors.
+        "reportsPeerLoss" to "https://github.com/tractat-us/kuilt/issues/2665",
     )
 
     /**
@@ -152,9 +158,8 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
      * link: killing the client's base seam deregisters that spoke and leaves the hub
      * [us.tractat.kuilt.core.SeamState.Woven] with every other spoke intact, which is precisely why
      * that same injection is this harness's [injectMembershipDrain] directly above. The obligation
-     * needs *both* ends to latch `Torn`, and the survivor here structurally cannot. (Compounded by
-     * #2372: the joiner handed back is a `NamedMux` channel view that does not reach `Torn` even on
-     * its own `close()`.)
+     * needs *both* ends to latch `Torn`, and the survivor here structurally cannot — a fact about the
+     * star's topology, so it is unaffected by what the joiner does.
      *
      * [midSessionDeathDeclarationIsHonest] refutes that claim's cheap failure mode rather than
      * believing it; [ObligationDeclaration] states what the arm still cannot detect.
@@ -165,11 +170,13 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
      * and the same one [injectMembershipDrain] performs.
      *
      * **Without this override the refutation is vacuous here, and that nearly shipped (#2568 review).**
-     * `MuxBase.ChannelView.close` drains its own delivery spool and returns while `state` and `peers`
-     * keep delegating to a base connection that is still alive (#2372) — so the default
-     * `joiner.close()` departs nobody, the hub stays `Woven` because *nothing happened*, and the
-     * arm's no-tear conclusion would have been green by absence rather than by topology. Closing the
-     * base seam is a real departure: the hub deregisters the spoke from every room it joined.
+     * A per-channel close is a local unsubscribe with **no wire representation**: since #2372 it does
+     * latch the view's own `Torn` and collapse the view's own roster, but nothing leaves the machine,
+     * so the base connection carries on and the hub deregisters nobody (#2665). The default
+     * `joiner.close()` therefore departs nobody, the hub stays `Woven` because *nothing reached it*,
+     * and the arm's no-tear conclusion would have been green by absence rather than by topology.
+     * Closing the base seam is a real departure: the hub deregisters the spoke from every room it
+     * joined.
      */
     override suspend fun departCounterpart(host: Seam, joiner: Seam): Boolean {
         val base = pair?.clientBase ?: return false
@@ -182,11 +189,11 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
             "a room hub does not die of one link: killing the client's base seam deregisters that " +
                 "spoke and leaves the hub Woven with every other spoke intact, so the survivor " +
                 "cannot latch Torn. That same injection is this harness's membership drain, which " +
-                "this harness proves. The JOINER half is separately contaminated by #2372 (the " +
-                "NamedMux channel view does not reach Torn even on its own close()) - named here so " +
-                "this arm is not read as laundering that open defect into a by-design claim: the " +
-                "obligation needs BOTH ends to latch Torn and the star's survivor never can, so the " +
-                "declaration stays accurate however #2372 resolves",
+                "this harness proves. The claim is about the star's topology alone, so it holds " +
+                "whatever the joiner does: the obligation needs BOTH ends to latch Torn and the " +
+                "star's survivor never can. Stated that way deliberately - it used to also name " +
+                "#2372 (the channel view not reaching Torn on its own close), and that half is now " +
+                "fixed without the declaration needing to change",
         )
 
     private companion object {
