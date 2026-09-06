@@ -153,9 +153,10 @@ internal class ManagedSeam(
      * effect at a *suspension point*. `StateFlow.collect` checks `ensureActive()` before each emit,
      * so a tracker that has already entered this function has no suspension point left at which the
      * cancellation could land — it runs to completion and its write stands over whatever the closer
-     * or swapper wrote. Measured on the real thing before this guard existed: ~30% of closes and
-     * ~40% of swaps left the seam settled on a roster it had no route to, permanently, because both
-     * writers had by then retired (`ManagedSeamRosterCollapseConcurrencyTest`).
+     * or swapper wrote. Measured on the real thing before this guard existed: roughly **a third** of
+     * closes (893 of 3 000) and a third of swaps (811 of 3 000) left the seam settled on a roster it
+     * had no route to, permanently, because both writers had by then retired
+     * (`ManagedSeamRosterCollapseConcurrencyTest`).
      *
      * Identity rather than a `collapsed` flag, deliberately. It covers [swap] as well as [close]
      * with one test — the outgoing tracker is stale for exactly the same reason the post-close one
