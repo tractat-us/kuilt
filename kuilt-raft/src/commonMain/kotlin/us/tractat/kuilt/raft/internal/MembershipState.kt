@@ -96,10 +96,17 @@ internal sealed interface MembershipState {
      * both sides are simultaneously active during the joint phase, so a node voting on
      * either side is a legitimate voter.
      *
-     * Empty ONLY in the pre-bootstrap learner seed (`ClusterConfig(voters = emptySet(),
+     * Empty in the pre-bootstrap learner seed (`ClusterConfig(voters = emptySet(),
      * learners = {self})`) — a node that has not yet learned the cluster's config. A real
      * Raft cluster always has at least one voter, so an established voter's set is never
      * empty and always contains itself.
+     *
+     * **A peer can no longer put an established node back into that state** (#2663):
+     * `RaftEngine.configPayloadRefusal` drops a wire [us.tractat.kuilt.raft.ConfigPayload] whose `new`
+     * — or, for a joint payload, whose `old` — names no voters, on both the `AppendEntries` and the
+     * `InstallSnapshot` lane. Two ways in remain, and neither is a remote peer: a consumer's own
+     * `bootstrapConfig`, which nothing validates, and a snapshot already on disk carrying such a
+     * config, since `RaftEngine.checkedRestoredSnapshotMeta` bounds index and term but not `config`.
      */
     val voters: Set<NodeId>
         get() = when (this) {

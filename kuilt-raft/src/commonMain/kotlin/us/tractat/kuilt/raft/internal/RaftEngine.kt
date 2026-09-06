@@ -1986,8 +1986,11 @@ internal class RaftEngine(
      * `0..MAX_PLAUSIBLE_INDEX` a Byzantine voter can still advance a follower's `snapshotIndex`,
      * `commitIndex` and compaction floor to a position it never reached, and wipe its log. That is
      * not fixable at this boundary; it needs authentication or a cross-frame invariant. See #1876.
-     * One further unvalidated field of this same frame is out of scope here: `config` (#1880). The
-     * reassembly buffer behind `done = false` is no longer unbounded — it is capped by
+     * The same frame's `config` is bounded here too since #2663, but only for *well-formedness* — see
+     * [configPayloadRefusal]. Its **content** stays unauthenticated by decision: #1880 closed as
+     * accepted-unauthenticated because a recipient cannot separate a forged config from an honest
+     * arbitrarily-distant one, and the mechanism that would is #1907, not a better local check.
+     * The reassembly buffer behind `done = false` is no longer unbounded — it is capped by
      * `RaftConfig.snapshotTotalCeiling` in [SnapshotReceiver] (#1881) — but that is a resource bound,
      * not a validity one, and it lives there rather than in this frame-shape check.
      *
@@ -2023,7 +2026,10 @@ internal class RaftEngine(
             }
             return RefusalGate.InstallSnapshotTermOutOfRange
         }
-        return null
+        // Every chunk carries the same `config` (sendSnapshotChunk copies it from the SnapshotMeta), so
+        // checking it here — on every chunk, ahead of reassembly — refuses a poisoned transfer at its
+        // first frame rather than at the last one, and cannot be evaded by poisoning only chunk n.
+        return configPayloadRefusal(from, "onInstallSnapshot", m.config)
     }
 
     /**
@@ -2331,6 +2337,63 @@ internal class RaftEngine(
      * there is blind rather than merely ambiguous. The `RefusalGate?` return is also what makes a
      * fourth bound added here unable to compile without naming itself.
      */
+    /**
+     * §6 well-formedness of a [ConfigPayload] **arriving over the wire**: every currently-active side
+     * must name at least one voter (issue #2663). Shared by [batchRefusal] (an `AppendEntries` entry's
+     * `config`) and [snapshotChunkRefusal] (an `InstallSnapshot`'s), which are the only two routes by
+     * which a peer's config reaches [recomputeMembership].
+     *
+     * **What an empty `new` costs.** The §5.2 leader-authority gate in [onMessage] is conditioned on
+     * `membershipState.voters.isNotEmpty()` — a deliberate carve-out for the pre-bootstrap learner seed,
+     * which must accept the leader's frames to catch up at all. That carve-out was reasoned about in the
+     * arming direction only, and this is the reverse: a config that un-seats every voter puts an
+     * *established* node back into the unarmed state, permanently, for every subsequent sender. What
+     * follows is not the term inflation a spoof-only reading suggests — the log path does no `from`
+     * validation, so an arbitrary non-voter's `AppendEntries` then truncates the victim's committed log
+     * and replaces it, and installs itself as `_leader`. Reproduced in #2663.
+     *
+     * **What an empty `old` costs, which is different.** [MembershipState.Joint]'s `voters` is the
+     * *union* of both sides, so an empty `old` leaves §5.2 armed. It takes out quorum instead:
+     * [MembershipState.voterQuorumReached] and [MembershipState.committedIndex] take **independent**
+     * majorities of each side, and a majority of the empty set is unreachable — `quorumSize(∅)` is 1
+     * and nothing can be granted from it. One frame and the node commits nothing and wins no election,
+     * for good. Both sides are bounded because either alone is sufficient damage.
+     *
+     * **Checkable without trust, and without local state.** This reads only the payload, which is what
+     * separates it from the *content* check #1880 weighed and rejected — "is this config reachable from
+     * what I last committed" cannot work, because a long-absent node must be catchable-up to an
+     * arbitrarily distant config and the intermediate entries are exactly what compaction removed. That
+     * issue closed as accepted-unauthenticated with the observation that **well-formedness is** locally
+     * checkable here; this is that half. #1898's staleness relaxation is untouched: a node holding
+     * `{A,B,X}` still adopts `{X,C,D}`. The residue is authorization, tracked under #1907.
+     *
+     * **No honest sender can emit one.** [onChangeMembership] refuses an empty target voter set, so
+     * every in-tree `ConfigPayload` is built from a non-empty one; `old` is a settled `Simple` config
+     * held by a *leader*, and a node whose voter set is empty can never win an election to become one
+     * ([MembershipState.electionTargets] is empty and it cannot self-credit). The learner seed is a
+     * `bootstrapConfig`, not a wire payload, which is why the predicate lives here and not in a
+     * `ClusterConfig` `init` — a `require` there would make the seed unconstructible.
+     *
+     * **Disposition: drop the frame**, like every sibling validator, and for the same two reasons —
+     * there is no honest sender to answer, and a `require` on the actor loop would convert one hostile
+     * frame into permanent node death (#1818). Not a repair: a config is an identity, and clamping one
+     * launders a forgery into the most favourable valid value (#1817).
+     */
+    private fun configPayloadRefusal(from: NodeId, rpc: String, config: ConfigPayload?): RefusalGate? {
+        if (config == null) return null
+        val emptySide = when {
+            config.new.voters.isEmpty() -> "new"
+            config.old != null && config.old.voters.isEmpty() -> "old"
+            else -> return null
+        }
+        debug {
+            "$rpc($from): DROP — the config payload's `$emptySide` side names no voters ($config); a " +
+                "wire config may not leave an active side voterless (§5.2's gate is conditioned on a " +
+                "non-empty voter set, and a joint majority of the empty set is unreachable)"
+        }
+        return RefusalGate.ConfigPayloadEmptyVoterSet
+    }
+
     private fun batchRefusal(from: NodeId, m: RaftMessage.AppendEntries): RefusalGate? {
         // A negative probe index is nonsense, and one within `entries.size + 1` of Long.MAX_VALUE
         // would overflow the expected-index arithmetic below. Neither is reachable honestly.
@@ -2348,6 +2411,7 @@ internal class RaftEngine(
                 debug { "onAppendEntries($from): DROP — entries[$i].term=${entry.term} outside 0..${m.term} (no entry may carry a term above the leader's)" }
                 return RefusalGate.AppendEntriesEntryTermOutOfRange
             }
+            configPayloadRefusal(from, "onAppendEntries", entry.config)?.let { return it }
         }
         return null
     }
@@ -3618,6 +3682,16 @@ internal class RaftEngine(
         // The instant it applies the config entry that seats voters, the gate arms and
         // every subsequent leader→peer frame is validated. Mirrors RoutedRaftTransport's
         // player-side `origin ∈ voters()` check (the relay-side half of #1383).
+        //
+        // That carve-out was reasoned about in the ARMING direction only, and the reverse direction
+        // disarmed it: a wire config un-seating every voter returned an established node to the
+        // pre-bootstrap state permanently, for every subsequent sender — and with this gate off the
+        // log path does no `from` validation at all, so the next non-voter's AppendEntries truncated
+        // the victim's committed log and replaced it (#2663, reproduced). Both routes a peer's config
+        // arrives by are now bounded in [configPayloadRefusal]; what this predicate rests on is that
+        // `state.membershipState.voters` cannot be emptied by a remote frame. It can still be empty
+        // from a consumer's own `bootstrapConfig` and from a snapshot already on disk, neither of
+        // which is a peer — see [MembershipState.voters].
         //
         // This gate is the module's exemplar of the "defend — the recipient holds a local
         // witness" half of its trust policy; the accepted, unauthenticated exposures on the
