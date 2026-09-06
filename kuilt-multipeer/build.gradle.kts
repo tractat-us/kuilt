@@ -81,7 +81,20 @@ kotlin {
             implementation(libs.kotlin.logging)
         }
         // MANUAL appleMain → disables default-hierarchy auto-wiring → hand-wire ALL intermediates:
-        val appleMain by creating { dependsOn(commonMain.get()) }
+        val appleMain by creating {
+            dependsOn(commonMain.get())
+            // atomicfu, on APPLE PRODUCTION source only — MCSessionLink's `peersLock`, the roster
+            // guard of #2626. Kotlin/Native has no stdlib mutual-exclusion primitive, and the
+            // read-then-write it closes cannot be closed lock-free (the collapse writes
+            // `setOf(selfId)`, frequently the value the flow already holds, so a `compareAndSet`
+            // succeeds against it instead of retrying — see `MCSessionLink.publishRoster`).
+            //
+            // Declared HERE rather than in commonMain so it reaches the ios/macos publications and
+            // no others: the JVM twin `BridgePeerLink` gets the same primitive from the JDK, and
+            // wasm/android inherit nothing. The appleTest note below used to say this module had no
+            // production use of atomicfu at all; that is what changed.
+            dependencies { implementation(libs.kotlinx.atomicfu) }
+        }
         val iosArm64Main by getting { dependsOn(appleMain) }
         val iosSimulatorArm64Main by getting { dependsOn(appleMain) }
         val macosMain by creating { dependsOn(appleMain) }
@@ -95,12 +108,15 @@ kotlin {
         // one appleTest source set.
         val appleTest by creating {
             dependsOn(commonTest.get())
-            // atomicfu is a TEST-only dependency for this module. It used to sit in commonMain for
-            // MCSessionLink's single-shot `tornDown` atomic; SeamStateGate's own latch replaced that
-            // (#1803), leaving no production use — but a commonMain `implementation` still ships in
-            // the published POM, so a dead production dep is a consumer-visible cost, not just
-            // clutter. The one remaining use is `reentrantLock` in the apple discovery-source
-            // conformance binding, which is here.
+            // atomicfu is no longer test-only for this module — appleMain declares it above for
+            // MCSessionLink's roster lock (#2626). This declaration is kept anyway: it is what
+            // `reentrantLock` in the apple discovery-source conformance binding below depends on,
+            // and it says so at the source set that uses it rather than relying on the main
+            // compilation's association to supply it.
+            //
+            // The rule the earlier note recorded still stands and is why the production
+            // declaration went to appleMain rather than commonMain: an `implementation` ships in
+            // the published POM, so a dependency reaches only the targets that genuinely need it.
             //
             // appleMain's MultipeerServiceBrowser is bound to DiscoverySourceConformanceSuite here
             // (kuilt #2410). It runs against the real MCNearbyServiceBrowser with its delegate driven by
