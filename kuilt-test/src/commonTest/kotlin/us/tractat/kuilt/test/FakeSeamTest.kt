@@ -102,6 +102,52 @@ class FakeSeamTest {
         assertEquals(SeamState.Woven, seam.state.value)
     }
 
+    // ── weave() out of Torn is refused — Torn is terminal (#2622) ──────────────
+    //
+    // `tear()` is guarded and `weave()` was not, so the two arms of one state machine disagreed about
+    // whether `Torn` is terminal. The refusal is LOUD (`check`) rather than a silent no-op, matching
+    // `deliver` — see [FakeSeam.weave]'s KDoc for why this arm and `tear`'s idempotent arm differ.
+
+    @Test
+    fun `weave after tear throws IllegalStateException`() = runTest {
+        val seam = FakeSeam()
+        seam.tear()
+        val failure = assertFailsWith<IllegalStateException> { seam.weave() }
+        assertAll(
+            {
+                assertTrue(
+                    failure.message.orEmpty().contains("terminal"),
+                    "the refusal must name the obligation it enforces, not merely fail (got: ${failure.message})",
+                )
+            },
+            { assertIs<SeamState.Torn>(seam.state.value, "the refused weave must not have moved the state") },
+        )
+    }
+
+    @Test
+    fun `weave after close throws IllegalStateException`() = runTest {
+        val seam = FakeSeam()
+        seam.close(CloseReason.RemoteRequested)
+        assertFailsWith<IllegalStateException> { seam.weave() }
+        assertEquals(
+            SeamState.Torn(CloseReason.RemoteRequested),
+            seam.state.value,
+            "the refused weave must not have clobbered the close reason either",
+        )
+    }
+
+    /**
+     * The control: the guard must key on `Torn`, not on "not currently Weaving". `weave()` on an
+     * already-[SeamState.Woven] seam is the harmless re-assertion it has always been, and a guard that
+     * over-reached would take it out — the tests above would still pass.
+     */
+    @Test
+    fun `weave on an already Woven seam is still accepted`() = runTest {
+        val seam = FakeSeam(initialState = SeamState.Woven)
+        seam.weave()
+        assertEquals(SeamState.Woven, seam.state.value)
+    }
+
     @Test
     fun `tear transitions state to Torn with given reason`() = runTest {
         val seam = FakeSeam()

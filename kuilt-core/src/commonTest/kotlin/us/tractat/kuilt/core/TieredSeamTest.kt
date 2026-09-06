@@ -21,6 +21,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.isActive
@@ -247,8 +251,7 @@ class TieredSeamTest {
 
     /**
      * When BOTH tiers reach [SeamState.Torn] — driven directly on the underlying tiers, NOT via
-     * [tieredSeam]'s own `close()` — the composed lifecycle is **terminal** [SeamState.Torn], and it
-     * **latches**: a tier subsequently flapping back to [SeamState.Woven] must NOT revive the union.
+     * [tieredSeam]'s own `close()` — the composed lifecycle is **terminal** [SeamState.Torn].
      *
      * Unlike [us.tractat.kuilt.core.composite.CompositeSeam] (whose persistent spool survives ply
      * churn, so its all-plies-torn rollup is recoverable `Weaving`), a tiered union's [incoming] is a
@@ -256,16 +259,19 @@ class TieredSeamTest {
      * torn is genuinely terminal, and the merged `incoming` must complete consistently with the
      * terminal `state` (#1367). A revivable `Weaving` here would contradict a terminally-completed
      * `incoming` and hang a `state.first { it is Torn }` waiter — the exact bug class this closes.
+     *
+     * The **latch** half — a tier leaving `Torn` must not revive the union — needs an input no
+     * conforming tier can present, so it lives in
+     * [aTierThatLeavesTornCannotReviveTheLatchedUnion] over a declared non-conforming double.
      */
     @Test
     fun bothTiersTornIsTerminalLatchedTornAndIncomingCompletes() =
         runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Two FakeSeams sharing one selfId (both tiers are views of the SAME node) whose state and
-            // incoming we drive directly, so we can tear both then flap one back to Woven.
+            // incoming we drive directly.
             val node = PeerId("node")
-            // Each tier carries a remote, so the roster assertions below are not vacuous: FakeSeam.close
-            // only tears its `state` and leaves its own `peers` standing, so after both tiers die the
-            // union pump still has two remotes it would happily republish.
+            // Each tier carries a remote so the PRE-tear precondition below is non-trivial — the union
+            // has to actually be holding two remotes for its collapse to be observable at all.
             val localMember = PeerId("local-member")
             val peerMember = PeerId("peer-member")
             val local = FakeSeam(selfId = node, initialPeers = setOf(node, localMember), initialState = SeamState.Woven)
@@ -304,9 +310,16 @@ class TieredSeamTest {
                 {
                     // The SELF-DRIVEN collapse. `close()` is not the only path that publishes the
                     // terminal Torn a consumer waits on — this one does too, with nobody calling close,
-                    // and `Seam.peers` binds it identically. Without the state pump's own collapseRoster()
-                    // this reads [node, local-member, peer-member]: a torn union advertising peers only
-                    // dead tiers could reach, with no trigger left to correct it.
+                    // and `Seam.peers` binds it identically.
+                    //
+                    // This asserts the OUTCOME, and the outcome is now over-determined: since #1854
+                    // `FakeSeam.tear` collapses its own roster first, so the union pump alone already
+                    // computes `{ node } ∪ { node }`. (The comment this replaces claimed the opposite —
+                    // "FakeSeam.close leaves its own peers standing" — which stopped being true when
+                    // #1854 landed, and nothing reddened.) The pump's `collapseRoster()` and its
+                    // `collapsed` MARKER are pinned instead by the post-collapse emission in
+                    // [aTierThatLeavesTornCannotReviveTheLatchedUnion], which is the only place a tier
+                    // can be made to emit a roster after its own tear.
                     assertEquals(
                         setOf(node),
                         tiered.peers.value,
@@ -315,25 +328,124 @@ class TieredSeamTest {
                     )
                 },
             )
+        }
 
-            // Flap a tier back to Woven — the latched terminal Torn must NOT revive.
-            local.weave()
+    /**
+     * The **latch**, staged against an input NO CONFORMING TIER CAN PRESENT.
+     *
+     * `Torn` is terminal on every real seam, so a tier can never flap back to [SeamState.Woven] once
+     * the union has latched, and can never emit a roster after its own tear. [FakeSeam] used to permit
+     * both and this test used to borrow that permissiveness; it refuses the state flap since #2622, so
+     * the non-conformance is declared here — locally, once, named — instead of being smuggled in
+     * through the fake every other test in the repo shares.
+     *
+     * Kept rather than deleted because the property is real defence-in-depth: the no-revive guarantee
+     * is [SeamStateGate]'s, and what this pins is that [TieredSeam]'s state pump *routes through it* —
+     * publishing recoverable rollups via `update()` rather than writing the flow directly. The roster
+     * half is the same shape one field over: a post-collapse union emission is the one thing that could
+     * republish the roster, and the `collapsed` marker (not a read of `state`, which is not yet latched
+     * mid-close) is what absorbs it. A rewiring that lost either would leave every other test here
+     * green.
+     */
+    @Test
+    fun aTierThatLeavesTornCannotReviveTheLatchedUnion() =
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val node = PeerId("node")
+            val localMember = PeerId("local-member")
+            val peerMember = PeerId("peer-member")
+            val local = NonTerminalTier(node, setOf(node, localMember))
+            val peer = NonTerminalTier(node, setOf(node, peerMember))
+            val tiered = tieredSeam(local = local, peer = peer, scope = backgroundScope)
+
+            local.tear(CloseReason.Unreachable)
+            peer.tear(CloseReason.Unreachable)
             assertTrue(
                 tiered.state.value is SeamState.Torn,
-                "a latched terminal Torn must NOT revert when a tier flaps back to Woven (no revive)",
+                "precondition: both tiers torn must have latched the union, or nothing below is a latch test",
             )
 
-            // A real roster emission AFTER the collapse — the union pump's own input changing, which is
-            // the one thing that could republish. It must be absorbed. This pins the marker guard on the
-            // self-driven path; nothing else does, and a `state`-based guard would also pass here only
-            // because the latch happens to precede this line.
-            local.addPeer(PeerId("latecomer"))
-            assertEquals(
-                setOf(node),
-                tiered.peers.value,
-                "a post-collapse roster emission must not resurrect peers on a terminally torn union",
+            local.reviveToWoven()
+            assertAll(
+                {
+                    // The rig's own precondition. Without it a `reviveToWoven` that quietly did nothing
+                    // would leave this test green while proving no latch at all.
+                    assertTrue(
+                        local.state.value is SeamState.Woven,
+                        "the rig must have fired: the tier really did leave Torn (got ${local.state.value})",
+                    )
+                },
+                {
+                    assertTrue(
+                        tiered.state.value is SeamState.Torn,
+                        "a latched terminal Torn must NOT revert when a tier flaps back to Woven (no revive)",
+                    )
+                },
+            )
+
+            val latecomer = PeerId("latecomer")
+            local.admitWhileTorn(latecomer)
+            assertAll(
+                {
+                    assertTrue(
+                        latecomer in local.peers.value,
+                        "the rig must have fired: the tier really did emit a post-collapse roster",
+                    )
+                },
+                {
+                    assertEquals(
+                        setOf(node),
+                        tiered.peers.value,
+                        "a post-collapse roster emission must not resurrect peers on a terminally torn union",
+                    )
+                },
             )
         }
+
+    /**
+     * A tier that **deliberately violates** [SeamState]'s terminality, so the union's latch can be
+     * exercised at all. [tear] is the conforming half (collapse the roster, then latch `Torn`, in that
+     * order); [reviveToWoven] and [admitWhileTorn] are the two violations, each named for what it
+     * breaks so no future reader mistakes this for a general-purpose fake. Use [FakeSeam] for
+     * everything else: it refuses [reviveToWoven]'s equivalent (`weave()` after a tear) since #2622,
+     * and [admitWhileTorn]'s roster twin is the door recorded on #2546.
+     */
+    private class NonTerminalTier(
+        override val selfId: PeerId,
+        initialPeers: Set<PeerId>,
+    ) : Seam {
+        private val _peers = MutableStateFlow(initialPeers)
+        override val peers: StateFlow<Set<PeerId>> = _peers
+
+        private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
+        override val state: StateFlow<SeamState> = _state
+
+        override val incoming: Flow<Swatch> = emptyFlow()
+
+        /** Conforming: `Seam.peers` collapses to `{ selfId }` *before* the terminal latch (#1816). */
+        fun tear(reason: CloseReason) {
+            _peers.value = setOf(selfId)
+            _state.value = SeamState.Torn(reason)
+        }
+
+        /** **Non-conforming.** No real seam leaves `Torn`; this is the input under test. */
+        fun reviveToWoven() {
+            _state.value = SeamState.Woven
+        }
+
+        /** **Non-conforming.** A torn fabric reaches nobody, so no real seam emits this. */
+        fun admitWhileTorn(peer: PeerId) {
+            _peers.value = _peers.value + peer
+        }
+
+        override suspend fun broadcast(payload: ByteArray) = Unit
+
+        override suspend fun sendTo(
+            peer: PeerId,
+            payload: ByteArray,
+        ) = Unit
+
+        override suspend fun close(reason: CloseReason): Unit = tear(reason)
+    }
 
     // ── 5 · close() lifecycle ─────────────────────────────────────────────────
 
