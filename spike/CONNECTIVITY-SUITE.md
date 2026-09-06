@@ -694,7 +694,6 @@ Three things worth keeping from that hunt:
   expectation surfaced immediately — it had never been reachable before, so the joiner branch had never
   once run. Assertion corrected in #1838 (tracked by #1836, since closed — fixed on `main` in
   `6100dabb`) — <!-- ALLOW-staleCitation: provenance, not outstanding work — the sentence itself says the issue closed and names the fixing commit -->
-
   [the section above](#scenario-4-the-two-sides-expect-different-things) is what it now asserts, and
   per [Status](#status) that assertion has **not yet been re-run on hardware**.
 - **A doc can be fixed while the code it describes is not.** The guide was corrected to the #1513
