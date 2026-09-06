@@ -6,7 +6,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
@@ -46,7 +45,9 @@ import us.tractat.kuilt.core.raceCollapse
  * never arrives. [roll] detects both via [us.tractat.kuilt.core.raceCollapse] and throws
  * [SeamCollapsedException] rather than stalling, so no outer timeout is required. (A peer
  * that stays connected but simply withholds its reveal is a distinct, application-level
- * concern — see "Abort resistance" above — and still requires game-layer forfeit handling.)
+ * concern — see "Abort resistance" above — and still requires game-layer forfeit handling.
+ * A peer that sends a *malformed* reveal falls into that same case: the frame is dropped,
+ * so it is indistinguishable from one that never arrived. See [FairRandomMessage.Reveal].)
  *
  * ## Usage
  *
@@ -109,7 +110,15 @@ public class FairRandom(
                     swatch.decode(Cbor, FairRandomMessage.serializer())
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: SerializationException) {
+                } catch (_: IllegalArgumentException) {
+                    // Two refusals arrive here, and one arm covers both because
+                    // SerializationException IS an IllegalArgumentException: bytes CBOR cannot
+                    // parse, and bytes it can parse into values FairRandomMessage.Reveal will not
+                    // hold (its init { require } throws a plain IllegalArgumentException — kotlinx
+                    // does not wrap a constructor throw). Widened from SerializationException when
+                    // the width check moved onto the wire type (#2650): an escaping throw here
+                    // would end this collector and leave the round permanently deaf with no tear
+                    // to observe, which is strictly worse than dropping the frame (#1819's shape).
                     return@collect
                 }
                 when (msg) {
@@ -191,19 +200,11 @@ public class FairRandom(
             val (sender, msg) = reveals.receive()
             if (sender !in peers || sender == myId) continue
             if (sender in result) continue
-            // Reject reveals with wrong field lengths before verifying.
-            // The commitment hash is SHA-256(secret ‖ nonce) with no length framing,
-            // so without this check a peer could reveal a different (secret', nonce')
-            // split that hashes identically yet contributes a different secret to the
-            // seed — a post-commit bias attack. Fixed lengths make the preimage
-            // unambiguous.
-            if (msg.secret.size != SECRET_BYTES || msg.nonce.size != NONCE_BYTES) {
-                throw CommitmentViolation(
-                    sender,
-                    allCommits[sender] ?: ByteArray(0),
-                    ByteArray(0),
-                )
-            }
+            // No width check here: `msg` is a FairRandomMessage.Reveal, and the type cannot hold a
+            // wrong-width secret or nonce (#2650). A frame that tried was refused by the decode
+            // above and never reached this channel. See FairRandomMessage.Reveal's KDoc for the
+            // re-split attack the widths defend against, and for why enforcing it on the type
+            // rather than here is the point.
             val expectedHash = checkNotNull(allCommits[sender]) {
                 "Reveal from $sender who did not commit"
             }
@@ -243,15 +244,17 @@ public class FairRandom(
 
     private fun resolveSecret(): ByteArray {
         if (fixedSecret != null) return fixedSecret
-        val bytes = secureRandomBytes(SECRET_BYTES)
-        require(bytes.size == SECRET_BYTES) { "secureRandomBytes returned ${bytes.size} bytes; expected $SECRET_BYTES" }
+        val width = FairRandomMessage.Reveal.SECRET_BYTES
+        val bytes = secureRandomBytes(width)
+        require(bytes.size == width) { "secureRandomBytes returned ${bytes.size} bytes; expected $width" }
         return bytes
     }
 
     private fun resolveNonce(): ByteArray {
         if (fixedNonce != null) return fixedNonce
-        val bytes = secureRandomBytes(NONCE_BYTES)
-        require(bytes.size == NONCE_BYTES) { "secureRandomBytes returned ${bytes.size} bytes; expected $NONCE_BYTES" }
+        val width = FairRandomMessage.Reveal.NONCE_BYTES
+        val bytes = secureRandomBytes(width)
+        require(bytes.size == width) { "secureRandomBytes returned ${bytes.size} bytes; expected $width" }
         return bytes
     }
 
@@ -259,9 +262,6 @@ public class FairRandom(
         secret.copyOf().also { it[0] = (it[0].toInt() xor 0xFF).toByte() }
 
     internal companion object {
-        internal const val SECRET_BYTES = 32
-        internal const val NONCE_BYTES = 16
-
         internal fun sha256(input: ByteArray): ByteArray = SHA256().digest(input)
     }
 }
@@ -300,11 +300,69 @@ internal sealed class FairRandomMessage {
         override fun hashCode(): Int = hash.contentHashCode()
     }
 
-    /** Phase-2 message: the revealed secret and nonce. */
+    /**
+     * Phase-2 message: the revealed secret and nonce.
+     *
+     * ## Both fields are fixed-width, and a wrong width is REJECTED, never reshaped (#2650)
+     *
+     * [secret] is always exactly [SECRET_BYTES] bytes and [nonce] exactly [NONCE_BYTES] —
+     * enforced here, not merely documented. The check lives in the constructor deliberately:
+     * kotlinx-serialization invokes it, so the invariant holds on **every** path, encode and
+     * decode alike, and a new consumer of this type cannot forget it.
+     *
+     * It is load-bearing because the commitment is `SHA-256(secret ‖ nonce)` with **no length
+     * delimiter between the halves**. A peer free to choose the widths can commit to one 48-byte
+     * string and then present any split of it — the (33, 15) split hashes to exactly the
+     * commitment it already published, while contributing a *different* secret to the derived
+     * seed. That is a bias applied after every other peer is committed. Fixed widths are what
+     * make the preimage unambiguous, and they only work as a pair: pinning one half would leave
+     * the other free to move.
+     *
+     * A quantity could be clamped into range; these cannot. The secret is a seed contribution and
+     * the nonce is part of a hash preimage, so a wrong width is proof of a malformed or forged
+     * reveal, and padding or truncating it to the declared width would launder that proof into a
+     * valid-looking contribution — the forger simply receives whichever in-range value the
+     * reshaping picks. The frame is refused instead.
+     *
+     * ## Why this is not the check in the handler it replaces
+     *
+     * [FairRandom.awaitAllReveals] used to compare both sizes itself, one call site away from the
+     * type. The invariant then held because *that* consumer remembered it: a second reader of
+     * [Reveal] — another handler, a log line, a replay tool — inherits nothing, and the next hand
+     * to write a reveal path re-derives the omission along with the format. Enforced on the type,
+     * there is no path that can hold a malformed [Reveal] at all, so there is nothing left to
+     * remember.
+     *
+     * The visible consequence is that a wrong-width reveal is now **dropped** by
+     * [FairRandom.roll]'s frame path rather than converted into a [CommitmentViolation] naming its
+     * sender — the type refuses to materialise, so the handler never sees a peer to accuse. That
+     * is the correct disposition and a slightly weaker signal: a peer who sends one becomes
+     * indistinguishable from a peer who withholds its reveal, which is the abort case documented
+     * on [FairRandom] and handled at the game layer. (The `CommitmentViolation` it replaced was
+     * itself a fabricated diagnosis — it reported an empty `actualHash`, because on this path the
+     * commitment typically *does* verify.)
+     */
     @Serializable
     internal data class Reveal(val secret: ByteArray, val nonce: ByteArray) : FairRandomMessage() {
+        init {
+            require(secret.size == SECRET_BYTES) {
+                "malformed Reveal: secret is ${secret.size} bytes, expected exactly $SECRET_BYTES"
+            }
+            require(nonce.size == NONCE_BYTES) {
+                "malformed Reveal: nonce is ${nonce.size} bytes, expected exactly $NONCE_BYTES"
+            }
+        }
+
         override fun equals(other: Any?): Boolean =
             other is Reveal && secret.contentEquals(other.secret) && nonce.contentEquals(other.nonce)
         override fun hashCode(): Int = 31 * secret.contentHashCode() + nonce.contentHashCode()
+
+        internal companion object {
+            /** Width of a revealed secret, in bytes. Both the generator and the check use this. */
+            internal const val SECRET_BYTES = 32
+
+            /** Width of a revealed nonce, in bytes. Both the generator and the check use this. */
+            internal const val NONCE_BYTES = 16
+        }
     }
 }
