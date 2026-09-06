@@ -115,7 +115,11 @@ propose lifecycle (`ProposeAccepted → ProposeCommitted → ProposeApplied`) an
 lifecycle (`ElectionStarted → ElectionWon` / `ElectionTimedOut`), plus
 `ElectionSuppressedTermCeiling` — a permanent *level* rather than a lifecycle step, emitted on
 every election timeout by a node whose term has reached the plausibility ceiling and so can
-never be elected again (#1886). Each carries the log
+never be elected again (#1886). Alongside those sit the **operator-diagnosis** metrics —
+`WedgeSuspected` and `LeaderPinDenial` — which are neither lifecycle steps nor levels but
+one-shot latched reports that a node has been persistently refusing frames it needed, each
+naming the identities involved rather than a count. Treat the names here as orientation, not
+an inventory; the sealed interface is the list. Each carries the log
 index or term and, where relevant, elapsed wall-time. A test collects into a list and
 asserts on the sequence — see `MetricInstrumentationTest#proposeEmitsAcceptedThenCommittedThenApplied`
 (shown in the [guide](https://tractat-us.github.io/kuilt/guide/testing.html)).
@@ -152,8 +156,8 @@ the frame's length. Filter both out before replaying a trace through the TLA+ sp
 
 The harness turns traces into a **failure diagnostic**: each `await*` helper, on timeout
 or on excess election churn, throws `AssertionError(dumpState(...))`. `dumpState` renders
-per-node `role/term/commitIndex`, the log index range, and a
-`Timeout=/BecomeLeader=/BecomeFollower=` histogram from a bounded per-node ring buffer of
+per-node `role/term/commitIndex`, the durable per-term leader `pin=`, the log index range,
+and a `Timeout=/BecomeLeader=/BecomeFollower=` histogram from a bounded per-node ring buffer of
 trace events, then the last events for the worst-off node — so a stuck cluster names the
 thrashing peer and shows what it was doing. You rarely call `dumpState` yourself; you let
 the awaits call it.

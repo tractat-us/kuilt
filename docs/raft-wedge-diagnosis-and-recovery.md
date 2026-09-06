@@ -99,8 +99,9 @@ That is the ceiling's real remaining job, and it is a good one.
 
 ## A jammed device must say so
 
-Both ways a device can get stuck refusing frames it needs are, from the inside, the
-same shape.
+Two of the ways a device can get stuck refusing frames it needs are, from the inside,
+the same shape. (A third, found later, is at the end of this section — it is the same
+shape too, and needed a report of its own anyway.)
 
 One: it has been away a long time, the set of voting members rotated while it was
 gone, and the frames that would teach it the new set are precisely the frames it
@@ -131,6 +132,36 @@ set does.
 
 Note what this section does **not** do. The gates themselves are unchanged — nothing
 is relaxed, no frame that was refused is now accepted. Only the silence is fixed.
+
+### A third way, and why it needed its own report
+
+There is a third way to get stuck, found later ([#2674][]): a device remembers which
+peer was established as the leader for the term it is in, and refuses same-term
+frames from anyone else. If the wrong peer got there first, everything the real
+leader sends is dropped for the rest of that term. Same symptom, same sentence in
+the box above — *I am persistently refusing frames that would otherwise let me make
+progress* — and it was **silent**, measured at 5001 refusals against an empty metric
+list.
+
+The reason is worth reading, because it is the sort of thing that looks handled and
+is not. The run the report above counts is reset by any frame that clears both of the
+*entry* checks — and this refusal happens later, after both have already passed. So
+the counter was zeroed immediately before every refusal it was supposed to be
+counting, and the report could never fire no matter how long the device stayed stuck.
+A shared counter cannot serve two checks at different depths.
+
+So this one carries its own run, and its own identities: **who is pinned** and **who
+is being refused**. The voter set that the report above names is the right diagnosis
+there and means nothing here. Latched the same way, once per pinned-leader epoch, for
+the same reason — and re-arming it costs a whole cluster-wide election, which is also
+the only thing that clears the jam.
+
+The way out is the one below, unchanged: a new identity, not a wiped disk. And one
+narrower case was not merely made visible but **fixed** — a device that has not yet
+learned who the voters are holds no evidence about anybody, so it now declines to
+commit to a leader at all until it does. See `kuilt-raft/module.md`.
+
+[#2674]: https://github.com/tractat-us/kuilt/issues/2674
 
 ## The way back is a new identity, not a wiped disk
 
