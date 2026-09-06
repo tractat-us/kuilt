@@ -1,12 +1,13 @@
 package us.tractat.kuilt.core
 
-import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
@@ -72,19 +73,71 @@ internal class MuxBase<K>(
      * Returns the [Seam] view for [key], creating it on first request. Idempotent and
      * thread-safe: concurrent calls are serialised by an internal reentrant lock.
      */
-    fun channel(key: K): Seam = lock.withLock { channels.getOrPut(key) { ChannelView(framing.forKey(key)) } }
+    fun channel(key: K): Seam = lock.withLock { channels.getOrPut(key) { ChannelView(key, framing.forKey(key)) } }
 
     /** Closes the underlying [delegate] [Seam]. */
     suspend fun closeBase(reason: CloseReason): Unit = delegate.close(reason)
 
-    private inner class ChannelView(private val framing: ChannelFraming) : Seam {
-        private val _closed = atomic(false)
+    /**
+     * One logical session's view of the shared fabric.
+     *
+     * ## A view owns its own lifecycle; the base owns the base's (#2372, #949)
+     *
+     * [state] and [peers] used to be `get() = delegate.state` / `delegate.peers`, and that single
+     * delegation was conflating **two** lifecycles. The base's must survive a per-channel close —
+     * leaving one room cannot drop the socket every other room is riding, which is #949 and is not in
+     * question. The **view's** is what the caller ends when it calls [close] on this seam, and it is
+     * what every `Seam` consumer reads [state] to learn. Delegating both left a closed view reporting
+     * the base's `Woven` forever, and advertising a roster of peers it would never deliver to again —
+     * the lie [Seam.peers]' KDoc forbids, and a straight contradiction of the ungated-core
+     * `SeamConformanceSuite.closeDrivesStateTornNormal`.
+     *
+     * So this view keeps its own [SeamStateGate] and its own roster, mirroring the base until one of
+     * two things latches it terminal:
+     *  - **its own [close]** — `Torn(reason)` here, base untouched and still `Woven` for its siblings;
+     *  - **the base tearing** — `Torn` with the base's *own* reason, since a dead socket is a dead
+     *    channel and a consumer waiting on this generation's death (every [MuxClientLoom] resume) must
+     *    see it.
+     *
+     * Everything that is genuinely a property of the fabric rather than of this session —
+     * [selfId], [plies], [capability], [maxPayloadBytes] — still reads through to the base.
+     *
+     * ## Consequence: a torn view refuses sends rather than swallowing them
+     *
+     * Publishing `Torn` subscribes this view to the rest of what `Torn` means. [Seam]'s contract is
+     * explicit — *"Either call when `Torn`: throws [IllegalStateException]"* — so [broadcast] and
+     * [sendTo] now refuse instead of silently dropping. The old swallow was defensible only while the
+     * view also claimed to be `Woven`: a seam that has told its holder it is torn owes that holder the
+     * failure rather than the appearance of a delivery.
+     *
+     * ## Thread safety
+     *
+     * [torn], the [gate] and [_peers] are written only under [viewLock], so "collapse the roster, then
+     * latch `Torn`" is one atomic step — the ordering [Seam.peers] requires, not merely the settled
+     * value. The lock is a real mutual-exclusion primitive rather than dispatcher confinement, it is a
+     * leaf (nothing suspends inside it, and the gate's own lock composes safely underneath), and
+     * [torn] is what lets one critical section cover a write to two different flows.
+     */
+    private inner class ChannelView(
+        /** This channel's key, used only to name its pumps in a coroutine dump (see [pumpIn]). */
+        private val key: K,
+        private val framing: ChannelFraming,
+    ) : Seam {
 
         /**
          * Per-view delivery spool. Frames are piped from [sharedIncoming] via a
          * background coroutine; closing the spool completes [incoming].
          */
         private val spool = Spool<Swatch>(DeliveryPolicy.Reliable)
+
+        /** Guards [torn], [gate] and [_peers] together. See the class KDoc's thread-safety note. */
+        private val viewLock = reentrantLock()
+
+        /** Single-shot terminal marker. Mirrors [gate]'s latch, and additionally guards [_peers]. */
+        private var torn = false
+
+        private val gate = SeamStateGate(delegate.state.value)
+        private val _peers = MutableStateFlow(delegate.peers.value)
 
         init {
             scope.launch {
@@ -93,11 +146,62 @@ internal class MuxBase<K>(
                 }
                 spool.close()
             }
+            // A view minted over an already-dead base is born torn: `gate` was constructed with the
+            // base's value, which publishes `Torn` WITHOUT latching it, so the next mirrored update
+            // would overwrite the terminal state. Latch it here, before the pumps can run.
+            (delegate.state.value as? SeamState.Torn)?.let { tear(it.reason) }
+            delegate.state.pumpIn(
+                scope = scope,
+                onFailure = { _, failure -> tear(CloseReason.Error(failure)) },
+                name = "mux-view-state[$key]",
+            ) { next -> mirrorState(next) }
+            delegate.peers.pumpIn(
+                scope = scope,
+                // A view that can no longer track the base's roster would go on advertising a stale
+                // one — the same lie as a closed view's. Latch terminal instead.
+                onFailure = { _, failure -> tear(CloseReason.Error(failure)) },
+                name = "mux-view-peers[$key]",
+            ) { next -> mirrorPeers(next) }
+        }
+
+        /** Mirror one base lifecycle value. The base's own `Torn` tears this view, reason and all. */
+        private fun mirrorState(next: SeamState) {
+            if (next is SeamState.Torn) {
+                tear(next.reason)
+            } else {
+                viewLock.withLock { if (!torn) gate.update(next) }
+            }
+        }
+
+        /** Mirror the base's roster, but never resurrect one this view has already collapsed. */
+        private fun mirrorPeers(next: Set<PeerId>) = viewLock.withLock {
+            if (!torn) _peers.value = next
+        }
+
+        /**
+         * The single-shot terminal transition for this view — and only this view: the base is
+         * deliberately untouched (#949).
+         *
+         * The roster collapse is inside the same critical section as the latch, so a consumer woken by
+         * `Torn` can never read a roster that still names a peer this view will not deliver to.
+         *
+         * @return `true` for the one winning caller.
+         */
+        private fun tear(reason: CloseReason): Boolean {
+            val won = viewLock.withLock {
+                if (torn) return@withLock false
+                torn = true
+                _peers.value = setOf(delegate.selfId)
+                gate.tear(reason)
+                true
+            }
+            if (won) spool.close()
+            return won
         }
 
         override val selfId: PeerId get() = delegate.selfId
-        override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
-        override val state: StateFlow<SeamState> get() = delegate.state
+        override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
+        override val state: StateFlow<SeamState> = gate.state
 
         /**
          * The base seam's per-ply breakdown, verbatim (#2393).
@@ -162,20 +266,41 @@ internal class MuxBase<K>(
 
         override val incoming: Flow<Swatch> = spool.incoming
 
+        /**
+         * The [SeamState.Torn] check comes first, as [Seam] requires it to everywhere: the tear is a
+         * fact about *this* seam, and a caller told `PeerNotConnected` (or told nothing at all) would
+         * reasonably retry against a channel that can no longer carry anything.
+         *
+         * The self-send refusal deliberately stays the base's: [selfId] reads through, so the base
+         * holds the check against the very id this view publishes.
+         */
+        private fun checkLive() {
+            check(state.value !is SeamState.Torn) {
+                "this channel view is closed — its own close() latched Torn. The base seam may well " +
+                    "still be live for its other channels (per-channel close), but this view cannot " +
+                    "deliver: open a fresh channel rather than sending on a closed one."
+            }
+        }
+
         override suspend fun broadcast(payload: ByteArray) {
-            if (_closed.value) return
+            checkLive()
             delegate.broadcast(framing.wrap(payload))
         }
 
         override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-            if (_closed.value) return
+            checkLive()
             delegate.sendTo(peer, framing.wrap(payload))
         }
 
+        /**
+         * Closes **this view** — its [incoming] completes, its [state] latches `Torn(reason)` and its
+         * [peers] collapses to `{ selfId }`. The base [Seam] is untouched and stays live for every
+         * other channel; only [closeBase] (or closing the delegate directly) ends that (#949).
+         *
+         * Idempotent: a second call is a no-op and does **not** rewrite the terminal reason.
+         */
         override suspend fun close(reason: CloseReason) {
-            if (_closed.compareAndSet(false, true)) {
-                spool.close()
-            }
+            tear(reason)
         }
     }
 }

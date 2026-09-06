@@ -18,6 +18,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -335,13 +336,20 @@ class MuxSeamTest {
     }
 
     /**
-     * After close(), broadcast on the closed channel view is a no-op (does not
-     * send to remote peers and does not throw).
+     * After close(), broadcast on the closed channel view is **refused** — it reaches no remote peer,
+     * and it throws rather than swallowing.
+     *
+     * It used to swallow, and that was defensible only while the view also reported itself `Woven`.
+     * Since #2372 the view latches its own `Torn`, and `Seam`'s contract for a torn seam is explicit:
+     * the send throws [IllegalStateException] rather than silently dropping, because a torn transport
+     * cannot deliver and swallowing hides that from the one caller who could act on it. The
+     * base-stays-live half — the point of this test and of #949 — is unchanged and still asserted
+     * below.
      */
     @Test
-    fun closedChannelBroadcastIsNoOp() = runTest(UnconfinedTestDispatcher()) {
+    fun closedChannelBroadcastIsRefused() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
-        val rawA = loom.host(Pattern("mux-channel-close-noop-broadcast"))
+        val rawA = loom.host(Pattern("mux-channel-close-refused-broadcast"))
         val rawB = loom.join(InMemoryTag("b"))
 
         val muxA = MuxSeam(rawA, backgroundScope)
@@ -356,16 +364,18 @@ class MuxSeamTest {
         // A sentinel on tag B to prove the base is alive.
         val sentinel = async { muxB.channel(tagB).incoming.first() }
 
-        // This must not throw — the broadcast on the closed view is a no-op.
-        channelAonSide.broadcast(byteArrayOf(99))
+        assertFailsWith<IllegalStateException>("a send on a closed channel view must be refused, not swallowed") {
+            channelAonSide.broadcast(byteArrayOf(99))
+        }
 
         // The sentinel on tag B still works.
         muxA.channel(tagB).broadcast(byteArrayOf(1))
         sentinel.await()
 
-        // Tag A on peer B must have received nothing (the no-op broadcast was swallowed).
+        // Tag A on peer B must have received nothing — the refusal happens BEFORE the frame is
+        // handed to the base, so nothing was put on the wire either.
         val tagAChannel = muxB.channel(tagA).incoming.produceIn(this)
-        assertTrue(tagAChannel.tryReceive().isFailure, "no-op broadcast must not reach peer B's channel A")
+        assertTrue(tagAChannel.tryReceive().isFailure, "the refused broadcast must not reach peer B's channel A")
         tagAChannel.cancel()
     }
 
