@@ -3666,6 +3666,180 @@ val forbidHashOrderedSeededDraw by tasks.registering {
     }
 }
 
+// Guard: a `-P`-gated probe must not decide its own fate at runtime (#2621).
+//
+// A `@Test` that reads a gate and returns early reports **passed**, not `skipped`. So a green
+// results XML row says the same thing whether the probe did its work or did none of it, which
+// defeats the one check that catches an un-run rig — count the test in `build/test-results/`. It is
+// the "an unreached rig is green by absence" failure with a green tick on it.
+//
+// Three sites had it when this landed, and all three were live on `ci-required`: `:kuilt-nw`'s
+// `NwConnectionDrainStressTest` and `:kuilt-mdns`'s `MDNSServiceDiscovererIosTest` (both
+// `platform.posix.getenv`, both run by `build-native`'s `macosArm64Test iosSimulatorArm64Test`
+// WITHOUT their flag) and `:kuilt-conformance`'s `VacuityBreakdownProbe`
+// (`System.getProperty(GATE)`, run by `build-jvm`). All three now gate at the **task** level, so an
+// un-run probe is absent from the XML instead.
+//
+// ## Why this is a guard and not a note
+//
+// **On Kotlin/Native there is no second signal.** `kotlin.test` has no assumption API on native, so
+// the JVM remedy (`Assume.assumeTrue`, which reports `skipped`) does not exist there — and duration
+// cannot stand in either: `macosArm64Test` reports `time="0.0"` for a run that provably completed
+// 3 000 iterations. On the exact target where the gate has to be an env var, nothing distinguishes
+// "ran" from "never ran" except the test's own absence. So the rule is not a style preference; it is
+// the only mechanism available.
+//
+// ## What it checks
+//
+//   * a **`getenv(`** call in a test source — always a gate read, since a K/N test binary has no
+//     other channel from Gradle;
+//   * a **`System.getProperty(`** whose argument is not one of a short list of JDK/OS properties
+//     (`os.name`, `user.dir`, `java.version`, …). A NON-LITERAL argument counts as a gate, which is
+//     deliberate and is what would have caught `VacuityBreakdownProbe`'s `getProperty(GATE)`.
+//
+// A file holding either must also route its verdict through an **assumption** (`assumeTrue` /
+// `assumeFalse` / `assumeEnabled`), which throws and is recorded as `skipped`. Otherwise it fails.
+//
+// ## What it does NOT check, stated rather than discovered later
+//
+// The assumption test is **file-level**, not per-function: a file with one honest `assumeTrue` and
+// one `if (…) return` elsewhere passes. Tightening it would mean walking each function's body, and
+// the population does not justify that — eleven files read a gate today and every one of them
+// assumes on it. It also cannot see a gate read behind a helper in another file
+// (`:kuilt-scale`'s `ScaleTcpTests.enabled` is that shape) — but the *read itself* is what this
+// scans, and that read is in `ScaleTcpTests.kt`, which assumes. And it says nothing about a probe
+// gated some third way — a file constant, a resource, a hostname probe.
+//
+// Baseline: none. There is nothing to grandfather — the three offenders are fixed in the same PR —
+// and a guard that starts empty is the only kind whose green is worth anything on day one. The
+// escape hatch is a line-tight `// ALLOW-selfSkipGate: <reason>`, reason mandatory, for the genuine
+// case of a test that reads an environment variable for something other than deciding whether to run.
+object RuntimeSelfSkipGateScanner {
+    /** One gate read. [kind] is what was found, for the failure message. */
+    data class Site(val line: Int, val kind: String)
+
+    /** `System.getProperty(` in either spelling — one line, or `System` then `.getProperty(`. */
+    private val SYSTEM_PROPERTY = Regex("""System\s*\.\s*getProperty\s*\(""")
+
+    /** `getenv(`, bare or qualified. The lookbehind excludes `myGetenv(`, not `System.getenv(`. */
+    private val GETENV = Regex("""(?<![A-Za-z0-9_])getenv\s*\(""")
+
+    /**
+     * JDK/OS properties a test may read without gating anything — matched against the RAW line, since
+     * [KotlinCodeScanner.stripNonCode] blanks literal contents. A property NOT on this list, or an
+     * argument that is not a string literal at all, counts as a gate.
+     */
+    private val JDK_PROPERTY = Regex(
+        """getProperty\s*\(\s*"(os\.name|os\.arch|os\.version|user\.dir|user\.home|user\.name|""" +
+            """java\.version|java\.home|java\.vendor|java\.vm\.name|java\.io\.tmpdir|""" +
+            """line\.separator|file\.separator|path\.separator)"""",
+    )
+
+    /** An assumption throws and is recorded as `skipped` — the honest JVM spelling of a self-skip. */
+    private val ASSUMPTION = Regex("""(?<![A-Za-z0-9_])(assumeTrue|assumeFalse|assumeNotNull|assumeEnabled)\s*\(""")
+
+    fun assumes(code: String): Boolean = ASSUMPTION.containsMatchIn(code)
+
+    /** Gate reads in [code] (already stripped of comments and literals), with 1-based line numbers. */
+    fun sites(code: String, rawLines: List<String>): List<Site> {
+        fun lineOf(offset: Int) = code.take(offset).count { it == '\n' } + 1
+        val hits = mutableListOf<Site>()
+        SYSTEM_PROPERTY.findAll(code).forEach { m ->
+            // The line of the `(`, not of `System`: the two-line spelling puts the argument there.
+            val line = lineOf(m.range.last)
+            if (!JDK_PROPERTY.containsMatchIn(rawLines.getOrElse(line - 1) { "" })) {
+                hits += Site(line, "System.getProperty")
+            }
+        }
+        GETENV.findAll(code).forEach { hits += Site(lineOf(it.range.first), "getenv") }
+        return hits.sortedBy { it.line }
+    }
+}
+
+val forbidRuntimeSelfSkippingProbe by tasks.registering {
+    group = "verification"
+    description = "Fails if a -P-gated test decides at runtime whether to run, reporting PASS when it skips (#2621)."
+    // Both test-source layouts, exactly as `forbidProductionDispatcherInTests` scopes itself.
+    val sources = kotlinSourcesIn(
+        subprojects.map { it.projectDir.resolve("src") },
+        listOf("*Test/**/*.kt", "test/**/*.kt"),
+    )
+    inputs.files(sources).withPropertyName("kotlinTestSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val stamp = layout.buildDirectory.file("verification/forbid-runtime-self-skipping-probe.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        // Group 1 is everything after the colon; blank ⇒ a reasonless marker, itself a violation.
+        val marker = Regex("""//\s*ALLOW-selfSkipGate:(.*)""")
+        val unmarked = mutableListOf<String>()
+        val reasonless = mutableListOf<String>()
+        var scannedGates = 0
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            val rawLines = raw.lines()
+            val code = KotlinCodeScanner.stripNonCode(raw)
+            val sites = RuntimeSelfSkipGateScanner.sites(code, rawLines)
+            if (sites.isEmpty()) return@forEach
+            scannedGates += sites.size
+            val assumes = RuntimeSelfSkipGateScanner.assumes(code)
+            sites.forEach { site ->
+                // Trailing on the same line, or the line immediately above — line-tight, as in
+                // `forbidProductionDispatcherInTests`.
+                val candidates = listOfNotNull(rawLines.getOrNull(site.line - 1), rawLines.getOrNull(site.line - 2))
+                val reasons = candidates.mapNotNull { marker.find(it)?.groupValues?.get(1)?.trim() }
+                val where = "${file.relativeTo(rootPath)}:${site.line}  (${site.kind})  " +
+                    rawLines.getOrElse(site.line - 1) { "" }.trim()
+                when {
+                    reasons.any { it.isNotEmpty() } -> Unit // exempt
+                    reasons.isNotEmpty() -> reasonless += where
+                    assumes -> Unit // the file routes its verdict through an assumption ⇒ reports `skipped`
+                    else -> unmarked += where
+                }
+            }
+        }
+        if (unmarked.isNotEmpty() || reasonless.isNotEmpty()) {
+            val detail = buildString {
+                if (unmarked.isNotEmpty()) append("\n  ").append(unmarked.joinToString("\n  "))
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-selfSkipGate:` marker with an EMPTY reason is itself a ")
+                    append("violation — say what this read is for, if not deciding whether to run:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+            }
+            error(
+                "A test reads a runtime gate without routing its verdict through an assumption " +
+                    "(#2621). A `@Test` that reads a flag and returns early reports **passed**, not " +
+                    "`skipped`, so a green results XML row cannot distinguish \"ran and passed\" from " +
+                    "\"never ran\" — and counting the test in `build/test-results/`, which is this " +
+                    "repo's standard check against an un-run rig, sees the same row either way. " +
+                    "Duration is not a substitute: Kotlin/Native reports `time=\"0.0\"` for a run that " +
+                    "provably completed 3 000 iterations, so on the one target where a gate MUST be an " +
+                    "env var the clock is not a witness at all.\n" +
+                    "  Fix it one of two ways:\n" +
+                    "    * PREFERRED — gate at the TASK level in the module's `build.gradle.kts`, over " +
+                    "`AbstractTestTask` (NOT `Test`: `KotlinNativeHostTest`/`KotlinNativeSimulatorTest` " +
+                    "are not `Test` tasks, so a `withType<Test>` rule silently misses every native " +
+                    "target). An excluded test is ABSENT from the XML. See `:kuilt-multipeer`, " +
+                    "`:kuilt-nw` and `:kuilt-mdns` for the pattern.\n" +
+                    "    * JVM-only alternative — `Assume.assumeTrue(...)`, which throws and is " +
+                    "recorded as `skipped`. Unavailable on Kotlin/Native.\n" +
+                    "  If this read is not a gate at all, keep it and say so on this line or the one " +
+                    "above:\n" +
+                    "      // ALLOW-selfSkipGate: <what this read is for>" +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${sources.files.size} Kotlin test sources scanned, $scannedGates gate read(s) " +
+                "found, all routed through an assumption or exempt\n",
+        )
+    }
+}
+
 // The `catch (…: IllegalStateException)` scanner behind `forbidCancellationSwallowingCatch` (#2598).
 // Same `object` rationale as the sibling scanners: a script-level object keeps the walk out of the
 // task action's closure, and gives the walk somewhere to carry its own fixture.
@@ -8062,6 +8236,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
         dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
         dependsOn(rootProject.tasks.named("forbidHashOrderedSeededDraw"))
+        dependsOn(rootProject.tasks.named("forbidRuntimeSelfSkippingProbe"))
         dependsOn(rootProject.tasks.named("forbidCancellationSwallowingCatch"))
         dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
         dependsOn(rootProject.tasks.named("forbidCoroutineLaunchDuringConstruction"))
