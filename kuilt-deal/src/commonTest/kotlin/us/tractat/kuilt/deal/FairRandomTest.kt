@@ -187,6 +187,37 @@ class FairRandomTest {
     }
 
     /**
+     * An unparseable frame is dropped and the round carries on — the *other* half of the single
+     * catch arm the width refusal now shares.
+     *
+     * `roll()`'s collector catches one type, `IllegalArgumentException`, and it covers both
+     * refusals only because `SerializationException` happens to extend it. That is a property of
+     * kotlinx-serialization, not of this code, and nothing else in this module would notice if it
+     * stopped holding: the round would start dying on any peer's stray frame, with the collector
+     * gone and no tear to observe. This is the arm that notices.
+     */
+    @Test
+    fun unparseableFrame_isDroppedAndTheRoundContinues() = runTest {
+        val preimage = ByteArray(48) { (it + 1).toByte() }
+        val declared = FairRandomMessage.Reveal.SECRET_BYTES
+        val aliceCommit = Cbor.encodeToByteArray<FairRandomMessage>(
+            FairRandomMessage.Commit(FairRandom.sha256(preimage)),
+        )
+        val honestSplit = unconstrainedRevealFrame(
+            preimage.copyOfRange(0, declared),
+            preimage.copyOfRange(declared, preimage.size),
+        )
+
+        var survivedTheGarbage = false
+        val result = bobRolls(aliceCommit, listOf(byteArrayOf(0x00, 0x01, 0x02), honestSplit)) { index, done ->
+            if (index == 0) survivedTheGarbage = !done
+        }
+
+        assertTrue(survivedTheGarbage, "three bytes of garbage from a peer ended Bob's round: $result")
+        assertNotNull(result.getOrNull(), "Bob must still finish on Alice's honest reveal, got $result")
+    }
+
+    /**
      * The widths are the wire type's own invariant, so the *sender* cannot express a violation
      * either — the half of the fix a receiver-side test cannot see.
      */
