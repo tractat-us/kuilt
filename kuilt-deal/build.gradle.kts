@@ -26,6 +26,12 @@ kotlin {
         jvmTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlin.testJunit)
+            // Compile scope, not runtimeOnly: FairRandomMalformedFrameAttributionTest captures the
+            // real log emission through a Logback ListAppender rather than an injected spy.
+            implementation(libs.logback)
+        }
+        androidUnitTest.dependencies {
+            runtimeOnly(libs.logback)
         }
     }
 }
