@@ -6886,6 +6886,196 @@ val forbidLintFrontendSkew by tasks.registering {
     }
 }
 
+// Guard: notice when either premise of CLAUDE.md's `clean`-leads-the-gate MEASUREMENT moves (#2692).
+//
+// The #2471 / #2595 shape a third time, and this time the subject is not a tool's bundled frontend
+// but a measurement of this build's own behaviour. Point (4) of the pre-merge gate paragraph in
+// `CLAUDE.md` says `clean` must LEAD the mandated command because `--rerun-tasks` does not clear
+// Kotlin's incremental-compilation state, and backs that with a sentinel experiment: plant a file in
+// every Kotlin IC directory, run one `:kuilt-core:build --rerun-tasks`, count survivors BY TASK
+// FAMILY. That paragraph is the command every contributor and agent runs before arming auto-merge,
+// and nothing re-runs the experiment.
+//
+// TWO INDEPENDENTLY-MOVING INPUTS FALSIFY IT, and today neither fails anything:
+//
+//   1. `kotlin.incremental.wasm=false` in `gradle.properties` — #1893's fix, which #1914 tracks
+//      REMOVING once a stable Kotlin carries the upstream ICE fix. Flip it and the set of IC
+//      directories that exist at all changes, so the measured population changes with it.
+//   2. The Kotlin version. Kotlin/Native klib incremental compilation is on by default from
+//      2.4.20-Beta2, so the first move past the measured pin hands the NATIVE lane its own
+//      retained-IC surface — a task family the experiment never saw.
+//
+// FAILS ON CHANGE, not on regression, exactly like its two siblings. Re-enabling wasm IC is good
+// news and a Kotlin bump is routine; the point is that both silently invalidate a measurement
+// nobody re-runs, and the only cheap way to stop that being silent is to red on it.
+//
+// DELIBERATELY NO MEASURED NUMBERS IN THE MESSAGES. Restating the survivor counts here would
+// reproduce the very rot this guard exists to catch, one level down — a number in a failure string
+// is exactly as unmaintained as a number in prose, and there would then be two copies to keep in
+// step. The messages point AT the paragraph and name the experiment; the paragraph owns the numbers.
+//
+// EXACT MATCH on the Kotlin pin, not a `>`. Three reasons, in order of weight. The claim is not "IC
+// is retained above version X" but "at THIS version the surviving population is this one task
+// family", which a DOWNGRADE falsifies just as thoroughly as an upgrade. The boundary that actually
+// matters (2.4.20-Beta2) is a move WITHIN the 2.4 line, so any ordering comparison would have to
+// hard-code that boundary and would then rot beside the prose it protects. And exact match needs no
+// version-ordering semantics at all — `2.4.10`, `2.4.9` and `2.10.0` do not compare as strings, and
+// a hand-rolled comparator is one more thing to get wrong inside a required gate.
+//
+// WHAT IT CANNOT SEE: a backend that changes its IC layout without the version moving. Nothing
+// cheap can; the version pin is the proxy, and its exactness is what keeps the proxy honest.
+//
+// COSTS NOTHING AT CONFIGURATION TIME, unlike its two siblings: it resolves no configuration and
+// opens no jar. It reads two committed files and one Gradle property, all in `doLast`.
+
+// The Kotlin version point (4)'s sentinel experiment was measured on. A LITERAL here on purpose:
+// per "Guard plumbing" above, a literal in this script is folded into the task-action
+// implementation hash, so editing it re-runs the guard instead of replaying a cached verdict.
+val cleanGateMeasuredKotlin = "2.4.10"
+
+// The version the catalog entry `build-logic` actually applies Kotlin through resolves to. A
+// sibling of `DetektCatalogScanner` / `AgpCatalogScanner` rather than a generalisation of them, for
+// the reason given at `AgpCatalogScanner`; and it needs no fixture for the same reason — its subject
+// is a single real file every build parses, so a spelling change returns null and fails the next run.
+object KotlinCatalogScanner {
+    /** The version of `org.jetbrains.kotlin:kotlin-gradle-plugin` the catalog declares, or null. */
+    fun pluginVersion(toml: String): String? {
+        // ANCHORED to the start of a line, unlike the two sibling scanners. Without `(?m)^\s*` the
+        // alias is matched as a SUBSTRING, so a differently-prefixed neighbour (`xkotlin-gradlePlugin`)
+        // would satisfy it and this guard would confirm itself against an entry the build never
+        // applies — a green, which is the failure mode that matters here.
+        val entry = Regex(
+            """(?m)^\s*kotlin-gradlePlugin\s*=\s*\{[^}]*module\s*=\s*""" +
+                """"org\.jetbrains\.kotlin:kotlin-gradle-plugin"[^}]*version\.ref\s*=\s*"([^"]+)"""",
+        ).find(toml) ?: return null
+        val versionRef = entry.groupValues[1]
+        return Regex("""(?m)^\s*${Regex.escape(versionRef)}\s*=\s*"([^"]+)"""")
+            .find(toml)?.groupValues?.get(1)
+    }
+}
+
+val forbidCleanGateMeasurementSkew by tasks.registering {
+    group = "verification"
+    description = "Fails when a premise of CLAUDE.md's `clean`-leads-the-gate measurement moves — the wasm IC flag or the Kotlin pin (#2692)."
+    // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
+    // is a pure function of two committed files and one Gradle property, all declared as inputs.
+    val propertiesFile = rootDir.resolve("gradle.properties")
+    val catalogFile = rootDir.resolve("gradle/libs.versions.toml")
+    inputs.file(propertiesFile).withPropertyName("gradleProperties")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(catalogFile).withPropertyName("versionCatalog")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val measuredKotlin = cleanGateMeasuredKotlin
+    inputs.property("measuredKotlinVersion", measuredKotlin)
+    val catalogKotlin = libs.versions.kotlin.get()
+    inputs.property("catalogKotlinVersion", catalogKotlin)
+    // The EFFECTIVE property as well as the committed line, because they fail in opposite directions
+    // and neither subsumes the other: `~/.gradle/gradle.properties`, a `-P` flag or an
+    // `ORG_GRADLE_PROJECT_` env var can turn wasm IC back on without touching the repo, while an
+    // ambient override to `false` would mask the committed line having gone away.
+    val effectiveWasmIc = providers.gradleProperty("kotlin.incremental.wasm").orElse("<unset>")
+    inputs.property("effectiveWasmIncremental", effectiveWasmIc)
+    val stamp = layout.buildDirectory.file("verification/forbid-clean-gate-measurement-skew.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    doLast {
+        val reMeasure =
+            "  THE FIX is to RE-MEASURE, then move the paragraph and this guard together:\n" +
+                "    1. Plant a sentinel file in every Kotlin incremental-compilation directory " +
+                "under the module build directories, run one `./gradlew :kuilt-core:build " +
+                "--rerun-tasks`, and count survivors BY TASK FAMILY — confirming each surviving " +
+                "task actually shows `EXECUTED` in that run, since a task that did not run retains " +
+                "its state trivially and is not the finding.\n" +
+                "    2. Rewrite point (4) of the gate paragraph in `CLAUDE.md` with the new " +
+                "population. No numbers are restated in this guard on purpose, so the paragraph is " +
+                "the single copy to keep true.\n" +
+                "    3. Decide whether `clean` can now be narrowed or must stay the sledgehammer. " +
+                "#1913 records why a path-keyed wipe rots — its own table named " +
+                "`<module>/build/klib/cache`, 37 directories when filed and 0 by the time anyone " +
+                "acted on it — so narrowing needs an argument, not merely a smaller population.\n" +
+                "    4. Re-point this guard at whatever is true afterwards."
+        val committedWasmIc = java.util.Properties()
+            .also { loaded -> propertiesFile.inputStream().use { stream -> loaded.load(stream) } }
+            .getProperty("kotlin.incremental.wasm")
+        if (committedWasmIc != "false") {
+            error(
+                "`gradle.properties` no longer declares `kotlin.incremental.wasm=false` (it now " +
+                    "declares " +
+                    (committedWasmIc?.let { "`kotlin.incremental.wasm=$it`" } ?: "no such property") +
+                    "), so point (4) of `CLAUDE.md`'s pre-merge gate paragraph rests on a premise " +
+                    "that has moved.\n" +
+                    "  THIS IS PROBABLY GOOD NEWS: #1914 tracks removing that line once a stable " +
+                    "Kotlin carries the upstream ICE fix, and its removal is precisely the event " +
+                    "this guard exists to catch. With wasm incremental compilation back on there " +
+                    "are IC directories that did not exist when the paragraph was measured, so the " +
+                    "population it reports is no longer the population.\n" +
+                    reMeasure,
+            )
+        }
+        val effective = effectiveWasmIc.get()
+        if (effective != "false") {
+            error(
+                "`gradle.properties` declares `kotlin.incremental.wasm=false`, but the EFFECTIVE " +
+                    "Gradle property in this build is `$effective` — an override from " +
+                    "`~/.gradle/gradle.properties`, a `-P` flag, or an `ORG_GRADLE_PROJECT_` " +
+                    "environment variable.\n" +
+                    "  Point (4) of `CLAUDE.md`'s pre-merge gate paragraph was measured with wasm " +
+                    "incremental compilation OFF, so it does not describe the build running here, " +
+                    "and a gate run under this override proves something other than what the " +
+                    "paragraph says it proves.\n" +
+                    "  THE FIX is to drop the override. If it is deliberate and permanent — #1914 " +
+                    "landing, say — make it a committed change to `gradle.properties`, which is " +
+                    "the arm of this guard that prints the re-measurement steps.",
+            )
+        }
+        val applied = KotlinCatalogScanner.pluginVersion(catalogFile.readText())
+            ?: error(
+                "Could not find a `kotlin-gradlePlugin = { module = " +
+                    "\"org.jetbrains.kotlin:kotlin-gradle-plugin\", version.ref = \"…\" }` entry in " +
+                    "`gradle/libs.versions.toml`, so this guard cannot confirm that " +
+                    "`libs.versions.kotlin` is the Kotlin the build actually applies — and an " +
+                    "unconfirmed probe must fail rather than pass.\n" +
+                    "  THE FIX is to re-sync the parser in `build.gradle.kts` with however that " +
+                    "entry is spelled now.",
+            )
+        if (applied != catalogKotlin) {
+            error(
+                "This guard compares `libs.versions.kotlin` ($catalogKotlin) with the version point " +
+                    "(4) was measured on, but `gradle/libs.versions.toml` applies " +
+                    "`org.jetbrains.kotlin:kotlin-gradle-plugin:$applied`. Its verdict would be " +
+                    "about a Kotlin that is not in the build.\n" +
+                    "  The usual cause is a literal `version = \"…\"` on the plugin entry while the " +
+                    "`kotlin` alias is left behind.\n" +
+                    "  THE FIX is to point this guard at whichever catalog entry `build-logic` " +
+                    "takes the Kotlin Gradle plugin from.",
+            )
+        }
+        if (catalogKotlin != measuredKotlin) {
+            error(
+                "This repo's Kotlin is $catalogKotlin, but point (4) of `CLAUDE.md`'s pre-merge " +
+                    "gate paragraph records a sentinel measurement taken on $measuredKotlin, so the " +
+                    "paragraph describes a build that is no longer this one.\n" +
+                    "  ANY move counts, in EITHER direction — this is an exact match rather than a " +
+                    "`>` because the claim is about which task families retained IC state at one " +
+                    "pinned version, not about a threshold. The specific hazard is Kotlin/Native " +
+                    "klib incremental compilation, on by default from 2.4.20-Beta2: a move WITHIN " +
+                    "the 2.4 line that hands the native lane its own retained-IC surface the " +
+                    "experiment never saw.\n" +
+                    reMeasure + "\n" +
+                    "    5. Set `cleanGateMeasuredKotlin` in `build.gradle.kts` to $catalogKotlin.",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — `kotlin.incremental.wasm` is `false` both in `gradle.properties` and effectively, " +
+                "and this repo's Kotlin ($catalogKotlin, confirmed against catalog " +
+                "org.jetbrains.kotlin:kotlin-gradle-plugin:$applied) still matches the version point " +
+                "(4)'s sentinel measurement was taken on, so the gate paragraph's premises hold\n",
+        )
+    }
+}
+
 // Guard: forbid `:kuilt-bolt` rejoining the CRDT lattice (#2212, epic #2210).
 //
 // A bolt is a WRITE-ONLY archive. Its whole reason to exist is that it consumes operations, never
@@ -8252,6 +8442,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidNotNullAssertionInUnresolvedSource"))
         dependsOn(rootProject.tasks.named("forbidDetektFrontendSkew"))
         dependsOn(rootProject.tasks.named("forbidLintFrontendSkew"))
+        dependsOn(rootProject.tasks.named("forbidCleanGateMeasurementSkew"))
         dependsOn(rootProject.tasks.named("forbidSourcelessKmpTarget"))
         dependsOn(rootProject.tasks.named("forbidPortProbeRebind"))
         dependsOn(rootProject.tasks.named("verifyDocCitations"))
