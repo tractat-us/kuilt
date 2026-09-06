@@ -17,6 +17,7 @@ kotlin {
             implementation(libs.kotlinx.serialization.cbor)
             implementation(libs.ionspin.bignum)
             implementation(libs.kotlincrypto.hash.sha2)
+            implementation(libs.kotlin.logging)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
