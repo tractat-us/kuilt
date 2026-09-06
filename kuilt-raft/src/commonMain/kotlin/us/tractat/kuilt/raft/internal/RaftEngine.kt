@@ -82,9 +82,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
  * that is up, traced, emitting [RaftTraceEvent.FrameUndecodable], and completely unable to
  * participate. Forward-compatibility is load-bearing on its own; the crash was never the argument.
  *
- * `internal` rather than `private` so a test that measures wire sizes encodes with **this** instance.
- * A restated copy agrees with it only until one of them changes, and a size premise measured on the
- * copy stays green through the very codec change it exists to catch (#2720).
+ * `internal` rather than `private` so a test that measures wire sizes, and `RaftWireGoldenVectorTest`,
+ * encode with **this** instance. A restated copy agrees with it only until one of them changes: a size
+ * premise measured on the copy stays green through the very codec change it exists to catch (#2720),
+ * and a golden vector encoded through the copy leaves the config itself unpinned — every vector stays
+ * green while every real frame moves.
  */
 internal val raftCbor = Cbor { ignoreUnknownKeys = true }
 
