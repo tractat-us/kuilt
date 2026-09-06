@@ -313,6 +313,38 @@ class EntitlementLedgerReconcileTest {
     }
 
     /**
+     * #2389 — the **both-terms** sibling of the two pins above. `charge` is `leafSpent + rollupSpent`,
+     * and every fixture in this file hardcodes one of the two to `0`
+     * ([theCoverPreconditionIsExactAtItsBoundary] zeroes the roll-up half,
+     * [aRollUpChargeCountsTowardTheCoverPreconditionToo] the leaf half), so `checkedAdd(lsp, rsp)`
+     * has never been evaluated with both terms live and collapsing it to either operand passes the
+     * whole suite. The boundary pair is what makes that impossible: at `cover = 9` the charge is
+     * exactly `5 + 4`, so a single-term spelling reads `5` or `4` and would fund the `cover = 8`
+     * arm the sum refuses.
+     *
+     * This is *representability* only — that the arithmetic can be reached at all.
+     * `EntitlementLedgerLeafGainsChildRelocationTest` proves the state is **reachable** through the
+     * real mutators, which is the half that closes the issue.
+     */
+    @Test
+    fun bothHalvesOfTheSpendSplitCountTowardTheCoverPreconditionTogether() {
+        fun move(cover: Long) = EntitlementLedger.ZERO.relocationPatch(
+            e3,
+            mapOf(e1 to mapOf(p3 to SlotFinals(issued = cover, returned = 0L, leafSpent = 5L, rollupSpent = 4L))),
+        )
+        val moved = assertIs<Relocation.Moved>(move(cover = 9L), "cover 9 == charge 5 + 4 is exactly fundable")
+        assertAll(
+            { assertIs<Relocation.Refused>(move(cover = 8L), "one unit short of the SUM refuses") },
+            // …and the two halves ride ONE fenced slot and ONE live slot, the pair of writes no
+            // earlier fixture could put on a single slot at all.
+            { assertEquals(5L, moved.patch.storedSlot(CounterFamily.LEAF_RELOC_OUT, e1, p3), "leaf half cancelled on e1") },
+            { assertEquals(4L, moved.patch.storedSlot(CounterFamily.ROLLUP_RELOC_OUT, e1, p3), "roll-up half cancelled on e1") },
+            { assertEquals(5L, moved.patch.storedSlot(CounterFamily.LEAF_RELOC_IN, e3, p3), "leaf half re-opened on e3") },
+            { assertEquals(4L, moved.patch.storedSlot(CounterFamily.ROLLUP_RELOC_IN, e3, p3), "roll-up half re-opened on e3") },
+        )
+    }
+
+    /**
      * The §6.5.2 residual, reproduced on the **roll-up** family: an ack that understates a replica's
      * spend on the fenced edge (the cross-incarnation gap — charge, delta escapes to one other peer,
      * crash before ack, restart re-acks lower). Deliberately **not closed** in v1: closing it needs
