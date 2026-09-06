@@ -57,15 +57,20 @@ public sealed interface RaftAction {
  * fresh randomness each run trades a real defect signal for a flake generator.
  * Change it deliberately (and re-run the mutation table in the PR that does).
  *
- * One mutation in that table is **structurally unkillable here, and no seed or budget will change
- * that**: deleting the `entry.term == r.term` conjunct at the commit-advance site (Raft §5.4.2,
- * Figure 8). [Cluster.becomeLeader] appends a current-term no-op as the leader's last entry and
- * `appendEntriesMsgs` ships the *entire* unbounded suffix, so any follower that accepts replies
- * with a `matchIndex` at or above that no-op — leaving the quorum-th `matchIndex` either 0 (no
- * commit) or in the all-current-term region. A prior-term majority commit is therefore
- * unreachable. Killing it needs bounded AppendEntries batches, so a follower can acknowledge a
- * prefix stopping short of the no-op; that is tracked in #2114. Don't spend a budget increase on
- * it — 450,000 trajectories over 100 seeds produced zero prior-term majority-commit states.
+ * The §5.4.2 (Figure 8) mutation — deleting the `entry.term == r.term` conjunct at the
+ * commit-advance site — used to be **structurally unkillable** here, at any seed or budget:
+ * [Cluster.becomeLeader] appends a current-term no-op as the leader's last entry and
+ * `appendEntriesMsgs` shipped the *entire* unbounded suffix, so every accepting follower replied with
+ * a `matchIndex` at or above that no-op and the quorum-th `matchIndex` was either 0 or in the
+ * all-current-term region. 450 000 trajectories over 100 seeds produced zero prior-term
+ * majority-commit states.
+ *
+ * [Cluster.maxEntriesPerAppend] is what changed that (#2114) — a follower can now ack a prefix
+ * stopping short of the no-op. **A budget increase alone still will not kill it**: the bound is
+ * necessary and, on its own, not sufficient. It also needs the trajectory shape the two bounded
+ * properties use, because Figure 8 takes three elections; see `BOUNDED_MAX_ACTIONS` /
+ * [DELIVER_WEIGHT]. Removing the bound while keeping everything else leaves the mutation surviving
+ * all nine tests.
  */
 internal const val SEED: Long = 0x5AFE_7A17L
 
@@ -76,38 +81,49 @@ private const val NODE_INDEX_BOUND = 11
 private const val MESSAGE_INDEX_BOUND = 101
 
 /**
- * Relative weights over the eight action constructors, preserving the original
- * arbitrary's shape: `Deliver` is weighted 3× because messages have to be
- * processed for the cluster to make any progress at all.
+ * Default relative weight of `Deliver` against each of the other seven action constructors,
+ * preserving the original arbitrary's shape: messages have to be processed for the cluster to make
+ * any progress at all.
+ *
+ * **It is a parameter rather than a constant because the right value scales with cluster size, and
+ * a single figure starves the larger cluster.** One event fans out to `n - 1` messages, so the
+ * fraction of actions that must be `Deliver` merely to keep the queue from growing rises with `n` —
+ * and below that fraction the trajectory drowns in un-delivered mail. Measured on this model at
+ * `maxActions = 60`: a 5-node cluster reaches a state with anything committed on **112** steps out
+ * of 15 000 trajectories at this weight, against **12 284** at weight 12. The 5-node property is
+ * therefore close to vacuous for every invariant that needs a commit to exist (#2114).
  */
-private const val DELIVER_WEIGHT = 3
-private const val ACTION_WEIGHT_TOTAL = 7 + DELIVER_WEIGHT
+internal const val DELIVER_WEIGHT = 3
 
 /** Generates one action. Index bounds match the jqwik arbitraries this replaced. */
-private fun randomAction(random: Random): RaftAction {
+private fun randomAction(random: Random, deliverWeight: Int): RaftAction {
     val node = { random.nextInt(NODE_INDEX_BOUND) }
-    return when (random.nextInt(ACTION_WEIGHT_TOTAL)) {
+    return when (val roll = random.nextInt(7 + deliverWeight)) {
         0 -> RaftAction.Timeout(node())
-        1, 2, 3 -> RaftAction.Deliver(random.nextInt(MESSAGE_INDEX_BOUND))
-        4 -> RaftAction.Propose
-        5 -> RaftAction.Crash(node())
-        6 -> RaftAction.Restart(node())
-        7 -> RaftAction.Partition(node(), node())
-        8 -> RaftAction.Heal
-        else -> RaftAction.Compact(node())
+        in 1..deliverWeight -> RaftAction.Deliver(random.nextInt(MESSAGE_INDEX_BOUND))
+        deliverWeight + 1 -> RaftAction.Propose
+        deliverWeight + 2 -> RaftAction.Crash(node())
+        deliverWeight + 3 -> RaftAction.Restart(node())
+        deliverWeight + 4 -> RaftAction.Partition(node(), node())
+        deliverWeight + 5 -> RaftAction.Heal
+        else -> RaftAction.Compact(node()).also { check(roll == deliverWeight + 6) { "roll $roll" } }
     }
 }
 
 /**
- * Generates one trajectory of 1..[maxActions] actions.
+ * Generates one trajectory of 1..[maxActions] actions, drawing `Deliver` [deliverWeight] times as
+ * often as each other constructor.
  *
  * The length is drawn uniformly. That is a deliberate departure from jqwik, whose
  * default list-size distribution is biased hard toward short lists — and short
  * trajectories cannot reach a safety violation, which takes an election, a
  * replication round and a second election before anything can go wrong.
  */
-internal fun generateActions(random: Random, maxActions: Int): List<RaftAction> =
-    List(1 + random.nextInt(maxActions)) { randomAction(random) }
+internal fun generateActions(
+    random: Random,
+    maxActions: Int,
+    deliverWeight: Int = DELIVER_WEIGHT,
+): List<RaftAction> = List(1 + random.nextInt(maxActions)) { randomAction(random, deliverWeight) }
 
 // ── Shrinking ───────────────────────────────────────────────────────────────
 
@@ -231,11 +247,12 @@ internal fun forAllActionSequences(
     tries: Int,
     maxActions: Int,
     seed: Long = SEED,
+    deliverWeight: Int = DELIVER_WEIGHT,
     body: (List<RaftAction>) -> Unit,
 ) {
     for (tryIndex in 0 until tries) {
         val trySeed = seed + tryIndex
-        val actions = generateActions(Random(trySeed), maxActions)
+        val actions = generateActions(Random(trySeed), maxActions, deliverWeight)
         val failure = outcomeOf(actions, body) ?: continue
         // Shrink toward the SAME kind of failure. A predicate that accepted any throwable would let
         // the search minimise a safety violation into an unrelated model crash and report that one.

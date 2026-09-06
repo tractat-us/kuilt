@@ -125,17 +125,46 @@ class PureRaftModelTest {
     }
 
     /**
-     * Leader Completeness: if an entry was committed in term T, every leader
-     * whose term is strictly greater than T must have that entry in its log.
-     *
-     * [committedEntries] accumulates entries as they become committed anywhere
-     * in the cluster (index → entry). It grows monotonically across steps.
+     * A committed entry, together with the term it was committed **in** — which is not the same thing
+     * as [LogEntry.term], the term it was *created* in. §5.4.2 is exactly the rule that lets the two
+     * diverge: a prior-term entry becomes committed by implication when a current-term entry commits
+     * above it, so an entry created in term 1 is routinely committed in term 3.
      */
-    private fun checkLeaderCompleteness(c: Cluster, committedEntries: Map<Long, LogEntry>) {
+    private data class CommittedEntry(val entry: LogEntry, val committedInTerm: Long)
+
+    /**
+     * Leader Completeness (Ongaro, Fig. 3.2): *"if a log entry is committed in a given term, then that
+     * entry will be present in the logs of the leaders for all higher-numbered terms."*
+     *
+     * ## Keyed on the commit term. **Do not re-tighten this to `entry.term`.**
+     *
+     * This check used to read `if (committed.term >= leader.term) continue` — i.e. it keyed on the term
+     * the entry was *created* in. That states a strictly stronger proposition than Fig. 3.2, and the
+     * stronger proposition is **not a theorem of Raft**: it flags a trajectory in which nothing is
+     * wrong. The witness is an ordinary stale leader. n2 wins term 2 with log `[1:t2]`; n1 goes on to
+     * lead term 3 with `[1:t1, 2:t3]` and commits index 1 by implication under §5.4.2. Index 1 is now
+     * committed *in term 3*; n2 leads term 2; 2 is not higher than 3, so Raft promises nothing about
+     * n2 — correctly, because a stale leader no quorum will answer can never commit its conflicting
+     * entry. But `entry.term` is 1, which *is* below n2's term, so the old spelling reported a
+     * violation.
+     *
+     * Re-tightening is tempting precisely because it looks safer — a stricter invariant "can only catch
+     * more". It cannot: it catches a **false positive**, and one that hides. It needed an unbounded
+     * 200-action trajectory at try 13 224 of 20 000 to surface, several times past the shipped budget,
+     * so re-tightening it would leave a latent false-alarm generator that first fires on somebody
+     * else's unrelated change (#2114). `checkLeaderCompleteness ignores a stale leader below the term
+     * the entry was committed in` is the pin; if you are here to make this stricter, that test is the
+     * argument against it.
+     *
+     * [committedEntries] accumulates entries as they become committed anywhere in the cluster
+     * (index → entry + commit term). It grows monotonically across steps.
+     */
+    private fun checkLeaderCompleteness(c: Cluster, committedEntries: Map<Long, CommittedEntry>) {
         val leaders = c.replicas.values.filter { it.alive && it.role == RaftRole.Leader }
         for (leader in leaders) {
-            for ((idx, committed) in committedEntries) {
-                if (committed.term >= leader.term) continue
+            for ((idx, record) in committedEntries) {
+                val committed = record.entry
+                if (record.committedInTerm >= leader.term) continue
                 // A compacted leader holds the entry in its snapshot baseline, not its retained log.
                 if (idx <= leader.snapshotIndex) continue
                 val entry = leader.entryAt(idx)
@@ -143,8 +172,8 @@ class PureRaftModelTest {
                     entry != null && entry.term == committed.term && entry.command.contentEquals(committed.command),
                 ) {
                     "Leader Completeness violated: leader ${leader.id} (term=${leader.term}) " +
-                        "is missing committed entry at index=$idx (term=${committed.term}, " +
-                        "cmd=${committed.command.contentToString()})"
+                        "is missing entry at index=$idx (term=${committed.term}, " +
+                        "cmd=${committed.command.contentToString()}) committed in term ${record.committedInTerm}"
                 }
             }
         }
@@ -174,18 +203,24 @@ class PureRaftModelTest {
      * [committedEntries]. An entry at index [idx] is committed on a replica when
      * its [commitIndex] ≥ [idx].
      */
-    private fun collectCommitted(c: Cluster, committedEntries: MutableMap<Long, LogEntry>) {
+    private fun collectCommitted(c: Cluster, committedEntries: MutableMap<Long, CommittedEntry>) {
         for (replica in c.replicas.values) {
             if (!replica.alive) continue
             for (entry in replica.log) {
-                if (entry.index <= replica.commitIndex && entry.index !in committedEntries) {
-                    committedEntries[entry.index] = entry
-                }
+                if (entry.index > replica.commitIndex) continue
+                // A replica holding index `i` committed while at term T witnesses "committed in some term
+                // <= T". Keeping the LOWEST such witness ever seen is the tightest bound available, and
+                // therefore the strictest sound key: a looser one would check fewer leaders.
+                val previous = committedEntries[entry.index]
+                committedEntries[entry.index] = CommittedEntry(
+                    entry = previous?.entry ?: entry,
+                    committedInTerm = minOf(previous?.committedInTerm ?: Long.MAX_VALUE, replica.term),
+                )
             }
         }
     }
 
-    private fun checkAllInvariants(c: Cluster, committedEntries: Map<Long, LogEntry>) = assertAll(
+    private fun checkAllInvariants(c: Cluster, committedEntries: Map<Long, CommittedEntry>) = assertAll(
         { checkElectionSafety(c) },
         { checkLogMatching(c) },
         { checkStateMachineSafety(c) },
@@ -194,10 +229,10 @@ class PureRaftModelTest {
     )
 
     /** Replays one trajectory against a fresh cluster of [nodeIds], checking every invariant after each step. */
-    private fun replay(nodeIds: Array<String>, actions: List<RaftAction>) {
-        var c = cluster(*nodeIds)
+    private fun replay(nodeIds: Array<String>, actions: List<RaftAction>, maxEntriesPerAppend: Int? = null) {
+        var c = cluster(*nodeIds, maxEntriesPerAppend = maxEntriesPerAppend)
         val nodes = c.replicas.keys.toList()
-        val committedEntries = mutableMapOf<Long, LogEntry>()
+        val committedEntries = mutableMapOf<Long, CommittedEntry>()
         for (action in actions) {
             c = applyAction(c, action, nodes)
             collectCommitted(c, committedEntries)
@@ -220,6 +255,24 @@ class PureRaftModelTest {
         tries = FIVE_NODE_TRIES,
         maxActions = MAX_ACTIONS,
     ) { actions -> replay(arrayOf("n1", "n2", "n3", "n4", "n5"), actions) }
+
+    @Test
+    fun `safety invariants hold in a 3-node cluster under bounded AppendEntries batches`() = forAllActionSequences(
+        property = "safety invariants hold in a 3-node cluster under bounded AppendEntries batches",
+        tries = BOUNDED_TRIES,
+        maxActions = BOUNDED_MAX_ACTIONS,
+        deliverWeight = BOUNDED_DELIVER_WEIGHT,
+    ) { actions -> replay(arrayOf("n1", "n2", "n3"), actions, maxEntriesPerAppend = MAX_ENTRIES_PER_APPEND) }
+
+    @Test
+    fun `safety invariants hold in a 5-node cluster under bounded AppendEntries batches`() = forAllActionSequences(
+        property = "safety invariants hold in a 5-node cluster under bounded AppendEntries batches",
+        tries = BOUNDED_TRIES,
+        maxActions = BOUNDED_MAX_ACTIONS,
+        deliverWeight = BOUNDED_DELIVER_WEIGHT,
+    ) { actions ->
+        replay(arrayOf("n1", "n2", "n3", "n4", "n5"), actions, maxEntriesPerAppend = MAX_ENTRIES_PER_APPEND)
+    }
 
     // ── Invariant self-checks ────────────────────────────────────────────────
 
@@ -256,12 +309,101 @@ class PureRaftModelTest {
             voters = setOf(n1, n2, n3),
         )
 
-        // committedEntries: the entry was committed in term 1 at index 1
-        val committedEntries = mapOf(1L to committedEntry)
+        // committedEntries: the entry was committed in term 1 at index 1 — n2/n3 witness it while at term 1
+        val committedEntries = mapOf(1L to CommittedEntry(committedEntry, committedInTerm = 1L))
 
         assertFailsWith<AssertionError> {
             checkLeaderCompleteness(c, committedEntries)
         }
+    }
+
+    /**
+     * §5.3 rule 3 applies to **every** entry of a batch, not only the first.
+     *
+     * The rig is the one shape where "first" and "every" differ: `nextIndex` has backed all the way to
+     * 1, so `prevLogIndex` is 0 and the consistency check is skipped entirely; the batch's first entry
+     * then *matches* while the divergence sits one entry later. The pre-#1248 form kept the follower's
+     * stale entry at that index and appended around it, and the follower went on to attest a log the
+     * leader never sent.
+     *
+     * A directed test rather than a property: the random surface cannot see this. The unbounded
+     * properties would need trajectories several times longer than they run (measured: 5 State Machine
+     * Safety violations per 20 000 compaction-free 3-node trajectories of up to 200 actions), and the
+     * bounded ones carry one entry per frame, where the two readings coincide by construction (#2114).
+     */
+    @Test
+    fun `onAppendEntries truncates on a conflict later in the batch and not only on the first entry`() {
+        val n1 = NodeId("n1")
+        val n2 = NodeId("n2")
+        val shared = LogEntry(index = 1L, term = 1L, command = byteArrayOf())
+        val leaderBatch = listOf(shared, LogEntry(index = 2L, term = 2L, command = byteArrayOf()))
+        // The follower agrees at index 1 and DIVERGES at index 2 — the entry a term-1 leader gave it.
+        val stale = LogEntry(index = 2L, term = 1L, command = byteArrayOf(9))
+        val follower = Replica(id = n2, term = 2L, log = listOf(shared, stale))
+        val leader = Replica(id = n1, term = 2L, role = RaftRole.Leader, log = leaderBatch)
+
+        val before = Cluster(
+            replicas = mapOf(n1 to leader, n2 to follower),
+            voters = setOf(n1, n2),
+            inFlight = listOf(
+                ModelMsg.AppendEntries(
+                    from = n1, to = n2, term = 2L,
+                    prevLogIndex = 0L, prevLogTerm = 0L, entries = leaderBatch, leaderCommit = 0L,
+                ),
+            ),
+        )
+        val after = before.deliver(0)
+        val settled = after.replicas.getValue(n2)
+        val reply = after.inFlight.filterIsInstance<ModelMsg.AppendEntriesResp>().single()
+
+        assertAll(
+            // Precondition: the rig really does diverge only at the batch's SECOND entry, so a
+            // first-entry-only check cannot notice it. Without this the test is green either way.
+            { assertEquals(shared.term, before.replicas.getValue(n2).entryAt(1L)?.term, "index 1 must match") },
+            { assertEquals(1L, before.replicas.getValue(n2).entryAt(2L)?.term, "index 2 must diverge") },
+            { assertEquals(2L, leaderBatch.last().term, "…against the leader's term-2 entry") },
+            { assertEquals(listOf(1L to 1L, 2L to 2L), settled.log.map { it.index to it.term }) },
+            { assertTrue(settled.entryAt(2L)!!.command.isEmpty(), "stale command [9] must be gone") },
+            { assertTrue(reply.success, "the frame is well-formed and must be accepted") },
+            { assertEquals(2L, reply.matchIndex, "attests exactly what the batch covered") },
+        )
+    }
+
+    /**
+     * Leader Completeness says nothing about a leader whose term is **below** the term an entry was
+     * committed in — and a stale leader in that position is an ordinary Raft state, not a violation.
+     *
+     * The mirror of the self-check above: that one proves the invariant still fires, this one proves it
+     * no longer fires where Raft makes no promise. Keying on `entry.term` instead of the commit term
+     * reported a violation here, and the random surface does not reach it at the shipped budget — it
+     * took an unbounded 200-action trajectory at try 13 224 of 20 000 to surface (#2114).
+     */
+    @Test
+    fun `checkLeaderCompleteness ignores a stale leader below the term the entry was committed in`() {
+        val n1 = NodeId("n1")
+        val n2 = NodeId("n2")
+        val entry = LogEntry(index = 1L, term = 1L, command = byteArrayOf())
+        // n2 won term 2 with its own conflicting entry, then n1 led term 3 and committed index 1 there.
+        val staleLeader = Replica(
+            id = n2, term = 2L, role = RaftRole.Leader,
+            log = listOf(LogEntry(index = 1L, term = 2L, command = byteArrayOf())),
+        )
+        val currentLeader = Replica(
+            id = n1, term = 3L, role = RaftRole.Leader, commitIndex = 2L,
+            log = listOf(entry, LogEntry(index = 2L, term = 3L, command = byteArrayOf())),
+        )
+        val c = Cluster(replicas = mapOf(n1 to currentLeader, n2 to staleLeader), voters = setOf(n1, n2))
+        val committedInTerm3 = mapOf(1L to CommittedEntry(entry, committedInTerm = 3L))
+
+        assertAll(
+            // Premise: n2 IS a leader, IS missing the entry, and its term IS above the entry's own term
+            // — every condition the old spelling keyed on. Only the commit term separates the two.
+            { assertEquals(RaftRole.Leader, staleLeader.role) },
+            { assertTrue(staleLeader.entryAt(1L)!!.term != entry.term, "n2 must diverge at the index") },
+            { assertTrue(staleLeader.term > entry.term, "…and outrank the entry's own term") },
+            { assertTrue(staleLeader.term < 3L, "…while sitting below the commit term") },
+            { checkLeaderCompleteness(c, committedInTerm3) },
+        )
     }
 
     /**
@@ -305,7 +447,7 @@ class PureRaftModelTest {
         val floor = c.globalCommitFloor()
         for (id in ids) c = c.compact(id, floor)
 
-        val committed = (1L..5L).associateWith { idx -> log.first { it.index == idx } }
+        val committed = (1L..5L).associateWith { idx -> CommittedEntry(log.first { it.index == idx }, 1L) }
         assertAll(
             { assertEquals(5L, floor) },
             { c.replicas.values.forEach { r -> assertEquals(emptyList(), r.log, "${r.id} log fully compacted") } },
@@ -331,5 +473,56 @@ class PureRaftModelTest {
          * of finding one — length is drawn uniformly up to this bound rather than biased small.
          */
         const val MAX_ACTIONS = 60
+
+        /**
+         * Entries one AppendEntries may carry in the bounded properties (see
+         * [Cluster.maxEntriesPerAppend]). **1 is the engine's own floor, not a contrivance**:
+         * `RaftEngine.boundedBatch` sends a single entry alone whenever nothing more fits the
+         * transport's payload budget, which `ProposePayloadBudgetTest` exercises with real budgets.
+         * 2 also reaches the §5.4.2 state, less often — see the measurement in the PR for #2114.
+         */
+        const val MAX_ENTRIES_PER_APPEND = 1
+
+        /**
+         * Budget for the two bounded properties. Much longer trajectories than [MAX_ACTIONS], and
+         * fewer of them, because Figure 8 is a **three-election** shape — an entry replicated under one
+         * leader, a second leader that inherits it uncommitted, and a third that can still overwrite it
+         * — and a 60-action trajectory at the default delivery weight ends long before the third.
+         *
+         * **Length, not count, is what buys detection here, and by a wide margin.** Counterexamples per
+         * 30 000 trajectories under the §5.4.2 mutation, 5-node, at a fixed ~2 s of JVM time each:
+         * 400 actions → **4**; 800 → **15**; 1200 → **19**. Trading tries for length is therefore nearly
+         * free and worth roughly 5×, because a 5-node cluster spends most of a short trajectory just
+         * reaching its first commit. Shorter still finds nothing at all: 60 and 120 actions produce zero
+         * at every delivery weight and every budget tried, including 100× this one.
+         *
+         * **Both arms are detectors — but they are not equally strong, and the budget is set by the
+         * weaker one.** Within this exact window the §5.4.2 mutation is caught by **11** distinct
+         * trajectories at 3 nodes (first at try 50) and **4** at 5 nodes (first at try 1 077). Those are
+         * enumerated hit indices, not an expected value computed from a density: an expectation can be
+         * comfortably above 1 while the actual count in the window is 0, and reporting one as the other
+         * is how a coin flip gets presented as a detector. Both arms are therefore genuine, and neither
+         * red rests on a single lucky trajectory.
+         *
+         * The 3-node arm is nonetheless ~3× denser, so **if a model change ever shifts the trajectories,
+         * expect the 5-node arm to go quiet first** — that alone is not evidence §5.4.2 regressed. Do not
+         * cut [BOUNDED_TRIES] without re-enumerating both counts; an earlier revision ran 6 000 × 400,
+         * where the 5-node arm had **one** hit in the window and its red really was this seed's luck.
+         *
+         * Unmutated, **180 000 trajectories at this length across 3 and 5 nodes, bounded and unbounded,
+         * produce zero** — so the length is not buying false positives along with the true ones. Every
+         * figure reproduces **byte-identically** on `macosArm64` and `wasmJs` (same try indices, same
+         * messages), so nothing here walks a hash-ordered collection.
+         *
+         * **What it costs**, stated because the budget above was deliberately sized for the slowest
+         * target: ~1.5 s of the class's JVM time, and **~34 s on `macosArm64`** (~11 s for the 3-node
+         * arm, ~21 s for the 5-node) against ~1 s before. Measured on the target, not extrapolated from
+         * the JVM — scaling the JVM figure predicted ~27 s and was wrong by a quarter. That is the price
+         * of a §5.4.2 kill, and it is why [MAX_ACTIONS] / [THREE_NODE_TRIES] are left alone rather than
+         * raised for every property.
+         */
+        const val BOUNDED_TRIES = 1_500
+        const val BOUNDED_MAX_ACTIONS = 1_200
+        const val BOUNDED_DELIVER_WEIGHT = 12
     }
 }
