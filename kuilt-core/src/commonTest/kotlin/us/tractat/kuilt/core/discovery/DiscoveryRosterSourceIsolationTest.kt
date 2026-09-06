@@ -164,12 +164,14 @@ class DiscoveryRosterSourceIsolationTest {
     fun aSourceMintedCancellationIsAbsorbedLikeAnyOtherFailure() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val mdns = MutableSharedFlow<Signal<Tag>>(extraBufferCapacity = 16)
         val multipeer = MutableSharedFlow<Signal<Tag>>(extraBufferCapacity = 16)
+        val failures = mutableListOf<Pair<PeerDiscoverySource, Throwable>>()
         val roster = discoveryRoster(
             listOf(
                 DrivableSource(DiscoveryKind.Mdns, discoveries = mdns.drivenFeed()),
                 DrivableSource(DiscoveryKind.Multipeer, discoveries = multipeer.drivenFeed()),
             ),
             backgroundScope,
+            onSourceFailure = { source, cause -> failures += source to cause },
         )
         runCurrent()
 
@@ -183,7 +185,15 @@ class DiscoveryRosterSourceIsolationTest {
         multipeer.emit(Signal.Item(InMemoryTag("bob")))
         runCurrent()
 
-        assertTrue("bob" in keysOf(roster.value), "sibling source kept feeding the roster")
+        assertAll(
+            { assertTrue("bob" in keysOf(roster.value), "sibling source kept feeding the roster") },
+            // The half that is NOT green-either-way: the accident above absorbed the minted
+            // cancellation in silence. The fix has to recognise it as this feed's failure.
+            { assertEquals(1, failures.size, "the minted cancellation was reported as a feed failure") },
+            // `firstOrNull`, not `single`: on an empty list `single` throws NoSuchElementException,
+            // which escapes assertAll and replaces the diagnosis with a stack trace about a list.
+            { assertEquals(DiscoveryKind.Mdns, failures.firstOrNull()?.first?.kind, "which feed died") },
+        )
     }
 
     /**
@@ -198,10 +208,12 @@ class DiscoveryRosterSourceIsolationTest {
     @Test
     fun cancellingTheScopeStillEndsTheFold() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val mdns = MutableSharedFlow<Signal<Tag>>(extraBufferCapacity = 16)
+        val failures = mutableListOf<Pair<PeerDiscoverySource, Throwable>>()
         val foldScope = CoroutineScope(backgroundScope.coroutineContext + Job())
         val roster = discoveryRoster(
             listOf(DrivableSource(DiscoveryKind.Mdns, discoveries = mdns.drivenFeed())),
             foldScope,
+            onSourceFailure = { source, cause -> failures += source to cause },
         )
         runCurrent()
 
@@ -219,6 +231,78 @@ class DiscoveryRosterSourceIsolationTest {
         assertAll(
             { assertEquals(0, mdns.subscriptionCount.value, "our cancellation ended the collection") },
             { assertEquals(setOf("alice"), keysOf(roster.value), "the fold stopped folding") },
+            // A guard that mistook OUR cancellation for a feed failure would report one here.
+            { assertTrue(failures.isEmpty(), "our own cancellation is not a feed failure") },
         )
+    }
+
+    /**
+     * `:kuilt-core` is logger-free by contract, so `onSourceFailure` is the only signal a dead feed
+     * can produce — and a healthy source must never trip it.
+     */
+    @Test
+    fun aFailedFeedIsReportedWithItsSourceAndThrowable() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val mdns = MutableSharedFlow<Signal<Tag>>(extraBufferCapacity = 16)
+        val multipeer = MutableSharedFlow<Signal<Tag>>(extraBufferCapacity = 16)
+        val mdnsSource = DrivableSource(DiscoveryKind.Mdns, discoveries = mdns.drivenFeed())
+        val multipeerSource = DrivableSource(DiscoveryKind.Multipeer, discoveries = multipeer.drivenFeed())
+        val failures = mutableListOf<Pair<PeerDiscoverySource, Throwable>>()
+        discoveryRoster(
+            listOf(mdnsSource, multipeerSource),
+            backgroundScope,
+            onSourceFailure = { source, cause -> failures += source to cause },
+        )
+        runCurrent()
+
+        multipeer.emit(Signal.Item(InMemoryTag("bob")))
+        runCurrent()
+        assertTrue(failures.isEmpty(), "precondition: a healthy source reports nothing")
+
+        val cause = IllegalStateException("jmdns IO error")
+        mdns.emit(Signal.Fail(cause))
+        runCurrent()
+
+        assertAll(
+            { assertEquals(1, failures.size) },
+            { assertEquals(mdnsSource, failures.firstOrNull()?.first, "the failing source, by identity") },
+            { assertEquals(cause, failures.firstOrNull()?.second, "the throwable itself, not a summary") },
+        )
+    }
+
+    /**
+     * A consumer's logger must not be able to do what the isolation exists to prevent. If the
+     * reporting hook's own throw escaped, it would fail the merged flow and freeze the roster —
+     * reintroducing #1904 through the very callback that reports it.
+     */
+    @Test
+    fun aThrowingOnSourceFailureCannotKillTheFold() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val mdns = MutableSharedFlow<Signal<Tag>>(extraBufferCapacity = 16)
+        val multipeer = MutableSharedFlow<Signal<Tag>>(extraBufferCapacity = 16)
+        var reported = 0
+        val roster = discoveryRoster(
+            listOf(
+                DrivableSource(DiscoveryKind.Mdns, discoveries = mdns.drivenFeed()),
+                DrivableSource(DiscoveryKind.Multipeer, discoveries = multipeer.drivenFeed()),
+            ),
+            backgroundScope,
+            onSourceFailure = { _, _ ->
+                reported++
+                throw IllegalStateException("the consumer's logger blew up")
+            },
+        )
+        runCurrent()
+
+        multipeer.emit(Signal.Item(InMemoryTag("bob")))
+        runCurrent()
+        assertEquals(setOf("bob"), keysOf(roster.value), "precondition: the fold is live")
+
+        mdns.emit(Signal.Fail(IllegalStateException("jmdns IO error")))
+        runCurrent()
+        assertEquals(1, reported, "precondition: the throwing hook actually ran")
+
+        multipeer.emit(Signal.Item(InMemoryTag("carol")))
+        runCurrent()
+
+        assertTrue("carol" in keysOf(roster.value), "the fold survived the hook's own throw")
     }
 }
