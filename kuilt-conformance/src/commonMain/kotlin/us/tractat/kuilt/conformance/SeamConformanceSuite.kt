@@ -31,6 +31,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -340,12 +341,29 @@ public abstract class SeamConformanceSuite {
         ObligationDeclaration.Gap(CapabilityGaps.MEMBERSHIP_DRAIN)
 
     /**
-     * Inject a **self-dial**: make [host] resolve a connection whose remote identity is its OWN
-     * [Seam.selfId] — the #1466 class. A symmetric advertise+browse fabric is delivered its own
-     * advertisement (real Bonjour/mDNS/`NWBrowser` returns a device's own service to its own browser),
-     * dials it, and the resulting connection resolves to `selfId`. The seam's self-connection guard
-     * MUST drop it. Return `true` if the harness performed the injection; `false` (the default) means
-     * "this harness cannot inject a self-dial", and [selfDialIsRejected] early-returns without asserting.
+     * Inject a **self-dial at BOTH ends**: make [host] *and* [joiner] each resolve a connection whose
+     * remote identity is its OWN [Seam.selfId] — the #1466 class. A symmetric advertise+browse fabric
+     * is delivered its own advertisement (real Bonjour/mDNS/`NWBrowser` returns a device's own service
+     * to its own browser), dials it, and the resulting connection resolves to `selfId`. Each seam's
+     * self-connection guard MUST drop its own. Return `true` only if the harness injected at **both**
+     * ends; `false` (the default) means "this harness cannot inject a self-dial", and
+     * [selfDialIsRejected] early-returns without asserting.
+     *
+     * **Both ends, and why the hook took only a host until #2601.** A role-split fabric ships two
+     * different `Seam` implementations behind one harness, so a self-dial proven on `host` proves at
+     * most half of what the harness ships — and the other half is what a joining device runs. Taking
+     * both ends is what makes the joiner arms of [selfDialIsRejected] reachable at all; it is the same
+     * shape [injectMidSessionDeath] and [injectMembershipDrain] already have, so no harness meets a
+     * new concept. Every in-tree harness that declared [ObligationDeclaration.Proven] could inject at
+     * both ends, so widening it cost no coverage — but a future harness that can dial only one end
+     * must return `false` and declare a [ObligationDeclaration.Gap] rather than injecting one end and
+     * returning `true`, which would make the other end's arms silently vacuous.
+     *
+     * **The honest limit.** The suite cannot check that a harness really dialled the end it was
+     * handed: a *correctly* guarded self-dial leaves no trace at either end, by construction, which is
+     * the same reason [selfDialDeclaration] has no refutation for its `NotConstructible` arm. A
+     * harness that dials the host twice and returns `true` is indistinguishable from one that dials
+     * both. What the signature buys is that the joiner is *named* — an omission has to be written.
      *
      * This is a **harness** capability, not a fabric [SeamCapabilities] flag — mirroring
      * [injectMidSessionDeath]. Only a harness that can make a live seam see a connection to its own
@@ -359,7 +377,7 @@ public abstract class SeamConformanceSuite {
      * A harness that overrides this to `true` MUST also declare [ObligationDeclaration.Proven] via
      * [selfDialDeclaration].
      */
-    public open suspend fun injectSelfDial(host: Seam): Boolean = false
+    public open suspend fun injectSelfDial(host: Seam, joiner: Seam): Boolean = false
 
     /**
      * What this harness says about the self-dial obligation — the accountability analog of
@@ -2223,47 +2241,112 @@ public abstract class SeamConformanceSuite {
     // a connection to its own `selfId` (e.g. the `FakeNwRadio` self-endpoint path, #1485) can inject it.
     // The default [injectSelfDial] returns false, so harnesses that cannot self-dial early-return (a
     // silent skip declared via [selfDialDeclaration]). `incoming` is single-collection (ADR-034) and [connectedPair]
-    // does NOT collect `host.incoming`, so the collector below is its sole reader.
+    // does NOT collect either end's `incoming`, so the collectors below are their sole readers.
+    //
+    // **Both ends are checked (#2601), and this row is the one that needed a wider hook.** The other
+    // fourteen rows the sweep found could be asserted on the joiner with no signature change; this one
+    // could not, because its stimulus is *injected* and [injectSelfDial] took only a host — so a joiner
+    // arm written against the old hook would have asserted three properties of a seam nothing had
+    // dialled, which is a green that means nothing. The hook now takes both ends and must inject at
+    // both. What it still cannot do is verify the harness dialled the end it named: a correctly guarded
+    // self-dial is invisible by construction, so there is no observable to check against, the same
+    // structural gap [selfDialDeclaration] records for its `NotConstructible` arm.
+    //
+    // **Where the joiner arms can fail, and where they cannot.** No fixture supplies a self-dial —
+    // unlike the roster, which a shared registry can fill ([JoinerRosterOrigin] is the declaration for
+    // exactly that) — so the joiner arms rest entirely on the joining seam's own guard. On every
+    // in-tree harness that declares Proven, both ends are the same class (`NwSeam`, `BridgePeerLink`,
+    // `MCSessionLink`) or the guard is a factory-level `require` (mDNS), so the arms currently pass by
+    // sharing an implementation rather than by two independent guards agreeing. That is worth writing
+    // down rather than counting as proof: the row's value is that a fabric which later splits its ends
+    // — or gains a joiner whose guard lives elsewhere — cannot regress on the joining device while the
+    // host keeps looking healthy. Two of the three joiner arms are also weaker than they read: the
+    // roster arm is structurally blind on a fabric that republishes `registry.peers + selfId`
+    // (`MCSessionLink` does), and the literal #1466 direction — evicting *self* — reds
+    // [connectedPair]'s continuous monitor before this arm is reached.
 
     @Test
-    public fun selfDialIsRejected(): TestResult =
-        runTest {
-            connectedPair { host, _ ->
-                val peersBefore = host.peers.value
-                // Declaration first — see incomingCompletesOnInjectedMidSessionDeath for why.
-                if (selfDialDeclaration() !is ObligationDeclaration.Proven) return@connectedPair
-                val injected = injectSelfDial(host)
-                if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
+    public fun selfDialIsRejected(): TestResult = runTest { runSelfDialIsRejected(this) }
 
-                // Subscribe the sole `incoming` collector first, then let the injected self-dial fully
-                // resolve-or-drop, then broadcast the probe. A self-registered link echoes the broadcast
-                // back attributed to selfId (non-null ⇒ fail); a healthy seam never does (window elapses
-                // ⇒ null ⇒ pass).
-                val selfEcho = async {
-                    withTimeoutOrNull(2.seconds) { host.incoming.first { it.sender == host.selfId } }
-                }
-                delay(100.milliseconds) // let the injected self-dial resolve/drop and the collector subscribe
-                host.broadcast(byteArrayOf(0x5E.toByte(), 0x1F))
-                val echo = selfEcho.await()
+    internal suspend fun runSelfDialIsRejected(scope: TestScope) {
+        scope.connectedPair { host, joiner ->
+            val hostPeersBefore = host.peers.value
+            val joinerPeersBefore = joiner.peers.value
+            // Declaration first — see incomingCompletesOnInjectedMidSessionDeath for why.
+            if (selfDialDeclaration() !is ObligationDeclaration.Proven) return@connectedPair
+            val injected = injectSelfDial(host, joiner)
+            if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
 
-                assertAll(
-                    {
-                        assertNull(
-                            echo,
-                            "a rejected self-dial must not register a self-link: the host's own broadcast must " +
-                                "never loop back to it attributed to selfId",
-                        )
-                    },
-                    { assertEquals(peersBefore, host.peers.value, "a rejected self-dial must not change peers (self never registered as a remote)") },
-                    {
-                        assertIs<SeamState.Woven>(
-                            host.state.value,
-                            "a rejected self-dial must not re-flip Weaving→Woven nor tear the seam — state stays Woven",
-                        )
-                    },
-                )
-            }
+            // **The two probes run SEQUENTIALLY, and that is load-bearing (#2601)** — the same trap
+            // `runIncomingCompletesWhenSeamCloses` records. Each probe spends a 2 s *virtual* window
+            // waiting for an echo that must never arrive, so running them concurrently on a real-IO
+            // harness lets the first `broadcast`'s suspension on a real socket fast-forward the clock
+            // through the second window before its `broadcast` is reached. That failure is a false
+            // GREEN, not a flake: an unspent window returns `null`, which is this arm's PASS. Giving
+            // each end its own window costs virtual time and nothing else, and leaves the host arms
+            // byte-identical to the host-only form.
+            val hostEcho = probeForSelfEcho(host)
+            val joinerEcho = probeForSelfEcho(joiner)
+
+            assertAll(
+                {
+                    assertNull(
+                        hostEcho,
+                        "a rejected self-dial must not register a self-link: the host's own broadcast must " +
+                            "never loop back to it attributed to selfId",
+                    )
+                },
+                { assertEquals(hostPeersBefore, host.peers.value, "a rejected self-dial must not change peers (self never registered as a remote)") },
+                {
+                    assertIs<SeamState.Woven>(
+                        host.state.value,
+                        "a rejected self-dial must not re-flip Weaving→Woven nor tear the seam — state stays Woven",
+                    )
+                },
+                {
+                    assertNull(
+                        joinerEcho,
+                        "the JOINER's own broadcast must never loop back to it attributed to selfId either — " +
+                            "a role-split fabric ships a different Seam on each end (#2601), so the host's " +
+                            "guard proves nothing about the one a joining device runs",
+                    )
+                },
+                {
+                    assertEquals(
+                        joinerPeersBefore,
+                        joiner.peers.value,
+                        "a rejected self-dial must not change the JOINER's peers either (self never " +
+                            "registered as a remote there)",
+                    )
+                },
+                {
+                    assertIs<SeamState.Woven>(
+                        joiner.state.value,
+                        "the JOINER's state must stay Woven through a rejected self-dial too — no re-flip " +
+                            "Weaving→Woven, no tear",
+                    )
+                },
+            )
         }
+    }
+
+    /**
+     * Broadcast one probe from [seam] and return the frame that came back attributed to its own
+     * `selfId`, or `null` if none did within the window.
+     *
+     * Subscribes the sole `incoming` collector first, then lets the injected self-dial fully
+     * resolve-or-drop, then broadcasts. A self-registered link echoes the broadcast back attributed to
+     * `selfId` (non-null ⇒ the caller's arm fails); a healthy seam never does (window elapses ⇒ null ⇒
+     * pass). One collector per seam, so ADR-034's single-collection contract holds at both ends.
+     */
+    private suspend fun CoroutineScope.probeForSelfEcho(seam: Seam): Swatch? {
+        val selfEcho = async {
+            withTimeoutOrNull(2.seconds) { seam.incoming.first { it.sender == seam.selfId } }
+        }
+        delay(100.milliseconds) // let the injected self-dial resolve/drop and the collector subscribe
+        seam.broadcast(byteArrayOf(0x5E.toByte(), 0x1F))
+        return selfEcho.await()
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     //  Meta-test — every declared gap is trackable.
@@ -2522,62 +2605,62 @@ public abstract class SeamConformanceSuite {
     // KDoc says so.
 
     @Test
-    public fun selfDialDeclarationIsHonest(): TestResult =
-        runTest {
-            connectedPair { host, _ ->
-                when (val declared = selfDialDeclaration()) {
-                    is ObligationDeclaration.Proven ->
-                        assertTrue(
-                            injectSelfDial(host),
-                            "Proven claims selfDialIsRejected ran — but injectSelfDial returned false, so it " +
-                                "early-returned and asserted nothing. Override the hook, or declare " +
-                                "Gap/NotApplicable.",
-                        )
+    public fun selfDialDeclarationIsHonest(): TestResult = runTest { runSelfDialDeclarationIsHonest(this) }
 
-                    is ObligationDeclaration.Gap -> {
-                        val injected = injectSelfDial(host)
-                        assertAll(
-                            { assertTrue(declared.trackingUrl.isNotBlank(), GAP_NEEDS_A_URL) },
-                            {
-                                assertFalse(
-                                    injected,
-                                    "this harness CAN inject a self-dial, so it has no gap: declare Proven",
-                                )
-                            },
-                        )
-                    }
+    internal suspend fun runSelfDialDeclarationIsHonest(scope: TestScope): Unit =
+        scope.connectedPair { host, joiner ->
+            when (val declared = selfDialDeclaration()) {
+                is ObligationDeclaration.Proven ->
+                    assertTrue(
+                        injectSelfDial(host, joiner),
+                        "Proven claims selfDialIsRejected ran — but injectSelfDial returned false, so it " +
+                            "early-returned and asserted nothing. Override the hook, or declare " +
+                            "Gap/NotApplicable.",
+                    )
 
-                    // Hook cross-check, as everywhere. What is genuinely missing here — and stated at
-                    // [selfDialDeclaration] rather than papered over — is a refutation: a self-dial has
-                    // no universal stimulus, so NotConstructible buys the consistency check and the
-                    // prose toll and nothing more.
-                    is ObligationDeclaration.NotApplicable.ContractDiffers -> {
-                        val injected = injectSelfDial(host)
-                        assertAll(
-                            { assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON) },
-                            {
-                                assertTrue(
-                                    injected,
-                                    "ContractDiffers must DEMONSTRATE the deviation, not assert it: " +
-                                        "injectSelfDial returned false, so nothing was injected",
-                                )
-                            },
-                        )
-                    }
+                is ObligationDeclaration.Gap -> {
+                    val injected = injectSelfDial(host, joiner)
+                    assertAll(
+                        { assertTrue(declared.trackingUrl.isNotBlank(), GAP_NEEDS_A_URL) },
+                        {
+                            assertFalse(
+                                injected,
+                                "this harness CAN inject a self-dial, so it has no gap: declare Proven",
+                            )
+                        },
+                    )
+                }
 
-                    is ObligationDeclaration.NotApplicable.NotConstructible -> {
-                        val injected = injectSelfDial(host)
-                        assertAll(
-                            { assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON) },
-                            {
-                                assertFalse(
-                                    injected,
-                                    "this harness just injected a self-dial, so the event IS constructible " +
-                                        "here: declare Proven",
-                                )
-                            },
-                        )
-                    }
+                // Hook cross-check, as everywhere. What is genuinely missing here — and stated at
+                // [selfDialDeclaration] rather than papered over — is a refutation: a self-dial has
+                // no universal stimulus, so NotConstructible buys the consistency check and the
+                // prose toll and nothing more.
+                is ObligationDeclaration.NotApplicable.ContractDiffers -> {
+                    val injected = injectSelfDial(host, joiner)
+                    assertAll(
+                        { assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON) },
+                        {
+                            assertTrue(
+                                injected,
+                                "ContractDiffers must DEMONSTRATE the deviation, not assert it: " +
+                                    "injectSelfDial returned false, so nothing was injected",
+                            )
+                        },
+                    )
+                }
+
+                is ObligationDeclaration.NotApplicable.NotConstructible -> {
+                    val injected = injectSelfDial(host, joiner)
+                    assertAll(
+                        { assertTrue(declared.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON) },
+                        {
+                            assertFalse(
+                                injected,
+                                "this harness just injected a self-dial, so the event IS constructible " +
+                                    "here: declare Proven",
+                            )
+                        },
+                    )
                 }
             }
         }

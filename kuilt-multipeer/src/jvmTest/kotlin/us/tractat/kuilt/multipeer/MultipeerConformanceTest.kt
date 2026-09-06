@@ -81,14 +81,22 @@ class MultipeerConformanceTest : SeamConformanceSuite() {
     )
 
     /**
-     * Drive the host session to see a peer-state event for its OWN peerId — the #1466 self-dial.
+     * Drive **each** session to see a peer-state event for its OWN peerId — the #1466 self-dial.
      * Real MultipeerConnectivity hands a device that both advertises and browses its own
      * `MCPeerID`; [us.tractat.kuilt.multipeer.internal.BridgePeerLink]'s self-connection guard
      * (`peer == selfId`) must drop it, proving [SeamConformanceSuite.selfDialIsRejected] on a
-     * live, already-woven seam.
+     * live, already-woven seam at both ends (#2601).
+     *
+     * Neither call is short-circuited by the other: both must land, and `true` is returned only if
+     * both did, so a joiner whose peer-state callback was never registered reports an honest `false`
+     * instead of crediting the joiner arms to an injection that never ran.
      */
-    override suspend fun injectSelfDial(host: Seam): Boolean =
-        bus?.injectHostSelfDial() ?: false
+    override suspend fun injectSelfDial(host: Seam, joiner: Seam): Boolean {
+        val b = bus ?: return false
+        val onHost = b.injectHostSelfDial()
+        val onJoiner = b.injectJoinerSelfDial()
+        return onHost && onJoiner
+    }
 
     /** Proven: this harness fires a genuine self-peer event through the fake, so no gap. */
     override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven

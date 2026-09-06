@@ -44,8 +44,10 @@ import kotlin.test.assertNull
  * `check`/`require`/`oversizeOrNull`, or the absence of it.
  *
  * The fifth remaining row, `selfDialIsRejected`, is not here: its gate is
- * [SeamConformanceSuite.injectSelfDial], which takes only a host, so asserting it on the joiner is a
- * signature change and lands on its own.
+ * [SeamConformanceSuite.injectSelfDial], and asserting it on the joiner was a signature change, so it
+ * landed on its own with its own control in [SymmetricSelfDialObligationRigTest]. That hook now takes
+ * both ends, which closes #2601's list — this paragraph is kept because it is the reason this rig
+ * covers four rows and not five, not because the row is still outstanding.
  *
  * ## Why the payload rows need a budgeted harness
  *

@@ -222,10 +222,21 @@ internal class DeliveringFakeMultipeerNativeLib(
      * Returns `false` if the host peer-state callback isn't registered yet (no live host seam);
      * `true` once the injection has been driven through the host session's callback.
      */
-    fun injectHostSelfDial(): Boolean {
-        val cb = hostPeerStateCallback ?: return false
-        cb.invoke(hostPeerId, /* isConnected = */ 1)
-        cb.invoke(hostPeerId, /* isConnected = */ 0)
+    fun injectHostSelfDial(): Boolean = injectSelfDial(hostPeerStateCallback, hostPeerId)
+
+    /**
+     * The same injection on the JOINING session (#2601). Both ends run `BridgePeerLink`, so this
+     * drives the joiner's own copy of the self-guard rather than inferring it from the host's — the
+     * arm a joining device would otherwise ship unproven.
+     *
+     * Returns `false` if the joiner peer-state callback isn't registered yet (no live joiner seam).
+     */
+    fun injectJoinerSelfDial(): Boolean = injectSelfDial(joinerPeerStateCallback, joinerPeerId)
+
+    private fun injectSelfDial(callback: MultipeerNativeLib.PeerStateCallback?, peerId: String): Boolean {
+        val cb = callback ?: return false
+        cb.invoke(peerId, /* isConnected = */ 1)
+        cb.invoke(peerId, /* isConnected = */ 0)
         return true
     }
 
