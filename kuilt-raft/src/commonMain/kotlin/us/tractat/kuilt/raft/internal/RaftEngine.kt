@@ -1005,14 +1005,16 @@ internal class RaftEngine(
      * [snapshotChunkRefusal], and inclusive for the same reason: a pure plausibility filter with no
      * progress obligation creates no fixed point at the boundary.
      *
-     * **`config` is NOT bounded here, and that is open under #2676.** The wire routes by which a peer
-     * could plant a degenerate one are closed ([configPayloadRefusal], #2663), but a snapshot written
-     * before that landed, by an older peer, or by a torn store still restores its `config` verbatim into
-     * [RaftState.snapshotConfig] — and an empty voter set there un-arms [onMessage]'s §5.2 gate for the
-     * whole life of the process. It is deliberately not fixed alongside the wire half: the disposition
-     * is a different decision, because a config has a third option the two bounds below do not (fall
-     * back to `bootstrapConfig`, which [recomputeMembership] already does for a null config), and
-     * because refusing to start would strand a node whose snapshot predates the wire fix.
+     * **`config` IS bounded here, and by a different disposition from the two numeric halves — see
+     * the section below.** The wire routes by which a peer could plant a degenerate one are closed
+     * ([configPayloadRefusal], #2663); a snapshot written before that landed, by an older peer, or by a
+     * torn store would otherwise still restore its `config` verbatim into [RaftState.snapshotConfig],
+     * and an empty voter set there un-arms [onMessage]'s §5.2 gate for the whole life of the process.
+     * That half was split out of the wire fix rather than landed with it, because its *disposition* is a
+     * different decision: a config has a third option the two bounds below do not (fall back to
+     * `bootstrapConfig`, which [recomputeMembership] already does for a null config), and refusing to
+     * start would strand a node whose snapshot predates the wire fix. What remains open under #2676 is
+     * only the `bootstrapConfig` residue named at the end of this KDoc.
      *
      * **Refuse, don't repair** — the disposition [checkedRestoredTerm] argues for, and the reason it also
      * applies to the alternative available *here* but not there. A trailing corrupt suffix could in
