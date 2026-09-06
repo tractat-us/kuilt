@@ -10,6 +10,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import us.tractat.kuilt.test.assertAll
 
 /**
  * Tests for [Fugue] causal-stability GC: [Fugue.compact] and [Fugue.causalDots].
@@ -558,5 +559,56 @@ class FugueCompactTest {
             assertEquals(expectedList, compacted.toList(), "seed=244 regression: toList() unchanged after compact")
             assertEquals(expectedList, merged.apply(compactOp).toList(), "seed=244 regression: toList() unchanged after apply(compact)")
         }
+    }
+
+    /**
+     * [Fugue]'s half of #2173 — the same defect as [Rga]'s, found by surveying the class rather
+     * than by a second report.
+     *
+     * `Fugue.withCompactCaches` passed `maxSeqByReplica` through unchanged while
+     * `computeMaxSeqByReplica` folds a `Compact`'s dots in through the shared [OpLogEngine], so a
+     * remote `Compact` carrying a dot **above** the local high-water left the threaded cache and
+     * the cacheless recompute disagreeing about the next seq to mint.
+     *
+     * Asserted through the public mint rather than through the map, which is `private` here — and
+     * the mint is the consequence that matters anyway: two states holding the identical op-log
+     * hand back different next ids, and the threaded one re-issues the dot the `Compact` it just
+     * absorbed recorded as collected.
+     */
+    @Test
+    fun cachedStateEqualsFromScratchAfterACompactAboveTheHighWater() {
+        // B mints p1..p3 locally, tombstones p3, and compacts it away.
+        val (t1, p1) = Fugue.empty<String>().insertAt(b, 0, "p1")
+        val (t2, p2) = t1.insertAt(b, 1, "p2")
+        val (t3, p3) = t2.insertAt(b, 2, "p3")
+        val (t4, _) = t3.removeAt(2)!!
+        val stable = VersionVector.of(mapOf(b to p3.id.seq))
+        val (_, compactOp) = t4.compact(stable, stable, stable)!!
+
+        // A peer that has delivered only p1 and p2 then receives the Compact via `apply`.
+        val seeded = Fugue.empty<String>().apply(p1).apply(p2)
+        val incremental = seeded.apply(compactOp)
+        val fromScratch = Fugue.fromOps(incremental.ops, incremental.lamport)
+
+        assertAll(
+            // The rig: the Compact's dot must actually sit above the peer's high-water, else this
+            // reduces to every other Compact case in this file and cannot fail.
+            { assertEquals(2L, p2.id.seq, "precondition: the peer's local high-water for b is 2") },
+            {
+                assertEquals(
+                    setOf(Dot(b, 3L)),
+                    compactOp.positions.keys.mapTo(mutableSetOf()) { it.dot },
+                    "and the Compact's dot sits above it",
+                )
+            },
+            { assertEquals(fromScratch.ops, incremental.ops, "same op-log, so same value") },
+            {
+                assertEquals(
+                    fromScratch.insertAt(b, 0, "next").second.id.seq,
+                    incremental.insertAt(b, 0, "next").second.id.seq,
+                    "so minting as b must not re-issue the seq the Compact recorded",
+                )
+            },
+        )
     }
 }

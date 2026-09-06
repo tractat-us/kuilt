@@ -42,9 +42,13 @@ public sealed interface LogOp<out Id> {
  * - [dotOf] projects an [Id] to its causal [Dot] `(replica, seq)`.
  *
  * Everything the engine exposes — [purge], [purgeAndRecord], [causalDots],
- * [maxSeqByReplica] — is defined in terms of those two adapters, so the two CRDTs
- * share one implementation of the delivery-frontier and dense-seq logic (including
+ * [maxSeqByReplica], [foldMaxSeq] — is defined in terms of those two adapters, so the two
+ * CRDTs share one implementation of the delivery-frontier and dense-seq logic (including
  * the GC-survives-a-self-compaction subtlety, #639) rather than duplicating it.
+ *
+ * The pairing to keep whole is [maxSeqByReplica] and [foldMaxSeq]: a whole-log recompute and
+ * the incremental fold a derived cache threads forward. Both route through [deliveredDots], so
+ * they cannot disagree; a caller that hand-writes the incremental half instead re-opens #2173.
  *
  * @param Id the element-identity type (`RgaId` / `FugueId`).
  * @param Op the op type (`RgaOp<V>` / `FugueOp<V>`).
@@ -98,6 +102,33 @@ internal class OpLogEngine<Id : Any, Op : Any>(
                 val current = result[dot.replica]
                 if (current == null || dot.seq > current) result[dot.replica] = dot.seq
             }
+        }
+        return result
+    }
+
+    /**
+     * [base] raised to dominate every dot [op] delivers — the **incremental** counterpart of
+     * [maxSeqByReplica], over one op instead of a whole log. Returns [base] itself when nothing
+     * rises, so an op that delivers no dot costs no allocation.
+     *
+     * It exists so the two halves cannot drift. A derived cache threaded forward across a
+     * mutation and a map recomputed from the op-log have to report the same high-water, and the
+     * only way to *guarantee* that is for both to fold through the same [deliveredDots]; a cache
+     * site that hand-writes the fold agrees only for as long as someone keeps the two in step.
+     *
+     * That is #2173 exactly, and it landed at the one arm where [deliveredDots] is non-trivial:
+     * a [LogOp.Compact] delivers **its recorded ids'** dots rather than one dot of its own, and
+     * both op-log CRDTs' compact-apply passed the map through untouched. A `Compact` whose dots
+     * sat above the local high-water then left the threaded cache low while a recompute — which
+     * every wire decode performs — read it high, so two states that compare **equal** disagreed
+     * about the next seq to mint (the #639 re-mint class, through the cache rather than the
+     * floor). The Insert and Remove arms were right by luck: one dot, and none.
+     */
+    fun foldMaxSeq(base: Map<ReplicaId, Long>, op: Op): Map<ReplicaId, Long> {
+        var result = base
+        for (dot in deliveredDots(op)) {
+            val current = result[dot.replica]
+            if (current == null || dot.seq > current) result = result + (dot.replica to dot.seq)
         }
         return result
     }
