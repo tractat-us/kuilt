@@ -41,6 +41,7 @@ import us.tractat.kuilt.raft.LeadershipTransferAbandonReason
 import us.tractat.kuilt.raft.LeadershipTransferException
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.MembershipChangeInProgressException
+import us.tractat.kuilt.raft.MembershipRefusal
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftConfig
@@ -3452,7 +3453,7 @@ internal class RaftEngine(
         }
         if (pendingConfigChange != null) {
             debug { "onChangeMembership: rejected — change already in progress" }
-            deferred.completeExceptionally(MembershipChangeInProgressException())
+            deferred.completeExceptionally(MembershipChangeInProgressException(MembershipRefusal.PendingLocalChange))
             return
         }
         // One-change-at-a-time, log-grounded: reject while the last config entry is still UNCOMMITTED —
@@ -3468,7 +3469,7 @@ internal class RaftEngine(
         val lastConfigIndex = state.log.lastOrNull { it.config != null }?.index ?: -1L
         if (lastConfigIndex > state.currentCommitIndex) {
             debug { "onChangeMembership: rejected — last config entry (index=$lastConfigIndex) not yet committed (commit=${state.currentCommitIndex})" }
-            deferred.completeExceptionally(MembershipChangeInProgressException())
+            deferred.completeExceptionally(MembershipChangeInProgressException(MembershipRefusal.UncommittedConfigEntry))
             return
         }
         if (target.voters.isEmpty()) {
@@ -3482,7 +3483,7 @@ internal class RaftEngine(
         val current = state.membershipState
         if (current !is MembershipState.Simple) {
             debug { "onChangeMembership: rejected — joint transition in progress ($current)" }
-            deferred.completeExceptionally(MembershipChangeInProgressException())
+            deferred.completeExceptionally(MembershipChangeInProgressException(MembershipRefusal.UnsettledJointConfig))
             return
         }
         pendingConfigChange = deferred
@@ -3598,7 +3599,12 @@ internal class RaftEngine(
         // change are thus mutually exclusive in both directions, which is what keeps lastLogIndex stable
         // for the duration of the transfer (the isTargetCaughtUp predicate relies on this).
         if (pendingConfigChange != null) {
-            response.completeExceptionally(MembershipChangeInProgressException("transferLeadership: a membership change is in progress"))
+            response.completeExceptionally(
+                MembershipChangeInProgressException(
+                    "transferLeadership: a membership change is in progress",
+                    MembershipRefusal.PendingLocalChange,
+                ),
+            )
             return
         }
         // A second concurrent call while one is already in flight: reject the second. `start` arms the

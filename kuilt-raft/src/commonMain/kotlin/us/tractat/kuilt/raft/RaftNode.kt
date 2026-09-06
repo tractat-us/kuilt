@@ -339,9 +339,11 @@ public interface RaftNode {
      *
      * ## Failure modes
      *
-     * - [NotLeaderException] — this node is not the leader.
+     * - [NotLeaderException] — this node is not the leader, or a leadership transfer is in flight.
      * - [MembershipChangeInProgressException] — a config entry is already uncommitted;
-     *   only one change may be in flight at a time.
+     *   only one change may be in flight at a time. Its
+     *   [reason][MembershipChangeInProgressException.reason] names which guard refused, as a
+     *   [MembershipRefusal] rather than message text.
      * - [IllegalArgumentException] — [target].voters is empty.
      * - [LeadershipLostException] — leadership was lost mid-transition; the change may
      *   or may not have committed on some nodes.
