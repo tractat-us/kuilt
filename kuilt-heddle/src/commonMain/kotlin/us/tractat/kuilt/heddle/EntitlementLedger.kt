@@ -1631,7 +1631,10 @@ public class EntitlementLedger private constructor(
                 if (carried > 0L) out += LedgerConflict.FrozenCarriedHandoff(path, donor, carried)
             }
         }
-        return out
+        // Sorted here as well as in [validate], so the helper does not rest on a caller's sort to
+        // answer the question its two map walks invite: `transferRelocIn` and its inner donor map are
+        // hash-ordered, and that order is not stable across platforms.
+        return out.sorted()
     }
 
     /**
