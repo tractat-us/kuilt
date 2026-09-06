@@ -24,9 +24,14 @@ import kotlin.time.Duration
  * only the timeout it minted itself, so an external cancellation escapes the child `launch` with the
  * conn untouched. Nothing here can close it, because at that instant the conn is suspended somewhere
  * inside [handle] and only [handle] knows what it has already taken ownership of. Every in-tree
- * [handle] discharges this by going through the mesh handshake, which closes a conn abandoned
- * mid-preamble under a `NonCancellable` shield; **a third-party [handle] that suspends while holding a
- * conn owes the same guarantee.**
+ * [handle] discharges the **mid-preamble half** of this by going through the mesh handshake, which
+ * closes a conn abandoned during the `MeshHello` exchange under a `NonCancellable` shield; **a
+ * third-party [handle] that suspends while holding a conn owes the same guarantee.**
+ *
+ * The **tail is not discharged here**, and no `acceptPump` call site carries the per-conn register
+ * `assembleVoterMesh` keeps for its *dials*: a cancellation landing after the handshake returns a
+ * `Link` but before `addLink` returns — inside `admission.admit`, or `startDrain`'s ordering hold —
+ * still escapes with the conn unclosed. Tracked by #2710.
  *
  * @param source the accept source drained forever until the pump [Job] is cancelled.
  * @param handshakeTimeout the ceiling on a single conn's [handle]; a conn whose handling exceeds it is

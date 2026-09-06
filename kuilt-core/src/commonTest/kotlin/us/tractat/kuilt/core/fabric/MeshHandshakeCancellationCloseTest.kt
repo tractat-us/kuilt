@@ -8,6 +8,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -15,6 +16,7 @@ import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.random.Random
 import kotlin.test.Test
@@ -85,11 +87,24 @@ class MeshHandshakeCancellationCloseTest {
             )
 
             build.cancelAndJoin()
+            runCurrent()
 
-            assertTrue(
-                conn.closed.isCompleted,
-                "a construction handshake abandoned by cancellation must close its connection: nothing " +
-                    "else can — no seam was returned and the conn is the caller transport's, not a scope's",
+            assertAll(
+                {
+                    assertTrue(
+                        conn.closed.isCompleted,
+                        "a construction handshake abandoned by cancellation must close its connection: " +
+                            "nothing else can — no seam was returned and the conn is the caller " +
+                            "transport's, not a scope's",
+                    )
+                },
+                {
+                    assertTrue(
+                        conn.collectionEnded.isCompleted,
+                        "it must close the singleCollection WRAPPER, not the raw conn: the wrapper's pump " +
+                            "runs on an unparented SupervisorJob, so closing the delegate alone leaks it",
+                    )
+                },
             )
         }
 
@@ -109,7 +124,7 @@ class MeshHandshakeCancellationCloseTest {
             val hub = hubMesh(PeerId("hub"), emptyList(), dispatcher, Random(7))
             val (theirs, mine) = connectionPair()
             val accepted = CloseCountingConnection(mine)
-            val source = OneShotConnectionSource(accepted)
+            val source = InMemoryConnectionSource().also { it.offer(accepted) }
 
             val pump = acceptPump(source, handshakeTimeout = HANDSHAKE_CEILING) { conn -> hub.addLink(conn) }
             runCurrent()
@@ -119,12 +134,12 @@ class MeshHandshakeCancellationCloseTest {
             val preamble = theirs.incoming.first()
             assertAll(
                 { assertEquals(PeerId("hub"), meshHelloOf(preamble).peerId, "the far end saw the hub's MeshHello") },
-                { assertTrue(source.accepted.isCompleted, "the pump really accepted the conn") },
                 { assertEquals(setOf(PeerId("hub")), hub.peers.value, "the link was never published") },
                 { assertEquals(0, accepted.closeCalls, "nothing has closed the conn yet") },
             )
 
             pump.cancelAndJoin()
+            runCurrent()
 
             assertAll(
                 {
@@ -140,6 +155,13 @@ class MeshHandshakeCancellationCloseTest {
                         accepted.closeCalls,
                         "exactly once: the handshake frame closes it and the pump's own closes stay " +
                             "unreached on this exit, so the fix adds an obligation rather than a second close",
+                    )
+                },
+                {
+                    assertTrue(
+                        accepted.collectionEnded.isCompleted,
+                        "it must close the singleCollection WRAPPER, not the raw conn: the wrapper's pump " +
+                            "runs on an unparented SupervisorJob, so closing the delegate alone leaks it",
                     )
                 },
             )
@@ -174,7 +196,7 @@ class MeshHandshakeCancellationCloseTest {
             val rejections = mutableListOf<Throwable>()
 
             val pump = acceptPump(
-                source = OneShotConnectionSource(accepted),
+                source = InMemoryConnectionSource().also { it.offer(accepted) },
                 handshakeTimeout = HANDSHAKE_CEILING,
                 onFailure = { rejections += it },
             ) { conn -> hub.addLink(conn) }
@@ -218,24 +240,6 @@ class MeshHandshakeCancellationCloseTest {
 }
 
 /**
- * A [ConnectionSource] that yields [first] once and then suspends forever, so exactly one pump child
- * exists. [accepted] completes when the pump has actually taken it — the "the rig fired" half of a
- * close assertion that would otherwise be green by absence.
- */
-internal class OneShotConnectionSource(private val first: Connection) : ConnectionSource {
-    private val handedOut = atomic(false)
-    val accepted: CompletableDeferred<Unit> = CompletableDeferred()
-
-    override suspend fun accept(): Connection =
-        if (handedOut.compareAndSet(expect = false, update = true)) {
-            accepted.complete(Unit)
-            first
-        } else {
-            CompletableDeferred<Connection>().await()
-        }
-}
-
-/**
  * One link end that records what was done to it: [closed] completes on the first [close] and
  * [closeCalls] counts every one.
  *
@@ -262,11 +266,26 @@ internal class CloseCountingConnection(private val raw: Connection) : Connection
     /** Completes when [close] is **called** — the obligation being pinned. */
     val closed: CompletableDeferred<Unit> = CompletableDeferred()
 
+    /**
+     * Completes when collection of [incoming] ends — i.e. when the [singleCollection] wrapper's pump
+     * coroutine is cancelled.
+     *
+     * This is what separates closing the **wrapper** from closing the **delegate**, and without it that
+     * distinction is unmeasured. `handshakeLink` closes `single`, not `conn`, and its KDoc argues for
+     * exactly that: the wrapper owns a pump on its own *unparented* `SupervisorJob`, so closing the
+     * wrapper cancels the pump and then closes the delegate, while closing the delegate alone leaves the
+     * pump collecting forever — a coroutine leak `runTest`'s own leaked-coroutine check cannot see,
+     * because the scope is unparented. [closed] and [closeCalls] are both blind to it: a refactor to
+     * `conn.close()` — the obvious simplification, and the one that KDoc exists to forbid — keeps every
+     * close assertion green. Measured: with this probe absent, that mutation reds nothing.
+     */
+    val collectionEnded: CompletableDeferred<Unit> = CompletableDeferred()
+
     /** How many times [close] has been called on this end. */
     val closeCalls: Int get() = calls.value
 
     override val maxFrameBytes: Int? get() = raw.maxFrameBytes
-    override val incoming: Flow<ByteArray> get() = raw.incoming
+    override val incoming: Flow<ByteArray> = raw.incoming.onCompletion { collectionEnded.complete(Unit) }
     override suspend fun send(frame: ByteArray) = raw.send(frame)
 
     /** Records the call **before** delegating (the obligation is that we were closed, not that the
