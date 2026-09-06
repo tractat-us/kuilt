@@ -247,7 +247,13 @@ class InstallSnapshotTest {
         val behind = sim.nodeIds.first { it != leaderId }
 
         sim.crash(behind)                             // fall behind the coming compaction boundary
-        repeat(10) { leader.propose(ByteArray(30) { it.toByte() }) }  // fat commands → a multi-chunk snapshot
+        // 20 raw bytes (all in CBOR's 0..23 short range, so 22 on the wire) — fat enough for a
+        // multi-chunk snapshot at 20 raw state bytes/chunk, with headroom under the propose limit.
+        // It was 30 until #2156: the propose gate now reserves the MEASURED worst-case envelope
+        // rather than a flat 256 B, which on this deliberately tiny budget leaves 26 wire bytes
+        // rather than 40. The budget is left alone on purpose — raising it would change
+        // `chunkBytes()` and with it the chunk count this test is actually about.
+        repeat(10) { leader.propose(ByteArray(20) { it.toByte() }) }  // fat commands → a multi-chunk snapshot
         val finalCommit = leader.commitIndex.value
         val through = sim.compactionFloorCandidate(leaderId)
         leader.snapshots.value = Snapshot(through, sim.stateBytes(leaderId, through))

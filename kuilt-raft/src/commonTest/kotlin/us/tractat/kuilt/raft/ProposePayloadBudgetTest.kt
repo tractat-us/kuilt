@@ -79,10 +79,29 @@ class ProposePayloadBudgetTest {
     private val budget = 1024
 
     /**
-     * The largest command this transport can carry, **as encoded**: [budget] less the AppendEntries
-     * envelope reserve. Denominated in wire bytes, not raw ones — see [wireBytes].
+     * The largest command [headerBudget] alone would allow, **as encoded**. Denominated in wire
+     * bytes, not raw ones — see [wireBytes].
+     *
+     * Since #2156 this is a **ceiling on the enforced limit, not the enforced limit itself.**
+     * `HEADER_BUDGET` is the number a caller may rely on; the gate reserves whichever is larger of it
+     * and the measured envelope, so the real limit is at or below this and moves with the node's
+     * `ClientId`. Every test that sits *on* the edge therefore discovers it via [derivedLimit]
+     * instead of assuming this — hard-coding it is what would rot the moment the envelope changes.
      */
-    private val limit = budget - headerBudget
+    private val floorLimit = budget - headerBudget
+
+    /**
+     * The limit this node actually enforces, **discovered from a refusal** rather than recomputed
+     * here.
+     *
+     * A test that recomputed `budget − reserve` would agree with the engine by construction and
+     * assert nothing; asking the engine and then pinning the *relationships* around the answer —
+     * that it partitions [budget], that it never exceeds [floorLimit], that a command one byte over
+     * it is refused and one exactly on it commits — is what still has content. The probe command is
+     * far past any plausible limit, so this cannot itself be sized against a number the test picked.
+     */
+    private suspend fun derivedLimit(node: RaftNode): Int =
+        assertFailsWith<PayloadTooLarge> { node.propose(ByteArray(budget)) }.budgetBytes
 
     /**
      * What [command] costs on the wire, which is what the budget is denominated in and what the gate
@@ -113,13 +132,33 @@ class ProposePayloadBudgetTest {
     fun anOversizeProposeIsRefusedNamingTheDerivedLimit() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = budget)
         val leader = awaitLeader(sim)
+        val limit = derivedLimit(leader)
         val command = commandOfWireSize(limit + 1)
         assertEquals(limit + 1, wireBytes(command), "premise: the command must be exactly one wire byte over")
         val refusal = assertFailsWith<PayloadTooLarge> { leader.propose(command) }
         assertAll(
             { assertEquals(limit + 1, refusal.payloadBytes, "payloadBytes names what the command costs on the wire") },
             { assertEquals(limit, refusal.budgetBytes, "budgetBytes is the transport budget less the envelope reserve") },
-            { assertEquals(headerBudget, refusal.reservedBytes, "reservedBytes is the envelope reserve") },
+            {
+                assertEquals(
+                    budget, refusal.budgetBytes + refusal.reservedBytes,
+                    "the limit and the reserve partition the transport's whole budget",
+                )
+            },
+            {
+                assertTrue(
+                    refusal.reservedBytes >= headerBudget,
+                    "the reserve never undercuts the published floor (#2156): it may be stricter " +
+                        "than HEADER_BUDGET promised, never laxer — ${refusal.reservedBytes} B",
+                )
+            },
+            {
+                assertTrue(
+                    limit <= floorLimit,
+                    "and so the enforced limit never exceeds the one the published floor implies: " +
+                        "$limit > $floorLimit",
+                )
+            },
         )
     }
 
@@ -142,6 +181,7 @@ class ProposePayloadBudgetTest {
         val leader = awaitLeader(sim)
         val leaderId = sim.idOf(leader)
         sim.awaitCommit(1L)
+        val limit = derivedLimit(leader)
         val before = sim.storages.getValue(leaderId).entries(1L).size
         val command = ByteArray(limit) { 0x7F }
         assertAll(
@@ -176,7 +216,11 @@ class ProposePayloadBudgetTest {
         // that could move the entry count across the refused propose is the propose itself.
         sim.awaitCommit(1L)
         val before = sim.storages.getValue(leaderId).entries(1L).size
-        assertFailsWith<PayloadTooLarge> { leader.propose(ByteArray(limit + 1)) }
+        // Over the enforced limit however the reserve is derived: this costs floorLimit + 3 wire
+        // bytes (all-zero, so 1:1, plus the 2-byte array framing), and the reserve is never below
+        // headerBudget — so the enforced limit is never above floorLimit. This test is about the log
+        // not growing, not about where the edge falls; the edge itself is held above.
+        assertFailsWith<PayloadTooLarge> { leader.propose(ByteArray(floorLimit + 1)) }
         sim.settle()
         val after = sim.storages.getValue(leaderId).entries(1L).size
         assertEquals(
@@ -191,6 +235,7 @@ class ProposePayloadBudgetTest {
     fun aProposeAtExactlyTheLimitCommits() = raftRunTest {
         val sim = raftSim(this, backgroundScope, n = 3, maxPayloadBytes = budget)
         val leader = awaitLeader(sim)
+        val limit = derivedLimit(leader)
         val command = commandOfWireSize(limit)
         assertEquals(limit, wireBytes(command), "premise: the command must sit exactly ON the limit, not under it")
         val entry = leader.propose(command)
@@ -232,8 +277,21 @@ class ProposePayloadBudgetTest {
         val follower = sim.nodes.getValue(followerId)
         // The forward hop crosses this same local transport, so the gate has to bite on the
         // caller's coroutine — before `RaftMessage.Forward` is minted, not at the leader.
-        val refusal = assertFailsWith<PayloadTooLarge> { follower.propose(ByteArray(limit + 1)) }
-        assertEquals(limit, refusal.budgetBytes, "a non-leader is bounded by its own transport's budget")
+        val refusal = assertFailsWith<PayloadTooLarge> { follower.propose(ByteArray(floorLimit + 1)) }
+        assertAll(
+            {
+                assertEquals(
+                    budget, refusal.budgetBytes + refusal.reservedBytes,
+                    "a non-leader is bounded by its own transport's budget",
+                )
+            },
+            {
+                assertTrue(
+                    refusal.budgetBytes <= floorLimit,
+                    "and by its own node's reserve, which is never laxer than the published floor",
+                )
+            },
+        )
     }
 }
 

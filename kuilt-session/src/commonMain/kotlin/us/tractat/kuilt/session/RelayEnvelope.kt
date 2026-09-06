@@ -55,8 +55,8 @@ internal sealed interface RelayDest {
  *
  * 256 covers ids of about 107 bytes each. `PeerId`s are short, controlled identifiers by
  * convention (a name or a uuid), so that is generous headroom rather than a tight fit — chosen to
- * match `:kuilt-raft`'s `RELAY_HEADER_BUDGET`, which reserves the same 256 B for the same shape of
- * wrapper over the same shape of ids. A pathologically long pair of ids could still exceed it; the
+ * match `:kuilt-cluster`'s `RELAY_HEADER_BUDGET`, which reserves the same 256 B for the same shape
+ * of wrapper over the same shape of ids. A pathologically long pair of ids could still exceed it; the
  * arithmetic is pinned by `RelayPayloadBudgetTest` so a change to the envelope's wire shape that
  * eats the margin fails a test rather than a fabric.
  *
