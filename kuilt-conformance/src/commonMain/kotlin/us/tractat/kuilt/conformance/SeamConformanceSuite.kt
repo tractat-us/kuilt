@@ -9,6 +9,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -236,6 +237,43 @@ public abstract class SeamConformanceSuite {
 
     /** The advertisement the joiner uses. Defaults to the in-memory tag. */
     public open fun joinTag(): Tag = InMemoryTag("joiner")
+
+    /**
+     * How many frames this harness's **own join path** has already delivered into the HOST's
+     * `incoming` by the time a test body starts. Zero for every harness whose `join()` moves no
+     * application frames; the joiner→host delivery obligations (#2601) drop exactly this many
+     * before reading what the test itself sent.
+     *
+     * ## Why this exists at all
+     *
+     * `Seam.incoming` carries whatever arrived, and nothing in the contract says a freshly-woven
+     * host's flow is empty. A harness may legitimately need the joiner to *speak* before it is a
+     * member — `MuxServerLoomConformanceTest`'s hub admits a connection on its first frame for a
+     * room, so its `join()` sends one empty announce frame and waits to be registered. That frame
+     * is real, it is delivered, and it sits at the head of the hub's `incoming`. Until an
+     * obligation collected the host's flow *for content*, nobody had to know.
+     *
+     * Without this declaration the three delivery rows read that announce frame as the joiner's
+     * payload and fail with `Got []` on a fabric that is behaving perfectly — the #2601 lifecycle
+     * slice's "measurement bug wearing a defect's clothes", one row over.
+     *
+     * ## Why a COUNT, and why it cannot be used to hide a defect
+     *
+     * A count is checkable from both sides and a filter is not. Declare too **few** and the
+     * obligation reads a handshake frame as the payload and reds; declare too **many** and it eats
+     * the frame the test sent and waits for one that will never come, which is the wedge the rig's
+     * probes pin. Neither direction is silently green — whereas "skip frames that don't look like
+     * mine" would swallow a fabric that duplicated, reordered or corrupted a frame and call it a
+     * pass.
+     *
+     * ## What it cannot detect
+     *
+     * It says nothing about *which* frames those are, only how many. A harness whose join path
+     * delivers one frame stays honest here whether that frame is an empty announce or a corrupted
+     * payload, so a defect confined entirely to the handshake frames is invisible to these rows —
+     * it belongs to whatever obligation covers the handshake, not to a delivery row.
+     */
+    public open fun joinHandshakeFramesAtHost(): Int = 0
 
     /**
      * Inject a **mid-session transport death** under **both** [host] and [joiner] — the way a real
@@ -570,7 +608,7 @@ public abstract class SeamConformanceSuite {
             // The reverse collector starts only after the forward direction has settled, so each
             // direction gets its own trajectory — the sequencing `incomingCompletesWhenSeamCloses`
             // adopted for the same reason. Distinct payloads keep a cross-direction leak visible.
-            val receivedByHost = async { host.incoming.take(1).toList() }
+            val receivedByHost = async { host.incoming.drop(joinHandshakeFramesAtHost()).take(1).toList() }
 
             val toHost = byteArrayOf(40, 50, 60)
             joiner.broadcast(toHost)
@@ -658,7 +696,7 @@ public abstract class SeamConformanceSuite {
             // Reverse direction, started after the forward one settles — see (2). The payloads are
             // offset by [REVERSE_ORDER_BASE] so a frame that leaked across directions is legible in
             // the failure message rather than passing as the right index.
-            val receivedByHost = async { host.incoming.take(5).toList() }
+            val receivedByHost = async { host.incoming.drop(joinHandshakeFramesAtHost()).take(5).toList() }
 
             repeat(5) { i -> joiner.broadcast(byteArrayOf((REVERSE_ORDER_BASE + i).toByte())) }
             val hostFrames = receivedByHost.await()
@@ -1271,7 +1309,7 @@ public abstract class SeamConformanceSuite {
                     "Got ${joiner.peers.value.map { it.value }}, host selfId ${host.selfId.value}",
             )
 
-            val receivedByHost = async { host.incoming.take(1).toList() }
+            val receivedByHost = async { host.incoming.drop(joinHandshakeFramesAtHost()).take(1).toList() }
 
             val toHost = byteArrayOf(8, 9, 10)
             joiner.sendTo(host.selfId, toHost)

@@ -204,6 +204,38 @@ class SymmetricDeliveryObligationRigTest {
         }.runSendToDeliversToNamedPeer(this)
     }
 
+    // ── the escape hatch the three rows opened ───────────────────────────────
+
+    /**
+     * [SeamConformanceSuite.joinHandshakeFramesAtHost] is the one place a harness may tell these rows
+     * to ignore a frame, so it is the one place a harness could hide a defect. It cannot: the count
+     * is checkable from both sides. Under-declaring reds (the row reads a handshake frame as the
+     * payload — measured on `MuxServerLoomConformanceTest`, whose hub really does hold one); this
+     * arm pins the other direction, where a harness declares a frame that is not there, eats the one
+     * the test sent, and waits for a frame that will never come.
+     *
+     * An `InMemoryLoom` pair has no handshake frames at all, so declaring one is a pure
+     * over-declaration and nothing else about the harness changes.
+     */
+    @Test
+    fun aHarnessOverDeclaringItsHandshakeFramesCannotPass(): TestResult = runTest {
+        val scope = this
+        val loom = InMemoryLoom()
+        val overDeclaring = object : SeamConformanceSuite() {
+            override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
+            override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL
+            override fun capabilityGaps(): Map<String, String> = emptyMap()
+            override fun joinerRosterOrigin(): JoinerRosterOrigin = RIG_ROSTER
+            override fun joinHandshakeFramesAtHost(): Int = 1
+        }
+        assertFailsWith<TimeoutCancellationException>(
+            "a harness declaring a handshake frame it does not have must not PASS — it would be " +
+                "skipping the joiner's real frame",
+        ) {
+            withTimeout(WEDGE_PROBE) { overDeclaring.runBroadcastDeliversToJoinedPeer(scope) }
+        }
+    }
+
     // ── the rig's own premise ────────────────────────────────────────────────
 
     /**

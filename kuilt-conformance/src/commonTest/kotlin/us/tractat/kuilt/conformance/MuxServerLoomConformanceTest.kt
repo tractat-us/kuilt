@@ -112,6 +112,18 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
         "reportsPeerLoss" to "https://github.com/tractat-us/kuilt/issues/2372",
     )
 
+    /**
+     * One: [RoomHubLoomPair]'s client announces itself with `channel.broadcast(byteArrayOf())`
+     * because a hub admits a connection on its **first frame** for a room. That empty frame is a
+     * real delivery and it is sitting at the head of the hub's `incoming` before any test body
+     * starts — so #2601's joiner→host delivery rows would otherwise read it as the joiner's payload
+     * and red with `Got []` on a fabric doing exactly what it should.
+     *
+     * The count is self-checking in both directions ([joinHandshakeFramesAtHost]): raise it and the
+     * rows eat the frame the test sent, lower it and they read the announce frame again.
+     */
+    override fun joinHandshakeFramesAtHost(): Int = 1
+
     /** #2591: the joiner starts at `{ selfId }` and grows only through the join path. */
     override fun joinerRosterOrigin(): JoinerRosterOrigin =
         JoinerRosterOrigin.TheJoinPath(
