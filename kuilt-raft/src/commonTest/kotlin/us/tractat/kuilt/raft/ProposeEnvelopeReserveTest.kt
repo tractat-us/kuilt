@@ -3,39 +3,45 @@ package us.tractat.kuilt.raft
 
 import kotlinx.serialization.builtins.ByteArraySerializer
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * `RaftEngine.HEADER_BUDGET` must actually cover the `AppendEntries` envelope it reserves for
- * (#2156) — the arithmetic `checkProposeFitsTransport`'s bound rests on, asserted rather than
- * assumed.
+ * `RaftEngine`'s propose bound must hold back what the `AppendEntries` envelope actually costs, not
+ * what a constant says it costs (#2156).
  *
- * The propose gate admits a command whose *encoded* size fits `budget − HEADER_BUDGET` and charges
- * everything else — the envelope's five `Long`s, the entry's own `index` / `term`, and the entry's
- * `dedupKey` — to a flat 256 B reserve. Soundness is therefore one inequality:
- *
- * > `encoded(AppendEntries with this entry) − encoded(command) <= HEADER_BUDGET`
- *
- * Nothing states it and nothing checks it. When it is false, a command accepted at exactly the
- * published limit produces a frame *over* the transport budget: dropped at
- * `SeamRaftTransport.sendTo` (which must swallow `PayloadTooLarge`), never acked, `nextIndex`
+ * The gate admits a command whose *encoded* size fits `budget − reserved`, and everything else — the
+ * envelope's five `Long`s, the entry's own `index` / `term`, and its `dedupKey` — rides in `reserved`.
+ * Before this, `reserved` was the flat `HEADER_BUDGET` and the bound's soundness was an unstated
+ * assumption about it. It was false: a command accepted at exactly the published limit minted a
+ * frame *over* the transport budget, dropped at `SeamRaftTransport.sendTo`, never acked, `nextIndex`
  * frozen — the exact wedge the gate exists to prevent, reached **through** the reserve.
  *
- * ### Why two tests and not one
+ * ### Why a flat number could not be repaired by bounding the ClientId
  *
- * [aDurableClientIdCanPushAnAtLimitProposeOverTheTransportBudget] is the observed wedge: a real
- * cluster on the canonical harness, a real propose the gate *accepted*, and a frame the network
- * refused. It proves the defect is reachable, not just arithmetically possible.
+ * The envelope holds eight `Long`s and CBOR widens each from one byte to nine as the log grows, so
+ * the headroom a 256 B reserve leaves an id is not a constant: 81 characters on a fresh log, 48 at
+ * 1e9 entries, 30 at 1e12, and **11** at `MAX_PLAUSIBLE_INDEX` / `MAX_PLAUSIBLE_TERM`. `ClientId.auto`
+ * — which the library mints for itself — is 23 characters at its shortest. A maximum admitting the
+ * library's own id and a maximum fitting the reserve are disjoint sets, which is why the fix measures
+ * rather than bounds. [aFlatReserveIsStillInsufficientAtThePlausibilityCeiling] keeps that premise
+ * under a test rather than in prose.
  *
- * [theEnvelopeCostsNoMoreThanTheReserveAcrossThePlausibleRange] is what the sim cannot show. A
- * simulation runs at `index`/`term` in the single digits, where CBOR spends one byte per `Long`;
- * the engine admits both up to `MAX_PLAUSIBLE_INDEX`/`MAX_PLAUSIBLE_TERM` (`2^60`), where each
- * costs **nine**. The reserve's headroom for a `ClientId` is therefore not a constant — it shrinks
- * as the log grows, and the sim sits at the most forgiving end of that range.
+ * ### What each test holds
+ *
+ * - [aDurableClientIdAtThePublishedLimitNeverMintsAnOverBudgetFrame] — the behaviour, on the
+ *   canonical harness. This is the arm that reddened before the fix.
+ * - [theChargedReserveCoversTheWorstCaseEnvelopeItStandsFor] — the arithmetic, against an
+ *   **independently constructed** envelope. The test builds the frame from [RaftMessage] itself; it
+ *   never asks the engine what it reserved and then checks that against itself.
+ * - [theEnvelopeOverheadIsAdditiveInTheCommand] — the property the fix's *cheapness* rests on.
+ * - [aFlatReserveIsStillInsufficientAtThePlausibilityCeiling] — the premise the fix exists for.
  */
 class ProposeEnvelopeReserveTest {
 
@@ -43,15 +49,12 @@ class ProposeEnvelopeReserveTest {
      * `RaftEngine.HEADER_BUDGET`, restated by value — the engine's copy is `private` to its
      * companion. Same direction of coupling as [ProposePayloadBudgetTest]: a test that read the
      * constant would agree with the engine by construction and assert nothing about *which* number
-     * it is.
+     * it is. Since the fix this is the published **floor**, not the reserve.
      */
     private val headerBudget = 256
 
     /** A transport budget comfortably above [headerBudget], as in [ProposePayloadBudgetTest]. */
     private val budget = 1024
-
-    /** The largest command the propose gate admits, as encoded. */
-    private val limit = budget - headerBudget
 
     /**
      * The engine's own plausibility ceiling for a term and an index (`RaftEngine.MAX_PLAUSIBLE_TERM`
@@ -63,83 +66,92 @@ class ProposeEnvelopeReserveTest {
 
     /**
      * A bare [Cbor] suffices: the engine's instance differs only by `ignoreUnknownKeys`, a *decoding*
-     * option. `encodeDefaults` is off in both, so a defaulted `round`/`isNoOp` is omitted in both.
+     * option. `encodeDefaults` is off in both, so a defaulted `round` / `isNoOp` is omitted in both.
      */
     private val cbor = Cbor
 
     private fun wireBytes(command: ByteArray): Int =
         cbor.encodeToByteArray(ByteArraySerializer(), command).size
 
-    /**
-     * What one entry's `AppendEntries` costs *beyond* its command — the quantity [headerBudget]
-     * reserves for.
-     *
-     * Measured with an **empty** command and no subtraction of a payload, which is exact rather than
-     * approximate: CBOR is definite-length, and the only size-dependent header in the frame is the
-     * command array's own, which `wireBytes` already accounts for. (Verified additive:
-     * `frame(cmd) == overhead + wireBytes(cmd)` for every row below.)
-     */
-    private fun envelopeOverhead(clientId: String?, index: Long, term: Long, round: Long, requestId: Long): Int {
-        val empty = ByteArray(0)
-        val entry = LogEntry(
-            index = index,
-            term = term,
-            command = empty,
-            dedupKey = clientId?.let { DedupKey(ClientId(it), requestId) },
-        )
-        val frame = RaftMessage.AppendEntries(
+    /** The frame one proposed entry produces, built here rather than obtained from the engine. */
+    private fun frameBytes(
+        clientId: String?,
+        index: Long,
+        term: Long,
+        round: Long,
+        requestId: Long,
+        command: ByteArray,
+    ): Int {
+        val frame: RaftMessage = RaftMessage.AppendEntries(
             term = term,
             prevLogIndex = index - 1,
             prevLogTerm = term,
-            entries = listOf(entry),
+            entries = listOf(
+                LogEntry(
+                    index = index,
+                    term = term,
+                    command = command,
+                    dedupKey = clientId?.let { DedupKey(ClientId(it), requestId) },
+                ),
+            ),
             leaderCommit = index - 1,
             round = round,
         )
-        return cbor.encodeToByteArray(RaftMessage.serializer(), frame).size - wireBytes(empty)
+        return cbor.encodeToByteArray(RaftMessage.serializer(), frame).size
     }
+
+    /** What that frame costs *beyond* its command — the quantity the engine holds back. */
+    private fun envelopeOverhead(clientId: String?, index: Long, term: Long, round: Long, requestId: Long): Int {
+        val empty = ByteArray(0)
+        return frameBytes(clientId, index, term, round, requestId, empty) - wireBytes(empty)
+    }
+
+    /** The widest envelope this node can ever produce — what the engine's probe stands for. */
+    private fun worstCaseOverhead(clientId: String) =
+        envelopeOverhead(clientId, plausibleCeiling, plausibleCeiling, Long.MAX_VALUE, Long.MAX_VALUE)
 
     /**
      * A command of exactly [wire] encoded bytes — copied from [ProposePayloadBudgetTest] so both
      * suites sit the propose on the same edge. `0x7F` costs two wire bytes, `0x00` costs one, and the
-     * array header costs two.
+     * array header costs two (kotlinx CBOR writes an indefinite-length array, so that two is a
+     * constant rather than a function of the length).
      */
     private fun commandOfWireSize(wire: Int, wide: Int = 100): ByteArray =
         ByteArray(wide + (wire - 2 - 2 * wide)) { if (it < wide) 0x7F else 0 }
 
     /**
-     * A `ClientIdentity.Durable` id long enough to push the envelope past the reserve at the
-     * magnitudes a simulation actually reaches (`index`/`term` in the single digits).
+     * A `ClientIdentity.Durable` id long enough to outrun a flat 256 B reserve even on a young log.
      *
-     * 96 characters — a prefixed uuid, or a tenant-scoped token. Not a pathological value: the
-     * arithmetic row below shows a plain 36-character uuid is already past the reserve once the log
-     * is long-lived.
+     * 96 characters — a prefixed uuid, or a tenant-scoped token. Not a pathological value: a plain
+     * 36-character uuid is already past the flat reserve once the log is long-lived, which is what
+     * [aFlatReserveIsStillInsufficientAtThePlausibilityCeiling] guards.
      */
     private val durableId = "tenant-7f3a9c21:client-0f8e1d4b-6a52-4c9e-b1d7-3e8a5f2c0946:shard-11-writer"
         .padEnd(96, 'z')
 
     /**
-     * The observed wedge: a propose the gate **accepted** mints a frame the transport **refuses**,
-     * and the leader then loses its term because every replication round carrying that entry is
-     * dropped.
+     * The behaviour: at the limit the engine publishes, nothing it mints exceeds the transport it was
+     * told about, and the leader keeps its term.
      *
      * ### What proves the rig fired
      *
      * `awaitCommit(1L)` — the leader's §5.4.2 election no-op reaching every voter *at this budget*.
      * It is the precondition, asserted rather than assumed: it proves replication genuinely flows
      * through this transport with this ceiling, so [InMemoryRaftNetwork.overBudget] being empty
-     * afterwards is a statement about the propose's own frame and not about a cluster that never
-     * sent anything. The list is cleared immediately after, so nothing before the propose can
+     * afterwards is a statement about the propose's own frame and not about a cluster that never sent
+     * anything. The list is asserted empty and then cleared, so nothing before the propose can
      * contribute to it.
      *
      * ### Both assertions are fix-agnostic
      *
-     * Neither says the propose must succeed, and neither says it must fail. A repaired engine may
-     * commit this command or refuse it with a typed [us.tractat.kuilt.core.PayloadTooLarge] — both
-     * are verdicts a caller can act on. What must not happen is the third outcome: accepted, minted
-     * into a frame the transport refuses, and paid for with the leader's term.
+     * Neither says the propose must succeed, and neither says it must fail — a repaired engine may
+     * commit this command or refuse it with a typed [PayloadTooLarge], and both are verdicts a caller
+     * can act on. What must not happen is the third outcome, which is what this reddened on before
+     * the fix: accepted, minted into a 1046 B frame against a 1024 B budget, retried eight times, and
+     * paid for with the leader's term.
      */
     @Test
-    fun aDurableClientIdCanPushAnAtLimitProposeOverTheTransportBudget() = raftRunTest {
+    fun aDurableClientIdAtThePublishedLimitNeverMintsAnOverBudgetFrame() = raftRunTest {
         val ids = (1..3).map { NodeId("v$it") }
         val cluster = ClusterConfig(voters = ids.toSet())
         // ONE config, shared by all three nodes: its seeded `Random` is a single stream, so each
@@ -163,18 +175,18 @@ class ProposeEnvelopeReserveTest {
             },
         )
         val leader = awaitLeader(sim)
-        // Rig: replication demonstrably flows at this budget before the propose. Without this the
-        // emptiness asserted below would also hold for a cluster that never sent a frame at all.
         sim.awaitCommit(1L)
         assertTrue(
             sim.network.overBudget.isEmpty(),
-            "rig: nothing may be over budget before the propose — ${sim.network.overBudget}",
+            "rig: replication must already flow at this budget, or the emptiness asserted below " +
+                "would hold for a cluster that never sent a frame — ${sim.network.overBudget}",
         )
         sim.network.overBudget.clear()
 
-        val command = commandOfWireSize(limit)
-        assertTrue(
-            wireBytes(command) == limit,
+        val command = commandOfWireSize(budget - headerBudget)
+        assertEquals(
+            budget - headerBudget,
+            wireBytes(command),
             "premise: the command must sit exactly ON the published limit, not under it",
         )
         val outcome = runCatchingCancellable { leader.propose(command) }
@@ -184,9 +196,9 @@ class ProposeEnvelopeReserveTest {
             {
                 assertTrue(
                     sim.network.overBudget.isEmpty(),
-                    "the engine must never mint a frame larger than the transport it was told about; " +
-                        "the ${durableId.length}-character ClientId ate past the $headerBudget B " +
-                        "reserve: ${sim.network.overBudget}",
+                    "the engine must never mint a frame larger than the transport it was told " +
+                        "about; the ${durableId.length}-character ClientId ate past the reserve: " +
+                        "${sim.network.overBudget}",
                 )
             },
             {
@@ -200,46 +212,125 @@ class ProposeEnvelopeReserveTest {
     }
 
     /**
-     * The reserve must cover the envelope across the whole range the engine declares plausible — not
-     * merely at the magnitudes a simulation reaches.
+     * The arithmetic: what the engine holds back is at least what the widest envelope it can produce
+     * actually costs, and never less than the published floor.
      *
-     * Rows are ordered fresh → ceiling, and the *shape* of the failure is the point: the headroom for
-     * a `ClientId` shrinks monotonically as `index`/`term` grow, so a single documented maximum
-     * cannot be sound at both ends. The last row carries `ClientId.auto`'s own shortest form, which
-     * the library mints itself — no consumer-supplied value is involved in it at all.
+     * The needed figure is an **independent construction** — built here out of [RaftMessage] and
+     * [LogEntry] — rather than a re-derivation of the engine's own expression. A reference computed
+     * the way the subject computes it asserts `x == x`.
+     *
+     * The floor half is the other direction, and it is what "published conservatively" means: the
+     * enforcement may be *stricter* than [headerBudget] promised, never laxer, so no caller that
+     * sized against the old published number is newly surprised by a frame being carried when it
+     * expected a refusal.
      */
     @Test
-    fun theEnvelopeCostsNoMoreThanTheReserveAcrossThePlausibleRange() {
-        // "auto:" + nodeId + "-" + 16 hex — the shortest form `ClientId.auto` can produce for a
-        // one-character NodeId. A realistic `host:port` NodeId makes it ~39.
-        val autoId = "auto:v-0123456789abcdef"
-        val rows = listOf(
-            Row("fresh log, auto id", autoId, index = 1L, term = 1L, round = 0L, requestId = 1L),
-            Row("mature log (1e9 entries), auto id", autoId, 1_000_000_000L, 10_000L, 1_000_000L, 1_000_000L),
-            Row("long-lived log (1e12), uuid id", "6a52-4c9e-b1d7-3e8a5f2c0946-0f8e1d4b", 1_000_000_000_000L, 1_000_000L, 1_000_000_000L, 1_000_000_000L),
-            Row("plausibility ceiling (2^60), auto id", autoId, plausibleCeiling, plausibleCeiling, plausibleCeiling, plausibleCeiling),
-        )
-        val checks: List<() -> Unit> = rows.map { row ->
-            {
-                val overhead = envelopeOverhead(row.clientId, row.index, row.term, row.round, row.requestId)
-                assertTrue(
-                    overhead <= headerBudget,
-                    "${row.label}: the envelope around a ${row.clientId.length}-character ClientId " +
-                        "costs $overhead B, past the $headerBudget B reserved for it — a command " +
-                        "accepted at the published limit mints a frame ${overhead - headerBudget} B " +
-                        "over the transport budget",
+    fun theChargedReserveCoversTheWorstCaseEnvelopeItStandsFor() = raftRunTest {
+        val ids = (1..3).map { NodeId("v$it") }
+        val cluster = ClusterConfig(voters = ids.toSet())
+        val config = fastRaftConfig()
+        val sim = RaftSimulation(
+            nodeIds = ids,
+            scope = this,
+            nodeScope = backgroundScope,
+            maxPayloadBytes = budget,
+            nodeFactory = { _, transport, storage, childScope ->
+                childScope.raftNode(
+                    cluster,
+                    transport,
+                    storage,
+                    config,
+                    ClientIdentity.Durable(ClientId(durableId)),
                 )
+            },
+        )
+        val leader = awaitLeader(sim)
+        // A command far past any plausible limit, so the refusal reports the engine's own arithmetic
+        // rather than being sized against a number this test picked.
+        val refusal = assertFailsWith<PayloadTooLarge> { leader.propose(ByteArray(budget)) }
+        val needed = worstCaseOverhead(durableId)
+
+        assertAll(
+            {
+                assertTrue(
+                    refusal.reservedBytes >= needed,
+                    "the reserve the engine charges (${refusal.reservedBytes} B) must cover the " +
+                        "widest envelope it can mint around a ${durableId.length}-character " +
+                        "ClientId ($needed B)",
+                )
+            },
+            {
+                assertTrue(
+                    refusal.reservedBytes >= headerBudget,
+                    "and must never undercut the published floor: ${refusal.reservedBytes} B " +
+                        "< $headerBudget B",
+                )
+            },
+            {
+                assertEquals(
+                    budget,
+                    refusal.budgetBytes + refusal.reservedBytes,
+                    "the limit and the reserve partition the transport's whole budget",
+                )
+            },
+        )
+    }
+
+    /**
+     * The property the fix's cheapness rests on: the envelope's cost does not depend on the command's
+     * size, so the engine's probe may encode an **empty** command and add the command's own measured
+     * cost — `O(|clientId|)` rather than a second `O(payload)` encode.
+     *
+     * True because CBOR is definite in structure and indefinite in array length here: every enclosing
+     * map/array header is a function of element *count*, and the only payload-sized header is the
+     * command array's own, which the gate measures separately. Asserted rather than reasoned, across
+     * three payload sizes and both a short and a long id, because if it ever stops holding the probe
+     * silently under-measures and the bound goes quietly unsound again.
+     */
+    @Test
+    fun theEnvelopeOverheadIsAdditiveInTheCommand() {
+        val checks: List<() -> Unit> = listOf("a", durableId).flatMap { id ->
+            listOf(0, 1, 100, 5_000).map { size ->
+                {
+                    val command = ByteArray(size) { 0x7F }
+                    val overhead = worstCaseOverhead(id)
+                    val frame = frameBytes(
+                        id, plausibleCeiling, plausibleCeiling, Long.MAX_VALUE, Long.MAX_VALUE, command,
+                    )
+                    assertEquals(
+                        overhead + wireBytes(command),
+                        frame,
+                        "id=${id.length} chars, command=$size B: the envelope must cost the same " +
+                            "whatever the command's size, or the empty-command probe under-measures",
+                    )
+                }
             }
         }
         assertAll(*checks.toTypedArray())
     }
 
-    private data class Row(
-        val label: String,
-        val clientId: String,
-        val index: Long,
-        val term: Long,
-        val round: Long,
-        val requestId: Long,
-    )
+    /**
+     * The premise the measured enforcement exists for — kept under a test so it cannot quietly stop
+     * being true.
+     *
+     * If this ever reds, the envelope shrank (`@ByteString` framing, #2160, or a dropped field) far
+     * enough that a flat [headerBudget] covers it again at the top of the admitted range, and
+     * `checkProposeFitsTransport`'s measurement could be reconsidered — so the red is an instruction
+     * to revisit #2156, not a defect.
+     *
+     * The id measured is `ClientId.auto`'s **shortest possible** form, `"auto:" + a one-character
+     * NodeId + "-" + 16 hex`. That is the sharpest statement of the refutation: no consumer-supplied
+     * value is involved, so no bound on a consumer's id could have helped.
+     */
+    @Test
+    fun aFlatReserveIsStillInsufficientAtThePlausibilityCeiling() {
+        val shortestAutoId = "auto:v-0123456789abcdef"
+        assertTrue(
+            worstCaseOverhead(shortestAutoId) > headerBudget,
+            "a ${shortestAutoId.length}-character auto-minted ClientId costs " +
+                "${worstCaseOverhead(shortestAutoId)} B at the plausibility ceiling, and the flat " +
+                "reserve is $headerBudget B — if this is no longer true, the measured enforcement " +
+                "in checkProposeFitsTransport can be reconsidered (#2156)",
+        )
+    }
 }

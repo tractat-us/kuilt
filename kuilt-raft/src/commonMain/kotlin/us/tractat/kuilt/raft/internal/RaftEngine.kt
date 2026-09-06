@@ -127,6 +127,19 @@ internal class RaftEngine(
         ClientIdentity.Auto -> ClientId.auto(transport.selfId, raftConfig.random)
     }
 
+    /**
+     * An immutable stand-in for [myClientId] whose **encoded width** this node can never exceed —
+     * what [proposeEnvelopeBytes] measures the envelope around (#2156).
+     *
+     * [checkProposeFitsTransport] runs on the *caller's* coroutine while [myClientId] is mutated on
+     * the actor loop, so reading that `var` there would be a data race. This `val` is not a cache of
+     * it and needs no invalidation: a [ClientIdentity.Durable] id never changes at all, and an
+     * [ClientIdentity.Auto] id re-mints only its **fixed-width** hex suffix — `"auto:" + selfId +
+     * "-" + 16 hex`, over an immutable [RaftTransport.selfId] — so every incarnation encodes to the
+     * identical number of bytes. Width, not value, is what the measurement depends on.
+     */
+    private val clientIdProbe: ClientId = myClientId
+
     /** Monotonic per-client serial for the auto [propose] form. Confined to the actor loop. */
     private var serial: Long = 0L
 
@@ -3165,10 +3178,30 @@ internal class RaftEngine(
      * `get()` over a moving value. A cached copy would refuse commands the fabric could carry and
      * admit ones it cannot.
      *
-     * **Why [HEADER_BUDGET].** The command does not ride alone: it is wrapped in the CBOR
-     * [RaftMessage.AppendEntries] envelope alongside `prevLogIndex` / `prevLogTerm` / `leaderCommit` /
-     * `round`, plus the entry's own `index` / `term` / `dedupKey`. [HEADER_BUDGET] is the existing
-     * in-tree reservation for exactly that envelope, already spent by [chunkBytes].
+     * **Why [HEADER_BUDGET] is the floor and not the answer (#2156).** The command does not ride
+     * alone: it is wrapped in the CBOR [RaftMessage.AppendEntries] envelope alongside `prevLogIndex` /
+     * `prevLogTerm` / `leaderCommit` / `round`, plus the entry's own `index` / `term` / `dedupKey`.
+     * A flat 256 B **cannot** cover that, and no bound on [ClientId] can make it: the envelope holds
+     * eight `Long`s, each of which CBOR widens from one byte to nine as the log grows, so the
+     * headroom the reserve leaves an id is not a constant. Measured (`raftCbor`), the longest
+     * [ClientId] 256 B covers is 81 characters on a fresh log, 48 at 1e9 entries, 30 at 1e12, and
+     * **11** at [MAX_PLAUSIBLE_INDEX] / [MAX_PLAUSIBLE_TERM] — where `ClientId.auto`'s own shortest
+     * form, 23 characters, already costs 268 B. A maximum admitting the id this library mints for
+     * itself and a maximum that fits the reserve are disjoint.
+     *
+     * So this follows `SeamRoom.maxPayloadBytes`, which has the identical shape over a long `PeerId`:
+     * **published conservatively, enforced exactly.** [HEADER_BUDGET] survives as the number a caller
+     * may *rely* on — the reserve never drops below it, so no transport gets a more generous limit
+     * than before — while the refusal is taken against [proposeEnvelopeBytes], measured around this
+     * node's actual id. The reserve therefore stops being an assumption the bound rests on.
+     *
+     * **The measurement is conservative, not exact**, and that is the one place this differs from
+     * `SeamRoom`. The entry's `index` and `term` do not exist yet — they are assigned on the actor
+     * loop, and this gate deliberately runs before it — so [proposeEnvelopeBytes] charges the widest
+     * values the engine will admit rather than the ones this entry will get. On a young log that
+     * over-reserves by up to ~70 B. That is the safe direction and the same one [HEADER_BUDGET]'s own
+     * KDoc argues: a byte reserved and not needed costs a byte of payload, one that falls short costs
+     * a silently dropped frame the sender believed it had sized to fit.
      *
      * **Why `coerceAtLeast(0)` and not `maxOf(1, …)`.** [chunkBytes] floors at 1 because a zero-byte
      * chunk would never terminate a transfer. Here `0` is the honest answer: a transport whose whole
@@ -3185,15 +3218,63 @@ internal class RaftEngine(
      * against it. The raw size is still recoverable by the caller — it is the array they passed.
      *
      * **What this does not bound.** The *aggregate*: N individually-legal entries can still sum past
-     * the budget, which is [boundedBatch]'s job, not this one's. And the entry's own metadata —
-     * `index` / `term` / `dedupKey` — is charged to [HEADER_BUDGET] rather than measured, so a
-     * consumer-supplied [ClientId] long enough to exhaust that reserve escapes this check (#2156).
+     * the budget, which is [boundedBatch]'s job, not this one's. And it covers the **propose** lane
+     * only — an internally-minted config entry never passes through here (#2721), and the snapshot
+     * lane spends the same constant around a `ConfigPayload` this measurement cannot see (#2720).
      */
     private fun checkProposeFitsTransport(command: ByteArray) {
         val budget = transport.maxPayloadBytes ?: return
-        val limit = (budget - HEADER_BUDGET).coerceAtLeast(0)
+        val reserved = maxOf(HEADER_BUDGET, proposeEnvelopeBytes())
+        val limit = (budget - reserved).coerceAtLeast(0)
         val wireBytes = raftCbor.encodeToByteArray(ByteArraySerializer(), command).size
-        if (wireBytes > limit) throw PayloadTooLarge(wireBytes, limit, HEADER_BUDGET)
+        if (wireBytes > limit) throw PayloadTooLarge(wireBytes, limit, reserved)
+    }
+
+    /**
+     * What an [RaftMessage.AppendEntries] carrying one proposed entry costs *beyond* its command —
+     * the quantity [checkProposeFitsTransport] holds back, **measured** around this node's own
+     * [clientIdProbe] rather than assumed to be [HEADER_BUDGET] (#2156).
+     *
+     * **Why an empty command rather than the real one.** CBOR is definite-length and every enclosing
+     * structure here is a map or an array whose header depends on element *count*, never on payload
+     * *size*; the only size-dependent header in the frame is the command array's own, which
+     * [checkProposeFitsTransport] already measures separately. The overhead is therefore exactly
+     * additive — `frame(command) == overhead + wireBytes(command)` — so the probe costs
+     * `O(|clientId|)` instead of a second `O(payload)` encode. Pinned by
+     * `ProposeEnvelopeReserveTest`, which measures both sides independently rather than trusting the
+     * identity.
+     *
+     * **Why the widest `Long`s.** `index` / `term` are assigned on the actor loop and do not exist at
+     * this call site, and `round` moves on its own; charging [MAX_PLAUSIBLE_INDEX] /
+     * [MAX_PLAUSIBLE_TERM] / [Long.MAX_VALUE] makes the result independent of when it is taken.
+     * Reading the current values instead would be both a data race and unsound — a CBOR width step
+     * between the read here and the append there is worth up to four bytes per field.
+     *
+     * **Why it is recomputed per propose rather than cached.** The result is a pure function of
+     * [clientIdProbe], which never changes, so a cache would be correct — but this runs on the
+     * caller's coroutine, so the cache would be shared mutable state needing a lock to be worth
+     * having. It encodes roughly 250 bytes, against a command the same call is already encoding in
+     * full; the lock would cost more than the saving.
+     */
+    private fun proposeEnvelopeBytes(): Int {
+        val empty = ByteArray(0)
+        val probe: RaftMessage = RaftMessage.AppendEntries(
+            term = MAX_PLAUSIBLE_TERM,
+            prevLogIndex = MAX_PLAUSIBLE_INDEX,
+            prevLogTerm = MAX_PLAUSIBLE_TERM,
+            entries = listOf(
+                LogEntry(
+                    index = MAX_PLAUSIBLE_INDEX,
+                    term = MAX_PLAUSIBLE_TERM,
+                    command = empty,
+                    dedupKey = DedupKey(clientIdProbe, Long.MAX_VALUE),
+                ),
+            ),
+            leaderCommit = MAX_PLAUSIBLE_INDEX,
+            round = Long.MAX_VALUE,
+        )
+        return raftCbor.encodeToByteArray(probe).size -
+            raftCbor.encodeToByteArray(ByteArraySerializer(), empty).size
     }
 
     private suspend fun proposeWithRequestId(command: ByteArray, requestId: Long?): LogEntry {
@@ -4126,18 +4207,29 @@ internal class RaftEngine(
          * [RaftMessage.AppendEntries] in [checkProposeFitsTransport], and a whole batch of entries in
          * [boundedBatch].
          *
-         * One constant covers all three because the envelopes carry the same *kind* of thing: a handful
+         * One constant serves all three because the envelopes carry the same *kind* of thing: a handful
          * of `Long`s (`term`, `prevLogIndex` / `lastIncludedIndex`, `leaderCommit` / `offset`, `round`)
          * around opaque bytes. Measured (`:kuilt-raft` commonTest, `raftCbor`): an entry-less
-         * `AppendEntries` encodes to 126 B and an `InstallSnapshot` with no data to 135 B, so the
-         * reserve carries roughly 120 B of slack for larger index/term varints and — on the
-         * AppendEntries side — the leading entry's own `index` / `term` / `dedupKey`, itself 60 B for a
-         * short [ClientId]. Deliberately generous: a byte of framing reserved and not needed costs a
-         * byte of payload, while one that falls short costs a silently dropped frame the sender
-         * believed it had sized to fit.
+         * `AppendEntries` encodes to 126 B and an `InstallSnapshot` with no data to 135 B, and the
+         * leading entry's own `index` / `term` / `dedupKey` is another 60 B for a short [ClientId].
+         * Deliberately generous: a byte of framing reserved and not needed costs a byte of payload,
+         * while one that falls short costs a silently dropped frame the sender believed it had sized
+         * to fit.
          *
-         * It is a **reserve, not a measurement**, and one consumer-supplied value can still outrun it:
-         * a [ClientId] long enough to push an entry's metadata past the slack (#2156).
+         * **This is a published floor, not a sufficient reserve, and the difference is load-bearing
+         * (#2156).** It was written as though 256 B covered every envelope it is spent on. It does
+         * not, and nothing about a `ClientId` can make it: the `AppendEntries` envelope holds eight
+         * `Long`s, each of which CBOR widens from one byte to nine as the log grows, so the slack
+         * left for an id shrinks from 81 characters on a fresh log to **11** at [MAX_PLAUSIBLE_INDEX]
+         * / [MAX_PLAUSIBLE_TERM] — below `ClientId.auto`'s own 23. So the number survives as the
+         * conservative bound a caller may *rely* on, and [checkProposeFitsTransport] enforces against
+         * [proposeEnvelopeBytes] instead, taking whichever is larger. `SeamRoom.maxPayloadBytes`
+         * carries the same split for the same reason over a long `PeerId`.
+         *
+         * The other two sites still spend it flat and are **not** covered by that: [chunkBytes]'
+         * envelope carries a `ConfigPayload` of consumer-supplied `NodeId`s on every chunk, already
+         * past 256 B for five voters with twenty-character ids (#2720), and [boundedBatch]'s
+         * always-send-at-least-one clause can meet the same payload as a config entry (#2721).
          */
         const val HEADER_BUDGET = 256
 
