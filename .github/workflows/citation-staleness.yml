@@ -1,0 +1,162 @@
+name: citation-staleness
+
+# Out-of-band check for in-tree comments that assert work is OUTSTANDING under an
+# issue that has since CLOSED.
+#
+# WHY THIS EXISTS
+#   A comment naming an issue asserts a world-state, so closing the issue silently
+#   inverts the claim the comment makes: it now tells a reader that work is pending
+#   which is in fact done, and it does so confidently enough that the reader trusts
+#   it over their own reading. Two instances were each found by accident; the survey
+#   that followed found four more in live source, and two of THOSE were worse than
+#   dangling pointers — the surrounding sentence had itself become false.
+#
+# WHY A SCHEDULED JOB AND NOT A `check`-WIRED GRADLE TASK
+#   Two reasons, and the second is the load-bearing one.
+#
+#   1. The verdict needs GitHub's issue state. A build guard runs offline and cannot
+#      resolve it; the most it could do is match the lexical half, which on its own
+#      names correct provenance citations as often as stale ones.
+#   2. A stale citation is not a reason to block someone else's merge. A required
+#      check that reddens the moment an unrelated issue closes charges the cost to
+#      whoever happens to open the next PR — who did not write the comment, has no
+#      context for the sentence, and whose only cheap move is to mute the check.
+#      Within a week it would be noise.
+#
+#   So this is deliberately NOT part of `ci-required`. It opens a tracking issue,
+#   the same shape and for the same reason as `skill-staleness.yml`.
+#
+# WHERE THE LOGIC LIVES
+#   `.github/scripts/stale-citations.sh`, not inline here, and that is deliberate:
+#   the script takes an optional tree-ish, which is what lets its baseline be derived
+#   by running it against a commit from BEFORE the known sites were fixed. A guard
+#   whose baseline it generated itself proves nothing, and a miss looks exactly like
+#   a clean tree. That script's header carries the precision measurement, the verb
+#   subset, the archived-docs exclusion and — stated rather than implied — the list
+#   of what it cannot see.
+
+on:
+  schedule:
+    # 06:45 UTC daily — between skill-staleness (06:30) and apple-nightly (07:00).
+    - cron: '45 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  citations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Scan for citations to closed issues
+        id: scan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STALE_CITATIONS_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          set +e
+          OUT=$(.github/scripts/stale-citations.sh 2>&1)
+          RC=$?
+          set -e
+          printf '%s\n' "$OUT"
+
+          # The script refuses to run rather than reporting a false all-clear when its
+          # own regex engine cannot honour interval expressions. Surface that as a job
+          # failure — a detector that silently matches nothing is the failure mode this
+          # whole workflow exists to avoid one level down.
+          if [ "$RC" -ge 2 ]; then
+            echo "::error::stale-citations.sh could not run (exit $RC)."
+            exit "$RC"
+          fi
+
+          if [ "$RC" -eq 1 ]; then
+            ROWS=$(printf '%s\n' "$OUT" | grep '^- ' || true)
+            {
+              echo "stale=yes"
+              echo 'rows<<ROWSEOF'
+              echo "$ROWS"
+              echo 'ROWSEOF'
+            } >> "$GITHUB_OUTPUT"
+            echo "::warning::found citations naming a closed issue"
+          else
+            echo "stale=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Idempotent by exact title: an existing OPEN issue is commented on, never
+      # duplicated. Same shape as skill-staleness.yml / publish.yml's alerts.
+      - name: Open or refresh the tracking issue
+        if: steps.scan.outputs.stale == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ROWS: ${{ steps.scan.outputs.rows }}
+        run: |
+          set -eu
+          TITLE="In-tree comments cite a closed issue as outstanding work"
+          LABEL="citation-stale"
+          BODY="These comments say work is still outstanding under an issue that is now **closed**, so each one now asserts the opposite of what is true:
+
+          ${ROWS}
+
+          **Repointing the number is rarely the whole fix.** Read the sentence around the citation first — twice in the original survey the surrounding *claim* had itself become false, not just the pointer. One comment told a reader three seams disagreed on a roster when the named one had been fixed to agree; another steered a reader toward failover work that a sibling test already proves end to end. A comment that is confidently wrong is worse than no comment.
+
+          Three ways to close a row out, in order of preference:
+
+          1. **Rewrite the claim** to say what is true now, and cite what makes it true (the fixing commit, the test that proves it).
+          2. **Repoint** at the issue that genuinely carries the remaining work, if there is one.
+          3. **Mark it as provenance** — a citation to a closed issue is legitimate when it records *where* something was established or fixed rather than claiming work is pending. Add a line-tight \`ALLOW-staleCitation: <reason>\` on the citing line; the reason is mandatory, because a blank one is a claim that nobody looked.
+
+          **This is a lexical signal filtered by issue state, not a verdict.** It watches one high-precision verb subset (\`tracked by\`, \`blocked on\`, \`deferred to\`, \`stays open under\`) and is blind to every other phrasing, to a claim falsified while its issue is still open, and to a claim naming no number at all. \`.github/scripts/stale-citations.sh\` lists what it cannot see; run it locally with no arguments to reproduce this.
+
+          - Run: ${RUN_URL}"
+
+          # The body is written inside a YAML block scalar, so every continuation line
+          # carries this step's indentation. Four or more leading spaces is a markdown
+          # CODE BLOCK, which would render the whole issue as unstyled preformatted text.
+          BODY=$(printf '%s\n' "$BODY" | sed 's/^ \{1,10\}//')
+
+          # Best-effort label create (idempotent). The title-based search below does not
+          # depend on it, so a failure here is tolerated.
+          gh label create "$LABEL" --color FBCA04 \
+            --description "A comment asserts outstanding work under a closed issue" 2>/dev/null || true
+
+          EXISTING=$(gh issue list --state open --search "\"$TITLE\" in:title" \
+            --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+
+          if [ -n "$EXISTING" ]; then
+            echo "Refreshing existing issue #$EXISTING"
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            echo "Opening new tracking issue"
+            gh issue create --title "$TITLE" --label "$LABEL" --body "$BODY" \
+              || gh issue create --title "$TITLE" --body "$BODY"
+          fi
+
+      # Close it once the tree is clean. The condition is fully decided by the scan,
+      # so leaving the issue open after it clears would be pure noise — same call as
+      # skill-staleness.yml, and unlike publish.yml's alert, which a human closes.
+      - name: Close the tracking issue once the tree is clean
+        if: steps.scan.outputs.stale == 'no'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          TITLE="In-tree comments cite a closed issue as outstanding work"
+          EXISTING=$(gh issue list --state open --search "\"$TITLE\" in:title" \
+            --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" \
+              --comment "Every outstanding-work citation in the tree now names an open issue — closing. Reopened automatically if another goes stale. Run: ${RUN_URL}"
+          fi
