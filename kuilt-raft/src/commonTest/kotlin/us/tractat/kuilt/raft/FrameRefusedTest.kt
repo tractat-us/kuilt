@@ -611,6 +611,95 @@ class FrameRefusedTest {
         )
     }
 
+    // ── configPayloadRefusal: the shared §6 well-formedness bound ────────────
+
+    /**
+     * `configPayloadRefusal` on the batch lane: an entry carrying a config that names no voters.
+     *
+     * The sender is the **pinned leader at our own term** and the batch is otherwise impeccable —
+     * contiguous from its own probe point, entry term equal to the frame's — so every other bound in
+     * `batchRefusal` and every gate upstream of it is *satisfied* rather than merely unreached, and
+     * this one is the only thing that can refuse the frame. That matters here more than elsewhere: the
+     * disarm it prevents is self-healing on this lane (the attacker's own truncation removes the
+     * poisoned entry, so `recomputeMembership` falls back to `bootstrapConfig`), which is exactly the
+     * shape whose state-effect assertion goes quietly vacuous. See `WireConfigVoterSetTest` for the
+     * damage; this pins the attribution.
+     */
+    @Test
+    fun anAppendEntriesConfigWithNoVoters_isRefusedAs_ConfigPayloadEmptyVoterSet() = raftRunTest {
+        val sim = simWithLearner()
+        val leaderId = sim.idOf(awaitLeader(sim))
+        val followerId = voterIds.first { it != leaderId }
+        sim.awaitTrue("$followerId recognises $leaderId") {
+            sim.nodes.getValue(followerId).leader.value == leaderId
+        }
+        val term = sim.storages.getValue(followerId).term()
+
+        val refusals = collectRefusals(sim)
+        sim.settle()
+        refusals.clear()
+
+        sim.deliverAppendEntries(
+            to = followerId, from = leaderId, term = term,
+            prevLogIndex = 0L, prevLogTerm = 0L,
+            entries = listOf(
+                LogEntry(
+                    index = 1L, term = term, command = byteArrayOf(),
+                    config = ConfigPayload(old = null, new = ClusterConfig(voters = emptySet())),
+                ),
+            ),
+        )
+        sim.settle()
+
+        val refusal = refusals.only(followerId)
+        assertAll(
+            { assertEquals(RefusalGate.ConfigPayloadEmptyVoterSet, refusal.gate) },
+            { assertEquals(leaderId, refusal.from, "the pinned leader, so every gate upstream passed it") },
+            { assertEquals(RaftMessageType.AppendEntries, refusal.messageType) },
+        )
+    }
+
+    /**
+     * The same predicate on the snapshot lane, and the worse of the two routes: `saveSnapshot` writes
+     * `config` **durably** before `recomputeMembership` reads it, and `checkedRestoredSnapshotMeta`
+     * bounds index and term but never `config`, so an admitted frame outlived a restart.
+     *
+     * The joint spelling is used here rather than the simple one so the `old` arm has an emit site of
+     * its own: `MembershipState.Joint.voters` is the union, so this payload leaves §5.2 armed and is
+     * refused for the *quorum* reason instead — a majority of the empty `old` side is unreachable.
+     */
+    @Test
+    fun anInstallSnapshotConfigWithAVoterlessJointSide_isRefusedAs_ConfigPayloadEmptyVoterSet() = raftRunTest {
+        val sim = simWithLearner()
+        val leaderId = sim.idOf(awaitLeader(sim))
+        val followerId = voterIds.first { it != leaderId }
+        sim.awaitTrue("$followerId recognises $leaderId") {
+            sim.nodes.getValue(followerId).leader.value == leaderId
+        }
+        val term = sim.storages.getValue(followerId).term()
+
+        val refusals = collectRefusals(sim)
+        sim.settle()
+        refusals.clear()
+
+        sim.deliverInstallSnapshot(
+            to = followerId, from = leaderId, term = term,
+            lastIncludedIndex = 5L, lastIncludedTerm = term,
+            config = ConfigPayload(
+                old = ClusterConfig(voters = emptySet()),
+                new = ClusterConfig(voters = voterIds.toSet()),
+            ),
+        )
+        sim.settle()
+
+        val refusal = refusals.only(followerId)
+        assertAll(
+            { assertEquals(RefusalGate.ConfigPayloadEmptyVoterSet, refusal.gate) },
+            { assertEquals(leaderId, refusal.from) },
+            { assertEquals(RaftMessageType.InstallSnapshot, refusal.messageType) },
+        )
+    }
+
     // ── adoptLeaderForTerm: §5.2 Election Safety ─────────────────────────────
 
     /**
@@ -667,7 +756,9 @@ class FrameRefusedTest {
      * deleted from under an entry that still exists.
      *
      * Deliberately a set comparison against [RefusalGate.entries] rather than a hand-written list, so
-     * adding a ninth gate turns it red without anyone remembering to come back here.
+     * adding *any* further gate turns it red without anyone remembering to come back here. It said "a
+     * ninth" until #2663 added the sixteenth — a count in prose is a claim that rots on the next commit
+     * and nothing fails when it does, so the property is stated without one.
      */
     @Test
     fun everyRefusalGateIsReachable() = raftRunTest {
@@ -732,6 +823,16 @@ class FrameRefusedTest {
         sim.deliverInstallSnapshot(
             to = followerId, from = leaderId, term = followerTerm,
             lastIncludedIndex = followerCommit + JUMP_AHEAD, lastIncludedTerm = floor - 1L,
+        )
+        sim.deliverAppendEntries(
+            to = followerId, from = leaderId, term = followerTerm,
+            prevLogIndex = 0L, prevLogTerm = 0L,
+            entries = listOf(
+                LogEntry(
+                    index = 1L, term = followerTerm, command = byteArrayOf(),
+                    config = ConfigPayload(old = null, new = ClusterConfig(voters = emptySet())),
+                ),
+            ),
         )
         sim.deliverAppendEntries(to = followerId, from = other, term = followerTerm)
         sim.settle()

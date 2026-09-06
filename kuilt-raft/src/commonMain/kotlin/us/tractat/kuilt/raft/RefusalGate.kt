@@ -52,9 +52,9 @@ package us.tractat.kuilt.raft
  * implausible-term arms and the §5.2/§8 leader-authority gate run at the dispatch boundary in
  * `RaftEngine.onMessage`, before any handler. The five `TimeoutNow*` guards run inside
  * `RaftEngine.onTimeoutNow`. The `AppendEntries*` and `InstallSnapshot*` guards run inside their own
- * handlers, ahead of every side-effect those handlers have. [ForgedLeaderForTerm] is last because it
- * is shared: both of those two handlers reach it, and both reach it after their own frame-shape
- * bounds.
+ * handlers, ahead of every side-effect those handlers have. The last two are the **shared** ones,
+ * reached by both of those handlers: [ConfigPayloadEmptyVoterSet] from inside each lane's own
+ * frame-shape validator, and [ForgedLeaderForTerm] after every frame-shape bound either lane has.
  */
 public enum class RefusalGate {
     /**
@@ -270,6 +270,49 @@ public enum class RefusalGate {
     InstallSnapshotBelowCommittedTermFloor,
 
     /**
+     * `RaftEngine.configPayloadRefusal` (#2663): a wire [ConfigPayload] one of whose currently-active
+     * sides names **no voters** — reached from `batchRefusal` for an `AppendEntries` entry's `config`
+     * and from `snapshotChunkRefusal` for an `InstallSnapshot`'s.
+     *
+     * §5.2's leader-authority gate is conditioned on `membershipState.voters.isNotEmpty()`, a carve-out
+     * for the pre-bootstrap learner seed that must accept a leader's frames to catch up at all. The
+     * carve-out was reasoned about in the arming direction only; a config that **un**-seats every voter
+     * returns an established node to that state permanently, for every subsequent sender. The damage is
+     * not term inflation — with the gate disarmed the log path does no `from` validation, so any
+     * non-voter's `AppendEntries` truncates the victim's committed log and replaces it, and via
+     * `InstallSnapshot` the poisoned config reaches **durable storage**, where
+     * `checkedRestoredSnapshotMeta` bounds index and term but not `config`.
+     *
+     * **Both sides, because they fail differently.** `MembershipState.Joint.voters` is the *union*, so
+     * an empty `old` leaves §5.2 armed; what it takes out is quorum, since commit and election need
+     * independent majorities of each side and a majority of ∅ is unreachable. One frame, permanent
+     * stall.
+     *
+     * **A well-formedness bound, not the content check #1880 rejected.** That issue asked whether a
+     * recipient can verify a config's *content* — reachability from what it last committed — and closed
+     * as accepted-unauthenticated, because a long-absent node must be catchable-up to an arbitrarily
+     * distant config, so any content predicate must accept and reject the same value. Its resolution
+     * states that well-formedness *is* locally checkable; this is that, and nothing more. It reads only
+     * the payload and never local state, so #1898's staleness relaxation is untouched — a node holding
+     * `{A,B,X}` still adopts `{X,C,D}`. Authorization remains open under #1907.
+     *
+     * **One value for two lanes**, unlike the per-lane split at [AppendEntriesEntryTermOutOfRange] /
+     * [InstallSnapshotTermOutOfRange]. Those are two *different* bounds that happen to rhyme; this is
+     * one predicate over one shared payload type, evaluated by one function both validators call. The
+     * shared-gate criterion set out at [AppendEntriesPrevLogIndexOutOfRange] is met — the two sites
+     * cannot co-fire, since a frame is either an `AppendEntries` or an `InstallSnapshot` — and
+     * [RaftTraceEvent.FrameRefused.messageType] already tells a reader which lane it was, so no
+     * diagnostic resolution is given up either.
+     *
+     * Disposition: **drop the frame**, like every sibling here. Not a `require` on [ClusterConfig] —
+     * that would make the learner seed `ClusterConfig(voters = emptySet(), learners = {self})`
+     * unconstructible, and it runs on the actor loop, whose `try`/`finally` has no `catch`, so a throw
+     * turns one hostile frame into permanent node death (#1818). Not a repair either: a config is an
+     * identity, and clamping one launders a forgery into the most favourable valid value (#1817).
+     */
+    ConfigPayloadEmptyVoterSet,
+
+    /**
      * `RaftEngine.adoptLeaderForTerm` (#1906): a same-term `AppendEntries` or `InstallSnapshot` from a
      * peer that is **not** the node already established as this term's leader.
      *
@@ -338,6 +381,7 @@ public enum class RefusalGate {
             InstallSnapshotIndexOutOfRange -> null
             InstallSnapshotTermOutOfRange -> null
             InstallSnapshotBelowCommittedTermFloor -> null
+            ConfigPayloadEmptyVoterSet -> null
             ForgedLeaderForTerm -> null
         }
 }
