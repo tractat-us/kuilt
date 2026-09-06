@@ -410,6 +410,17 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      * operator therefore saw the cost and the location, and had no way to reach the cause or the
      * remedy. This arm puts both on the ledger every replica already folds.
      *
+     * ## What it names: the acks the move requires, not only the ack it is missing
+     *
+     * Ackedness is the caller's fence state and is **not derivable from a merged ledger**, so this
+     * arm cannot say which of these donors is the absent one. What it can say is exactly as
+     * actionable: `relocationPatch` refuses unless **every** donor holding an uncancelled carried row
+     * at the fenced key has acked, so the donors named here are precisely the peers whose acks the
+     * next `Reconcile` requires on account of a hand-off. The refusal's `reason` narrows that set to
+     * the one that is missing; this arm is the durable half, and a superset by exactly the peers who
+     * *have* acked. On the two-hop chain that means two names where the ledger previously carried
+     * none, out of four peers reading zero.
+     *
      * ## The predicate, and why it needs no consequence clause
      *
      * `transferRelocIn − transferRelocOut > 0` for some recipient, at a path key whose edge is no
@@ -429,9 +440,9 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      *
      * ## What clears it — and what does not
      *
-     * The row being carried onward, and nothing else. That happens when the donor acks the fence at
-     * this key and the next `Reconcile` runs, so **[donor] rejoining and acking is the unblocking
-     * action** an operator is looking for.
+     * The row being carried onward, and nothing else. That happens when every donor named at this key
+     * acks the fence there and the next `Reconcile` runs, so **getting [donor] present and acking is
+     * the unblocking action** an operator is looking for.
      *
      * ⚠ It is *not* silenced by an ack that under-declares. The blocking row lives in
      * `transferRelocIn`, which is control-plane-authored and held on the receiver, so the amnesiac
@@ -448,7 +459,9 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      * ledger knows — there is no move to be blocked, and [OrphanedTransferPath] owns that state.
      *
      * @property path the dead generation's path key — where the hand-off is frozen
-     * @property donor the peer whose row blocks the move, and whose fence ack releases it
+     * @property donor the peer whose hand-off is frozen there, and whose fence ack the next move
+     *   requires. One report per donor, so a key holding a chain's worth of hand-offs names each of
+     *   them separately rather than folding them into the key the way [OrphanedTransferPath] must.
      * @property carried the still-uncancelled carried total from [donor] at [path], summed over its
      *   recipients. The per-donor attribution the aggregate `outstanding` cannot give; it is the
      *   hand-off residual, **not** the whole frozen supply at the group.

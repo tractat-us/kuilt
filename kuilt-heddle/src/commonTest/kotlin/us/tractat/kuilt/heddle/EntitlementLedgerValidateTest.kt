@@ -1042,10 +1042,12 @@ class EntitlementLedgerValidateTest {
      * `relocationPatch` carry produces (#1691). `e2` has since retired and `e3` is `g2`'s live
      * inbound, so the second move is the one that must carry it onward.
      *
-     * Deliberately **counter-free**: the report reads the three transfer matrices and the topology
-     * and nothing else, so no counter is needed to reach it — and their absence keeps every other
-     * check silent, which is what lets these arms assert the whole `validate()` list rather than
-     * filtering it. The production-derived state, with real counters and real pockets, is
+     * **Funded, not counter-free.** The report itself reads only the transfer matrices and the
+     * topology, so a bare pair of rows would reach it — but then `alice` would be handing away credit
+     * she never had, the pockets would derive negative and `PersistentNegativeHoldings` would
+     * dominate every arm below. The counters here are the ones the *first* move left: `e2` drained to
+     * `returned`, its 60 re-credited to `e3` in `issuedRelocIn`, exactly the shape
+     * [reHomedAwayFromTheRows] uses. The production-derived state, built by the real mutators, is
      * `EntitlementLedgerReconcileTest.theFrozenGenerationMoveNamesItsDepartedDonorOnTheLedger`.
      *
      * The knobs, and what each one switches **off** if moved:
@@ -1061,18 +1063,21 @@ class EntitlementLedgerValidateTest {
         cancelled: Long = 0L,
         successor: Lifecycle = Lifecycle.ACTIVE,
         deadKey: AttachmentId = e2,
-        donor: ReplicaId = alice,
     ): EntitlementLedger = EntitlementLedger.of(
         records = mapOf(
             e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
             e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
             e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
         ),
-        transferRelocIn = mapOf(PathKey.of(deadKey) to mapOf(donor to GCounter.of(bob to 40L))),
+        minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
+        issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
+        returned = mapOf(e2 to GCounter.of(alice to 60L)), // the first move drained the strand…
+        issuedRelocIn = mapOf(e3 to GCounter.of(alice to 60L)), // …and credited the successor
+        transferRelocIn = mapOf(PathKey.of(deadKey) to mapOf(alice to GCounter.of(bob to 40L))),
         transferRelocOut = if (cancelled == 0L) {
             emptyMap()
         } else {
-            mapOf(PathKey.of(deadKey) to mapOf(donor to GCounter.of(bob to cancelled)))
+            mapOf(PathKey.of(deadKey) to mapOf(alice to GCounter.of(bob to cancelled)))
         },
         lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to successor),
     )
@@ -1110,10 +1115,14 @@ class EntitlementLedgerValidateTest {
                         "shape a carry produces, and the shape a base-only enumeration cannot see",
                 )
             },
-            // ── the property: donor, key and residual, on the durable surface.
+            // ── the property: donor, key and residual, on the durable surface — added to the
+            // path-keyed report that was the whole diagnosis before, never replacing it.
             {
                 assertEquals(
-                    listOf(LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 40L)),
+                    listOf(
+                        LedgerConflict.OrphanedTransferPath(PathKey.of(e2)),
+                        LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 40L),
+                    ),
                     frozen.validate(),
                     "the blocked move's donor must be named on the ledger",
                 )
@@ -1175,7 +1184,10 @@ class EntitlementLedgerValidateTest {
     fun aPartiallyCarriedHandoffReportsOnlyWhatIsLeft() {
         val partial = carryFrozenOnADeadGeneration(cancelled = 15L)
         assertEquals(
-            listOf(LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 25L)),
+            listOf(
+                LedgerConflict.OrphanedTransferPath(PathKey.of(e2)),
+                LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 25L),
+            ),
             partial.validate(),
             "the reported total is the uncancelled remainder, 40 − 15",
         )
@@ -1235,7 +1247,10 @@ class EntitlementLedgerValidateTest {
             },
             {
                 assertEquals(
-                    listOf(LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 40L)),
+                    listOf(
+                        LedgerConflict.OrphanedTransferPath(PathKey.of(e2)),
+                        LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 40L),
+                    ),
                     twoDonors.validate(),
                     "only the donor still blocking the move is named",
                 )
@@ -1296,15 +1311,8 @@ class EntitlementLedgerValidateTest {
      */
     @Test
     fun anAmnesiacAckClearsTheFrozenReportOnlyByMovingTheRowAndNotTheOrphanItLeaves() {
-        fun withBaseRow(base: Long): EntitlementLedger = EntitlementLedger.of(
-            records = mapOf(
-                e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
-                e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
-                e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
-            ),
-            transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to base))),
-            transferRelocIn = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
-            lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to Lifecycle.ACTIVE),
+        fun withBaseRow(base: Long): EntitlementLedger = carryFrozenOnADeadGeneration().piece(
+            EntitlementLedger.of(transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to base)))),
         )
 
         // The carry an amnesiac ack still produces: the control-plane row moves in full, the

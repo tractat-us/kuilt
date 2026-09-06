@@ -1061,9 +1061,7 @@ public class EntitlementLedger private constructor(
      */
     private fun unackedCarriedDonors(deadPath: PathKey, acked: Set<ReplicaId>): List<ReplicaId> =
         transferRelocIn[deadPath]?.keys.orEmpty()
-            .filter { donor ->
-                donor !in acked && recipientsOf(deadPath, donor).any { to -> carriedResidual(deadPath, donor, to) > 0L }
-            }
+            .filter { donor -> donor !in acked && carriedResidualTotal(deadPath, donor) > 0L }
             .sortedBy { it.value }
 
     /**
@@ -1075,6 +1073,28 @@ public class EntitlementLedger private constructor(
         row(transferRelocIn, path, donor, recipient),
         row(transferRelocOut, path, donor, recipient),
     )
+
+    /**
+     * [donor]'s still-uncancelled carried total at [path], summed over its recipients — the quantity
+     * [unackedCarriedDonors] refuses on and the one [LedgerConflict.FrozenCarriedHandoff] reports.
+     *
+     * Read by **both** so the report cannot drift from the refusal it explains: an operator who sees
+     * this arm and an operator who reads a `Relocation.Refused.reason` are being told about the same
+     * rows. The two still differ in what they quantify over — the refusal filters by ackedness, which
+     * is the caller's fence state and not derivable here, and the report filters by key liveness,
+     * which the refusal's caller already knows because it fenced the key.
+     *
+     * Only the **positive** cells count, which is what makes it exactly the old `any { … > 0L }`
+     * predicate rather than a net. A negative cell is a `transferRelocOut` observed without the
+     * `transferRelocIn` it cancels — an observer-completeness break (§6.4) that
+     * [LedgerConflict.NegativeEffectiveSpend]'s sibling reasoning already covers — and netting it
+     * against a live positive one elsewhere would let an incomplete delivery silently retire a real
+     * refusal.
+     */
+    private fun carriedResidualTotal(path: PathKey, donor: ReplicaId): Long =
+        recipientsOf(path, donor).fold(0L) { acc, to ->
+            checkedAdd(acc, maxOf(0L, carriedResidual(path, donor, to)))
+        }
 
     /**
      * The **base** slots of [edge], by replica — the shape a [ControlCommand.QuiesceAck]
@@ -1450,6 +1470,15 @@ public class EntitlementLedger private constructor(
      *    deliberately **not** on "more than one group has no inbound edge" — that second spelling
      *    is also the shape of an honest partially-delivered topology and would fire on healthy
      *    traffic. Alone among these it is not a delivery transient in either direction.
+     *  - [LedgerConflict.FrozenCarriedHandoff] — the **donor** a blocked generation move is waiting
+     *    on (#2600): a hand-off an earlier move carried onto a key nothing reads any more, still
+     *    uncancelled. Alone among these it names a peer as the *cause* rather than as a party to the
+     *    fault — [relocationPatch] refuses per **edge**, so one absent donor freezes every pocket at
+     *    the group, and until this arm that donor existed only in a refusal string returned to the
+     *    caller of a `Reconcile`. Read off `transferRelocIn − transferRelocOut`, which
+     *    [relocationPatch] writes and nothing else does, so it is provenance rather than a magnitude
+     *    coincidence — and so it survives the masking blind spot
+     *    [LedgerConflict.OrphanedTransferPath] documents.
      *
      * **What is deliberately not reported:** a group whose only inbound edges are all
      * prepared/retired is quarantined (holdings `0`) but *silent* — that is the normal window
@@ -1486,6 +1515,10 @@ public class EntitlementLedger private constructor(
             }
         }
         for (path in orphanedTransferPaths()) conflicts += LedgerConflict.OrphanedTransferPath(path)
+        // #2600 — and the donor a blocked generation move is waiting on, named. The reports above
+        // give an operator the dead generation and the frozen aggregate; this one gives the peer
+        // whose ack releases it, which until now existed only in a refusal string nothing recorded.
+        conflicts += frozenCarriedHandoffs()
         // Two bootstraps in one ledger (#1751). Read off `minted` alone: a group is not a mint root
         // merely because its inbound edge is still in flight, so this cannot false-fire on the
         // partially-delivered topology a topology-keyed predicate would report.
@@ -1559,6 +1592,46 @@ public class EntitlementLedger private constructor(
             if (parties.any { r -> transferNet(path, r) != 0L && strandedOn(edge, r) != 0L }) out += path
         }
         return out.sorted()
+    }
+
+    /**
+     * The hand-offs an earlier generation move **carried** onto a key nothing reads any more and no
+     * later move has carried onward — the derivation behind [LedgerConflict.FrozenCarriedHandoff]
+     * (issue #2600). Its clauses, what clears it and why it needs no consequence test are in that
+     * type's KDoc; this is where they are evaluated.
+     *
+     * **Enumerated over `transferRelocIn` alone**, unlike [orphanedTransferPaths] which also walks
+     * `transfers`. That is the whole discrimination: a base row at a dead key is the documented
+     * left-untouched case and blocks nothing, while a carried row blocks the *entire* edge for every
+     * peer standing at the group. Reading both would report a departed donor for a state that
+     * [relocationPatch] moves without complaint — the rule its own KDoc explicitly disclaims.
+     *
+     * The residual is read through [carriedResidualTotal], the same helper [unackedCarriedDonors]
+     * refuses on, so the report and the refusal cannot come to disagree about which rows are still
+     * owed. What they do not share is the ack filter: ackedness is the caller's fence state and is
+     * not derivable from a merged ledger, so this report is the strictly wider one — it also stands
+     * in the honest window between a generation retiring and the `Reconcile` that re-homes it.
+     */
+    private fun frozenCarriedHandoffs(): List<LedgerConflict.FrozenCarriedHandoff> {
+        if (transferRelocIn.isEmpty()) return emptyList()
+        val edgeByPath = allEdges().associateBy { PathKey.of(it) }
+        val out = ArrayList<LedgerConflict.FrozenCarriedHandoff>()
+        for ((path, donors) in transferRelocIn) {
+            // A key naming no generation this ledger knows — [PathKey.ROOT] among them, since the
+            // root path has no final edge — has no move to block. `orphanedTransferPaths` owns that
+            // state, on the half of its clause 3 that survives without an edge.
+            val edge = edgeByPath[path] ?: continue
+            // Unknown or divergent record ⇒ quarantined, and [LedgerConflict.RecordDivergence] owns
+            // it; `null` lineage ⇒ the honest-reshape window, the standing silent exception (§10.11).
+            val child = recordOf(edge)?.child ?: continue
+            val live = lineageEdges(child) ?: continue
+            if (PathKey.of(live.last()) == path) continue // still the key `holdings` reads here
+            for (donor in donors.keys) {
+                val carried = carriedResidualTotal(path, donor)
+                if (carried > 0L) out += LedgerConflict.FrozenCarriedHandoff(path, donor, carried)
+            }
+        }
+        return out
     }
 
     /**
