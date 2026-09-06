@@ -713,6 +713,41 @@ the rules below as the reference version rather than a local convention.
   nobody is routed to gets reinvented downstream. Same obligation for a fabric, a `Room`/reconnect
   entry point, a CRDT, a liveness detector, a consensus/`GameSession` entry point, a dealing/gossip
   primitive — anything a consumer would otherwise hand-roll.
+- **But the `description` is a fixed budget, so adding a trigger means removing one.** The STOP list
+  in the body is free — a skill body is lazy. The `description:` is **eager**, loaded on every turn
+  of every session and every subagent in every repo that vendors this file, and Claude Code truncates
+  it at `skillListingMaxDescChars`, **default 1,536 characters**. Past that a phrase is not weak, it
+  is **absent**: it never reaches the deciding model, so it routes nothing, and nothing reports it.
+  This file's own advice caused the failure — the bullet above says "add the trigger phrases", so a
+  skill that wasn't firing kept getting phrases appended, and `kuilt-primitives` reached 8,155
+  characters of which **81% had never been seen by any model** (#2662). The receipt is #2572, and it
+  is the whole argument in one line: `6e80d89b` fixed a skill that was failing to route by
+  **appending** its `pumpIn` trigger — *"OR collecting a flow for the life of a session — a
+  background pump, a long-lived collector, `launchIn`, …"* — as a 562-character run landing at
+  offset 6,878, with `pump` at 6,942 and `launchIn` at 6,973 against a 1,536 cap. **The routing fix
+  for a routing failure was itself unroutable**, and nothing said so. Appending is the natural
+  remedy and is precisely the operation that cannot work.
+
+  **And this is not archaeology — it was still happening the night the guard landed.** `2903e32b`
+  (#2688) added a discovery-isolation route, correctly, in the same PR as the primitive, exactly as
+  the bullet above requires; it appended 252 characters at offset 5,256, putting its `discovery`
+  trigger at **5,294** of an 8,155-character description. Written, reviewed and merged by people
+  following the documented process, and it would have routed nothing, forever. That is what makes
+  this a guard rather than a note: every party was doing as instructed, and the instruction was
+  wrong.
+
+  Explanatory prose is not a trigger and belongs in the body or the cookbook, both unbounded, and a
+  trigger only earns its place by displacing another. `verifySkillDescriptionBudget` (root build,
+  in `check` and in the `doc-citations` CI job, since a SKILL.md edit is docs-only) enforces the cap,
+  and also rejects the `: ` and ` #` that silently break the unquoted plain scalar and stop the skill
+  loading altogether. **That half has already happened too, and it is not a near-miss:** before
+  `e0aa31a4` (#2541) one bare `: ` inside the scalar made the frontmatter **invalid YAML**, so the
+  skill was absent from every listing — routing nothing at all — until that commit replaced the
+  colon with an em-dash by hand. Note what #2541 is *filed* as: vendored drift, and the fix as
+  "repair the canonical skill". It was not drifting, it was **broken** — and the reason nobody could
+  tell is the reason this guard exists, since an unparseable frontmatter and a merely-absent skill
+  look identical from outside. So **both** things the guard checks have already bitten here, and
+  neither announced itself.
 - **It must never be more than 7 days behind the library.** `.github/workflows/skill-staleness.yml`
   opens a tracking issue when published `commonMain` moves and the skill doesn't; it deliberately
   does not fail a build, because a stale skill is not a reason to block someone else's merge.

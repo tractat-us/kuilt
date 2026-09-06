@@ -664,6 +664,11 @@ jobs:
   #   - verifyModuleTable  — every `:kuilt-*` module still has a row in CLAUDE.md's module table
   #     (#2257). CLAUDE.md is `*.md`, so DELETING a row is a docs-only change; only the other
   #     direction (adding a module) touches `settings.gradle.kts` and reaches the heavy build.
+  #   - verifySkillDescriptionBudget — no `.claude/skills/*/SKILL.md` `description:` exceeds the
+  #     1536-char skill-listing cap, past which the harness TRUNCATES and a trigger phrase routes
+  #     nothing (#2662). Belongs here above all the others: a SKILL.md is `*.md`, so editing one is
+  #     docs-only by definition and the heavy build never runs — and appending a trigger phrase to a
+  #     skill that "isn't firing" is exactly the docs-only edit this guard exists to catch.
   #   - verifySeamHarnessCoverage — every production `Seam` implementation still has a row in
   #     `docs/seam-harness-coverage.md`, against a conformance harness or a written opt-out
   #     (#1871). Same asymmetry as the module table, and the reason it belongs in this job:
@@ -702,10 +707,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Verify doc citations, @sample links, the module table and seam harness coverage
+      - name: Verify doc citations, @sample links, the module table, seam harness coverage and skill budgets
         run: >
           ./gradlew verifyDocCitations forbidUncitedDocCodeBlock verifyModuleDocLinks
           verifySampleLinks verifyModuleTable verifySeamHarnessCoverage
+          verifySkillDescriptionBudget
 
   # ── capability-probes ───────────────────────────────────────────────────────
   # The GATING half of the probe split (#1768's option 2). Runs only the
