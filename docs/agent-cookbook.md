@@ -1567,10 +1567,10 @@ cache, a "who has these bytes" protocol, or a sandbox.
 
 The trap is the uniform loop. `peers` includes you, so `peers.value.forEach { seam.sendTo(it, frame) }` sends to yourself on the first or last iteration, and before #2428 what happened next depended on which fabric you were on — a 2-peer link delivered the frame to the *other* peer and reported success. Filter, or broadcast:
 
+<!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/AgentCookbookSamples.kt#sendToEveryoneElseSample -->
 ```kotlin
-// Wrong: `peers` includes selfId, so this self-sends.
-seam.peers.value.forEach { seam.sendTo(it, frame) }
-
+// Wrong — `peers` includes selfId, so this self-sends:
+//     seam.peers.value.forEach { seam.sendTo(it, frame) }
 // Either filter…
 seam.peers.value.filter { it != seam.selfId }.forEach { seam.sendTo(it, frame) }
 // …or just broadcast, which is what "everyone else" means at this layer.
@@ -1656,7 +1656,7 @@ pump.join()
 
 A `Seam` has **two** state writers and they are genuinely concurrent: the promotion runs on whatever thread your transport calls back on (a JNA trampoline, MC's private delegate queue, a socket reader), while `close()` runs on the consumer's. So this, which is what everyone writes, is a **check-then-set**:
 
-```kotlin
+```text
 if (_state.value is SeamState.Weaving) _state.value = SeamState.Woven   // ← read and write are not atomic
 ```
 

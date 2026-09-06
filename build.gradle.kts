@@ -1946,7 +1946,6 @@ val forbidUncitedDocCodeBlock by tasks.registering {
         // Two deliberately-WRONG anti-pattern blocks — the `sendTo(selfId)` loop and the
         // check-then-set state write. Neither can cite a compiled sample: they exist to show the
         // bug, and a sample that contained them would be a sample of broken code. See #2630.
-        "docs/agent-cookbook.md" to 2,
         "docs/architecture.md" to 1,
         "docs/extending-fabrics.md" to 2,
         "docs/fabric-delivery-backpressure-design.md" to 2,
