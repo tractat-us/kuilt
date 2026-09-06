@@ -14,8 +14,10 @@ import platform.MultipeerConnectivity.MCPeerID
 import platform.MultipeerConnectivity.MCSession
 import platform.MultipeerConnectivity.MCSessionState
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.multipeer.internal.MCSessionLink
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -41,6 +43,24 @@ import kotlin.test.assertIs
  * This is the same defect, in the same spelling, as the JVM twin `BridgePeerLink` — the two files
  * cross-reference each other throughout and were written together. Both now route through
  * `:kuilt-core`'s `SeamStateGate`.
+ *
+ * ## The same race on the sibling flow — `peers` (#2626)
+ *
+ * This probe drove **both** halves of that sentence from the day it was written and only ever
+ * checked one: its race arm's failure message asserts, as established fact, that on a clobbered
+ * iteration "`incoming` has completed and `peers` has collapsed", and nothing looked at `peers`.
+ *
+ * The roster publish is the identical shape one flow over — `_peers.value = registry.peers + selfId`
+ * is a read of the registry followed by a store, against a `tearDown` that does
+ * `registry.clear(); _peers.value = setOf(selfId)`. A delegate callback preempted through a complete
+ * teardown stores the stale roster over the collapsed one; one arriving entirely *after* the
+ * teardown binds into the freshly-cleared registry and publishes the same thing. Either way the seam
+ * ends `Torn` while `peers` still names a peer that is gone — the collapse-on-tear invariant of
+ * #1816 / #1851, broken permanently.
+ *
+ * Both this class and the JVM twin now guard every roster publish with a `peersLock` and a
+ * `collapsed` marker set inside the same critical section as the collapse — the shape
+ * `NearbySeam.collapseRoster` and `TieredSeam` already use.
  *
  * ## What this probe proves, and what the JVM twin proves that this cannot
  *
@@ -100,25 +120,48 @@ class MCSessionLinkStateLatchConcurrencyTest {
     /**
      * Rig control for the race arm, and the reason its green is worth anything.
      *
-     * The race arm asserts an *absence* — that no iteration ended non-`Torn` — which passes
-     * trivially if the promotion never ran. This pins the other half: the delegate callback the race
-     * arm fires, on a link built exactly the way it builds one, does reach the `Weaving → Woven`
-     * promotion.
+     * The race arm asserts an *absence* — that no iteration ended non-`Torn`, and that none ended
+     * with a roster naming the guest — which passes trivially if the writer it races never ran. This
+     * pins the other half: the delegate callback the race arm fires, on a link built exactly the way
+     * it builds one, does reach **both** writes — the `Weaving → Woven` promotion and the
+     * `_peers.value = registry.peers + selfId` roster publish.
      */
     @Test
-    fun aConnectedDelegateCallbackOnItsOwnPromotesTheSeamToWoven() {
+    fun aConnectedDelegateCallbackOnItsOwnPromotesTheSeamToWovenAndPublishesTheGuest() {
         val self = MCPeerID(displayName = "self")
         val session = newSession(self)
         val link = MCSessionLink(self, session)
-        assertIs<SeamState.Weaving>(link.state.value, "precondition: nothing has promoted this link yet")
+        assertAll(
+            { assertIs<SeamState.Weaving>(link.state.value, "precondition: nothing has promoted this link yet") },
+            {
+                assertEquals(
+                    setOf(link.selfId),
+                    link.peers.value,
+                    "precondition: nothing has published a roster onto this link yet",
+                )
+            },
+        )
 
         link.delegate.session(session, MCPeerID(displayName = "guest"), MCSessionState.MCSessionStateConnected)
 
-        assertIs<SeamState.Woven>(
-            link.state.value,
-            "rig precondition: a `connected` delegate callback must drive the promotion the race arm " +
-                "races. If this fails, the race arm proves nothing — it would be asserting that a " +
-                "promotion which never happens cannot clobber anything",
+        assertAll(
+            {
+                assertIs<SeamState.Woven>(
+                    link.state.value,
+                    "rig precondition: a `connected` delegate callback must drive the promotion the " +
+                        "race arm races. If this fails, the race arm proves nothing — it would be " +
+                        "asserting that a promotion which never happens cannot clobber anything",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(link.selfId, PeerId("guest")),
+                    link.peers.value,
+                    "rig precondition: the same callback must also drive the ROSTER publish the race " +
+                        "arm races (#2626). If this fails, the race arm's roster assertion proves " +
+                        "nothing — a roster that never gains the guest can never keep it past a tear",
+                )
+            },
         )
     }
 
@@ -132,6 +175,7 @@ class MCSessionLinkStateLatchConcurrencyTest {
     @Test
     fun aPromotionCaughtMidFlightCannotStampWovenOverTheTerminalTorn() = runBlocking {
         val survivors = mutableListOf<String>()
+        val rosterSurvivors = mutableListOf<String>()
         var completed = 0
         repeat(ITERATIONS) { iter ->
             val self = MCPeerID(displayName = "self")
@@ -151,10 +195,12 @@ class MCSessionLinkStateLatchConcurrencyTest {
                 ready.complete(Unit)
                 awaitAll(promoter, closer)
             }
-            // Both writers have retired, so this read is final — which is what makes a non-`Torn`
-            // value here permanent rather than transient.
+            // Both writers have retired, so these reads are final — which is what makes a bad value
+            // here permanent rather than transient.
             val settled = link.state.value
             if (settled !is SeamState.Torn) survivors += "iter=$iter settled=$settled"
+            val roster = link.peers.value
+            if (roster != setOf(link.selfId)) rosterSurvivors += "iter=$iter peers=$roster"
             completed++
         }
 
@@ -165,15 +211,67 @@ class MCSessionLinkStateLatchConcurrencyTest {
         // ABSENCE must prove it did the work, or a loop that never executed reads as a clean pass.
         assertEquals(ITERATIONS, completed, "the race loop did not complete every iteration")
 
-        assertEquals(
-            emptyList(),
-            survivors.take(MAX_REPORTED_SURVIVORS),
-            "a delegate promotion caught mid-flight stamped a non-terminal state over the terminal " +
-                "`Torn` in ${survivors.size} of $ITERATIONS iterations (#1803). The link is closed, " +
-                "`incoming` has completed and `peers` has collapsed, so this value is " +
-                "contract-impossible AND permanent: no writer is left to correct it, every " +
-                "`state.first { it is Torn }` waiter hangs forever, and the factory's " +
-                "`ActiveSeamSlot` never frees — no later weave() on this device can succeed",
+        // One unraced link carries both teardown rig preconditions, and it is given a guest BEFORE
+        // the close on purpose: on a link that never met anybody `peers` is `{ selfId }` from
+        // construction, so "the roster collapsed" would hold by never having changed — the fixture
+        // configured into the one state at which the assertion cannot fail.
+        val unracedSelf = MCPeerID(displayName = "self")
+        val unracedSession = newSession(unracedSelf)
+        val unraced = MCSessionLink(unracedSelf, unracedSession)
+        unraced.delegate.session(unracedSession, MCPeerID(displayName = "guest"), MCSessionState.MCSessionStateConnected)
+        val unracedRosterBeforeClose = unraced.peers.value
+        unraced.close(CloseReason.Normal)
+
+        assertAll(
+            {
+                assertEquals(
+                    emptyList(),
+                    survivors.take(MAX_REPORTED_SURVIVORS),
+                    "a delegate promotion caught mid-flight stamped a non-terminal state over the " +
+                        "terminal `Torn` in ${survivors.size} of $ITERATIONS iterations (#1803). The " +
+                        "link is closed, `incoming` has completed and `peers` has collapsed, so this " +
+                        "value is contract-impossible AND permanent: no writer is left to correct it, " +
+                        "every `state.first { it is Torn }` waiter hangs forever, and the factory's " +
+                        "`ActiveSeamSlot` never frees — no later weave() on this device can succeed",
+                )
+            },
+            {
+                assertEquals(
+                    emptyList(),
+                    rosterSurvivors.take(MAX_REPORTED_SURVIVORS),
+                    "a delegate ROSTER publish caught mid-flight stood over the tear-time collapse " +
+                        "in ${rosterSurvivors.size} of $ITERATIONS iterations (#2626). The link is " +
+                        "`Torn` — `incoming` has completed and every send is refused — yet `peers` " +
+                        "still names a peer this fabric can no longer reach, which is the " +
+                        "collapse-on-tear invariant of #1816/#1851 broken PERMANENTLY. This is the " +
+                        "clause the sibling assertion's own failure message has always asserted as " +
+                        "fact",
+                )
+            },
+            {
+                assertIs<SeamState.Torn>(
+                    unraced.state.value,
+                    "rig precondition: an unraced close() must still latch `Torn`, so a green above " +
+                        "cannot be explained by close() having stopped publishing the terminal state",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(unraced.selfId, PeerId("guest")),
+                    unracedRosterBeforeClose,
+                    "rig precondition: the unraced link must actually HOLD the guest before its " +
+                        "close, or the collapse assertion below is asserting that `{ selfId }` " +
+                        "stayed `{ selfId }`",
+                )
+            },
+            {
+                assertEquals(
+                    setOf(unraced.selfId),
+                    unraced.peers.value,
+                    "rig precondition: an unraced close() must still COLLAPSE the roster, so a green " +
+                        "above cannot be explained by the collapse having been removed",
+                )
+            },
         )
     }
 
