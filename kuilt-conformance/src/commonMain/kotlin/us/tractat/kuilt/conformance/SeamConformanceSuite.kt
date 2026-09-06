@@ -1673,11 +1673,11 @@ public abstract class SeamConformanceSuite {
     //
     // Gated on `collapsesPeersOnTear`; every `false` is a tracked bug, not a by-design gap.
     //
-    // **STILL HOST-ONLY, and no longer blocked — this row is what measured the SECOND half of #2372
-    // (#2601).** `Seam.peers` is symmetric — that is the whole argument #2591 turned on — and the
-    // consumer this protects, `CompositeSeam`'s reachability fold, folds whichever seam it was
-    // given: a joiner freezing its pre-tear roster leaves a composite on the joining device
-    // advertising a peer only `sendTo` can disprove. The joiner arm belongs here.
+    // **Both ends are checked (#2601), and this row is what measured the SECOND half of #2372.**
+    // `Seam.peers` is symmetric — that is the whole argument #2591 turned on — and the consumer this
+    // protects, `CompositeSeam`'s reachability fold, folds whichever seam it was given: a joiner
+    // freezing its pre-tear roster leaves a composite on the joining device advertising a peer only
+    // `sendTo` can disprove. The joiner arm belongs here.
     //
     // It was held back because `MuxServerLoomConformanceTest`'s joiner is a `NamedMux` channel view
     // whose `peers` delegated to a still-live base, so a *closed* view advertised `PeerId(server)` —
@@ -1685,27 +1685,56 @@ public abstract class SeamConformanceSuite {
     // `peers`: a closed view advertises the base's roster, i.e. peers it will no longer deliver to —
     // the lie `Seam.peers`' KDoc forbids") and had no property that could reach it. This row was that
     // property, it red, and the fix collapses a torn view's roster to `{ selfId }` inside the same
-    // critical section as the latch. Landing the arm is #2601's slice. See
-    // `closeDrivesStateTornNormal` for why all three held-back rows were one defect.
+    // critical section as the latch. See `closeDrivesStateTornNormal` for why all three held-back
+    // rows were one defect.
     //
-    // **When it lands, note where the joiner PRECONDITION is weak, which is not where the
-    // obligation is.** `joiner.peers.size >= 2` before the tear is satisfied by the fixture on any
-    // harness declaring [JoinerRosterOrigin.FilledByConstruction], exactly as the joiner arm of
+    // **Where the joiner PRECONDITION is weak, which is not where the obligation is.**
+    // `joiner.peers.size >= 2` before the tear is satisfied by the fixture on any harness declaring
+    // [JoinerRosterOrigin.FilledByConstruction], exactly as the joiner arm of
     // [peersReportsSelfIdAndAtLeastTwoAfterJoin] is. What no fixture supplies is the *collapse*: a
     // seeded roster (`LinkSeam`'s `setOf(selfId, remoteId)` constructor literal) is precisely the
     // shape that cannot collapse unless the seam collapses it — so the obligation is strongest
-    // exactly where its precondition is weakest. The joiner's tear may be its own `close()` or the
-    // host's reaching it remotely; either satisfies the contract.
+    // exactly where its precondition is weakest.
+    //
+    // **BOTH preconditions are sampled before EITHER close, and that ordering is load-bearing.** On a
+    // role-split fabric the host's `close()` reaches the joiner remotely, so a `joiner.peers` read
+    // taken after it may legitimately have collapsed already — and a precondition that the tear
+    // itself can satisfy is no precondition at all. Sampling both up front is what keeps
+    // "the joiner had a remote peer to lose" a fact about the *join*, not about the teardown.
+    //
+    // **The host's roster is likewise read before the joiner closes**, for the reason
+    // `closeDrivesStateTornNormal` gives at length: it keeps the host arms' meaning byte-identical to
+    // the host-only form, so a red here is attributable to the new direction rather than to a
+    // shared-registry fabric reacting to a second departure.
+    //
+    // The joiner's tear is its own `close()` here. The contract admits either that or the host's
+    // reaching it remotely, and on a role-split fabric both have usually happened by this point; what
+    // the assertion reads is the terminal roster, which is the same value either way.
 
     internal suspend fun runPeersCollapseToSelfIdWhenTorn(scope: TestScope) {
         if (!capabilities().collapsesPeersOnTear) return
-        scope.connectedPair { host, _ ->
+        scope.connectedPair { host, joiner ->
             assertTrue(host.peers.value.size >= 2, "precondition: the pair must be connected before the tear")
+            assertTrue(
+                joiner.peers.value.size >= 2,
+                "precondition: the JOINER must name a remote peer before the tear too, or it has " +
+                    "nothing to collapse and its arms below would be green by absence (#2601); got " +
+                    "${joiner.peers.value.map { it.value }}",
+            )
 
             host.close()
             assertIs<SeamState.Torn>(host.state.value, "precondition: close() must latch Torn")
-
             val peers = host.peers.value
+
+            joiner.close()
+            assertIs<SeamState.Torn>(
+                joiner.state.value,
+                "precondition: the JOINER's close() must latch Torn — that is " +
+                    "`closeDrivesStateTornNormal`'s obligation, and a joiner still live here would " +
+                    "fail this row for its reason rather than for this one",
+            )
+            val joinerPeers = joiner.peers.value
+
             assertAll(
                 {
                     assertEquals(
@@ -1722,6 +1751,23 @@ public abstract class SeamConformanceSuite {
                         "a Torn seam's collapsed roster is { selfId }, not empty: peers always includes " +
                             "this peer's own id, so a seam that drops selfId on tear has collapsed too far " +
                             "(got ${peers.map { it.value }})",
+                    )
+                },
+                {
+                    assertEquals(
+                        emptySet(),
+                        joinerPeers - joiner.selfId,
+                        "the JOINER must advertise NO reachable remote peer once Torn either (#2601) — a " +
+                            "role-split fabric ships a different Seam on each end, and a joiner freezing " +
+                            "its pre-tear roster leaves a CompositeSeam on the JOINING device folding a " +
+                            "peer only sendTo can disprove. Got ${joinerPeers.map { it.value }}",
+                    )
+                },
+                {
+                    assertTrue(
+                        joiner.selfId in joinerPeers,
+                        "the JOINER's collapsed roster is { selfId }, not empty, for the same reason the " +
+                            "host's is (#2601); got ${joinerPeers.map { it.value }}",
                     )
                 },
             )
