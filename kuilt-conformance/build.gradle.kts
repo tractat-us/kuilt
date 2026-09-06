@@ -12,10 +12,12 @@ plugins {
 // ⚠ EXCLUDED at the task level, not skipped from inside the test (#2621). The probe used to read
 // `System.getProperty("lattice.vacuity.breakdown")` and `return` when it was absent, and a `@Test`
 // that returns early reports **passed**, not `skipped` — so the results XML said the same thing
-// whether the probe had cross-checked all 1 520 arms against the shipped harness or had done
-// nothing. The JVM alternative that reports honestly is a JUnit assumption; task-level exclusion is
-// preferred here because it is the mechanism every other gated probe in this repo now uses, needs no
-// test-framework dependency, and makes an un-run probe *absent* from the XML rather than present.
+// whether the probe had cross-checked all 152 arms against the shipped harness or had done
+// nothing — measured: `time="0.011"` self-skipping against `time="1.481"` doing the work, and the
+// XML row is identical. The JVM alternative that reports honestly is a JUnit assumption; task-level
+// exclusion is preferred here because it is the mechanism every other gated probe in this repo now
+// uses, needs no test-framework dependency, and makes an un-run probe *absent* from the XML rather
+// than present.
 // Every `*ConcurrencyTest` in this module is a real-threaded probe (the name is the contract,
 // mirroring :kuilt-core and :kuilt-nw — deliberately not an enumeration, which is what went stale
 // there as probes were added). They race dedicated OS threads rather than coroutines, so sibling

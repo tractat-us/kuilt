@@ -5,6 +5,7 @@ import kotlin.math.round
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
@@ -51,6 +52,13 @@ internal class VacuityBreakdownProbe {
 
         /** Which arm the shipped pool builder implements — the one the cross-check applies to. */
         val SHIPPED = Bootstrap.EVERY_REPLICA
+
+        /**
+         * Floor on `bindings()`, so the arm-count assertion cannot be satisfied by an empty list
+         * (#2621). Deliberately below the real count (19 when this landed) — a floor rather than a
+         * census, so adding a CRDT does not red a probe that has nothing to do with it.
+         */
+        const val MIN_BINDINGS = 15
     }
 
     /** Which pool builder to model. */
@@ -296,12 +304,24 @@ internal class VacuityBreakdownProbe {
                 }
             }
         }
-        // Rig precondition (#2621): the cross-check below asserts an ABSENCE — no arm diverged from
+        // Rig preconditions (#2621): the cross-check below asserts an ABSENCE — no arm diverged from
         // the shipped harness — which passes trivially if no arm was measured. `bindings()` is a
         // hand-maintained list and the loop nest is four deep, so "the probe emitted nothing" and
-        // "the probe emitted 1 520 clean rows" are the same green without this. Falsifiable for real:
-        // an emptied `bindings()`, a window list trimmed to one entry, or an `enum` arm removed all
-        // move this number while leaving every other assertion here satisfied.
+        // "the probe emitted 152 clean rows" are the same green without these.
+        //
+        // TWO assertions, because the obvious one alone contains the very defect it is here to close.
+        // `expected` is DERIVED from `bindings().size`, so an emptied `bindings()` makes it 0 against
+        // an `emitted` of 0 — a counter compared against itself, green on exactly the input that
+        // matters most. [MIN_BINDINGS] is the floor that makes it falsifiable. It is a FLOOR, not a
+        // census: adding a CRDT raises the real count and leaves it satisfied, while emptying or
+        // gutting the list reds. The shape assertion still earns its place — it is what catches a
+        // loop LEVEL that stopped running (a trimmed `windows`, a removed `enum` arm) with
+        // `bindings()` untouched.
+        assertTrue(
+            bindings().size >= MIN_BINDINGS,
+            "the probe models only ${bindings().size} bindings (floor $MIN_BINDINGS) — a gutted " +
+                "`bindings()` would otherwise satisfy the arm count below by making BOTH sides zero",
+        )
         val expected = windows.size * Bootstrap.entries.size * Retirement.entries.size * bindings().size
         assertEquals(
             expected,
