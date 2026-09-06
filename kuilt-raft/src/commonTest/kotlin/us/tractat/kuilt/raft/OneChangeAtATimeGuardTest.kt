@@ -59,9 +59,9 @@ import kotlin.time.Duration.Companion.milliseconds
  * `pendingConfigChange` is only ever assigned inside `onChangeMembership`. Asserted as a premise via
  * the entry's index. So that test pins the log-grounded guard **alone**.
  *
- * [inFlightLocalChange_refusesASecondChange] pins the **pair**, and cannot do better. On the leader,
- * `pendingConfigChange != null` *implies* the last config entry is uncommitted, so no trajectory
- * distinguishes the two guards:
+ * [inFlightLocalChange_refusesASecondChange] pins the in-memory guard, and could not until #2032. On
+ * the leader, `pendingConfigChange != null` *implies* the last config entry is uncommitted, so no
+ * trajectory distinguishes the two guards **by their state effects**:
  *
  *  - it is set at `onChangeMembership`'s tail, immediately before `appendConfigEntry` puts a config
  *    entry at `lastLogIndex + 1`, which is above `currentCommitIndex`;
@@ -74,23 +74,34 @@ import kotlin.time.Duration.Companion.milliseconds
  *    `onInstallSnapshot`'s finalize, and the latter runs `demoteToFollowerOnLeaderContact` →
  *    `relinquishToFollower` → `failPendingConfigChange` **before** it touches the commit index.
  *
- * So the in-memory guard is subsumed by the log-grounded one: deleting it alone is behaviour-preserving
- * and **no test can be red under that deletion**. The all-green column below is that fact, not a gap.
+ * So the in-memory guard is subsumed by the log-grounded one, and deleting it alone is
+ * behaviour-preserving in every sense a state-effect assertion can reach: the call is still refused,
+ * with the same exception type, at the same instant. Until #2032 that made it **unmeasurable by
+ * construction** — this file's left column was all-green, and that was the subsumption argument's
+ * receipt rather than a gap.
  *
- * Mutation-verified (`--no-build-cache --rerun-tasks`, `:kuilt-raft:compileKotlinJvm` EXECUTED and the
- * gradle exit code checked before reading any results XML; each deletion confirmed absent from
- * `RaftEngine.class` with `javap -p -c` — the `pendingConfigChange` field reads in `onChangeMembership`
- * go 2 → 1, the `getCurrentCommitIndex` call 1 → 0, and the `MembershipChangeInProgressException`
- * constructions 3 → 2 → 1):
+ * What closed it is attribution, not a new trajectory. [MembershipChangeInProgressException.reason]
+ * names the guard that refused as a typed [MembershipRefusal], so the two guards — which refuse the
+ * *same* call at the *same* instant and are therefore separable only by what they say — now say
+ * different things, and the deletion slides the refusal from [MembershipRefusal.PendingLocalChange]
+ * down to [MembershipRefusal.UncommittedConfigEntry] where an assertion can see it. The subsumption
+ * argument above is unchanged; what changed is that breaking it is now visible.
+ *
+ * Mutation-verified on this branch, `:kuilt-raft:jvmTest` in full, `:kuilt-raft:compileKotlinJvm`
+ * EXECUTED (never `FROM-CACHE`) and the gradle exit code checked before reading any results XML; each
+ * deletion confirmed absent from the source before the run. Every cell is `tests=544 skipped=0`:
  *
  * | | drop `pendingConfigChange` guard | drop uncommitted-config guard (C19) | drop **both** (P4) |
  * |---|---|---|---|
  * | [inheritedUncommittedConfigEntry_refusesTheNextChange] | GREEN | **RED** | **RED** |
- * | [inFlightLocalChange_refusesASecondChange] | GREEN | GREEN | **RED** |
+ * | [inFlightLocalChange_refusesASecondChange] | **RED** | GREEN | **RED** |
  *
- * Read as failure *sets*, not counts: the C19 column's single red is this file's first test and nothing
- * else — 472 green, no `LeadershipLostException` collateral — and the P4 column's two reds are exactly
- * these two tests. The left column is 473/473, which is the subsumption argument's receipt.
+ * Read as failure *sets*, not counts: `failures=1`, `failures=1`, `failures=2`, and in each column the
+ * failing tests are exactly the ones marked — no collateral anywhere, and in particular no
+ * `LeadershipLostException` fallout. The left column's red is
+ * `expected:<PendingLocalChange> but was:<UncommittedConfigEntry>`, which is the deletion described
+ * precisely. The same left-column mutation applied to `origin/main` is `failures=0` over the identical
+ * 544 tests — that pair is the whole receipt for #2032.
  */
 class OneChangeAtATimeGuardTest {
 
@@ -214,11 +225,16 @@ class OneChangeAtATimeGuardTest {
      * This is the trajectory the `ScriptedMembershipNode` test stands in for, driven against the real
      * engine.
      *
-     * It pins the **pair**, not either conjunct — see the class KDoc for why `pendingConfigChange != null`
-     * implies an uncommitted trailing config entry on the leader, which makes the two guards
-     * indistinguishable from outside. The premises here are therefore stated as what they are: the
-     * in-memory guard's predicate holds (the first call has not returned), the log-grounded guard's
-     * predicate *also* holds, and the settled-Simple guard is inert.
+     * It pins the **in-memory guard alone**, and does so only because the refusal is attributed. Both
+     * guards' predicates hold at the probing instant — the premises below assert exactly that, since
+     * `pendingConfigChange != null` implies an uncommitted trailing config entry on the leader (class
+     * KDoc) — so every *state effect* of this refusal is identical either way, and the assertion that
+     * discriminates them is the [MembershipChangeInProgressException.reason] one after the probe. Delete
+     * that assertion and this test silently reverts to pinning the pair.
+     *
+     * The premises are therefore stated as what they are: the in-memory guard's predicate holds (the
+     * first call has not returned), the log-grounded guard's predicate *also* holds, and the
+     * settled-Simple guard is inert.
      *
      * The in-flight change is **learner-only** on purpose. A voter-set change appends a `Joint`, which
      * adopt-on-append makes `membershipState`, and the settled-Simple guard would then refuse the second
