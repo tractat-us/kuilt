@@ -1,6 +1,7 @@
 package us.tractat.kuilt.core.composite
 
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PlyId
 
 /**
  * Per-origin inbound gate for a composite fabric. Collapses duplicate [PlyFrame.Data]
@@ -74,7 +75,7 @@ internal class PlyInboundGate(private val maxBuffered: Int = 16) {
      * origin table is already at [MAX_ORIGINS] — the frame is refused and nothing is recorded, so
      * the same id is refused again rather than half-admitted.
      */
-    fun accept(frame: PlyFrame.Data): List<ByteArray> {
+    fun accept(plyId: PlyId, transportSender: PeerId?, frame: PlyFrame.Data): List<ByteArray> {
         val origin = frame.originId
         if (origin !in nextExpected) {
             // Peer-chosen key: admit a new one only while there is room. See the class KDoc for why
