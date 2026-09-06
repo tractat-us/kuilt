@@ -28,6 +28,7 @@ import kotlinx.cinterop.set
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
 import platform.posix.memcpy
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory
 import kotlin.experimental.ExperimentalNativeApi
@@ -36,9 +37,21 @@ import kotlin.native.CName
 /**
  * Creates a `MultipeerPeerLinkFactory` and returns an opaque handle.
  *
- * Returns null if either string argument is null. Once handed out, the
- * caller is responsible for calling [mc_runtime_destroy] exactly once, or
- * the underlying ObjC objects (`MCPeerID`, `MCSession`, …) leak.
+ * [selfId] is the JVM caller's wire identity — the `PeerId.value` every remote
+ * peer observes for this device. It is baked into the advertised
+ * `MCPeerID.displayName` here, so the JVM half and the Apple half agree on one
+ * id without either having to guess the other's (#1430). Passing it across the
+ * ABI is what stops the JVM factory's `selfId` from being a parameter the native
+ * runtime silently overrides with a nonce of its own.
+ *
+ * Returns null if any string argument is null. A [selfId] the runtime cannot
+ * use — empty, containing the `#` delimiter, or too long to leave room for a
+ * display name inside Apple's 63-byte cap — throws from the factory constructor;
+ * it is a programming error on the JVM side, not a runtime condition to encode
+ * in the return value.
+ *
+ * Once handed out, the caller is responsible for calling [mc_runtime_destroy]
+ * exactly once, or the underlying ObjC objects (`MCPeerID`, `MCSession`, …) leak.
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
 @CName("mc_runtime_create")
@@ -46,10 +59,12 @@ import kotlin.native.CName
 public fun mc_runtime_create(
     displayName: CPointer<ByteVar>?,
     serviceType: CPointer<ByteVar>?,
+    selfId: CPointer<ByteVar>?,
 ): COpaquePointer? {
     val name = displayName?.toKString() ?: return null
     val service = serviceType?.toKString() ?: return null
-    val factory = MultipeerPeerLinkFactory(displayName = name, serviceType = service)
+    val id = selfId?.toKString() ?: return null
+    val factory = MultipeerPeerLinkFactory(displayName = name, serviceType = service, selfId = PeerId(id))
     return StableRef.create(factory).asCPointer()
 }
 
@@ -86,11 +101,12 @@ public fun mc_runtime_close(handle: COpaquePointer?) {
 }
 
 /**
- * Copies the runtime's **wire self-identity** (the decorated `MCPeerID.displayName`,
- * UTF-8) into [buf], NUL-terminated. This is the collision-resistant name every
- * peer observes for this device — the per-device nonce is embedded — so the JVM
- * side derives a `selfId` consistent with what remotes see. Returns the number of
- * bytes written (excluding the trailing NUL), or `-1` if the buffer is too small.
+ * Copies the runtime's **wire display name** (the decorated `MCPeerID.displayName`,
+ * UTF-8) into [buf], NUL-terminated. This is the name every peer observes for this
+ * device — the wire identity is embedded in it — so the JVM side derives a `selfId`
+ * consistent with what remotes see (`MultipeerPeerId.peerId`, the part after the
+ * last `#`). Returns the number of bytes written (excluding the trailing NUL), or
+ * `-1` if the buffer is too small.
  * Pass `bufLen = 0` to query the required size — the function still returns `-1`
  * but the (size + 1) is implied by the underlying name's length.
  */

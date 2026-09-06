@@ -15,13 +15,13 @@ import platform.MultipeerConnectivity.MCNearbyServiceAdvertiser
 import platform.MultipeerConnectivity.MCNearbyServiceAdvertiserDelegateProtocol
 import platform.MultipeerConnectivity.MCNearbyServiceBrowser
 import platform.MultipeerConnectivity.MCNearbyServiceBrowserDelegateProtocol
-import platform.Foundation.NSUUID
 import platform.MultipeerConnectivity.MCPeerID
 import platform.MultipeerConnectivity.MCSession
 import platform.darwin.NSObject
 import us.tractat.kuilt.core.ActiveSeamSlot
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.Loom
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -63,24 +63,28 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.MultipeerPeer
 public actual class MultipeerPeerLinkFactory actual constructor(
     displayName: String,
     serviceType: String,
+    selfId: PeerId,
 ) : Loom {
     internal val displayName: String = displayName
     internal val serviceType: String = serviceType
 
     /**
-     * Per-device nonce baked into the advertised `MCPeerID.displayName` so the
-     * wire [us.tractat.kuilt.core.PeerId] is collision-resistant. Two default-named
+     * This device's wire identity, baked into the advertised `MCPeerID.displayName`
+     * so the [us.tractat.kuilt.core.PeerId] is collision-resistant. Two default-named
      * "iPhone" devices would otherwise share one id and evict each other on a
-     * disconnect (#1494 / the #1466 class). The nonce travels WITH the identity —
-     * embedded in the name the local device advertises — which is the only way
-     * both ends of a link agree on the id (an observer cannot append a nonce to a
-     * name it merely received). See [MultipeerPeerId].
+     * disconnect (#1494 / the #1466 class). The identity travels WITH the
+     * advertisement — embedded in the name the local device chose — which is the only
+     * way both ends of a link agree on the id (an observer cannot append anything to
+     * a name it merely received).
+     *
+     * It is the caller's `selfId` rather than an internally-minted nonce (#1430), so
+     * `MCSessionLink.selfId` — derived back out of the decorated name, the same way
+     * every remote derives it — is exactly the value passed here. See [MultipeerPeerId].
      */
-    private val deviceNonce: String =
-        NSUUID().UUIDString().replace("-", "").lowercase().take(NONCE_HEX_LENGTH)
+    internal val selfId: PeerId = selfId
 
     internal val localPeerId: MCPeerID =
-        MCPeerID(displayName = MultipeerPeerId.decorate(displayName, deviceNonce))
+        MCPeerID(displayName = MultipeerPeerId.decorate(displayName, selfId.value))
 
     /**
      * Stable handle → live `MCPeerID` for peers seen by the browser. The
@@ -333,9 +337,6 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     private companion object {
         private const val INVITE_TIMEOUT_SECONDS: Double = 30.0
         private const val LOST_PEER_BUFFER: Int = 16
-
-        /** Hex characters of the per-device nonce appended to the display name. */
-        private const val NONCE_HEX_LENGTH: Int = 8
     }
 
     internal class AcceptAllAdvertiserDelegate(
@@ -375,9 +376,9 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             foundPeer: MCPeerID,
             withDiscoveryInfo: Map<Any?, *>?,
         ) {
-            // The handle is the full decorated display name — it IS the wire
-            // identity and the key back to the live MCPeerID for join(). The
-            // human-facing sessionName strips the per-device nonce.
+            // The handle is the full decorated display name — the key back to the
+            // live MCPeerID for join(), and the string the wire identity is derived
+            // from. The human-facing sessionName strips the identity back off.
             val handle = foundPeer.displayName
             log.info { "mc.discover.peer handle=$handle localPeer=${factory.displayName}" }
             factory.knownPeers[handle] = foundPeer

@@ -684,6 +684,7 @@ internal class ConformanceNativeLib : MultipeerNativeLib {
     override fun mc_runtime_create(
         displayName: String,
         serviceType: String,
+        selfId: String,
     ): Pointer = RUNTIME_HANDLE
 
     override fun mc_runtime_destroy(handle: Pointer?) = Unit

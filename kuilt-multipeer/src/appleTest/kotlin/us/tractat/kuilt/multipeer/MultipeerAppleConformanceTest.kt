@@ -162,10 +162,10 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
  * own, and then completes the virtual MC handshake so both ends reach
  * [us.tractat.kuilt.core.SeamState.Woven] before the suite's `connectedPair` hands them to a test.
  *
- * The display names carry a nonce suffix (`name#hex`) because that is what a real
- * `MultipeerPeerLinkFactory` advertises — `MultipeerPeerId.decorate` bakes a per-device nonce into
- * the name before the `MCPeerID` exists, and the wire [us.tractat.kuilt.core.PeerId] is the whole
- * decorated string. Using undecorated names here would test an identity shape production never
+ * The display names carry an identity suffix (`name#id`) because that is what a real
+ * `MultipeerPeerLinkFactory` advertises — `MultipeerPeerId.decorate` bakes the peer's `selfId` into
+ * the name before the `MCPeerID` exists, and the wire [us.tractat.kuilt.core.PeerId] is the part
+ * after the last `#`. Using undecorated names here would test an identity shape production never
  * produces.
  *
  * @param testScope owns the links' delivery-drain dispatcher. `null` is legal for the scope-free
