@@ -20,9 +20,10 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
-import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 /**
  * What [RoutedRaftTransport] owes a collector that subscribes **after** the transport was built
@@ -35,6 +36,20 @@ import kotlin.test.assertEquals
  * emits — which is exactly why it is blind to this. These run under [StandardTestDispatcher] and
  * pump **nothing** between constructing a collector and emitting to it; a `runCurrent()` in that
  * window hides the defect, so each one is placed deliberately.
+ *
+ * ## Every arm carries a sentinel, because an absence cannot say why
+ *
+ * The failure under test is *a dropped frame*, and the naive assertion for it — "the frame
+ * arrived" — fails identically when the frame was dropped, when it was never sent, when the
+ * collector was never wired, when the flow completed early, and when the rig never reached the
+ * window at all. So each arm sends a **second** frame *outside* the window and asserts both, in
+ * order. The late frame arrives under the defect too, so a red of shape `["late"]` says *the
+ * pipeline works and only the windowed frame was lost*, while a red of shape `[]` would say the rig
+ * itself is broken. The two are then distinguishable from the assertion message alone.
+ *
+ * Where the collector exists before the emit, [Sink.dispatched] additionally records — as an
+ * observation rather than a construction — that its coroutine had not yet run when the frame was
+ * emitted.
  *
  * `runCurrent()` rather than `advanceUntilIdle()` throughout: `advanceUntilIdle` stops as soon as
  * no *foreground* task remains, so it never dispatches a `backgroundScope` collector at all — every
@@ -55,18 +70,22 @@ class RoutedRaftTransportIncomingSubscriptionTest {
             val t = playerRelayTransport(inner, pRelay, voters = { setOf(voterA) }, scope = backgroundScope)
             testScheduler.runCurrent()
 
-            serverSeam.sendTo(
-                pRelay.selfId,
-                RaftRelay.encode(RaftRelay(origin = voterA, dest = self, bytes = "append".encodeToByteArray())),
+            serverSeam.sendTo(pRelay.selfId, relayFrame(voterA, self, "early"))
+            testScheduler.runCurrent()
+
+            // Only now does the engine subscribe — so in program order no collector existed while
+            // the relay pump was handling "early".
+            val sink = collectInto(t)
+            testScheduler.runCurrent()
+
+            // The sentinel: sent well outside the window, it arrives under the defect too.
+            serverSeam.sendTo(pRelay.selfId, relayFrame(voterA, self, "late"))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(listOf("early", "late"), sink.payloads(), "the pre-subscription relay frame must survive") },
+                { assertEquals(listOf(voterA, voterA), sink.received.map { it.from }, "both keep the true origin") },
             )
-            testScheduler.runCurrent()
-
-            // Only now does the engine subscribe.
-            val received = collectInto(t)
-            testScheduler.runCurrent()
-
-            assertEquals(listOf(voterA), received.map { it.from }, "a relayed frame must survive until the engine collects")
-            assertContentEquals("append".encodeToByteArray(), received.single().bytes)
         }
 
     @Test
@@ -83,12 +102,19 @@ class RoutedRaftTransportIncomingSubscriptionTest {
             val t = serverRelayTransport(inner, relay, core = setOf(self), scope = backgroundScope, attachment = { null })
             testScheduler.runCurrent()
 
-            val received = collectInto(t)
-            inner.emit(RaftEnvelope(peer, "direct".encodeToByteArray()))
+            val sink = collectInto(t)
+            assertFalse(sink.dispatched, "rig: the collector's coroutine must not have run yet — that is the window")
+            inner.emit(RaftEnvelope(peer, "early".encodeToByteArray()))
             testScheduler.runCurrent()
 
-            assertEquals(listOf(peer), received.map { it.from }, "a direct frame must not fall into the subscription window")
-            assertContentEquals("direct".encodeToByteArray(), received.single().bytes)
+            // The sentinel: emitted once the collector is up, it arrives under the defect too.
+            inner.emit(RaftEnvelope(peer, "late".encodeToByteArray()))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(listOf("early", "late"), sink.payloads(), "a direct frame must not fall into the subscription window") },
+                { assertEquals(listOf(peer, peer), sink.received.map { it.from }, "both keep the inner transport's sender") },
+            )
         }
 
     @Test
@@ -105,17 +131,43 @@ class RoutedRaftTransportIncomingSubscriptionTest {
             val inner = ChannelInnerTransport(selfId = self, peers = setOf(self))
             val t = serverRelayTransport(inner, relay, core = setOf(self), scope = backgroundScope, attachment = { null })
 
-            inner.deliver(RaftEnvelope(peer, "buffered".encodeToByteArray()))
+            inner.deliver(RaftEnvelope(peer, "early".encodeToByteArray()))
             testScheduler.runCurrent()
 
-            val received = collectInto(t)
+            val sink = collectInto(t)
             testScheduler.runCurrent()
 
-            assertEquals(listOf(peer), received.map { it.from }, "a frame buffered by a channel-backed inner must still be delivered")
-            assertContentEquals("buffered".encodeToByteArray(), received.single().bytes)
+            inner.deliver(RaftEnvelope(peer, "late".encodeToByteArray()))
+            testScheduler.runCurrent()
+
+            assertEquals(listOf("early", "late"), sink.payloads(), "a frame buffered by a channel-backed inner must still be delivered")
         }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * What one collector of [RoutedRaftTransport.incoming] saw, plus whether its coroutine has been
+     * dispatched at all — the observation that separates "the frame fell into the subscription
+     * window" from "the rig never reached the window".
+     */
+    private class Sink {
+        val received: MutableList<RaftEnvelope> = mutableListOf()
+        var dispatched: Boolean = false
+
+        fun payloads(): List<String> = received.map { it.bytes.decodeToString() }
+    }
+
+    private fun TestScope.collectInto(transport: RaftTransport): Sink {
+        val sink = Sink()
+        backgroundScope.launch {
+            sink.dispatched = true
+            transport.incoming.collect { sink.received += it }
+        }
+        return sink
+    }
+
+    private fun relayFrame(origin: NodeId, dest: NodeId, payload: String): ByteArray =
+        RaftRelay.encode(RaftRelay(origin = origin, dest = dest, bytes = payload.encodeToByteArray()))
 
     private suspend fun relayLoomWith(vararg names: String): Pair<Seam, Map<String, Seam>> {
         val loom = InMemoryLoom()
@@ -124,12 +176,6 @@ class RoutedRaftTransportIncomingSubscriptionTest {
             seams[name] = if (i == 0) loom.host(Pattern("relay")) else loom.join(InMemoryTag("relay"))
         }
         return seams.values.first() to seams
-    }
-
-    private fun TestScope.collectInto(transport: RaftTransport): List<RaftEnvelope> {
-        val received = mutableListOf<RaftEnvelope>()
-        backgroundScope.launch { transport.incoming.collect { received += it } }
-        return received
     }
 }
 
