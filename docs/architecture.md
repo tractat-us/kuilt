@@ -430,6 +430,55 @@ closes the moment the fabric can publish, and keep, the number it is already
 enforcing — and, as above, finding out that it *cannot* keep it yet is the most
 valuable thing the declaration does.
 
+### When it is the test that falls short, not the fabric
+
+The gaps above all say something about a *transport*: this one really is
+unencrypted, that one really does relay through a hub. Three more say something
+about the **test instead**. The fabric may behave perfectly well; what is missing
+is a way to set up the situation that would prove it.
+
+The difference matters to whoever reads the declaration. A fabric gap is a
+characteristic, and will still be true next year. A harness gap is only an
+admission that a particular question has not been asked yet — it says nothing
+about what the answer would be. Both are *declared* rather than quietly assumed,
+so that a suite which cannot reach a failure has to say so out loud instead of
+passing and looking like proof.
+
+### midSessionDeath — harnesses that cannot kill the transport
+
+A connection can end in two quite different ways: politely, because somebody
+called `close()`, or abruptly, because the cable was pulled. A consumer waiting
+for the session's messages to finish has to be released either way, and only the
+first is easy to arrange in a test.
+
+To stage the second, a harness needs to reach past the seam and destroy the
+underlying connection while the session is live — the socket, the radio link,
+the browser data channel. A harness driving a fabric through a public factory
+often holds no such handle. The usual way in is to decorate the handle the
+harness already owns and hand the fabric the decorated one.
+
+### membershipDrain — harnesses that cannot drop a single peer
+
+A peer can leave without anything breaking. In a room of four, one person
+hanging up leaves three still talking, and the survivors should notice the
+roster shrink while their own connection stays perfectly healthy.
+
+A two-peer harness cannot stage that at all, and not for want of trying: when a
+session has exactly one link, losing it *is* the session ending. Only a harness
+that can hold three or more peers can drop one and leave a survivor connected,
+so this gap is a property of the harness's shape rather than a shortfall anyone
+can fix in place.
+
+### selfDial — harnesses that cannot dial themselves
+
+A fabric where every peer both advertises and looks for others will sooner or
+later find its own advertisement and try to connect to itself. That has to be
+recognised and dropped.
+
+Staging it needs a harness that can deliver a peer its own advertisement. A
+relay harness, where a server hands out the roster, has no way to produce one,
+so the guard goes unexercised there however correct it is.
+
 ### Not every flag describes a design choice
 
 One flag is different in kind and is deliberately not explained here:
