@@ -79,8 +79,16 @@ evidence.
   ./gradlew build --max-workers="$N" 2>&1 | tee /tmp/build.log | tail -30   # N from your brief
   grep -q "BUILD SUCCESSFUL" /tmp/build.log && echo GREEN || echo "NOT GREEN"
   ```
-  or `set -o pipefail`, or read `${PIPESTATUS[0]}`. This is the general shape *a success code from a
-  wrapper is a claim to verify, not a fact* — the same trap `gh-pr-wait`'s exit 0 sets, one layer down.
+  or `set -o pipefail`. ⚠ **Do NOT reach for `${PIPESTATUS[0]}` — Claude Code's shell is `zsh`, where
+  it is a bash-ism that expands to the empty string.** Measured: `zsh -c 'false | true; echo
+  "[${PIPESTATUS[0]}]"'` prints `[]`, while bash prints `[1]`. Because it is *empty* rather than
+  wrong, **both** spellings of the guard misfire — `[ "$PIPESTATUS[0]" != "0" ]` and
+  `[ "$PIPESTATUS[0]" = "0" ]` each fire on a **passing** build, so the symptom is a false RED, not a
+  silent pass. The zsh spelling is `${pipestatus[1]}` — lowercase, 1-indexed (`0` on success, `1` on
+  failure, both verified). `set -o pipefail` works in both shells and is the portable choice.
+  This is the general shape *a success code from a wrapper is a claim to verify, not a fact* — the
+  same trap `gh-pr-wait`'s exit 0 sets, one layer down, and it applies to **every** wrapper: a
+  `gh-pr-wait <n> | tail -20` has reported exit 0 with its own last line reading `timed out`.
 
 - **A module-scoped build is a false green** for anything touching a widely-implemented interface, a
   cross-module DTO, a wire boundary, consensus *behaviour*, or a `*.gradle.kts`. It compiles neither
