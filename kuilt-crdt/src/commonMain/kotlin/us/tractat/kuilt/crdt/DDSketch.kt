@@ -76,7 +76,9 @@ public class DDSketch private constructor(
     public val minIndexedValue: Double,
     /** Magnitudes above this clamp into the top bucket and increment [overflowCount]. */
     public val maxIndexedValue: Double,
+    @Serializable(with = CanonicalMapSerializer::class)
     private val positive: Map<Int, GCounter>,
+    @Serializable(with = CanonicalMapSerializer::class)
     private val negative: Map<Int, GCounter>,
     private val zeros: GCounter,
     private val overflows: GCounter,

@@ -53,6 +53,7 @@ import kotlinx.serialization.Serializable
 public class Histogram private constructor(
     /** The `N` strictly-increasing upper bounds defining `N + 1` buckets. Cluster-wide constant. */
     public val boundaries: List<Double>,
+    @Serializable(with = CanonicalMapSerializer::class)
     private val buckets: Map<Int, GCounter>,
     private val positiveSum: GCounterDouble,
     private val negativeSum: GCounterDouble,
