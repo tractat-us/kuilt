@@ -7,6 +7,7 @@ import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -307,6 +308,52 @@ class ProposeEnvelopeReserveTest {
             }
         }
         assertAll(*checks.toTypedArray())
+    }
+
+    /**
+     * The premise the engine's **probe** rests on: every incarnation of an auto id encodes to the
+     * same width, so a probe captured once at construction stands for an id that may be re-minted
+     * later.
+     *
+     * `RaftEngine.clientIdProbe` is captured from `myClientId` at construction and never refreshed —
+     * deliberately, because `myClientId` is a `var` mutated on the actor loop and the propose gate
+     * runs on the caller's coroutine, so re-reading it would be a data race. That is sound only
+     * because *width* is invariant, and width invariance has two halves:
+     *
+     * - **Durable** — the id is never reassigned at all. `RaftEngine.detectCollision` throws
+     *   `ClientIdCollisionException` rather than re-minting, pinned by
+     *   [RaftEngineDedupIntegrationTest].
+     * - **Auto** — the id *is* re-minted, as `"auto:" + selfId + "-" + 16 hex` over an immutable
+     *   `selfId`. Nothing pinned that the hex tail is fixed-width, and it is fixed-width only
+     *   because `ClientId.auto` calls `padStart(2, '0')` on each of eight bytes. **Dropping that
+     *   `padStart` is a plausible tidy-up that would silently break this fix**: a byte below `0x10`
+     *   would render as one character, so a re-mint could come out *wider* than the probe captured,
+     *   the reserve would under-measure, and #2156's wedge would return with every test still green.
+     *   `DedupKey.autoFamily` would misparse too, but only by luck of the seed — it is not a
+     *   dependable red.
+     *
+     * Measured in the probe's own units (the envelope overhead) rather than in characters, since
+     * that is the quantity the fix actually depends on. 256 seeds: a dropped `padStart` makes about
+     * 40% of ids short, so a single short draw is essentially certain to appear.
+     *
+     * This is a **different** premise from
+     * [aFlatReserveIsStillInsufficientAtThePlausibilityCeiling], which guards the envelope's *size*.
+     * That one going green would mean the fix is unnecessary; this one going red means the fix is
+     * unsound.
+     */
+    @Test
+    fun everyAutoIncarnationEncodesToTheSameEnvelopeWidth() {
+        val nodeId = NodeId("dc1-rack2-host3")
+        val widths = (1..256).map { seed ->
+            worstCaseOverhead(ClientId.auto(nodeId, Random(seed)).value)
+        }
+        assertEquals(
+            1,
+            widths.toSet().size,
+            "an auto id must encode to one width on every incarnation, or RaftEngine's " +
+                "construction-time probe under-measures a later re-mint (#2156): saw " +
+                "${widths.toSet().sorted()}",
+        )
     }
 
     /**

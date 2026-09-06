@@ -137,6 +137,13 @@ internal class RaftEngine(
      * [ClientIdentity.Auto] id re-mints only its **fixed-width** hex suffix — `"auto:" + selfId +
      * "-" + 16 hex`, over an immutable [RaftTransport.selfId] — so every incarnation encodes to the
      * identical number of bytes. Width, not value, is what the measurement depends on.
+     *
+     * **Both halves of that are pinned, because both are easy to break by accident.** The durable
+     * half is [detectCollision] throwing rather than re-minting (`RaftEngineDedupIntegrationTest`).
+     * The auto half is `ClientId.auto`'s `padStart(2, '0')`: drop it and a byte below `0x10` renders
+     * as one character, so a re-mint could come out *wider* than what was captured here and this
+     * reserve would silently under-measure — `ProposeEnvelopeReserveTest`'s
+     * `everyAutoIncarnationEncodesToTheSameEnvelopeWidth` is what reds if it goes.
      */
     private val clientIdProbe: ClientId = myClientId
 
