@@ -1,16 +1,20 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.serialization.ExperimentalSerializationApi::class)
 
 package us.tractat.kuilt.deal
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamCollapsedException
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fakeSeamPair
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -19,12 +23,18 @@ import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 class FairRandomTest {
 
     private val alice = PeerId("alice")
     private val bob = PeerId("bob")
+
+    /** Bob's own contribution, fixed so two runs of [bobRolls] differ only in what Alice sent. */
+    private val bobSecret = ByteArray(FairRandomMessage.Reveal.SECRET_BYTES) { 0xBB.toByte() }
+    private val bobNonce = ByteArray(FairRandomMessage.Reveal.NONCE_BYTES) { 0x22.toByte() }
 
     // ── Two-peer agreement ────────────────────────────────────────────────────
 
@@ -110,26 +120,121 @@ class FairRandomTest {
         assertIs<CommitmentViolation>(bobResult.exceptionOrNull())
     }
 
+    /**
+     * A wrong-width reveal is refused by the **receiver**, and contributes nothing to the seed.
+     *
+     * The re-split attack in full: `SHA-256(secret ‖ nonce)` carries no length delimiter between
+     * the two halves, so a peer who commits to a 48-byte string may afterwards present *any* split
+     * of it and the commitment verifies against the hash it already published. Presenting the
+     * (33, 15) split rather than the (32, 16) one therefore changes what that peer contributes to
+     * the derived seed **after** every other peer is committed — the post-commit bias the fixed
+     * widths exist to forbid.
+     *
+     * Alice exists here only as raw bytes on Bob's seam, built by [unconstrainedRevealFrame]. She
+     * is not a [FairRandom]: since #2650 our own encoder calls [FairRandomMessage.Reveal]'s
+     * constructor on the way *out*, so it can no longer express a malformed frame — a test that
+     * built the attack by handing a local `FairRandom` a 33-byte `fixedSecret` (as this one used
+     * to) would now throw on the sending side, and Bob would never receive the frame the test
+     * exists to make him refuse. A real attacker is not running our encoder either.
+     *
+     * The second run is the control that makes the first non-vacuous: "Bob did not complete" would
+     * be equally true of a rig whose frames never reached him at all. It shares Alice's commitment
+     * with the attacked run, so it also pins that the re-split frame was refused for its *width* —
+     * the commitment behind both is identical and demonstrably acceptable.
+     */
     @Test
-    fun wrong_length_reveal_isRejected() = runTest {
+    fun wrongWidthReveal_isRefusedByTheReceiverAndContributesNothing() = runTest {
+        val preimage = ByteArray(48) { (it + 1).toByte() }
+        val aliceCommit = Cbor.encodeToByteArray<FairRandomMessage>(
+            FairRandomMessage.Commit(FairRandom.sha256(preimage)),
+        )
+        val declared = FairRandomMessage.Reveal.SECRET_BYTES
+        val honestSplit = unconstrainedRevealFrame(
+            preimage.copyOfRange(0, declared),
+            preimage.copyOfRange(declared, preimage.size),
+        )
+        val reSplit = unconstrainedRevealFrame(
+            preimage.copyOfRange(0, declared + 1),
+            preimage.copyOfRange(declared + 1, preimage.size),
+        )
+
+        var stillWaiting = false
+        val attacked = bobRolls(aliceCommit, listOf(reSplit, honestSplit)) { index, bobCompleted ->
+            if (index == 0) stillWaiting = !bobCompleted
+        }
+        val clean = bobRolls(aliceCommit, listOf(honestSplit)) { _, _ -> }
+
+        assertTrue(
+            stillWaiting,
+            "Bob's round ended the instant Alice's ${declared + 1}-byte secret arrived, so the " +
+                "re-split reveal decided it. A frame whose widths the wire type forbids must be " +
+                "dropped and the reveal phase left waiting, whichever way the round would have gone",
+        )
+        val cleanSeed = assertNotNull(
+            clean.getOrNull(),
+            "control arm: Bob must complete on the honest split of the same commitment, got $clean",
+        )
+        val attackedSeed = assertNotNull(
+            attacked.getOrNull(),
+            "Bob must still complete once Alice's honest split arrives, got $attacked",
+        )
+        assertEquals(
+            cleanSeed,
+            attackedSeed,
+            "the re-split reveal must contribute nothing: a seed that moves when it is injected is " +
+                "the post-commit bias the fixed widths exist to prevent",
+        )
+    }
+
+    /**
+     * The widths are the wire type's own invariant, so the *sender* cannot express a violation
+     * either — the half of the fix a receiver-side test cannot see.
+     */
+    @Test
+    fun reveal_refusesAWrongWidthFieldOnConstruction(): Unit = assertAll(
+        {
+            val ex = assertFailsWith<IllegalArgumentException> {
+                FairRandomMessage.Reveal(ByteArray(33), ByteArray(FairRandomMessage.Reveal.NONCE_BYTES))
+            }
+            assertContains(ex.message ?: "", "33")
+        },
+        {
+            val ex = assertFailsWith<IllegalArgumentException> {
+                FairRandomMessage.Reveal(ByteArray(FairRandomMessage.Reveal.SECRET_BYTES), ByteArray(15))
+            }
+            assertContains(ex.message ?: "", "15")
+        },
+    )
+
+    /**
+     * Drive an honest Bob through one round against an Alice who exists only as raw frames.
+     *
+     * [aliceReveals] are delivered in order once Bob is waiting on the reveal phase, and
+     * [afterEachReveal] is called with Bob's completion state after each — the hook that lets a
+     * caller assert *when* Bob finished, which is the difference between "refused it" and
+     * "accepted it and then saw a duplicate".
+     */
+    private suspend fun TestScope.bobRolls(
+        aliceCommit: ByteArray,
+        aliceReveals: List<ByteArray>,
+        afterEachReveal: (index: Int, bobCompleted: Boolean) -> Unit,
+    ): Result<Long> {
         val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
-        val peers = setOf(alice, bob)
-        val (aliceSeam, bobSeam) = fakeSeamPair(alice, bob)
-
-        // Alice uses a 33-byte secret (not the canonical SECRET_BYTES=32). Bob must
-        // reject it at the length check, preventing the re-split preimage ambiguity
-        // attack: SHA-256(S₃₃ ‖ N₁₅) == SHA-256(S₃₂ ‖ N₁₆) for a crafted split.
-        val dishonestAlice = FairRandom(aliceSeam, peers, fixedSecret = ByteArray(33) { 0xCC.toByte() })
-        val honestBob = FairRandom(bobSeam, peers)
-
-        val aliceDef = scope.async { runCatchingCancellable { dishonestAlice.roll() } }
-        val bobDef = scope.async { runCatchingCancellable { honestBob.roll() } }
-
-        aliceDef.await()
-        val bobResult = bobDef.await()
-
-        assertFails { bobResult.getOrThrow() }
-        assertIs<CommitmentViolation>(bobResult.exceptionOrNull())
+        val (_, bobSeam) = fakeSeamPair(alice, bob)
+        val bobDef = scope.async {
+            runCatchingCancellable {
+                FairRandom(bobSeam, setOf(alice, bob), fixedSecret = bobSecret, fixedNonce = bobNonce).roll()
+            }
+        }
+        runCurrent()
+        bobSeam.deliver(alice, aliceCommit)
+        runCurrent()
+        aliceReveals.forEachIndexed { index, frame ->
+            bobSeam.deliver(alice, frame)
+            runCurrent()
+            afterEachReveal(index, bobDef.isCompleted)
+        }
+        return withTimeout(5.seconds) { bobDef.await() }
     }
 
     // ── Deterministic derivation ──────────────────────────────────────────────
