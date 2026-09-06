@@ -1431,4 +1431,147 @@ class EntitlementLedgerReconcileTest {
             },
         )
     }
+
+    /**
+     * **#2600 option 2 — the departed donor, on a durable surface.** The same measured freeze as
+     * [aDepartedDonorFreezesEveryPocketAtTheGroupIncludingABystanders], asked the question that arm
+     * ends on: what does an operator holding only the ledger actually learn?
+     *
+     * On `main` the answer was a generation and a path key. `alice` was named nowhere on the state —
+     * only inside `Relocation.Refused.reason`, which `HeddleControlPlane.reconcile` passes back to
+     * the caller of a `Reconcile` and records on nothing. Every peer folding this ledger could see
+     * that 150 units were frozen at `h` and none of them could see **whose ack releases them**.
+     *
+     * This arm pins three things the aggregate could not give:
+     *
+     *  - the **donor's identity**, on the same deterministically-sorted report every replica derives;
+     *  - the **attribution** — exactly one donor is named out of four peers at the group, so the
+     *    report separates the peer who is holding the move from the three who are merely paying for
+     *    it, which is precisely the split `edge(e4).outstanding` folds into one number;
+     *  - the **agreement** between the durable surface and the ephemeral one — the report names the
+     *    same peer and the same key the refusal string does, so the two cannot drift into disagreeing
+     *    about who is being waited on.
+     *
+     * **Mutation receipt.** Emptying `frozenCarriedHandoffs()` reds the two report arms and leaves
+     * `ClosureViolation` + `OrphanedTransferPath` — the `main` diagnosis, verbatim. Dropping the
+     * residual filter (`> 0L`) reds [theFrozenReportClearsExactlyWhenTheMoveGoesThrough] below, which
+     * is the arm that pins it: on this state the healed ledger keeps `alice` in `transferRelocIn`
+     * forever, cancelled, so a derivation that ignored the cancellation would report the freeze after
+     * it had been cleared.
+     */
+    @Test
+    fun theFrozenGenerationMoveNamesItsDepartedDonorOnTheLedger() {
+        val chain = handOffChainWithBystander()
+        val departedAcks = chain.staged.baseFinalsOn(e4).filterKeys { it != alice }
+        val refused = chain.move1.patch.relocationPatch(e8, mapOf(e4 to departedAcks))
+        val settled = afterReconcile(chain.staged, refused)
+        val reason = assertIs<Relocation.Refused>(refused, "the move must refuse, or nothing is frozen").reason
+
+        assertAll(
+            // ── the rig: the fixture really reached the frozen state, not merely an empty one.
+            {
+                assertEquals(
+                    mapOf(alice to 0L, bob to 0L, carol to 0L, dave to 0L),
+                    pockets(settled, h),
+                    "rig: all four pockets really are frozen at zero — the state the report is about",
+                )
+            },
+            {
+                assertEquals(
+                    150L,
+                    settled.edge(e4)?.outstanding,
+                    "rig: …with the whole 150 outstanding on the dead generation",
+                )
+            },
+            // ── the deliverable: the donor is on the ledger.
+            {
+                assertEquals(
+                    listOf(LedgerConflict.FrozenCarriedHandoff(PathKey.of(e4), alice, 40L)),
+                    settled.validate().filterIsInstance<LedgerConflict.FrozenCarriedHandoff>(),
+                    "the departed donor is named on the durable surface, with her frozen hand-off",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(
+                        LedgerConflict.ClosureViolation(e4),
+                        LedgerConflict.OrphanedTransferPath(PathKey.of(e4)),
+                        LedgerConflict.FrozenCarriedHandoff(PathKey.of(e4), alice, 40L),
+                    ),
+                    settled.validate(),
+                    "…alongside, not instead of, the two reports that name the generation",
+                )
+            },
+            // ── attribution: one donor out of four peers, and not the bystander.
+            {
+                assertEquals(
+                    listOf(alice),
+                    settled.validate().filterIsInstance<LedgerConflict.FrozenCarriedHandoff>().map { it.donor },
+                    "exactly one of the four peers at the group is named — the one holding the move",
+                )
+            },
+            // ── agreement with the ephemeral surface the refusal already had.
+            {
+                assertTrue(
+                    "alice" in reason && "e4" in reason,
+                    "rig: the refusal string names the same donor and key: $reason",
+                )
+            },
+        )
+    }
+
+    /**
+     * The report clears **exactly** when the move goes through, and on nothing else — the property
+     * that makes it a statement about a blocked move rather than about a departure.
+     *
+     * Two states, one topology apart. Reparenting again (`e9`) does not clear it: `e4` stays a
+     * retired inbound edge of `h` forever, so the report is as durable as the freeze it describes.
+     * `alice`'s ack does clear it, and it clears *through the cancellation* — `transferRelocIn` is
+     * grow-only, so her row is still named at the dead key on the healed state and only
+     * `transferRelocOut` distinguishes the two.
+     */
+    @Test
+    fun theFrozenReportClearsExactlyWhenTheMoveGoesThrough() {
+        val chain = handOffChainWithBystander()
+        val departedAcks = chain.staged.baseFinalsOn(e4).filterKeys { it != alice }
+        val frozen = LedgerConflict.FrozenCarriedHandoff(PathKey.of(e4), alice, 40L)
+
+        var reparented = chain.staged.piece(chain.staged.close(e8)!!.delta)
+        reparented = reparented.piece(EntitlementLedger.of(lifecycle = mapOf(e8 to Lifecycle.RETIRED)))
+        reparented = reparented.piece(reparented.prepare(rec(e9, g, h))!!.delta)
+        reparented = reparented.piece(reparented.activate(e9)!!.delta)
+        val thirdMove = chain.move1.patch.relocationPatch(
+            e9,
+            mapOf(e2 to chain.staged.baseFinalsOn(e2), e4 to departedAcks, e8 to reparented.baseFinalsOn(e8)),
+        )
+        val healed = chain.staged.piece(
+            assertIs<Relocation.Moved>(
+                chain.move1.patch.relocationPatch(e8, mapOf(e4 to chain.staged.baseFinalsOn(e4))),
+                "fixture: with the donor's ack the move must go through",
+            ).patch,
+        )
+        assertAll(
+            {
+                assertTrue(
+                    frozen in afterReconcile(reparented, thirdMove).validate(),
+                    "a further reparent does not clear it — e4 stays a retired inbound edge forever",
+                )
+            },
+            {
+                assertTrue(
+                    alice in healed.carriedDonorsOn(e4),
+                    "rig: alice is STILL named at the dead key on the healed state — the matrices " +
+                        "are grow-only, so only the cancellation can be what cleared the report",
+                )
+            },
+            { assertEquals(0L, healed.carriedResidualOn(e4, alice, bob), "rig: …cancelled to exactly zero") },
+            {
+                assertEquals(
+                    emptyList(),
+                    healed.validate().filterIsInstance<LedgerConflict.FrozenCarriedHandoff>(),
+                    "the donor's ack, and the carry it unblocks, is what clears the report",
+                )
+            },
+        )
+    }
 }

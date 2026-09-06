@@ -46,6 +46,12 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
             }
             is NegativeEffectiveSpend -> edge.compareTo((other as NegativeEffectiveSpend).edge)
             is OrphanedTransferPath -> path.compareTo((other as OrphanedTransferPath).path)
+            is FrozenCarriedHandoff -> {
+                other as FrozenCarriedHandoff
+                path.compareTo(other.path).let { if (it != 0) return it }
+                donor.compareTo(other.donor).let { if (it != 0) return it }
+                carried.compareTo(other.carried)
+            }
             is MultipleRoots -> {
                 other as MultipleRoots
                 // Lexicographic over two already-sorted lists: `List` is not `Comparable`, and a
@@ -382,5 +388,76 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
      */
     public data class MultipleRoots(public val roots: List<GroupId>) : LedgerConflict {
         override val order: Int get() = 9
+    }
+
+    /**
+     * A hand-off an earlier generation move **carried** onto a key nothing reads any more, still
+     * uncancelled — and, with it, the identity of the peer whose fence ack a blocked move is waiting
+     * on (issue #2600).
+     *
+     * `EntitlementLedger.relocationPatch` refuses a whole generation move when a still-uncancelled
+     * carried row's donor is absent from the fence's acks. Refusing is right — the alternative
+     * reassigns that row's recipient's credit to the donor upstream of it, which is #2366 one hop up
+     * — but the refusal is **per edge, not per donor**, so *every* peer standing at that group reads
+     * `0` until the donor acks. Measured on the two-hop chain: 150 units frozen, four of four peers
+     * on zero, 60% of it belonging to peers who never left and 20% to one with no causal link to the
+     * departure at all.
+     *
+     * Before this report the *aggregate* was visible — `EntitlementLedger.edge(e)` reads the frozen
+     * total as `outstanding`, and [ClosureViolation] plus [OrphanedTransferPath] both name the dead
+     * generation — but the **donor** appeared only in the refusal's `reason` string, which
+     * `HeddleControlPlane` returns to the caller of a `Reconcile` and never records anywhere. An
+     * operator therefore saw the cost and the location, and had no way to reach the cause or the
+     * remedy. This arm puts both on the ledger every replica already folds.
+     *
+     * ## The predicate, and why it needs no consequence clause
+     *
+     * `transferRelocIn − transferRelocOut > 0` for some recipient, at a path key whose edge is no
+     * longer its child group's live inbound. That residual is **provenance the lattice carries**, not
+     * a magnitude coincidence: both matrices are written by `relocationPatch` and by nothing else, so
+     * a positive residual says an earlier move carried this row here and a later one has not carried
+     * it onward. [OrphanedTransferPath] needs its third clause because base rows are grow-only and an
+     * honestly closed generation keeps them forever; the residual *is* that test — a row carried on
+     * is cancelled to exactly zero.
+     *
+     * It is a report about a **blocked move**, not about stranded value, and the two come apart: a
+     * recipient may have spent everything the row credited it, closing the strand's books at zero,
+     * while the row still blocks the move and so still freezes the edge for everyone else. That is
+     * why no balance is required here and why the arm is not a second voice on [OrphanedTransferPath]
+     * — it also survives that report's documented **masking** blind spot, since an ordinary
+     * `EntitlementLedger.transfer` cannot write the relocation matrices at all.
+     *
+     * ## What clears it — and what does not
+     *
+     * The row being carried onward, and nothing else. That happens when the donor acks the fence at
+     * this key and the next `Reconcile` runs, so **[donor] rejoining and acking is the unblocking
+     * action** an operator is looking for.
+     *
+     * ⚠ It is *not* silenced by an ack that under-declares. The blocking row lives in
+     * `transferRelocIn`, which is control-plane-authored and held on the receiver, so the amnesiac
+     * rejoiner of `SlotFinals.transfers` — a peer back with a fresh durable store, honestly declaring
+     * `transfers = emptyMap()` — clears this report only by the row *genuinely* moving. What such an
+     * ack still buys is the abandonment of that donor's **base** rows, which is [OrphanedTransferPath]'s
+     * business and stays there; where the carried row is the larger of the two, that report's magnitude
+     * clause masks it, and this arm does not close that gap.
+     *
+     * Like every report here it is a diagnostic, not a safety gate, and it has an honest transient:
+     * between a generation retiring and the `Reconcile` that re-homes it, the residual is legitimately
+     * uncarried on a dead key. Deliberately silent while the child group has **no** live inbound at all
+     * (the reshape window, §10.11's standing exception) and where the key names no generation this
+     * ledger knows — there is no move to be blocked, and [OrphanedTransferPath] owns that state.
+     *
+     * @property path the dead generation's path key — where the hand-off is frozen
+     * @property donor the peer whose row blocks the move, and whose fence ack releases it
+     * @property carried the still-uncancelled carried total from [donor] at [path], summed over its
+     *   recipients. The per-donor attribution the aggregate `outstanding` cannot give; it is the
+     *   hand-off residual, **not** the whole frozen supply at the group.
+     */
+    public data class FrozenCarriedHandoff(
+        public val path: PathKey,
+        public val donor: ReplicaId,
+        public val carried: Long,
+    ) : LedgerConflict {
+        override val order: Int get() = 10
     }
 }
