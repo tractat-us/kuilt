@@ -5,13 +5,13 @@ import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.merge
-import kotlinx.coroutines.launch
+import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.pumpIn
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.validFirstHop
 import us.tractat.kuilt.raft.NodeId
@@ -136,17 +136,18 @@ internal const val RELAY_HEADER_BUDGET: Int = 256
  *
  * ## Ownership & threading
  *
- * Takes **sole ownership** of [relayChannel]'s `incoming` stream (a single relay
- * coroutine, launched in [scope], pulls envelopes off it), per the
- * single-collection contract — do not run another collector over the same seam.
- * [incoming] merges [inner]'s own frames with the relayed frames destined for
- * this node. There is no shared mutable state: routing reads only the live
- * [inner]/[relayChannel] peer sets and the injected [attachment] function, so the
- * transport is correct under a multi-threaded dispatcher.
+ * Takes **sole ownership** of *both* inbound streams — [relayChannel]'s `incoming`
+ * and [inner]'s `incoming` — per the single-collection contract; do not run another
+ * collector over either. Two pumps, both launched in [scope] at construction, feed
+ * the one `inbound` queue that [incoming] drains, so the two routes are unioned at
+ * their producers rather than by a combinator (#2106 — see `inbound`). There is no
+ * shared mutable state: routing reads only the live [inner]/[relayChannel] peer sets
+ * and the injected [attachment] function, so the transport is correct under a
+ * multi-threaded dispatcher.
  *
  * @param inner the direct transport this wraps (typically a `SeamRaftTransport`).
- *   Sends to a direct peer, and this node's own directly-received frames, pass
- *   through it unchanged.
+ *   Sends to a direct peer pass through it unchanged, and the transport owns its
+ *   `incoming`, republishing every frame on [incoming] unchanged.
  * @param relayChannel the seam relay envelopes are sent and received on. For a
  *   server it reaches the local players and the other core servers; for a player
  *   it reaches its one server. The transport owns its `incoming`.
@@ -200,9 +201,42 @@ public class RoutedRaftTransport internal constructor(
     override val maxPayloadBytes: Int?
         get() = inner.maxPayloadBytes?.let { (it - headerBudget).coerceAtLeast(0) }
 
-    /** Self-destined relayed frames, fed by [relayJob] and merged into [incoming]. */
-    private val relayed: MutableSharedFlow<RaftEnvelope> =
-        MutableSharedFlow(extraBufferCapacity = Int.MAX_VALUE)
+    /**
+     * The engine's one inbound queue, fed by **both** producers — [innerPump] for [inner]'s own
+     * frames and [relayJob] for self-destined relayed ones — and drained by whoever collects
+     * [incoming].
+     *
+     * ## Why a buffer, and why the union is here rather than in a combinator (#2106)
+     *
+     * This used to be `merge(inner.incoming, relayed)` over a replay-0 `MutableSharedFlow`.
+     * `merge` subscribes to its sources from child coroutines it *launches*, so a collector's
+     * subscription lands a dispatch turn after its own coroutine first runs, and everything emitted
+     * in that window was dropped. Unioning at the producers removes that turn — a [Spool] registers
+     * its receiver synchronously on first collect, so there is no subscription for a collector to
+     * race.
+     *
+     * A [Spool] rather than a shared flow because the window that actually matters here is longer
+     * than one dispatch turn: the transport is constructed *before* the [us.tractat.kuilt.raft.RaftNode]
+     * that collects it (`buildClusterClient`, `ConsensusPlacement.federatedCore`), so the relay pump
+     * is already delivering while nothing is subscribed. A replay-0 shared flow would drop that
+     * frame, and an eager [innerPump] into one would additionally *drain* the frames a channel-backed
+     * `inner.incoming` (every real `Seam.incoming` is a `Spool`) is holding for its collector —
+     * moving the drop rather than removing it. Bounded buffering is what both producers already sit
+     * on one layer down; this is the same primitive, one layer up.
+     *
+     * [DeliveryPolicy.Reliable] — bounded, ordered, backpressured. It replaces an
+     * `extraBufferCapacity = Int.MAX_VALUE` shared flow, i.e. exactly the unbounded inbound queue
+     * `Spool` exists to make unrepresentable. A collector far enough behind to fill it backpressures
+     * both pumps, which for [innerPump] simply restores the backpressure the engine already exerts
+     * on a `Seam` when it collects one directly.
+     */
+    private val inbound: Spool<RaftEnvelope> = Spool(DeliveryPolicy.Reliable)
+
+    /**
+     * Single-collection FIFO, per [RaftTransport.incoming]'s contract ("the engine calls
+     * `incoming` exactly once per `RaftNode` lifetime"), and live from construction — see [inbound].
+     */
+    override val incoming: Flow<RaftEnvelope> = inbound.incoming
 
     /**
      * One-shot latch so a mis-wired multi-peer relay channel is warned at most once
@@ -212,17 +246,26 @@ public class RoutedRaftTransport internal constructor(
     private val misWiredRelayWarned = atomic(false)
 
     /**
+     * The sole collector of [inner]'s frames, forwarding them verbatim into [inbound]. Taking this
+     * collection over is what lets the two inbound routes be unioned at their producers; it is also
+     * why this transport now owns `inner.incoming` as well as [relayChannel]'s.
+     */
+    private val innerPump: Job = inner.incoming.pumpIn(
+        scope = scope,
+        onFailure = { phase, failure -> log.debug { "raft-relay: $selfId inner pump $phase: $failure" } },
+        name = "routed-raft-inner[${inner.selfId.value}]",
+    ) { envelope -> inbound.deliver(envelope) }
+
+    /**
      * The sole collector of [relayChannel]. Validates each relay frame, hands
-     * self-destined ones to the engine (via [relayed]) and forwards the rest one
+     * self-destined ones to the engine (via [inbound]) and forwards the rest one
      * hop onward. Launched in [scope]; cancelled by [close] or scope teardown.
      */
-    private val relayJob: Job = scope.launch {
-        runCatchingCancellable {
-            relayChannel.incoming.collect { swatch -> handleRelayFrame(swatch) }
-        }.onFailure { log.debug { "raft-relay: $selfId relay ended: ${it.message}" } }
-    }
-
-    override val incoming: Flow<RaftEnvelope> = merge(inner.incoming, relayed)
+    private val relayJob: Job = relayChannel.incoming.pumpIn(
+        scope = scope,
+        onFailure = { phase, failure -> log.debug { "raft-relay: $selfId relay pump $phase: $failure" } },
+        name = "routed-raft-relay[${inner.selfId.value}]",
+    ) { swatch -> handleRelayFrame(swatch) }
 
     override suspend fun sendTo(peer: NodeId, message: ByteArray) {
         if (peer in inner.peers.value) {
@@ -310,7 +353,7 @@ public class RoutedRaftTransport internal constructor(
         when {
             relay.dest == selfId ->
                 // For us: hand to the engine with the true origin preserved.
-                relayed.emit(RaftEnvelope(relay.origin, relay.bytes))
+                inbound.deliver(RaftEnvelope(relay.origin, relay.bytes))
 
             relay.dest in inner.peers.value ->
                 // Destination is directly reachable here: one hop down to it.
@@ -345,7 +388,7 @@ public class RoutedRaftTransport internal constructor(
             return
         }
         if (relay.dest == selfId) {
-            relayed.emit(RaftEnvelope(relay.origin, relay.bytes))
+            inbound.deliver(RaftEnvelope(relay.origin, relay.bytes))
         }
     }
 
@@ -355,9 +398,16 @@ public class RoutedRaftTransport internal constructor(
             .onFailure { log.debug { "raft-relay: $selfId forward to $hop failed" } }
     }
 
-    /** Stop relaying and release the relay coroutine. Idempotent. */
+    /**
+     * Stop relaying and release both inbound pumps. Idempotent.
+     *
+     * [innerPump] goes with [relayJob] because the two are now the only producers of [incoming]:
+     * leaving the inner one running would keep draining `inner.incoming` into a queue nothing will
+     * ever pass on. (No in-tree caller invokes this; scope teardown is the ordinary path.)
+     */
     public fun close() {
         relayJob.cancel()
+        innerPump.cancel()
     }
 }
 
