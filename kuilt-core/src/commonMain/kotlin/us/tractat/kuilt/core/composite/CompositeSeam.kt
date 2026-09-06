@@ -986,7 +986,7 @@ internal class CompositeSeam(
                 // across the concurrent per-ply inbound pumps. Snapshot under the lock and
                 // deliver OUTSIDE it — spool.deliver may suspend (SUSPEND-overflow policy)
                 // and must never be called while holding a reentrantLock.
-                val payloads = lock.withLock { gate.accept(frame) }
+                val payloads = lock.withLock { gate.accept(plyId, swatch.sender, frame) }
                 payloads.forEach { payload ->
                     spool.deliver(Swatch(payload = payload, sender = frame.originId))
                 }
