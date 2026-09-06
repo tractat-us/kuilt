@@ -731,9 +731,10 @@ jobs:
   #     race at the PRIMITIVE level: a derived `update()` surviving a concurrent
   #     single-shot `tear()`. Graduated from the non-blocking job here; it was
   #     `SeamStateGateConcurrencyTest` before.
-  #     WHY IT IS WORTH GATING: SeamStateGate backs SEVEN production types across
-  #     two modules — CompositeSeam, TieredSeam, MeshSeam, LinkSeam, RoomHubSeam in
-  #     :kuilt-core, plus :kuilt-multipeer's BridgePeerLink (jvmMain) and
+  #     WHY IT IS WORTH GATING: SeamStateGate backs EIGHT production types across
+  #     three modules — CompositeSeam, TieredSeam, MeshSeam, LinkSeam, RoomHubSeam in
+  #     :kuilt-core, :kuilt-test's FlakyLifecycleSeam (#2633), plus
+  #     :kuilt-multipeer's BridgePeerLink (jvmMain) and
   #     MCSessionLink (appleMain). Those last two are the #1803 state-latch fixes
   #     whose own probes are contention-sensitive and stay non-blocking, so before
   #     this the gate did not pin them at all (kuilt-multipeer/build.gradle.kts

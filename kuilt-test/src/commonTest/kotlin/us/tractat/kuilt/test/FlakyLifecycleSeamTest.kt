@@ -98,6 +98,49 @@ class FlakyLifecycleSeamTest {
             assertIs<SeamState.Torn>(seam.state.first { it is SeamState.Torn })
         }
 
+    /**
+     * The first tear's reason wins. This used to be pinned one level down, on the pure `onTear`
+     * helper (`onTear_alreadyTorn_preservesOriginalReason`); #2633 replaced that helper with
+     * [us.tractat.kuilt.core.SeamStateGate.tear], whose single-shot latch now decides it, so the
+     * property is re-pinned HERE — at the level a consumer actually observes — rather than deleted
+     * along with the helper.
+     */
+    @Test
+    fun `a second tear does not overwrite the first reason`() =
+        runTest {
+            val delegate = InMemoryLoom().host(Pattern("A"))
+            val seam = FlakyLifecycleSeam(delegate, backgroundScope)
+
+            seam.tear(CloseReason.Normal)
+            seam.tear(CloseReason.Unreachable)
+
+            val torn = assertIs<SeamState.Torn>(seam.state.first { it is SeamState.Torn })
+            assertEquals(CloseReason.Normal, torn.reason, "the winning tear's reason must stand")
+        }
+
+    /**
+     * A seam whose delegate is **already** `Torn` is born terminal, and a later [tear] must not
+     * relabel it.
+     *
+     * This is the arm that pins the constructor's latch (#2633). Before the migration the
+     * `onTear(current, reason) === current` pre-check made a later `tear` a no-op; after it,
+     * [us.tractat.kuilt.core.SeamStateGate.tear] is what refuses — and a gate merely *constructed*
+     * with a `Torn` is **not latched**, so without the `init` latch this seam's reason would be
+     * silently rewritten to `Unreachable` and the delegate re-closed. Deleting that one line reds
+     * exactly this test.
+     */
+    @Test
+    fun `a seam born torn keeps its delegate's reason through a later tear`() =
+        runTest {
+            val delegate = FakeSeam(initialState = SeamState.Torn(CloseReason.Normal))
+            val seam = FlakyLifecycleSeam(delegate, backgroundScope)
+
+            seam.tear(CloseReason.Unreachable)
+
+            val torn = assertIs<SeamState.Torn>(seam.state.first { it is SeamState.Torn })
+            assertEquals(CloseReason.Normal, torn.reason, "a born-torn seam's reason is already decided")
+        }
+
     @Test
     fun `peers collapses to selfId-only while Weaving`() =
         runTest {

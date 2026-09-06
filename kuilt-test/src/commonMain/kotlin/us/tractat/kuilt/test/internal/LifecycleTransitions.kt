@@ -1,6 +1,5 @@
 package us.tractat.kuilt.test.internal
 
-import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.SeamState
 
 /**
@@ -8,8 +7,19 @@ import us.tractat.kuilt.core.SeamState
  *
  * Each function takes the current [SeamState] and returns the next [SeamState] —
  * no coroutines, no `StateFlow`, no side effects. The imperative shell
- * (`FlakyLifecycleSeam`) owns the `MutableStateFlow` write, the mutex, and the
- * launched collectors; these functions decide the value to write.
+ * (`FlakyLifecycleSeam`) owns the state publish, the mutex, and the launched
+ * collectors; these functions decide the value to publish.
+ *
+ * **There is no `onTear` here.** The terminal transition is not a pure function of the current
+ * state: it is a *decision* that must be fused with its publish, or a concurrent recoverable write
+ * can land after it and erase it. `us.tractat.kuilt.core.SeamStateGate.tear` owns it, atomically and
+ * single-shot, and returns whether this caller won (#2633, part of #1803).
+ *
+ * **Non-transitions return the argument ITSELF, not an equal copy.** `FlakyLifecycleSeam` reads that
+ * identity (`next === current`) to decide whether to publish at all, and that is what keeps a `Torn`
+ * out of `SeamStateGate.update`, which rejects one. `assertSame` in the tests, never `assertEquals`:
+ * [SeamState.Torn] is a data class, so an equality assertion here passes on a fresh copy and would
+ * leave the property the caller depends on unpinned.
  */
 
 /**
@@ -38,12 +48,3 @@ internal fun onEnterWeaving(current: SeamState): SeamState =
  */
 internal fun onRecover(current: SeamState): SeamState =
     if (current is SeamState.Weaving) SeamState.Woven else current
-
-/**
- * `* → Torn` terminal transition.
- *
- * Returns [SeamState.Torn] with [reason] when [current] is not already [SeamState.Torn];
- * returns [current] unchanged when the seam is already torn (idempotent).
- */
-internal fun onTear(current: SeamState, reason: CloseReason): SeamState =
-    if (current is SeamState.Torn) current else SeamState.Torn(reason)
