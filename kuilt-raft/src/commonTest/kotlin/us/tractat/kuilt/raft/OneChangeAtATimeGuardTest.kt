@@ -192,9 +192,14 @@ class OneChangeAtATimeGuardTest {
         )
 
         val furtherTarget = ClusterConfig(voters = newConfig.voters, learners = setOf(l1))
-        assertFailsWith<MembershipChangeInProgressException>(
+        val refusal = assertFailsWith<MembershipChangeInProgressException>(
             "a change arriving above an uncommitted inherited config entry must be refused",
         ) { leader.changeMembership(furtherTarget) }
+        assertEquals(
+            MembershipRefusal.UncommittedConfigEntry,
+            refusal.reason,
+            "the log-grounded guard is the only one whose predicate holds here — the refusal must say so",
+        )
 
         // The guard withholds; it does not wedge. Once the inherited entry commits, the same change lands.
         val committed = sim.changeMembershipOnLeader(furtherTarget)
@@ -267,9 +272,19 @@ class OneChangeAtATimeGuardTest {
             },
         )
 
-        assertFailsWith<MembershipChangeInProgressException>(
+        val refusal = assertFailsWith<MembershipChangeInProgressException>(
             "a second membership change while one is still converging must be refused",
         ) { leader.changeMembership(ClusterConfig(voters = oldConfig.voters, learners = setOf(l2))) }
+        // The discriminator, and the only thing that separates the two guards here (#2032). Both
+        // predicates hold at this instant — the premises above assert exactly that — so a refusal that
+        // says only "in progress" is compatible with either guard having fired, and deleting the
+        // in-memory one is invisible. Naming the reason makes the deletion observable: with guard 3
+        // gone the same call slides down to guard 4 and this assertion reads UncommittedConfigEntry.
+        assertEquals(
+            MembershipRefusal.PendingLocalChange,
+            refusal.reason,
+            "the in-memory guard is evaluated first and must be the one that refused",
+        )
 
         // The first change still commits — the refusal cost the cluster nothing.
         assertEquals(setOf(l1), inFlight.await().learners, "the in-flight change committed unharmed")

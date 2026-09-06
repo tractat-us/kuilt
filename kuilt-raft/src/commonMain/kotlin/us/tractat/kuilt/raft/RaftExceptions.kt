@@ -21,15 +21,29 @@ public class LeadershipLostException(message: String = "leadership lost while pr
 
 /**
  * Thrown by [RaftNode.changeMembership] when a membership change is already in progress
- * (a config entry is uncommitted).
+ * (a config entry is uncommitted), and by [RaftNode.transferLeadership] for the reverse
+ * direction of the same §3.10 exclusion.
  *
  * The one-change-at-a-time rule is a liveness guard: it keeps the membership state
  * machine trivial and prevents multiple joint configs from stacking. The caller should
  * wait for the in-flight change to complete (or fail) before retrying.
+ *
+ * [reason] names **which** of the engine's converging-membership guards refused, as a typed value
+ * rather than a message a reader has to parse (#2032). It is `null` on an instance this library did
+ * not throw — the message-only constructor is retained so a fake or a consumer can still raise the
+ * type — so read it as *attribution when present*, never as a switch that must be total.
  */
 public class MembershipChangeInProgressException(
-    message: String = "a membership change is already in progress — wait for it to commit before starting another",
-) : Exception(message)
+    message: String = DEFAULT_MEMBERSHIP_IN_PROGRESS_MESSAGE,
+    public val reason: MembershipRefusal? = null,
+) : Exception(message) {
+    /** Names the refusing guard and derives the message from it — the constructor the engine uses. */
+    public constructor(reason: MembershipRefusal) :
+        this("$DEFAULT_MEMBERSHIP_IN_PROGRESS_MESSAGE — ${reason.detail}", reason)
+}
+
+private const val DEFAULT_MEMBERSHIP_IN_PROGRESS_MESSAGE: String =
+    "a membership change is already in progress — wait for it to commit before starting another"
 
 /**
  * Thrown by [RaftNode.transferLeadership] when the transfer could not complete.

@@ -975,6 +975,13 @@ internal class LeadershipTransferTest {
                     "expected MembershipChangeInProgressException, got ${result.exceptionOrNull()}",
                 )
             },
+            {
+                assertEquals(
+                    MembershipRefusal.PendingLocalChange,
+                    (result.exceptionOrNull() as? MembershipChangeInProgressException)?.reason,
+                    "the §3.10 step-1 gate reads pendingConfigChange and must attribute the refusal to it",
+                )
+            },
         )
     }
 
