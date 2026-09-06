@@ -59,9 +59,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ManagedSeam")
  *
  * ## Thread safety
  *
- * The current backing seam pointer is guarded by an atomicfu reentrant lock; the
- * lock is never held across a suspend call. [peers] and [incoming] are safe
- * concurrent flows. Correct under a multi-threaded dispatcher.
+ * The current backing seam pointer is guarded by an atomicfu reentrant lock, and **every write to
+ * [peers] is made under that same lock, in the same critical section as the pointer move that
+ * authorises it** — see `publishRoster`. The lock is never held across a suspend call. [peers] and
+ * [incoming] are safe concurrent flows. Correct under a multi-threaded dispatcher.
  *
  * @param scope parents the per-swap relay coroutines; must outlive all [swap] calls.
  *   **Required** — no real-dispatcher default.
@@ -129,13 +130,42 @@ internal class ManagedSeam(
      */
     fun swap(newSeam: Seam) {
         // Cancel the old relay FIRST so the old backing seam has no live collector
-        // once the new one is installed.
+        // once the new one is installed. Best-effort only — see `publishRoster`.
         relayJob.value?.cancel()
         lock.withLock {
             current = newSeam
             _peers.value = reattributed(newSeam.peers.value, newSeam.selfId)
         }
         startRelay(newSeam)
+    }
+
+    /**
+     * Publish [seam]'s roster — but only while [seam] is still **this** seam's backing seam.
+     *
+     * Every write to [_peers] happens here or under the same [lock] in [swap] / [close], and the
+     * `current === seam` test is what makes a stale write impossible rather than merely unlikely
+     * (#2655). Both of the other two writers install their new value of [current] in the *same*
+     * critical section as their roster write, so a tracker that loses the race for the lock finds
+     * itself already superseded and publishes nothing.
+     *
+     * **Cancelling the tracker is not enough, and the comment that used to say it was is the bug.**
+     * `Job.cancel()` is not `join()`: it marks the job and returns, and cancellation only takes
+     * effect at a *suspension point*. `StateFlow.collect` checks `ensureActive()` before each emit,
+     * so a tracker that has already entered this function has no suspension point left at which the
+     * cancellation could land — it runs to completion and its write stands over whatever the closer
+     * or swapper wrote. Measured on the real thing before this guard existed: ~30% of closes and
+     * ~40% of swaps left the seam settled on a roster it had no route to, permanently, because both
+     * writers had by then retired (`ManagedSeamRosterCollapseConcurrencyTest`).
+     *
+     * Identity rather than a `collapsed` flag, deliberately. It covers [swap] as well as [close]
+     * with one test — the outgoing tracker is stale for exactly the same reason the post-close one
+     * is — and it needs no answer to "may a seam be swapped again after close?", because [current]
+     * already *is* that answer: `null` after a close, the new seam after a swap.
+     */
+    private fun publishRoster(seam: Seam, roster: Set<PeerId>) {
+        lock.withLock {
+            if (current === seam) _peers.value = reattributed(roster, seam.selfId)
+        }
     }
 
     /**
@@ -166,7 +196,7 @@ internal class ManagedSeam(
             // child of the relay job and is cancelled by the next swap / teardown.
             // Re-attributed on every emission, not only at swap — the backing roster
             // moves as peers come and go, and each move is a fresh chance to drop selfId.
-            launch { seam.peers.collect { _peers.value = reattributed(it, seam.selfId) } }
+            launch { seam.peers.collect { publishRoster(seam, it) } }
             runCatchingCancellable {
                 seam.incoming.collect { _incoming.emit(it) }
             }.onFailure { log.debug { "managed-seam: $selfId relay ended: ${it.message}" } }
@@ -184,15 +214,18 @@ internal class ManagedSeam(
      * [sendTo] silently discards.
      */
     override suspend fun close(reason: CloseReason) {
+        // Detaching the backing seam and collapsing the roster are ONE critical section. That is
+        // what shuts the tracker out, not the cancel below — see `publishRoster` for why a cancel
+        // cannot: a tracker already inside its write has no suspension point left at which the
+        // cancellation could take effect, and the comment that used to stand here claimed it did.
         val seam = lock.withLock {
             val s = current
             current = null
+            _peers.value = setOf(selfId)
             s
         }
-        // Cancel the tracker BEFORE collapsing, so no in-flight emission of the outgoing seam's
-        // roster can be published over the collapse.
+        // Still cancelled, to stop the pump rather than to order the write.
         relayJob.value?.cancel()
-        _peers.value = setOf(selfId)
         runCatchingCancellable { seam?.close(reason) }
     }
 }
