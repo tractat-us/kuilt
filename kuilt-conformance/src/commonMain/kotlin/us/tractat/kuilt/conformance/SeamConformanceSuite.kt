@@ -967,24 +967,26 @@ public abstract class SeamConformanceSuite {
     // even now `SeamStateGate` is `public` (#1803) and an out-of-tree fabric *can* reach for it —
     // reachability is not adoption, and this obligation is what catches a fabric that did not.
 
+    internal suspend fun runStateStaysTornAfterClose(scope: TestScope) {
+        if (!capabilities().staysTornAfterClose) return
+        scope.connectedPair { host, joiner ->
+            host.close()
+            val torn = host.state.value
+            assertIs<SeamState.Torn>(torn, "state must be Torn immediately after close()")
+
+            // Post-close churn: the conditions under which a multi-writer seam could clobber Torn.
+            repeat(5) { i -> tolerateTornChurn { joiner.broadcast(byteArrayOf(i.toByte())) } }
+            tolerateTornChurn { joiner.close() }
+
+            val after = host.state.value
+            assertIs<SeamState.Torn>(after, "state must STAY Torn after post-close churn")
+            assertEquals(torn.reason, after.reason, "the terminal Torn reason must not change under churn")
+        }
+    }
+
     @Test
     public fun stateStaysTornAfterClose(): TestResult =
-        runTest {
-            if (!capabilities().staysTornAfterClose) return@runTest
-            connectedPair { host, joiner ->
-                host.close()
-                val torn = host.state.value
-                assertIs<SeamState.Torn>(torn, "state must be Torn immediately after close()")
-
-                // Post-close churn: the conditions under which a multi-writer seam could clobber Torn.
-                repeat(5) { i -> tolerateTornChurn { joiner.broadcast(byteArrayOf(i.toByte())) } }
-                tolerateTornChurn { joiner.close() }
-
-                val after = host.state.value
-                assertIs<SeamState.Torn>(after, "state must STAY Torn after post-close churn")
-                assertEquals(torn.reason, after.reason, "the terminal Torn reason must not change under churn")
-            }
-        }
+        runTest { runStateStaysTornAfterClose(this) }
 
     /**
      * Run best-effort post-close [op], swallowing the closed-seam / dropped-peer signals a torn
@@ -1033,26 +1035,28 @@ public abstract class SeamConformanceSuite {
     // Gated on `terminatesIncomingOnClose` for a future fabric that can't honour it; WebRTC was
     // the historical non-conformer (#335), since fixed — every fabric in-tree passes this today.
 
+    internal suspend fun runIncomingCompletesWhenSeamCloses(scope: TestScope) {
+        if (!capabilities().terminatesIncomingOnClose) return
+        scope.connectedPair { host, _ ->
+            // Collect host.incoming in the background; it should complete once host closes.
+            val collectingJob = async {
+                withTimeout(5.seconds) {
+                    host.incoming.toList()
+                }
+            }
+
+            host.close()
+
+            // If the fabric honours the contract, toList() completes (flow terminated).
+            // withTimeout(5s) guards against fabrics that hang instead of completing.
+            collectingJob.await()
+            assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()")
+        }
+    }
+
     @Test
     public fun incomingCompletesWhenSeamCloses(): TestResult =
-        runTest {
-            if (!capabilities().terminatesIncomingOnClose) return@runTest
-            connectedPair { host, joiner ->
-                // Collect host.incoming in the background; it should complete once host closes.
-                val collectingJob = async {
-                    withTimeout(5.seconds) {
-                        host.incoming.toList()
-                    }
-                }
-
-                host.close()
-
-                // If the fabric honours the contract, toList() completes (flow terminated).
-                // withTimeout(5s) guards against fabrics that hang instead of completing.
-                collectingJob.await()
-                assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()")
-            }
-        }
+        runTest { runIncomingCompletesWhenSeamCloses(this) }
 
     // ── (13) send on a Torn seam throws IllegalStateException ────────────────
     //
@@ -1198,38 +1202,40 @@ public abstract class SeamConformanceSuite {
     //
     // Gated on `collapsesPeersOnTear`; every `false` is a tracked bug, not a by-design gap.
 
+    internal suspend fun runPeersCollapseToSelfIdWhenTorn(scope: TestScope) {
+        if (!capabilities().collapsesPeersOnTear) return
+        scope.connectedPair { host, _ ->
+            assertTrue(host.peers.value.size >= 2, "precondition: the pair must be connected before the tear")
+
+            host.close()
+            assertIs<SeamState.Torn>(host.state.value, "precondition: close() must latch Torn")
+
+            val peers = host.peers.value
+            assertAll(
+                {
+                    assertEquals(
+                        emptySet(),
+                        peers - host.selfId,
+                        "a Torn seam must advertise NO reachable remote peer — a torn fabric can reach " +
+                            "nobody, and a decorator folding this seam (CompositeSeam) reads what is left " +
+                            "here as still reachable until the member is detached",
+                    )
+                },
+                {
+                    assertTrue(
+                        host.selfId in peers,
+                        "a Torn seam's collapsed roster is { selfId }, not empty: peers always includes " +
+                            "this peer's own id, so a seam that drops selfId on tear has collapsed too far " +
+                            "(got ${peers.map { it.value }})",
+                    )
+                },
+            )
+        }
+    }
+
     @Test
     public fun peersCollapseToSelfIdWhenTorn(): TestResult =
-        runTest {
-            if (!capabilities().collapsesPeersOnTear) return@runTest
-            connectedPair { host, _ ->
-                assertTrue(host.peers.value.size >= 2, "precondition: the pair must be connected before the tear")
-
-                host.close()
-                assertIs<SeamState.Torn>(host.state.value, "precondition: close() must latch Torn")
-
-                val peers = host.peers.value
-                assertAll(
-                    {
-                        assertEquals(
-                            emptySet(),
-                            peers - host.selfId,
-                            "a Torn seam must advertise NO reachable remote peer — a torn fabric can reach " +
-                                "nobody, and a decorator folding this seam (CompositeSeam) reads what is left " +
-                                "here as still reachable until the member is detached",
-                        )
-                    },
-                    {
-                        assertTrue(
-                            host.selfId in peers,
-                            "a Torn seam's collapsed roster is { selfId }, not empty: peers always includes " +
-                                "this peer's own id, so a seam that drops selfId on tear has collapsed too far " +
-                                "(got ${peers.map { it.value }})",
-                        )
-                    },
-                )
-            }
-        }
+        runTest { runPeersCollapseToSelfIdWhenTorn(this) }
 
     // ── (13f) a survivor stops advertising a peer that has departed ──────────
     //
