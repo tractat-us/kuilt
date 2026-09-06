@@ -22,10 +22,11 @@ import us.tractat.kuilt.core.discovery.PeerDiscoverySource
  * drop the invite.
  *
  * The browser uses each peer's `displayName` as the
- * [MultipeerAdvertisement.handle]. That collides if two devices on the same
- * Wi-Fi share a display name — unusual but not impossible. The lobby treats
- * that as a UX problem to be disambiguated later (e.g. by appending a short
- * suffix); the transport itself does no de-duplication.
+ * [MultipeerAdvertisement.handle]. Two devices sharing a *human* name do not
+ * collide there: what a kuilt peer advertises is the decorated name, whose suffix
+ * is that peer's own `selfId` (see `MultipeerPeerId`), so the handles differ even
+ * when the lobby shows two identical labels. Disambiguating the two *labels* for a
+ * human reader remains a UX problem; the transport needs no de-duplication.
  *
  * Departures are surfaced via [departures] which exposes
  * `MultipeerPeerLinkFactory.lostPeerHandles` — a `SharedFlow` fed by the

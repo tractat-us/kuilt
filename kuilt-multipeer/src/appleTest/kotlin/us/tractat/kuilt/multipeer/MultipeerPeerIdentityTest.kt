@@ -84,7 +84,7 @@ class MultipeerPeerIdentityTest {
     }
 
     @Test
-    fun `a selfId containing the delimiter is refused at construction, not at weave`() {
+    fun `a selfId containing the delimiter is refused at construction rather than at weave`() {
         // `decorate` runs in a property initializer, so the failure lands on the line that
         // builds the loom rather than on a later `weave` — a caller sees it where the bad
         // value was passed. Asserted because the alternative (a lazily-decorated name)

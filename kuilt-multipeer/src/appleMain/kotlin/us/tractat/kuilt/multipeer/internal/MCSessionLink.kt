@@ -55,10 +55,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.MCSe
  * them to [spool] in FIFO order — preserving delivery ordering while keeping
  * the delegate callback non-blocking and bounded (no UNLIMITED).
  *
- * Two-way mapping from `MCPeerID` ↔ [PeerId]: the peer's `displayName` is the
- * wire identity (Apple exposes no stable cross-process id). The advertised
- * display name embeds a per-device nonce (see [MultipeerPeerId]), so two
- * default-named "iPhone" devices no longer collapse to one [PeerId]. As
+ * Two-way mapping from `MCPeerID` ↔ [PeerId]: the peer's `displayName` carries
+ * the wire identity (Apple exposes no stable cross-process id). The advertised
+ * display name embeds the advertiser's own `selfId` (see [MultipeerPeerId]), so
+ * two default-named "iPhone" devices no longer collapse to one [PeerId]. As
  * defence-in-depth, peer membership is keyed by the underlying `MCPeerID`
  * device identity through a [PeerIdentityRegistry]: a second distinct device
  * that still (pathologically) hit one id is REFUSED rather than merged, and a
@@ -267,8 +267,15 @@ internal class MCSessionLink(
         // `require` above already refuses `selfId` by name, so this cannot change which peer is
         // found today — it is here so a future spelling of self-identity has a single place to
         // change, not two that can disagree.
+        //
+        // Matched through [MultipeerPeerId.peerId], NOT `displayName == peer.value`. This is the
+        // INVERSE of the derivation every other site here performs, and it was spelled as a raw
+        // string comparison — correct only while the wire id happened to be the whole display
+        // name. Since #1430 the id is the part after the last `#`, so the raw comparison stopped
+        // resolving anybody and every addressed send answered `PeerNotConnected`. An inverse
+        // mapping must be spelled with the forward one, or the two can disagree.
         val target =
-            remotes.firstOrNull { it.displayName == peer.value }
+            remotes.firstOrNull { MultipeerPeerId.peerId(it.displayName) == peer }
                 ?: throw PeerNotConnected(peer)
         log.debug { "mc.session.send localPeer=${selfId.value} toPeer=${peer.value} bytes=${payload.size}" }
         session.sendData(
@@ -401,7 +408,7 @@ internal class MCSessionLink(
                         PeerIdentityRegistry.BindResult.COLLISION ->
                             // A DIFFERENT device advertising an id already held. Refuse the
                             // merge (the incumbent keeps the id) and surface it — with
-                            // per-device nonces this should be unreachable in practice.
+                            // distinct per-peer selfIds this should be unreachable in practice.
                             log.error {
                                 "mc.session.collision localPeer=${selfId.value} peer=${peer.displayName} " +
                                     "id=${peerId.value} — refusing to merge two distinct devices onto one id"

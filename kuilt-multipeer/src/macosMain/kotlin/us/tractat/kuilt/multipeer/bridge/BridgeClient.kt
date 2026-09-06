@@ -168,7 +168,9 @@ public fun mc_session_set_peer_state_callback(
 
 /**
  * Sends [data] (first [len] bytes) to a single peer addressed by
- * [peerHandle] (== `MCPeerID.displayName`). Returns the number of bytes
+ * [peerHandle] — a `PeerId.value`, i.e. the identity the JVM side received through
+ * [mc_session_set_peer_state_callback], **not** the full `MCPeerID.displayName`
+ * (they stopped being the same string in #1430). Returns the number of bytes
  * sent or `-1` on invalid input. If the peer is no longer connected, the
  * Apple-side `MCSessionLink.sendTo` throws and we return `-1`.
  */
