@@ -1,6 +1,7 @@
 package us.tractat.kuilt.mdns
 
 import io.ktor.server.application.Application
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.FabricAvailability
@@ -11,10 +12,10 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
+import us.tractat.kuilt.core.freshPeerId
 import us.tractat.kuilt.websocket.KtorClientLoom
 import us.tractat.kuilt.websocket.KtorServerLoom
 import us.tractat.kuilt.websocket.WebSocketAdvertisement
-import java.util.UUID
 import javax.jmdns.JmDNS
 
 /**
@@ -49,6 +50,18 @@ import javax.jmdns.JmDNS
  * @param wsPath WebSocket path to register and advertise.
  * @param httpClientFactory Factory for producing the Ktor HttpClient used on
  *   the joiner side. Callers supply this so they control the client lifecycle.
+ * @param selfId This peer's fabric identity, on **both** paths — announced in the mDNS TXT
+ *   record when hosting, and presented as `?peer=` when joining. Defaults to a fresh random
+ *   [PeerId], distinct on every construction. One value for both paths is what makes
+ *   [selfPeerId] and the self-dial guard below mean the same thing on either side.
+ * @param dispatcher Schedules the woven seam's read/write loops, on both the hosting and the
+ *   joining path. It is a *scheduler*, never a mutual-exclusion mechanism — the seam under it is
+ *   thread-safe on its own, and the WebSocket looms confine it with `limitedParallelism(1)`
+ *   themselves. Defaults to [Dispatchers.IO], matching [MDNSMultiAcceptHost]'s `serverDispatcher`.
+ *   It must be a real dispatcher: the transport is a live Ktor WebSocket, so a virtual
+ *   `TestDispatcher` here would never run the socket loops at all.
+ * @see mdnsLoom the convention-shaped entry point (#1430); this constructor keeps its own
+ *   older parameter order and stays the surface for dependency injection and tests.
  */
 public class MDNSPeerLinkFactory(
     private val serviceType: MDNSServiceType,
@@ -57,12 +70,15 @@ public class MDNSPeerLinkFactory(
     private val port: Int,
     private val wsPath: String = MDNSAdvertisement.DEFAULT_WS_PATH,
     private val httpClientFactory: () -> io.ktor.client.HttpClient,
+    selfId: PeerId = freshPeerId(),
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : Loom {
     private val serverFactory =
         KtorServerLoom(
             application = application,
             path = wsPath,
-            selfPeerId = PeerId("mdns-${UUID.randomUUID()}"),
+            selfPeerId = selfId,
+            dispatcher = dispatcher,
         )
 
     private var advertiser: MDNSServiceAdvertiser? = null
@@ -108,7 +124,11 @@ public class MDNSPeerLinkFactory(
                         serverPeerId = advertisement.serverPeerId,
                         sessionName = advertisement.sessionName,
                     )
-                KtorClientLoom(httpClientFactory()).join(wsAdvertisement)
+                KtorClientLoom(
+                    httpClient = httpClientFactory(),
+                    dispatcher = dispatcher,
+                    selfPeerId = selfPeerId,
+                ).join(wsAdvertisement)
             }
         }
 
@@ -119,8 +139,12 @@ public class MDNSPeerLinkFactory(
     public fun advertiser(): MDNSServiceAdvertiser? = advertiser
 
     /**
-     * The server peer's [PeerId]. Expose so callers can build [MDNSAdvertisement]s
-     * for the local session without an extra lookup.
+     * This peer's [PeerId] — the `selfId` it was built with. Exposed so callers can build
+     * [MDNSAdvertisement]s for the local session without an extra lookup, and so the self-dial
+     * guard in [weave] has something to compare a discovered advertisement against.
+     *
+     * The same value on both paths: it is the identity advertised when hosting *and* the one
+     * presented as `?peer=` when joining.
      */
     public val selfPeerId: PeerId get() = serverFactory.selfPeerId
 

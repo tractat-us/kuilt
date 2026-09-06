@@ -206,8 +206,8 @@ ticket-in-query is the honest ceiling there.
 ## mDNS discovery (`kuilt-mdns`, JVM/Android)
 
 mDNS is *rendezvous over the LAN*; the actual session still runs over WebSocket.
-`MDNSPeerLinkFactory` is a `Loom` that registers an mDNS service on `open` (and
-runs the embedded WebSocket server underneath), and resolves an `MDNSAdvertisement`
+`mdnsLoom(…)` builds a `Loom` that registers an mDNS service on `host` (and runs
+the embedded WebSocket server underneath), and resolves an `MDNSAdvertisement`
 to a WebSocket join on `join`. Discover peers separately with
 `MDNSServiceDiscoverer`, which emits an `MDNSAdvertisement` per peer found:
 
@@ -215,7 +215,12 @@ to a WebSocket join on `join`. Discover peers separately with
 val jmdns = JmDNS.create()
 
 // Host: host() registers the mDNS service and waits for the first joiner.
-val host = MDNSPeerLinkFactory(application, jmdns, port = 8080, httpClientFactory = { HttpClient { /* … */ } })
+val host = mdnsLoom(
+    serviceType = MDNSServiceType("_myapp._tcp"),
+    application = application,
+    jmdns = jmdns,
+    port = 8080,
+) { HttpClient { /* … */ } }
 val hostSeam = host.host(Pattern("alice's game"))
 
 // Joiner: discover, then join one of the advertisements.
@@ -223,6 +228,12 @@ val discoverer = MDNSServiceDiscoverer(jmdns)
 val ad = discoverer.discoveries().first()      // apply your own timeout / take(n)
 val joinerSeam = host.join(ad)
 ```
+
+`mdnsLoom` follows the same argument order as every other fabric factory: the
+fabric's own required arguments first, then the universal knobs — here `selfId`
+(this peer's identity, advertised when hosting and presented when joining) and
+`dispatcher`. It takes no `policy` or `weaveTimeout`, because neither is
+something this fabric can honour; `mdnsLoom`'s KDoc says why.
 
 mDNS service resolution is timing-sensitive — bound your collection with a
 timeout or `take(n)` rather than collecting `discoveries()` forever.
