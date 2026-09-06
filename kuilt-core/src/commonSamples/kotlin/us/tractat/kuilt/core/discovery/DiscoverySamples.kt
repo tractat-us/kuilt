@@ -3,6 +3,7 @@ package us.tractat.kuilt.core.discovery
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryTag
@@ -45,4 +46,50 @@ internal fun sampleDiscoveryRoster() = runTest {
     mdnsGone.emit("alice")
     runCurrent()
     check(roster.value.map { it.peerKey }.toSet() == setOf("bob"))
+}
+
+/** One transport dying costs you that transport; the rest of the roster keeps running. */
+@Suppress("unused")
+internal fun sampleDiscoveryRosterSourceFailure() = runTest {
+    val mdnsPeers = MutableSharedFlow<Tag>(extraBufferCapacity = 8)
+    val multipeerPeers = MutableSharedFlow<Tag>(extraBufferCapacity = 8)
+    val mdns = object : PeerDiscoverySource {
+        override val kind = DiscoveryKind.Mdns
+
+        // A real source fails from inside its own flow — a callbackFlow whose jmdns listener
+        // throws. This one fails when the sample sends it the sentinel, so the sample controls when.
+        override fun discoveries(): Flow<Tag> = mdnsPeers.transform { tag ->
+            if (tag.peerKey == "boom") error("jmdns IO error") else emit(tag)
+        }
+
+        override fun departures(): Flow<String> = emptyFlow()
+    }
+    val multipeer = object : PeerDiscoverySource {
+        override val kind = DiscoveryKind.Multipeer
+        override fun discoveries(): Flow<Tag> = multipeerPeers
+        override fun departures(): Flow<String> = emptyFlow()
+    }
+
+    // kuilt-core is logger-free, so this callback is the only signal a dead feed can produce.
+    val dead = mutableListOf<DiscoveryKind>()
+    val roster = discoveryRoster(
+        listOf(mdns, multipeer),
+        backgroundScope,
+        onSourceFailure = { source, _ -> dead += source.kind },
+    )
+    runCurrent()
+
+    mdnsPeers.emit(InMemoryTag("alice"))
+    multipeerPeers.emit(InMemoryTag("bob"))
+    runCurrent()
+    check(roster.value.map { it.peerKey }.toSet() == setOf("alice", "bob"))
+
+    mdnsPeers.emit(InMemoryTag("boom")) // the mDNS feed dies here
+    runCurrent()
+    check(dead == listOf(DiscoveryKind.Mdns))
+
+    // Multipeer carries on, and alice lingers — nothing ever observed her leave.
+    multipeerPeers.emit(InMemoryTag("carol"))
+    runCurrent()
+    check(roster.value.map { it.peerKey }.toSet() == setOf("alice", "bob", "carol"))
 }

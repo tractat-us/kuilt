@@ -2,6 +2,7 @@ package us.tractat.kuilt.core
 
 import kotlinx.coroutines.test.TestResult
 import us.tractat.kuilt.core.discovery.sampleDiscoveryRoster
+import us.tractat.kuilt.core.discovery.sampleDiscoveryRosterSourceFailure
 import kotlin.test.Test
 
 /**
@@ -68,6 +69,9 @@ class CoreSamplesRunTest {
 
     @Test
     fun discoveryRosterHolds(): TestResult = sampleDiscoveryRoster()
+
+    @Test
+    fun discoveryRosterSourceFailureHolds(): TestResult = sampleDiscoveryRosterSourceFailure()
 
     @Test
     fun pumpInHolds(): TestResult = samplePumpIn()

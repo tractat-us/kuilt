@@ -63,6 +63,8 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 
 It returns only **this peer's current best view** — not an agreement. It is **not** an election input: pick a host from `Seam.peers` once connected, never from this roster. And note the ghost caveat — a source whose `departures()` returns `emptyFlow()` is add-only, so departed peers linger forever. There is no interface default for `departures()`: a source with no leave signal has to write the `emptyFlow()` out, so you can tell which of your sources the caveat applies to by reading them.
 
+**One transport dying costs you that transport, not the roster.** Each source's `discoveries()` and `departures()` is isolated separately, so a feed that throws mid-session just stops reporting while every other source carries on — don't wrap the sources in your own try/catch or `SupervisorJob`. `:kuilt-core` is logger-free, so pass `onSourceFailure` if you want to know which transport died; that callback is the only signal there is, and the throwable's trace names the feed. The dead feed's peers **linger** — nothing observed them leave, so it is the ghost caveat by a second route, not a claim anyone is still reachable.
+
 <!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/discovery/DiscoverySamples.kt#sampleDiscoveryRoster -->
 ```kotlin
 // One StateFlow the lobby UI renders directly — no hand-rolled merge.
