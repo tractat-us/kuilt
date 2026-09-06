@@ -1112,22 +1112,28 @@ public abstract class SeamConformanceSuite {
     // a peer that IS in the session delivers exactly that payload to that peer, attributed to the
     // sender. Gated on `supportsSendTo` because a fabric without directed addressing cannot honour it.
 
+    // The gate lives **inside** the body helper, never in the `@Test` wrapper — [SeamConformanceUngatedCoreTest]
+    // drives the `run*` helpers rather than the wrappers, so a gate in a wrapper would be invisible to
+    // it, and a rig driving the body would silently run an obligation the harness had opted out of.
+
+    internal suspend fun runSendToDeliversToNamedPeer(scope: TestScope) {
+        if (!capabilities().supportsSendTo) return
+        scope.connectedPair { host, joiner ->
+            val received = async { joiner.incoming.take(1).toList() }
+
+            val payload = byteArrayOf(5, 6, 7)
+            host.sendTo(joiner.selfId, payload)
+
+            val frames = received.await()
+            assertEquals(1, frames.size, "directed send must deliver exactly one frame")
+            assertTrue(frames[0].toByteArray().contentEquals(payload), "directed payload must match")
+            assertEquals(host.selfId, frames[0].sender, "sender must be the directed-send originator")
+        }
+    }
+
     @Test
     public fun sendToDeliversToNamedPeer(): TestResult =
-        runTest {
-            if (!capabilities().supportsSendTo) return@runTest
-            connectedPair { host, joiner ->
-                val received = async { joiner.incoming.take(1).toList() }
-
-                val payload = byteArrayOf(5, 6, 7)
-                host.sendTo(joiner.selfId, payload)
-
-                val frames = received.await()
-                assertEquals(1, frames.size, "directed send must deliver exactly one frame")
-                assertTrue(frames[0].toByteArray().contentEquals(payload), "directed payload must match")
-                assertEquals(host.selfId, frames[0].sender, "sender must be the directed-send originator")
-            }
-        }
+        runTest { runSendToDeliversToNamedPeer(this) }
 
     // ── (12) incoming completes when the seam reaches Torn ───────────────────
     //
