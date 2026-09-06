@@ -3,8 +3,8 @@ package us.tractat.kuilt.multipeer.internal
 import us.tractat.kuilt.core.PeerId
 
 /**
- * Collision-resistant mapping between a human display name and the wire
- * identity used as a [PeerId] on the MultipeerConnectivity fabric.
+ * Mapping between a human display name and the wire identity used as a
+ * [PeerId] on the MultipeerConnectivity fabric.
  *
  * Apple's `MCPeerID.displayName` is the only cross-process identity handle MC
  * exposes, but it is whatever the *remote* device chose — two default-named
@@ -12,23 +12,37 @@ import us.tractat.kuilt.core.PeerId
  * SAME [PeerId]. A disconnect of either then evicted BOTH from the peer set
  * (the wrong-peer-eviction class, kuilt#1466 / #1494).
  *
- * The fix embeds a per-device nonce INTO the advertised display name
- * ([decorate]) *before* the `MCPeerID` is constructed, so the collision-resistant
- * identity travels WITH the advertisement. This is the only way both ends stay
- * consistent: the observer cannot append a nonce to a *received* display name
- * (it does not know the remote's nonce), so the nonce must be baked into the
+ * The fix embeds a collision-resistant identity INTO the advertised display
+ * name ([decorate]) *before* the `MCPeerID` is constructed, so the identity
+ * travels WITH the advertisement. This is the only way both ends stay
+ * consistent: the observer cannot append anything to a *received* display name
+ * (it does not know the remote's identity), so it must be baked into the
  * advertised name the local device chose. Every observer — the advertiser and
  * every browser/joiner — then derives the [PeerId] from the same decorated
  * string ([peerId]), so both ends of a link always agree on the id.
  * [humanName] recovers the original display name for UI.
+ *
+ * **The identity is the caller's `selfId`, not an internal nonce (#1430).** The
+ * suffix used to be an 8-hex-character nonce minted inside the factory, which
+ * made the wire `PeerId` an *output* of construction that no caller could
+ * predict. It is now the `PeerId` the caller supplied, so
+ * `peerId(decorate(name, selfId.value)) == selfId`. A `freshPeerId()` UUID
+ * already carries all the collision resistance the nonce provided — that was
+ * the nonce's only job — so #1466 is unaffected: two same-named devices still
+ * advertise different suffixes and derive different ids. The consequence for
+ * [peerId] is that it takes the part after the LAST delimiter rather than the
+ * whole string; that is what makes the round-trip an identity.
  */
 internal object MultipeerPeerId {
     /**
-     * Separates the human display name from the per-device nonce. The nonce is
-     * appended as `<name><delimiter><nonce>`; [humanName] splits on the LAST
-     * delimiter so a human name that itself contains the delimiter round-trips.
+     * Separates the human display name from the identity. The identity is
+     * appended as `<name><delimiter><selfId>`; [humanName] splits on the LAST
+     * delimiter and [peerId] takes what follows it, so a human name that itself
+     * contains the delimiter round-trips and can never be mistaken for the
+     * identity ([decorate] forbids the delimiter in the identity, so the last
+     * one is always the separator).
      */
-    internal const val NONCE_DELIMITER: Char = '#'
+    internal const val ID_DELIMITER: Char = '#'
 
     /**
      * Apple caps `MCPeerID.displayName` at 63 UTF-8 bytes (a construction with a
@@ -40,23 +54,27 @@ internal object MultipeerPeerId {
     private const val EMPTY_NAME_FALLBACK: String = "peer"
 
     /**
-     * Produces the wire display name embedding [nonce], trimming [name] so the
-     * result fits [MAX_DISPLAY_NAME_BYTES]. The nonce is kept whole — it is the
-     * collision-resistant part — and only the human prefix is trimmed.
+     * Produces the wire display name embedding [selfId], trimming [name] so the
+     * result fits [MAX_DISPLAY_NAME_BYTES]. The identity is kept whole — it is
+     * what the far end derives the [PeerId] from — and only the human prefix is
+     * trimmed. A `freshPeerId()` UUID costs 37 of the 63 bytes, leaving 26 for
+     * the human name; the display name is cosmetic, the identity is not.
      *
-     * @throws IllegalArgumentException if [nonce] is empty, contains the
-     *   [NONCE_DELIMITER], or is itself so long it leaves no room for a name.
+     * @param selfId the `PeerId.value` of the local peer.
+     * @throws IllegalArgumentException if [selfId] is empty, contains the
+     *   [ID_DELIMITER], or is itself so long it leaves no room for a name.
      */
     internal fun decorate(
         name: String,
-        nonce: String,
+        selfId: String,
     ): String {
-        require(nonce.isNotEmpty()) { "nonce must be non-empty" }
-        require(NONCE_DELIMITER !in nonce) { "nonce must not contain the delimiter '$NONCE_DELIMITER'" }
-        val suffix = "$NONCE_DELIMITER$nonce"
+        require(selfId.isNotEmpty()) { "selfId must be non-empty" }
+        require(ID_DELIMITER !in selfId) { "selfId must not contain the delimiter '$ID_DELIMITER': '$selfId'" }
+        val suffix = "$ID_DELIMITER$selfId"
         val budget = MAX_DISPLAY_NAME_BYTES - suffix.encodeToByteArray().size
         require(budget >= 1) {
-            "nonce '$nonce' leaves no room for a display name within $MAX_DISPLAY_NAME_BYTES bytes"
+            "selfId '$selfId' leaves no room for a display name within $MAX_DISPLAY_NAME_BYTES bytes " +
+                "(MCPeerID.displayName is capped there); use a shorter PeerId such as freshPeerId()"
         }
         val prefix =
             name
@@ -66,21 +84,32 @@ internal object MultipeerPeerId {
     }
 
     /**
-     * The wire [PeerId] for a (possibly decorated) display name — the FULL
-     * string. Deriving from the whole decorated name is what makes the id
-     * collision-resistant, and what keeps both ends in agreement (they observe
-     * the same `MCPeerID.displayName`).
+     * The wire [PeerId] for a (possibly decorated) display name — everything
+     * after the LAST [ID_DELIMITER], which is exactly the `selfId` the advertiser
+     * baked in. Both ends of a link observe the same `MCPeerID.displayName` and
+     * so derive the same id.
+     *
+     * An **undecorated** name (no delimiter) yields the whole string, so a legacy
+     * or non-kuilt peer still gets a sensible, non-blank id — `substringAfterLast`
+     * returns its receiver when the delimiter is absent. The same fallback covers
+     * a name that merely *ends* with the delimiter: [decorate] can never produce
+     * one (an empty identity is refused), so it is a foreign name, and deriving
+     * `PeerId("")` from it would only be refused later by
+     * `PeerIdentityRegistry`'s blank-id guard.
      */
-    internal fun peerId(displayName: String): PeerId = PeerId(displayName)
+    internal fun peerId(displayName: String): PeerId {
+        val identity = displayName.substringAfterLast(ID_DELIMITER)
+        return PeerId(identity.ifEmpty { displayName })
+    }
 
     /**
      * Recovers the human display name from a decorated wire name — everything
-     * before the LAST [NONCE_DELIMITER]. An undecorated name (no delimiter) is
+     * before the LAST [ID_DELIMITER]. An undecorated name (no delimiter) is
      * returned unchanged, so legacy/undecorated peers still display sensibly.
      */
     internal fun humanName(displayName: String): String =
-        if (NONCE_DELIMITER in displayName) {
-            displayName.substringBeforeLast(NONCE_DELIMITER)
+        if (ID_DELIMITER in displayName) {
+            displayName.substringBeforeLast(ID_DELIMITER)
         } else {
             displayName
         }
