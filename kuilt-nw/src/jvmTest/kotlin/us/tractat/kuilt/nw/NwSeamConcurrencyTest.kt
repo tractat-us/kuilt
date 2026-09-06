@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
@@ -107,6 +108,31 @@ import kotlin.test.assertTrue
  *  - **Drain start against drain end.** Un-guarded `endDrain`: green 0 of 6. Every teardown path
  *    converges on the same end state whatever the interleaving, so "no orphaned drain" cannot separate
  *    them.
+ *
+ * ## The `close`-teardown row above is now PARTLY reachable — see hazard 6 (#2648)
+ * The `close()`-against-a-departure bullet stands as written for the *departure* it was measured on,
+ * but it should not be read as "nothing can enter the teardown window". #2648 reached that window from
+ * the other side — an **arrival** rather than a departure. A `bytesReceivedLoop` coroutine parked on
+ * [NwSeam]'s lock with an unresolved `Hello` is not cancellable there (a `reentrantLock` acquire is not
+ * a suspension point), so `latchTorn` cancelling [scope] first does not remove it, and it resolves an
+ * identity between `latchTorn` releasing the lock and `close()` re-taking it.
+ * [aTornSeamNeverRepublishesARosterAfterTheCollapse] reaches that window in **71 of 150 rounds**, and
+ * reddens **3 of 3** against a `NwSeam` whose roster guard is deleted. The earlier 0-of-6 was a real
+ * measurement of a different arm, not a property of the window.
+ *
+ * ## The #2648 mutation table — each half of that fix is pinned by exactly ONE test
+ * Neither test can see the other's defect, which is the whole reason both ship.
+ *
+ * | `NwSeam` variant | `NwCloseCollapseOrderTest` (commonTest, virtual time, 200 rounds) | hazard 6 (here, 150 rounds) |
+ * |---|---|---|
+ * | pre-#2648: collapse after the latch, no roster guard | **RED 200/200** | green — rig fired, 74/150 |
+ * | collapse moved ahead of the latch, guard DELETED | green | **RED 3/3** (iters 52, 47, …) |
+ * | shipped: collapse moved + guard | green | green — rig fired, 71/150 |
+ *
+ * Read row 2 against row 1: moving the collapse **without** the guard is strictly worse than shipping
+ * neither change. Pre-#2648 the late arrival was overwritten by a collapse that ran afterwards, so it
+ * healed; with the collapse moved first and nothing refusing later writes, it becomes permanent. That
+ * is why the ordering fix and the guard are one change and not two.
  *
  * A trap found on the way and worth recording, because it would have shipped as an intermittent false
  * red: contending the dedup with a `broadcast` hammer *during formation* wedges the pair to zero peers
@@ -495,6 +521,132 @@ class NwSeamConcurrencyTest {
         )
     }
 
+    // ── hazard 6: a roster publish landing after the tear-time collapse ─────────
+
+    /**
+     * Dial a hub from a crowd of FRESH peers at the instant it closes, and assert its roster is still
+     * collapsed once it is `Torn` — i.e. that no identity resolved in the teardown window republished a
+     * peer over the collapse (#2648).
+     *
+     * ## Why this exists as well as `NwCloseCollapseOrderTest`
+     * That one is a deterministic virtual-time pin on the *ordering*: the collapse must be published
+     * before, or atomically with, the `Torn` latch. It cannot see this hazard at all. Under any test
+     * dispatcher `close()` is single-threaded from `latchTorn` through its teardown critical section —
+     * neither is a suspension point — so no other coroutine can be scheduled between them and the window
+     * this probe needs does not exist. Only real OS threads open it.
+     *
+     * ## The window, and why the fix's guard is the half under test
+     * `close()` calls `latchTorn`, which collapses the roster and latches `Torn` under [NwSeam]'s lock,
+     * releases it, cancels the scope, and only then re-takes the lock to clear `registry`/`conns` and
+     * tombstone every connection. A `bytesReceivedLoop` coroutine parked on that lock with an unresolved
+     * `Hello` acquires it in between — parked on a non-suspending `reentrantLock` it is not cancellable
+     * there, and `processFrame`'s classify section is non-suspend, so it runs to completion including
+     * `addRemotePeer`. The conns-clear that would otherwise have refused it (`conns[connId] !== cs`) has
+     * not happened yet.
+     *
+     * Before #2648 that healed, because the collapse came *after* this window. Moving the collapse ahead
+     * of the latch — the ordering fix alone — would make it permanent instead: the collapse runs first,
+     * the late `addRemotePeer` resurrects the peer, and nothing runs afterwards to discard it. So this
+     * probe pins `publishPeersLocked`'s `closed` guard specifically, and the ordering test pins the move;
+     * neither substitutes for the other, and shipping the move without the guard is strictly worse than
+     * shipping neither.
+     *
+     * ## The rig receipt
+     * A round whose dials all resolved before the close never enters the window, and a probe made of
+     * those rounds is green by absence. [unresolvedAtClose] counts rounds in which at least one link to
+     * the hub was open while the hub still had not rostered its peer at the moment `close()` was
+     * invoked — the precondition for a resolution landing in the teardown window — and is asserted
+     * against a floor rather than inferred from the absence of a failure.
+     */
+    @Test
+    fun aTornSeamNeverRepublishesARosterAfterTheCollapse() = runConcurrencyStress { stage ->
+        val unresolvedAtClose = AtomicInteger()
+        val linksAtClose = AtomicInteger()
+        val triggerMissed = AtomicInteger()
+        val resolvedAtClose = AtomicInteger()
+        var linksOpened = 0
+        repeat(RESURRECTION_ITERATIONS) { iter ->
+            val radio = FakeNwRadio()
+            val nodes = (0..LATE_DIALERS).map { node(radio, it, iter.toLong() * 1000) }
+            val hub = nodes.first()
+            val late = nodes.drop(1)
+
+            stage.at("iter=$iter dial storm vs close") { dump(iter, radio, nodes) }
+            coroutineScope {
+                val ready = CompletableDeferred<Unit>()
+                val dials = late.map { p ->
+                    async(Dispatchers.Default) {
+                        ready.await()
+                        // A dial can legitimately fail against a hub that has already stopped listening;
+                        // the probe is about the roster, not about which dials won.
+                        try {
+                            // Each late peer dials the HUB (index 0) — not its own endpoint, which the
+                            // seam correctly drops as a self-connection, so the hub would never see an
+                            // inbound link and the trigger below could never fire.
+                            p.api.connect(endpointFor(HUB_INDEX))
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            // dial lost the race with teardown — expected, and not what is under test
+                        }
+                    }
+                }
+                val closer = async(Dispatchers.Default) {
+                    ready.await()
+                    // Trigger on the hub's own STATE, and specifically on the FIRST identity to resolve:
+                    // at that instant the other [LATE_DIALERS] - 1 links are open with their `Hello`
+                    // still in flight, which is exactly the population that can resolve inside the
+                    // teardown window. A fixed yield count cannot find this — measured over 150 rounds,
+                    // 0 yields closes before any link is tracked at all (linksAtClose=0) and 3 closes
+                    // after every identity has resolved (unresolvedAtClose=0), with nothing stable in
+                    // between under real-thread scheduling. Waiting on `peers` rather than polling
+                    // `formationSnapshot()` also keeps the closer off the seam's lock until it closes,
+                    // so the trigger does not starve the receive loop it is trying to race.
+                    val triggered = withTimeoutOrNull(TRIGGER_BOUND) { hub.seam.peers.first { it.size > 1 } }
+                    if (triggered == null) triggerMissed.incrementAndGet()
+                    val snapshot = hub.seam.formationSnapshot()
+                    linksAtClose.addAndGet(snapshot.links.size)
+                    resolvedAtClose.addAndGet(snapshot.links.count { it.resolvedPeer != null })
+                    if (snapshot.links.any { it.resolvedPeer == null }) unresolvedAtClose.incrementAndGet()
+                    closeRefusingCleanly { hub.seam.close(CloseReason.Normal) }
+                }
+                ready.complete(Unit)
+                awaitAll(*dials.toTypedArray(), closer)
+            }
+
+            stage.at("iter=$iter await hub torn") { dump(iter, radio, nodes) }
+            hub.seam.state.first { it is SeamState.Torn }
+            linksOpened += radio.openedLinkCount
+
+            assertAll(
+                {
+                    assertEquals(
+                        setOf(hub.peerId),
+                        hub.seam.peers.value,
+                        "a Torn seam is advertising a peer republished after the tear-time collapse " +
+                            "(#2648): an identity resolved in the window between latchTorn and the " +
+                            "teardown critical section, and nothing runs after it to discard the write. " +
+                            "${dump(iter, radio, nodes)}",
+                    )
+                },
+                { assertNoCollectorLeaked(nodes, iter, radio) },
+            )
+            teardown(nodes)
+        }
+
+        println(
+            "nw-probe.rig-receipt rounds=$RESURRECTION_ITERATIONS linksOpened=$linksOpened " +
+                "unresolvedAtClose=${unresolvedAtClose.get()} linksAtClose=${linksAtClose.get()} resolvedAtClose=${resolvedAtClose.get()} triggerMissed=${triggerMissed.get()}",
+        )
+        assertTrue(
+            unresolvedAtClose.get() >= MIN_UNRESOLVED_AT_CLOSE,
+            "rig did not fire: the hub held an unresolved link at close time in only " +
+                "${unresolvedAtClose.get()} of $RESURRECTION_ITERATIONS rounds (floor " +
+                "$MIN_UNRESOLVED_AT_CLOSE) — every dial resolved before the close, so the teardown " +
+                "window under test was never entered",
+        )
+    }
+
     // ── shared invariant + helpers ──────────────────────────────────────────────
 
     /**
@@ -662,6 +814,49 @@ class NwSeamConcurrencyTest {
 
         /** How often the QUIET detector samples the seam's binding invariant mid-storm. */
         val AUDIT_SAMPLE_INTERVAL = kotlin.time.Duration.parse("1ms")
+
+        // ── knobs for [aTornSeamNeverRepublishesARosterAfterTheCollapse] ────────
+
+        /**
+         * Rounds of dial-storm-against-close. The window under test is a handful of instructions wide,
+         * so this trades round count against per-round cost: each round is a fresh star that is built,
+         * raced and torn, and only the rounds where a resolution lands inside the window can witness
+         * anything.
+         */
+        const val RESURRECTION_ITERATIONS = 150
+
+        /** The hub's index in the round's node list — every late peer dials THIS endpoint. */
+        const val HUB_INDEX = 0
+
+        /**
+         * Real-time bound on waiting for the hub's first identity to resolve. Bounded, not a bare
+         * `peers.first { … }`: a round in which no dial ever resolves would otherwise wedge until
+         * `runConcurrencyStress`'s cap and report as a hang rather than as a round that did not fire.
+         */
+        val TRIGGER_BOUND = kotlin.time.Duration.parse("2s")
+
+        /**
+         * Fresh peers dialling the hub at the instant it closes. Every one is an independent chance for
+         * a `Hello` to be mid-`processFrame` when `latchTorn` releases the lock, so this is the knob
+         * that sets how wide the window is sampled; at 1 the probe is a single coin flip per round.
+         */
+        const val LATE_DIALERS = 5
+
+        /**
+         * `yield()`s between the dial burst and the close. The knob most able to make this probe
+         * vacuous, and it has a floor as well as a ceiling: at 0 the hub tears before any `Hello` is in
+         * flight and no identity can resolve in the teardown window, while past the burst every dial has
+         * already resolved and `addRemotePeer` has nothing left to do. Neither end fails — both go
+         * quietly green, which is what [MIN_UNRESOLVED_AT_CLOSE] exists to catch.
+         */
+
+        /**
+         * Floor on rounds that reached the precondition — the hub holding an unresolved link at the
+         * moment it closed. Deliberately a small fraction of [RESURRECTION_ITERATIONS]: real-thread
+         * scheduling means many rounds will resolve early or late, and requiring most of them would make
+         * the rig receipt itself load-sensitive. It only has to rule out "never".
+         */
+        const val MIN_UNRESOLVED_AT_CLOSE = 5
 
         /**
          * Floors for the rig receipts. Deliberately far BELOW what a healthy run produces (measured in
