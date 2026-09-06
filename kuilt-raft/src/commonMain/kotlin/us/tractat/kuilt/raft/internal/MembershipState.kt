@@ -107,6 +107,9 @@ internal sealed interface MembershipState {
      * `InstallSnapshot` lane. Two ways in remain, and neither is a remote peer: a consumer's own
      * `bootstrapConfig`, which nothing validates, and a snapshot already on disk carrying such a
      * config, since `RaftEngine.checkedRestoredSnapshotMeta` bounds index and term but not `config`.
+     * Both are open under #2676, which is separate because its *disposition* is a different decision —
+     * the restore bounds refuse to start, and for a config there is a fallback available that the
+     * index and term halves do not have.
      */
     val voters: Set<NodeId>
         get() = when (this) {
