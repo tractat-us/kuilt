@@ -4,7 +4,6 @@ package us.tractat.kuilt.nw
 
 import kotlinx.atomicfu.atomic
 import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.toKString
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: opt-in real-network multi-threaded stress probe — hundreds of real Network.framework loopback links need a real IO dispatcher; there is no virtual-time option here
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
@@ -16,7 +15,6 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import platform.posix.getenv
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
@@ -27,6 +25,7 @@ import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -42,11 +41,23 @@ import kotlin.time.Duration.Companion.seconds
  * ## Why this is opt-in (never in `ci-required`)
  * Unlike the deterministic, single-link [NwConnectionDrainTest] (which runs on every macOS build),
  * this probe stands up many concurrent real GCD sockets under real thread contention — expensive
- * and machine-sensitive. It runs ONLY when `-Pconcurrency.stress.tests=true` is passed, which the
- * module's `build.gradle.kts` forwards to the Kotlin/Native macOS host test binary as the
- * `CONCURRENCY_STRESS_TESTS` environment variable ([GATE_ENV_VAR]); absent the flag [gated] is
- * false and the test self-skips (mirrors `:kuilt-mdns`'s `MDNS_MULTICAST_TESTS` gating and
- * `:kuilt-core`'s `-Pconcurrency.stress.tests` JVM probes).
+ * and machine-sensitive. It runs ONLY when `-Pconcurrency.stress.tests=true` is passed. The gating
+ * is at the **task** level — the `*StressTest` name contract in this module's `build.gradle.kts`
+ * excludes the class from every `AbstractTestTask` unless the flag is set — so an un-run probe is
+ * **absent** from the results XML rather than present and green.
+ *
+ * That replaced an env-var-plus-`getenv` self-skip inside this test body (#2621). The gating
+ * *decision* was right; the *mechanism* was unsound as a reporting device, because a `@Test` that
+ * returns early reports **passed**, not `skipped` — so a green XML row could not distinguish "ran
+ * all [TOTAL_LINKS] cycles" from "never ran one", and `build-native` in `ci.yml` runs
+ * `macosArm64Test iosSimulatorArm64Test` *without* the flag on every `ci-required` build.
+ *
+ * ## Do not read this task's reported duration — assert the work instead
+ *
+ * `macosArm64Test` reports `time="0.0"` for a Kotlin/Native run that provably completed 3 000
+ * iterations (measured on `:kuilt-multipeer`'s sibling probe). Duration is not a witness that a
+ * native test did anything, which is why [registryDrainsToEmptyUnderConcurrentOpenClose] asserts its
+ * own cycle count against [TOTAL_LINKS] rather than leaving "did it run?" to the clock.
  *
  * ## Bounded fan-out (fd-safe, still high-volume + concurrent)
  * [TOTAL_LINKS] open/close cycles run through a [Semaphore] capped at [MAX_CONCURRENT] in-flight at
@@ -67,9 +78,6 @@ class NwConnectionDrainStressTest {
     private companion object {
         const val SERVICE_TYPE = "_kuilt._tcp"
         const val ROOM_KEY = "loopback-stress-secret"
-
-        /** Env var forwarded from `-Pconcurrency.stress.tests=true` by this module's build.gradle.kts. */
-        const val GATE_ENV_VAR = "CONCURRENCY_STRESS_TESTS"
 
         /** Total open/close cycles — "hundreds", each a fresh real loopback link. */
         const val TOTAL_LINKS = 240
@@ -94,10 +102,26 @@ class NwConnectionDrainStressTest {
     private val failures = mutableListOf<String>()
     private val failuresLock = Semaphore(1)
 
+    /**
+     * Cycles that ran [openCloseAndDrain] through to a normal return — the probe's own witness that
+     * it did the work it claims.
+     *
+     * Asserted against [TOTAL_LINKS] rather than inferred from the reported duration, because on
+     * Kotlin/Native the duration is not a witness at all: `macosArm64Test` reports `time="0.0"` for a
+     * run that provably completed 3 000 iterations. What this catches is a *body* that stops doing
+     * the work while still reporting a pass — a `return@launch` added to the cycle, a widened
+     * swallow around it (this probe deliberately records leaks rather than throwing, so a cycle that
+     * bailed out early would otherwise be indistinguishable from a clean one).
+     *
+     * What it does NOT catch, stated so nobody mistakes it for the whole fix: an early return placed
+     * *above* it skips the assertion too. Nothing inside a test body can defend against that — the
+     * task-level `*StressTest` exclusion in `build.gradle.kts` is what does, by making an un-run
+     * probe absent from the XML rather than present and green (#2621).
+     */
+    private val completedCycles = atomic(0)
+
     @Test
     fun registryDrainsToEmptyUnderConcurrentOpenClose() = runBlocking {
-        if (!gated()) return@runBlocking
-
         val gate = Semaphore(MAX_CONCURRENT)
 
         coroutineScope {
@@ -107,6 +131,7 @@ class NwConnectionDrainStressTest {
                         bumpPeak(inFlight.incrementAndGet())
                         try {
                             openCloseAndDrain(i)
+                            completedCycles.incrementAndGet()
                         } finally {
                             inFlight.decrementAndGet()
                         }
@@ -116,6 +141,16 @@ class NwConnectionDrainStressTest {
         }
 
         assertAll(
+            {
+                assertEquals(
+                    TOTAL_LINKS,
+                    completedCycles.value,
+                    "the probe did not run every cycle it claims (${completedCycles.value}/$TOTAL_LINKS " +
+                        "completed). Every assertion below is about an ABSENCE — no leaked registry — so a " +
+                        "loop that did not execute reads as a clean pass. On Kotlin/Native this is the ONLY " +
+                        "witness that the work happened: the result XML's `time` is 0.0 either way",
+                )
+            },
             {
                 assertTrue(
                     peakConcurrent.value > 1,
@@ -198,9 +233,6 @@ class NwConnectionDrainStressTest {
             if (candidate <= current || peakConcurrent.compareAndSet(current, candidate)) return
         }
     }
-
-    /** True when [GATE_ENV_VAR] is `"true"` — the `-Pconcurrency.stress.tests=true` opt-in. */
-    private fun gated(): Boolean = getenv(GATE_ENV_VAR)?.toKString() == "true"
 
     /**
      * Wrap [delegate] so `weave` runs on a real [Dispatchers.Default]. [NwLoom] captures its seam
