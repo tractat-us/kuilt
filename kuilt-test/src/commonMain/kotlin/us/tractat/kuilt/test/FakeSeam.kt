@@ -149,8 +149,10 @@ public class FakeSeam(
      *
      * **The roster:** [Seam.peers] requires a `Torn` seam's roster to be exactly `{ selfId }`,
      * published *before* the terminal latch — hence the `_peers` write ahead of `_state` below. Read
-     * the seams named above as a model for the **spool dimension only**: they do not agree on the
-     * roster one, and `InMemorySeam.close` in particular is tracked by #1849. The obligation this
+     * the seams named above as a model for the **spool dimension only**. On the roster one they now
+     * all collapse to `{ selfId }` (#1849 fixed `InMemorySeam`, whose `peers` derives the collapse
+     * from its close latch), but they do **not** all publish it *before* the latch: `NwSeam.close`
+     * latches `Torn` and collapses afterwards, in a later lock acquisition (#2648). The obligation this
      * `tear` honours comes from [Seam.peers] and `SeamConformanceSuite.peersCollapseToSelfIdWhenTorn`,
      * not from any one of them; it is pinned here by `TestFakePeersCollapseOnTearTest` (#1854).
      */

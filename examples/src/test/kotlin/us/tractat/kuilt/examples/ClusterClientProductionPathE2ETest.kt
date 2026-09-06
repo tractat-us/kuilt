@@ -54,10 +54,12 @@ import kotlin.time.Duration.Companion.seconds
  *
  * The full failover leg (≥2 relay endpoints, kill the entry server, client re-admits on
  * another keeping its identity, a subsequent propose commits) requires the relay endpoints
- * to front **one shared voter cluster** — i.e. the M>1 voter mesh over real sockets, which
- * is tracked by #545. Two independent single-node clusters cannot share a Raft log, so a
- * learner cannot meaningfully fail over between them. The stable-identity primitive proven
- * here is the prerequisite; the shared-cluster failover proof lands with #545.
+ * to front **one shared voter cluster**: two independent single-node clusters cannot share a
+ * Raft log, so a learner cannot meaningfully fail over between them. The stable-identity
+ * primitive proven here is the prerequisite. Both halves have since landed — the M>1
+ * real-socket voter mesh with #545 (`ServerClusterM3E2ETest`), and the failover leg itself in
+ * `ClusterClientFailoverE2ETest`, which drives exactly the sequence above over two relays
+ * fronting one shared M=3 mesh. Still not covered *here*; no longer uncovered.
  *
  * ## Real-socket discipline
  *
