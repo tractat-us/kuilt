@@ -4,6 +4,7 @@ import us.tractat.kuilt.crdt.Quilted
 import kotlin.math.round
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.fail
 
 /**
@@ -27,6 +28,13 @@ import kotlin.test.fail
  * and would tell CI nothing; what pins the behaviour it measures is the per-binding
  * [VacuityFloors.maxNoOpSteps] the retiring bindings now declare.
  *
+ * The gate is at the **task** level — the `*Probe` name contract in this module's `build.gradle.kts`
+ * — so an un-run probe is **absent** from the results XML. It used to read the property here and
+ * `return` when it was missing, and a `@Test` that returns early reports **passed**, not `skipped`
+ * (#2621): a green XML row said the same thing whether the probe had cross-checked every arm against
+ * the shipped harness or had done nothing at all. Since the cross-check is the only thing that makes
+ * this probe's numbers trustworthy, that is exactly the row a reader must not be misled by.
+ *
  * ```
  * ./gradlew :kuilt-conformance:jvmTest --tests "*VacuityBreakdownProbe*" \
  *     -Plattice.vacuity.breakdown=true --rerun-tasks
@@ -43,8 +51,6 @@ internal class VacuityBreakdownProbe {
 
         /** Which arm the shipped pool builder implements — the one the cross-check applies to. */
         val SHIPPED = Bootstrap.EVERY_REPLICA
-
-        const val GATE = "lattice.vacuity.breakdown"
     }
 
     /** Which pool builder to model. */
@@ -272,25 +278,37 @@ internal class VacuityBreakdownProbe {
 
     @Test
     fun breakdown() {
-        if (System.getProperty(GATE) != "true") {
-            println("VacuityBreakdownProbe skipped — run with -P$GATE=true")
-            return
-        }
         val mismatches = mutableListOf<String>()
         println(
             "ROW|window|bootstrap|retirement|binding|noOp|steps|noOp%|fromBottom|fromBottomRETIRE|" +
                 "explNoOp|explSteps|explNoOp%|effRetire|retire%|leadRetire|explRetire|explRetire%|" +
                 "anc%|conc%|pairs|equal%",
         )
-        for (seeds in listOf(0L..15L, 0L..63L)) {
+        val windows = listOf(0L..15L, 0L..63L)
+        var emitted = 0
+        for (seeds in windows) {
             for (bootstrap in Bootstrap.entries) {
                 for (retirement in Retirement.entries) {
                     for ((name, suite) in bindings()) {
                         emit<Nothing>(name, suite, seeds, bootstrap, retirement, mismatches)
+                        emitted++
                     }
                 }
             }
         }
+        // Rig precondition (#2621): the cross-check below asserts an ABSENCE — no arm diverged from
+        // the shipped harness — which passes trivially if no arm was measured. `bindings()` is a
+        // hand-maintained list and the loop nest is four deep, so "the probe emitted nothing" and
+        // "the probe emitted 1 520 clean rows" are the same green without this. Falsifiable for real:
+        // an emptied `bindings()`, a window list trimmed to one entry, or an `enum` arm removed all
+        // move this number while leaving every other assertion here satisfied.
+        val expected = windows.size * Bootstrap.entries.size * Retirement.entries.size * bindings().size
+        assertEquals(
+            expected,
+            emitted,
+            "the probe measured $emitted of $expected arms — its cross-check against the shipped " +
+                "harness is an absence claim, so a loop nest that did not run reads as a clean pass",
+        )
         if (mismatches.isNotEmpty()) fail("probe diverged from the harness:\n${mismatches.joinToString("\n")}")
     }
 }
