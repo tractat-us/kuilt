@@ -1,6 +1,18 @@
 package us.tractat.kuilt.conformance
 
-/** Stable [CapabilityGaps] URLs for by-design capability limitations (see docs/architecture.md#capability-gaps-by-design). */
+/**
+ * Stable [CapabilityGaps] URLs for by-design capability limitations
+ * (see docs/architecture.md#capability-gaps-by-design).
+ *
+ * **Every constant here points at a docs anchor, never at an issue, and that is load-bearing.** A
+ * URL naming an issue asserts the work is outstanding, so it inverts the moment the issue closes —
+ * silently, in published API, aimed at whoever writes the next fabric. All three harness-gap
+ * constants below did exactly that: #1442, #1474 and #1502 had all closed while the constants still
+ * cited them. A gap constant describes an evergreen *category* ("this harness cannot reach a
+ * transport handle"), which outlives any particular issue that once tracked closing one instance of
+ * it. Point a *fabric's own* blocking issue at the declaration site instead — as
+ * [SeamConformanceSuite.payloadBudgetGap] documents — not at the shared constant.
+ */
 public object CapabilityGaps {
     /** Fabrics unencrypted on the wire by design (plaintext ws://, raw TCP, in-memory). */
     public const val SECURES_TRANSPORT: String =
@@ -28,7 +40,7 @@ public object CapabilityGaps {
      * so the remote-disconnect half of the `incoming`-completes-on-Torn obligation is unproven.
      */
     public const val MID_SESSION_DEATH: String =
-        "https://github.com/tractat-us/kuilt/issues/1442"
+        "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#midsessiondeath--harnesses-that-cannot-kill-the-transport"
 
     /**
      * A conformance harness that cannot inject a **membership drain** — a peer leaving
@@ -40,7 +52,7 @@ public object CapabilityGaps {
      * (e.g. the shared-roster `InMemoryLoom`) can drop one peer and leave the survivor Woven.
      */
     public const val MEMBERSHIP_DRAIN: String =
-        "https://github.com/tractat-us/kuilt/issues/1474"
+        "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#membershipdrain--harnesses-that-cannot-drop-a-single-peer"
 
     /**
      * A conformance harness that cannot inject a **self-dial** — a peer resolving a connection to its
@@ -51,7 +63,7 @@ public object CapabilityGaps {
      * harness with no self-discovery cannot self-dial at all.
      */
     public const val SELF_DIAL: String =
-        "https://github.com/tractat-us/kuilt/issues/1502"
+        "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#selfdial--harnesses-that-cannot-dial-themselves"
 
     /**
      * A fabric that names no frame ceiling — [us.tractat.kuilt.core.Seam.maxPayloadBytes] is `null`
