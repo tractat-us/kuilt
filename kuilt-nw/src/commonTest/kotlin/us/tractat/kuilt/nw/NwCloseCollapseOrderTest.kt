@@ -52,8 +52,22 @@ import kotlin.test.assertTrue
 class NwCloseCollapseOrderTest {
 
     private companion object {
-        /** Enough that a partial rate would be visible; cheap because every iteration is virtual-time. */
-        const val ITERATIONS = 200
+        /**
+         * Enough that a partial rate would be visible, and **capped by the wasm harness, not by time**.
+         *
+         * An iteration is cheap in virtual time and expensive in *log volume*: it builds two `NwSeam`s,
+         * each of which logs its formation and its tear at INFO. `wasmJsBrowserTest` carries a class's
+         * output as Karma service messages, and a class that emits more than the harness will carry has
+         * its results **silently dropped** — exit 0, no verdict, and `verifyTestResultParity` is the only
+         * thing that notices (#2183/#2185).
+         *
+         * Measured on this branch: at 200 iterations `:kuilt-nw:wasmJsBrowserTest` still exited 0 while
+         * writing results for **9** classes instead of 27 — this class took ~18 unrelated classes'
+         * wasm verdicts down with it. At 20 it writes 28, this class included. So the number is a
+         * budget: raising it buys nothing (the defect is deterministic, see above) and silently spends
+         * other tests' coverage.
+         */
+        const val ITERATIONS = 20
 
         fun TestScope.seamScope(): CoroutineScope =
             CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
