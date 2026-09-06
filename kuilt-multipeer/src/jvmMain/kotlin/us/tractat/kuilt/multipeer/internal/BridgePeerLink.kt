@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
@@ -24,6 +25,7 @@ import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.multipeer.MultipeerNativeLib
+import kotlin.concurrent.withLock
 import kotlin.coroutines.CoroutineContext
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.BridgePeerLink")
@@ -81,8 +83,45 @@ internal class BridgePeerLink(
     // evicts nobody.
     private val registry = PeerIdentityRegistry<PeerId>(selfId)
 
+    // Guards EVERY write to [_peers] and the [registry] read each one derives from, with the
+    // tear-time collapse folded into the same critical section (#2626). A JDK `ReentrantLock`
+    // rather than atomicfu's: this file is `jvmMain`, the JDK already supplies the primitive, and
+    // this module deliberately keeps atomicfu off its published production classpath (see
+    // `build.gradle.kts`). The Apple twin `MCSessionLink` is `appleMain` and has no such choice —
+    // it takes atomicfu's `reentrantLock`, which is the same primitive under a different import.
+    private val peersLock = ReentrantLock()
+
+    // Set by [tearDown], read by every roster publish — both under [peersLock], never apart. NOT a
+    // second lifecycle latch ([stateGate] is still the single-shot tear gate). It exists because
+    // the roster collapse must be published BEFORE `Torn` becomes observable (#1816), so a publish
+    // cannot key its guard on `state`: in the window between the collapse and the latch this seam
+    // is not yet `Torn`, and a publish landing there would resurrect the roster. `NearbySeam`'s
+    // `collapsed` field carries the same argument at length.
+    private var collapsed = false
+
     private val _peers: MutableStateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
+
+    /**
+     * Republish the roster from [registry], unless [tearDown] has already collapsed it.
+     *
+     * **The caller must hold [peersLock].** `registry.peers + selfId` is a read-then-write: the
+     * right-hand side is evaluated — taking the registry's own lock and copying its key set — and
+     * only then stored. A [tearDown] landing between those two steps was stamped over with a roster
+     * naming a peer that is gone, on a seam whose `state` is already `Torn` (#2626).
+     *
+     * Atomicity alone would not close it, which is why this is a guard and not a
+     * `_peers.update { … }` CAS. A callback arriving entirely *after* a teardown binds into the
+     * freshly-cleared registry and computes exactly the same stale roster, with no interleaving to
+     * detect; and the CAS cannot even see the interleaved case reliably, because the collapse
+     * writes `setOf(selfId)` — frequently the *same value* the flow already holds, so a concurrent
+     * `compareAndSet` succeeds against it rather than retrying. The [collapsed] marker, set inside
+     * this same critical section, decides both.
+     */
+    private fun publishRoster() {
+        if (collapsed) return
+        _peers.value = registry.peers + selfId
+    }
 
     // Starts Weaving; transitions to Woven on first peer-connected callback.
     //
@@ -160,9 +199,19 @@ internal class BridgePeerLink(
                 return@PeerStateCallback
             }
             if (isConnected == 1) {
-                when (registry.bind(peer, peer)) {
+                // The bind and the roster publish it derives are ONE critical section — see
+                // [publishRoster]. `stateGate.update` deliberately stays outside it: the gate
+                // carries its own latch, so a late promotion is already a no-op, and holding
+                // [peersLock] across a `StateFlow` write that can resume consumer code inline
+                // would widen the lock for nothing.
+                val bindResult =
+                    peersLock.withLock {
+                        val result = registry.bind(peer, peer)
+                        if (result == PeerIdentityRegistry.BindResult.BOUND) publishRoster()
+                        result
+                    }
+                when (bindResult) {
                     PeerIdentityRegistry.BindResult.BOUND -> {
-                        _peers.value = registry.peers + selfId
                         // Unconditional, and equivalent to the old `is Weaving` guard: `Woven` over
                         // `Woven` is a no-op (StateFlow conflates equal values, and `Woven` is a
                         // data object), and `Woven` over a latched `Torn` is refused by the gate —
@@ -203,8 +252,19 @@ internal class BridgePeerLink(
                 // Identity-scoped removal: a drop for an id this device does not hold — a refused
                 // self-dial, a blank id, a peer that never bound — removes nothing, so it cannot
                 // take a live peer with it.
-                registry.unbind(peer, peer)
-                _peers.value = registry.peers + selfId
+                //
+                // Unbind, publish and the last-peer TEST are one critical section (#2626). The test
+                // has to be inside it as well as the publish: reading `registry.peers` after the
+                // lock is released would let a concurrent bind add a peer between the publish and
+                // the read, and this branch would then decline to tear down a session whose last
+                // remote really had gone. `tearDown` itself is called OUTSIDE the lock — it cancels
+                // the scope and closes the spool, and neither belongs under a roster lock.
+                val lastRemoteGone =
+                    peersLock.withLock {
+                        registry.unbind(peer, peer)
+                        publishRoster()
+                        registry.peers.isEmpty()
+                    }
                 // Terminal peer-level drop. When the last remote peer is gone the
                 // whole session is dead — tear the seam down (latch Torn, complete
                 // `incoming`) so the Seam contract holds on a remote disconnect. The
@@ -218,7 +278,7 @@ internal class BridgePeerLink(
                 // set-equality test `remaining == setOf(selfId)` on `_peers`. The two agree only
                 // while `_peers` holds nothing but selfId and live remotes — which is exactly the
                 // property a blank or self id used to break, wedging the seam Woven forever (#1821).
-                if (registry.peers.isEmpty()) {
+                if (lastRemoteGone) {
                     tearDown(CloseReason.RemoteRequested)
                 }
             }
@@ -315,10 +375,24 @@ internal class BridgePeerLink(
      * native fires `.notConnected` for every peer that was connected, and the first such callback
      * would recompute `registry.peers + selfId` from stale bindings and republish peers that are
      * gone (#1851).
+     *
+     * The collapse runs under [peersLock] and sets [collapsed] in the same critical section, which
+     * is what makes it *final* rather than merely last-so-far (#2626): clearing the registry alone
+     * only stops publishes that have not yet read it, and a callback arriving after the clear binds
+     * into the empty registry and recomputes the very roster this was supposed to have discarded.
+     *
+     * The lock is released before [stateGate] is torn, following `NearbySeam.latchTorn`: the `Torn`
+     * write resumes `state` collectors, which can run consumer code inline and re-enter this seam,
+     * and no lock of this frame's should be held across that. Nothing is lost by releasing early —
+     * [collapsed] already refuses every later publish, so the ordering `Seam.peers` requires
+     * ("collapsed by the time anyone can observe `Torn`") holds without holding the lock.
      */
     private fun tearDown(reason: CloseReason) {
-        registry.clear()
-        _peers.value = setOf(selfId)
+        peersLock.withLock {
+            registry.clear()
+            collapsed = true
+            _peers.value = setOf(selfId)
+        }
         if (!stateGate.tear(reason)) return
         bridge.close()
         spool.close()
