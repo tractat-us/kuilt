@@ -143,14 +143,30 @@ class SymmetricSelfDialObligationRigTest {
     }
 
     /**
-     * The row's **honest limit**, demonstrated rather than claimed: a harness that cannot inject runs
-     * nothing, so a joiner this rig has proven broken is green here. That silent skip is the price of
-     * an opt-in hook, and it is not left unattended — [SeamConformanceSuite.selfDialDeclarationIsHonest]
-     * is what makes it accountable, and the next test drives it.
+     * The row's **honest limit**, demonstrated rather than claimed: a harness that does not declare
+     * [ObligationDeclaration.Proven] runs nothing, so a joiner this rig has proven broken is green
+     * here. That silent skip is the price of an opt-in hook, and it is not left unattended —
+     * [SeamConformanceSuite.selfDialDeclarationIsHonest] is what makes it accountable.
+     *
+     * **This harness is deliberately inconsistent** — it declares a `Gap` while its hook *can* inject
+     * — because that is the only way to reach the declaration gate with the injection gate open, and
+     * an unpinned gate is a GREEN mutation row: delete the declaration check and this test must red.
+     * The inconsistency is itself illegal, and the meta-test's `Gap` arm is what forbids it.
      */
     @Test
-    fun aHarnessThatCannotInjectSkipsEveryArmSilently(): TestResult = runTest {
-        trackedGapHarness(::SeamThatLoopsItsOwnBroadcastBack).runSelfDialIsRejected(this)
+    fun theDeclarationGateSkipsEveryArmBeforeAnythingIsInjected(): TestResult = runTest {
+        brokenJoinerHarness(::SeamThatLoopsItsOwnBroadcastBack, gap = true).runSelfDialIsRejected(this)
+    }
+
+    /**
+     * The second gate, pinned on its own: a harness that claims `Proven` and injects nothing still
+     * asserts nothing, because the row cannot tell a dropped self-dial from one that never happened.
+     * Delete the `injected` check and this test reds. What it costs is answered by the next test —
+     * the meta-test refuses the claim.
+     */
+    @Test
+    fun theInjectionGateSkipsEveryArmWhenNothingWasDialled(): TestResult = runTest {
+        brokenJoinerHarness(::SeamThatLoopsItsOwnBroadcastBack, injects = false).runSelfDialIsRejected(this)
     }
 
     /**
@@ -222,17 +238,17 @@ class SymmetricSelfDialObligationRigTest {
      */
     private fun reference(): SeamConformanceSuite = rigHarness(InMemoryLoom(), injects = true)
 
-    private fun brokenJoinerHarness(decorate: (Seam) -> Seam): SeamConformanceSuite {
+    private fun brokenJoinerHarness(
+        decorate: (Seam) -> Seam,
+        injects: Boolean = true,
+        gap: Boolean = false,
+    ): SeamConformanceSuite {
         val broken = mutableListOf<RespondsToASelfDial>()
         val loom = DecoratingJoinerLoom(InMemoryLoom()) { seam ->
             decorate(seam).also { if (it is RespondsToASelfDial) broken += it }
         }
-        return rigHarness(loom, injects = true, onInject = { broken.forEach { it.selfDialled() } })
+        return rigHarness(loom, injects = injects, gap = gap, onInject = { broken.forEach { it.selfDialled() } })
     }
-
-    /** A broken joiner behind a harness that cannot dial it — the silent skip, tracked as a gap. */
-    private fun trackedGapHarness(decorate: (Seam) -> Seam): SeamConformanceSuite =
-        rigHarness(DecoratingJoinerLoom(InMemoryLoom(), decorate), injects = false, gap = true)
 
     /** Claims the row ran while its hook injects nothing — what the declaration meta-test must catch. */
     private fun provenButUninjectableHarness(): SeamConformanceSuite =
