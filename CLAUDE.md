@@ -251,6 +251,19 @@ merge; the deterministic virtual-time siblings do.
   Make it the explicit closing step of every fix and every review: name the property the fix now rests
   on, and whether anything reds when that property breaks. Carrying the question is what caught a fix
   whose obvious implementation would have re-vacuated the very property it repaired.
+- **Then ask the converse: what does this fix now INVALIDATE?** A different question, and the one
+  that is *not* answerable by reading the diff — the claims a change falsifies are usually in files
+  it never touched, so nothing in review puts them in front of you. Three instances landed on
+  2026-09-05 alone, one created and caught the same afternoon. The sharpest: #2634 made the seam
+  **decorators** publish a payload budget without enforcing it, and several hundred lines away
+  `Seam.kt` still said the over-budget obligation is *"one every in-tree seam that publishes one now
+  meets"* — true while only fabric seams published a budget, false the moment the decorators did
+  (#2644). The other two were **citations**, which are the cheap half of the same class: a comment
+  naming `#N` asserts a world-state, so a CLOSED issue silently inverts the claim it backs (#2419
+  citing closed #1539; #2634 citing closed #2069). A citation to an issue is fine as *provenance*
+  for where a principle was established — it is a claim only when it says the work is outstanding.
+  So the closing step is to grep for the **concept** you changed rather than the files you edited,
+  and re-read every claim and open-issue citation that lands.
 - Test methods: no `test` prefix (the `@Test` annotation suffices); multi-assert
   tests use `assertAll()`.
 - **Coroutine test determinism:** types that own a `CoroutineScope` take an
