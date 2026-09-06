@@ -113,11 +113,15 @@ class FakeSeamTest {
         val seam = FakeSeam()
         seam.tear()
         val failure = assertFailsWith<IllegalStateException> { seam.weave() }
-        assertTrue(
-            failure.message.orEmpty().contains("terminal"),
-            "the refusal must name the obligation it enforces, not merely fail (got: ${failure.message})",
+        assertAll(
+            {
+                assertTrue(
+                    failure.message.orEmpty().contains("terminal"),
+                    "the refusal must name the obligation it enforces, not merely fail (got: ${failure.message})",
+                )
+            },
+            { assertIs<SeamState.Torn>(seam.state.value, "the refused weave must not have moved the state") },
         )
-        assertIs<SeamState.Torn>(seam.state.value, "the refused weave must not have moved the state")
     }
 
     @Test
