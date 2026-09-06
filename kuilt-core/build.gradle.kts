@@ -41,6 +41,11 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            // The WireCodecConformanceSuite TCK. `:kuilt-conformance` api's THIS module in its main
+            // source set, so a commonTest dependency here is not a cycle: Gradle sees
+            // :kuilt-core main -> :kuilt-conformance main -> :kuilt-core test. Same shape as
+            // :kuilt-store's DurableStore TCK.
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.coroutines.test)
         }
         // JVM-only, test-only. `DebugProbes` is what lets the concurrency-probe harness dump
