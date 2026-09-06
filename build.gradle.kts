@@ -3495,6 +3495,145 @@ val forbidProductionDispatcherInTests by tasks.registering {
     }
 }
 
+// The seeded-draw scanner behind `forbidHashOrderedSeededDraw` (#2592). Same `object` rationale as
+// its siblings: a script-level object keeps the walk out of the task action's closure, so the
+// configuration cache never has to serialize the `Build_gradle` script instance.
+//
+// It answers one question per `.random(`/`.shuffled(` in a test source: **did the collection this
+// draw indexes into get its order from a hash table?** `Collection<T>.random(Random)` is
+// `elementAt(nextInt(size))`, so on a `Set` or a `Map`'s views the *seed* picks a position and the
+// *bucket layout* picks which element sits there — and JVM and Kotlin/Native disagree about bucket
+// layout. The seed is portable; the trajectory is not.
+//
+// Two spellings, because the real one was not on a single line:
+//   * INLINE — `honest.entries.filter { … }.random(rnd)`, the hazard and the draw in one expression.
+//   * ASSIGNED — `val chargers = honest.entries.filter { … }` on one line and `chargers.random(rnd)`
+//     two lines later, which is the shape #2592 actually shipped as. A name is tainted by a
+//     hash-ordered right-hand side and un-tainted by a later assignment that is not, so a reused
+//     name cannot carry a stale verdict forward.
+//
+// A right-hand side that ALREADY imposes an order (`sorted`/`sortedBy`/`sortedWith`/
+// `sortedDescending`) is cleared — that is the fix, so recognising it is what makes the guard
+// something you can act on rather than route around.
+//
+// ── KNOWN LIMITS, stated because the issue is explicit that they exist ──────────────────────────
+// This catches the *greppable* half of a hazard whose greppable half is the smaller one.
+//   * **`groupBy` is invisible.** It returns a `LinkedHashMap`, so it is deterministic *given a
+//     deterministic input order* — the hazard lives in its input, one hop away, and there is no
+//     container name to key on. The issue names it for exactly this reason.
+//   * **Taint does not propagate through a helper, a field or a function return.** `val ks =
+//     orderedKeys()` is invisible; only the syntactic right-hand side is read.
+//   * **Only `.random(`/`.shuffled(` count as draws.** `.first()`/`.last()`/`[i]` on a hash-ordered
+//     collection have the same property, but in this tree they are overwhelmingly benign assertions
+//     over interchangeable elements (`sim.nodes.values.first()`), and a guard that reds on 14 of
+//     those to catch one real site is a guard people learn to route around. Measured, not assumed:
+//     including them took the population from 1 to 15.
+// So a green here is evidence about explicit `Set`/`Map`-view draws, and nothing else. The rule the
+// guard backs is the prose one in `CLAUDE.md` — *a seeded generator must impose its own total order
+// on any collection it walks* — which is broader than what any lexical scan can see.
+//
+// ── NO BASELINE, and that is a measurement, not an omission ────────────────────────────────────
+// Run against `origin/main` at the time it was written, this reports exactly the two `chargers`
+// draws in `EntitlementLedgerConservationTest` (the #2592 site) plus one genuine second instance in
+// `ORMapDualTrackTest`, whose `ORMap.keys` is a `HashMap`'s key set. All three are fixed in the same
+// PR, so the correct number of grandfathered entries is zero and the escape hatch is a marker with a
+// mandatory reason, as in `forbidProductionDispatcherInTests`.
+object HashOrderedDrawScanner {
+    // `.entries` NOT followed by `(` — `storage.entries(fromIndex = 1L)` is an ordered `List`-
+    // returning function on a Raft log, and matching it was 10 of the 15 false positives above.
+    private val HASH_ORDERED = Regex("""\.(entries|keys|values)\b(?!\s*\()|\btoHashSet\s*\(|\bHashSet\s*\(""")
+    private val ORDERED = Regex("""\.sorted(By|With|Descending)?\s*\(?""")
+    private val ASSIGN = Regex("""^\s*(?:val|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]*)?=\s*(.*)$""")
+    private val NAMED_DRAW = Regex("""\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(random|shuffled)\s*\(""")
+    private val INLINE_DRAW =
+        Regex("""\.(entries|keys|values)\b(?!\s*\()[^\n]*?\.\s*(random|shuffled)\s*\(""")
+
+    /** 1-based line numbers in [code] carrying an unordered hash-backed seeded draw. */
+    fun violations(code: String): List<Int> {
+        val hits = sortedSetOf<Int>()
+        val tainted = HashMap<String, Int>()
+        code.lines().forEachIndexed { index, line ->
+            val lineNo = index + 1
+            if (INLINE_DRAW.containsMatchIn(line) && !ORDERED.containsMatchIn(line)) hits += lineNo
+            NAMED_DRAW.findAll(line).forEach { if (it.groupValues[1] in tainted) hits += lineNo }
+            val assign = ASSIGN.find(line) ?: return@forEachIndexed
+            val (name, rhs) = assign.groupValues[1] to assign.groupValues[2]
+            if (HASH_ORDERED.containsMatchIn(rhs) && !ORDERED.containsMatchIn(rhs)) {
+                tainted[name] = lineNo
+            } else {
+                tainted.remove(name)
+            }
+        }
+        return hits.toList()
+    }
+}
+
+val forbidHashOrderedSeededDraw by tasks.registering {
+    group = "verification"
+    description = "Fails if a seeded test draw indexes into a hash-ordered collection (#2592)."
+    // Both test-source layouts, exactly as `forbidProductionDispatcherInTests` scopes itself.
+    val sources = kotlinSourcesIn(
+        subprojects.map { it.projectDir.resolve("src") },
+        listOf("*Test/**/*.kt", "test/**/*.kt"),
+    )
+    inputs.files(sources).withPropertyName("kotlinTestSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val stamp = layout.buildDirectory.file("verification/forbid-hash-ordered-seeded-draw.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        // Group 1 is everything after the colon; blank ⇒ a reasonless marker, itself a violation.
+        val marker = Regex("""//\s*ALLOW-hashOrderedDraw:(.*)""")
+        val unmarked = mutableListOf<String>()
+        val reasonless = mutableListOf<String>()
+        sources.files.sortedBy { it.invariantSeparatorsPath }.forEach { file ->
+            val raw = file.readText()
+            val rawLines = raw.lines()
+            HashOrderedDrawScanner.violations(KotlinCodeScanner.stripNonCode(raw)).forEach { line ->
+                // Trailing on the same line, or the line immediately above — line-tight, as in
+                // `forbidProductionDispatcherInTests`.
+                val candidates = listOfNotNull(rawLines.getOrNull(line - 1), rawLines.getOrNull(line - 2))
+                val reasons = candidates.mapNotNull { marker.find(it)?.groupValues?.get(1)?.trim() }
+                val where = "${file.relativeTo(rootPath)}:$line  " + rawLines.getOrElse(line - 1) { "" }.trim()
+                when {
+                    reasons.any { it.isNotEmpty() } -> Unit // exempt
+                    reasons.isNotEmpty() -> reasonless += where
+                    else -> unmarked += where
+                }
+            }
+        }
+        if (unmarked.isNotEmpty() || reasonless.isNotEmpty()) {
+            val detail = buildString {
+                if (unmarked.isNotEmpty()) append("\n  ").append(unmarked.joinToString("\n  "))
+                if (reasonless.isNotEmpty()) {
+                    append("\n\n  An `// ALLOW-hashOrderedDraw:` marker with an EMPTY reason is ")
+                    append("itself a violation — say why this draw's order cannot matter:\n  ")
+                    append(reasonless.joinToString("\n  "))
+                }
+            }
+            error(
+                "A seeded draw indexes into a hash-ordered collection (#2592). `Random(seed)` is " +
+                    "portable across targets; `HashSet`/`HashMap` iteration order is not, so the " +
+                    "same seed walks a DIFFERENT trajectory on the JVM and on Kotlin/Native — and " +
+                    "nothing about the resulting number says so. That is what makes a clean, " +
+                    "well-run JVM measurement (\"this arm never fires across 80 runs\") silently " +
+                    "false on the other targets, and it defeats the usual vacuity drill: a control " +
+                    "derived from the JVM observation can sit INSIDE the case the other target " +
+                    "reaches. Impose the fixture's own total order at the point of the draw — " +
+                    "`.sorted()` / `.sortedBy { … }` — in the TEST, not in the production accessor, " +
+                    "which has no reason to pay for it. If the order genuinely cannot matter here, " +
+                    "keep it and say so in a marker on this line or the line above:\n" +
+                    "      // ALLOW-hashOrderedDraw: <why this draw's order cannot matter>" +
+                    detail,
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${sources.files.size} Kotlin test sources scanned\n")
+    }
+}
+
 // The `catch (…: IllegalStateException)` scanner behind `forbidCancellationSwallowingCatch` (#2598).
 // Same `object` rationale as the sibling scanners: a script-level object keeps the walk out of the
 // task action's closure, and gives the walk somewhere to carry its own fixture.
@@ -8034,6 +8173,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidBareRunCatching"))
         dependsOn(rootProject.tasks.named("forbidKotlinAssert"))
         dependsOn(rootProject.tasks.named("forbidProductionDispatcherInTests"))
+        dependsOn(rootProject.tasks.named("forbidHashOrderedSeededDraw"))
         dependsOn(rootProject.tasks.named("forbidCancellationSwallowingCatch"))
         dependsOn(rootProject.tasks.named("forbidTightRunTestTimeout"))
         dependsOn(rootProject.tasks.named("forbidCoroutineLaunchDuringConstruction"))

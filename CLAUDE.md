@@ -166,6 +166,8 @@ source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem
 
 **Verify cache-disabled before auto-merge: `./gradlew :<module>:build detektAll --rerun-tasks`.** Two false greens recur here. (1) `jvmTest` (or a scoped `:module:jvmTest`) does **not** compile the Android variant — a `commonTest` source can compile on JVM yet fail `compileDebugUnitTestKotlinAndroid` (and Kotlin/Native test targets) on a type-inference difference the JVM compiler accepts. CI runs the full `./gradlew build`, so it catches this; your local `jvmTest` won't. (2) Gradle's **build cache** can serve a stale `FROM-CACHE` "success" for a test-compile task whose source is actually broken, so a re-run "passes locally" without executing the failing code. Before enabling auto-merge on a code PR, run the **full module build** with `--rerun-tasks` (add `--no-build-cache` if any test-compile task still shows `FROM-CACHE`) and confirm the tasks are genuinely `EXECUTED`. "Built locally" via `jvmTest` or a cached build is not proof the Android/Native variants compile. (3) A **`:<module>:build`-scoped build is a false green for consensus/runtime *behavior* changes** — even the full *module* build (not just `jvmTest`) skips the downstream `:examples`/`:kuilt-cluster` **E2E cluster tests**, which exercise the whole runtime stack. A change to `:kuilt-raft` consensus *behavior* (election / replication / membership / forwarding) that passes every `:kuilt-raft` test can still break a cluster E2E invariant — e.g. a forward-reaping change broke `ClusterClientMultiClientHardeningE2ETest`'s "no double-apply", entirely invisible to `:kuilt-raft:build`. For any consensus-*behavior* change, run the **full `./gradlew build`** (or at minimum add `:examples:test`), not a module-scoped build.
 
+**A cross-target CLAIM needs a cross-target RUN — `jvmTest` is not merely incomplete here, it is misleading (#2592).** Any statement of the form *"this arm never fires"*, *"this tolerance is inert"*, *"this branch is unreachable"* or *"`prefixSafety` is 0 across 80 runs"* is a claim about **every** target, and only `allTests` (or at least one native target plus `wasmJs`) can back it. The three cases above are about *compiling*; this one is about **executing a different trajectory**: a seeded property generator that walks a hash-ordered collection reaches different states on JVM and Kotlin/Native from the same seed (see the seeded-generator rule under *Coroutine test determinism*). So a clean, well-run, 80-sample JVM measurement can be a *correct measurement of the wrong trajectory*, and nothing in the number says so. The near-miss that produced this rule: a JVM measurement of `0 / 80` justified deleting a tolerance, and `:kuilt-heddle:build` reddened on `iosSimulatorArm64` where the same seed reaches breach 17. Before deleting a tolerance, pinning a zero, or removing an "unreachable" arm on the strength of a measurement, run it on a native target too.
+
 The mDNS multicast suite is opt-in because it sends real multicast packets; the
 `-P` flag is forwarded to JVM tests as a system property and to K/N simulator
 tests as the `MDNS_MULTICAST_TESTS` env var (see `kuilt-mdns/build.gradle.kts`).
@@ -364,6 +366,34 @@ merge; the deterministic virtual-time siblings do.
     (e.g. `TimeoutCoroutine.run`) *and* `time="…"`. Those two fields distinguish "the trajectory
     wedged" from "the box was slow" — #1891 was diagnosed entirely from them, after the console had
     made it look undiagnosable.
+  - **A seeded generator must impose its own total order on any collection it walks.** The sibling
+    of the seeded-RNG rule above, and the half that is invisible when it breaks: `Random(seed)` is
+    portable across targets, `HashSet`/`HashMap` iteration order is **not** — bucket layout differs
+    between the JVM and Kotlin/Native, so the *same seed* walks a *different trajectory* on each
+    target. Sort at the point the generator walks it (`state.store.entries.keys.sorted()` in
+    `CausalDotMapConvergenceTest`, `chargersIn` in `EntitlementLedgerConservationTest`) — in the
+    **test**, not in the production accessor, which has no reason to pay for it.
+    `forbidHashOrderedSeededDraw` in the root build (wired into `check`) catches the greppable
+    half — a `.random(`/`.shuffled(` whose receiver came, inline or via a local two lines up, from a
+    `Map` view or a `HashSet` — with no baseline (there is nothing to grandfather) and an
+    `// ALLOW-hashOrderedDraw: <reason>` escape hatch whose reason is mandatory. **Its green is
+    evidence about explicit `Set`/`Map`-view draws and nothing else.** The hazard is not limited to
+    an explicit `HashSet`: any draw or branch keyed on `Map.keys`, `Set` iteration or `groupBy`
+    output over a hash-backed collection has it, and **that set is not greppable by container
+    name** — `groupBy` returns a `LinkedHashMap`, so its non-determinism lives one hop away in its
+    input, where no scan can see it. Taint also does not cross a helper or a function return, and
+    `.first()`/`.last()`/`[i]` are deliberately not treated as draws (measured: including them took
+    the population from 1 real site to 15, the other 14 benign). So the tell you still have to spot
+    by eye is a `.random(`/`.first()`/`[i]` whose receiver came out of a `Set` or a `Map`'s entries
+    rather than out of a `List` the test built.
+    Two properties make this the nastiest failure shape in the repo. **It is invisible in the
+    number** — nothing about `0 / 80` hints the walk is target-dependent — and **it inverts the
+    usual asymmetry**: "green on JVM, red on native" normally means a native bug; here it means the
+    JVM measurement was not measuring the thing at all. It also defeats the standard vacuity drill,
+    since a control derived from the JVM observation can sit *inside* the breach the other target
+    reaches. Measured on #2592: the honest arms of `EntitlementLedgerConservationTest`, which never
+    reach the unordered draw, were byte-identical on JVM and `macosArm64` while the under-acked
+    arms, which do, disagreed on every counter from one seed.
   - **No real-dispatcher defaults.** A factory/helper that owns a scope makes the
     `scope`/dispatcher a **required** parameter — never `= CoroutineScope(Dispatchers.Unconfined)`
     or similar. A default real dispatcher silently decouples the work from `runTest`'s

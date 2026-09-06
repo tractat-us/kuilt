@@ -237,12 +237,20 @@ class EntitlementLedgerConservationTest {
         /**
          * How many under-acked runs saw `PerEdgeSafety(e1)` — the strand's strict prefix — fire.
          *
-         * Reported, never asserted on — deliberately. `e1` is in [assertUnderAckIsAttributed]'s
-         * tolerated set, and the natural way to keep such a tolerance honest is a frequency floor
-         * ("it must fire at least once"). That is not available here: the run's trajectory depends
-         * on `Set` iteration order, which JVM and Kotlin/Native do not agree on, so this reads 0 on
-         * one target and non-zero on the other from the same seed. The tolerance is kept honest by a
-         * **bound** on the breach instead. This counter is what makes that split legible in a
+         * Reported, never asserted on. `e1` is in [assertUnderAckIsAttributed]'s tolerated set, and
+         * the natural way to keep such a tolerance honest is a frequency floor ("it must fire at
+         * least once").
+         *
+         * That floor was **unavailable** until #2592: the run's trajectory depended on the order the
+         * under-ack victim was drawn out of a `HashSet`-backed map, which JVM and Kotlin/Native do
+         * not agree on, so this read 0 on one target and non-zero on the other from the same seed.
+         * [chargersIn] now imposes the fixture's own order and all four measured targets walk one
+         * trajectory, on which this reads **1** across the 80 runs of
+         * [anUnderAckedLeafFinalBreaksConservationByExactlyTheUnderAckedAmount].
+         *
+         * It is still not asserted on, now for a different reason: a `>= 1` floor sitting at exactly
+         * 1 reds on any unrelated generator tweak. The tolerance is kept honest by a **bound** on the
+         * breach instead, which is live on every target. This counter is what makes that legible in a
          * failure message rather than something the next reader has to rediscover.
          */
         var prefixSafety = 0
@@ -308,6 +316,82 @@ class EntitlementLedgerConservationTest {
     }
 
     /**
+     * The acking replicas on one edge that charged something under [charge], in **this fixture's
+     * own total order** ([ReplicaId] ascending) rather than in the map's.
+     *
+     * The sort is the whole point of this function and it is not cosmetic. A seeded generator is
+     * only reproducible across targets while its trajectory never depends on walking a hash-ordered
+     * collection: `Random(seed)` is portable, `HashSet` bucket order is not.
+     * [EntitlementLedger.baseFinalsOn] builds its map from a `HashSet` of the replicas on the edge,
+     * so drawing the under-ack victim straight out of `entries` lets the *same seed* pick a
+     * *different* victim on each target — and one different victim cascades into a different delta,
+     * a different clamp and a different reachable state for the rest of the run.
+     *
+     * Measured before this sort existed (#2592): the two **honest** arms, which never reach this
+     * draw, were byte-identical on JVM and `macosArm64`, while the two **under-acked** arms, which
+     * do, disagreed on every counter — `moved` 850 vs 791, `underAcks` 76 vs 67 — from one seed.
+     * That is the shape that makes a JVM-only measurement of "this arm never fires" silently false
+     * on three of six targets.
+     */
+    private fun Map<ReplicaId, SlotFinals>.chargersIn(
+        charge: (SlotFinals) -> Long,
+    ): List<Map.Entry<ReplicaId, SlotFinals>> = entries.filter { charge(it.value) > 0L }.sortedBy { it.key }
+
+    /**
+     * The property [chargersIn] exists for, asserted directly: the draw must not move when the
+     * *same* finals arrive in a different order.
+     *
+     * This is what a cross-target run would otherwise be the only witness to. Permuting the map
+     * stands in for the JVM/Kotlin-Native bucket-order disagreement, so the regression is reachable
+     * on every target from a single-target run. Drop the `sortedBy` in [chargersIn] and this reds.
+     */
+    @Test
+    fun theUnderAckVictimIsDrawnInAnOrderTheFixtureImposesRatherThanTheMapS() {
+        val finals = linkedMapOf(
+            replicas[0] to SlotFinals(issued = 9L, returned = 0L, leafSpent = 3L, rollupSpent = 1L),
+            replicas[1] to SlotFinals(issued = 9L, returned = 0L, leafSpent = 5L, rollupSpent = 2L),
+            replicas[2] to SlotFinals(issued = 9L, returned = 0L, leafSpent = 7L, rollupSpent = 4L),
+        )
+        val permuted: Map<ReplicaId, SlotFinals> =
+            finals.entries.reversed().associateTo(LinkedHashMap()) { it.key to it.value }
+        assertAll(
+            {
+                // The precondition: a permutation that cannot be distinguished proves nothing, so
+                // assert the rig is live before asserting what it shows.
+                assertEquals(
+                    replicas.reversed(),
+                    permuted.keys.toList(),
+                    "the permuted fixture is not actually permuted — this arm would pass unsorted",
+                )
+            },
+            {
+                assertEquals(
+                    finals.chargersIn { it.leafSpent }.map { it.key },
+                    permuted.chargersIn { it.leafSpent }.map { it.key },
+                    "the leaf charger order follows the map's iteration order, not the fixture's",
+                )
+            },
+            {
+                assertEquals(
+                    finals.chargersIn { it.rollupSpent }.map { it.key },
+                    permuted.chargersIn { it.rollupSpent }.map { it.key },
+                    "the roll-up charger order follows the map's iteration order, not the fixture's",
+                )
+            },
+            {
+                // And the draw itself, which is what the generator actually calls.
+                for (seed in 0 until 16) {
+                    assertEquals(
+                        finals.chargersIn { it.leafSpent }.random(Random(seed)).key,
+                        permuted.chargersIn { it.leafSpent }.random(Random(seed)).key,
+                        "seed $seed drew a different under-ack victim from a permuted map",
+                    )
+                }
+            },
+        )
+    }
+
+    /**
      * One seeded run of the four base mutators **plus** two relocation shapes, with
      * [assertConservationWithRelocation] after every single step.
      *
@@ -349,7 +433,7 @@ class EntitlementLedgerConservationTest {
         ): Pair<Map<ReplicaId, SlotFinals>, UnderAck?> {
             val honest = l.baseFinalsOn(strand)
             if (!underAck) return honest to null
-            val chargers = honest.entries.filter { it.value.leafSpent > 0L }
+            val chargers = honest.chargersIn { it.leafSpent }
             if (chargers.isEmpty()) return honest to null // nothing was charged here: nothing to understate
             val victim = chargers.random(rnd)
             val base = victim.value.leafSpent
@@ -549,18 +633,23 @@ class EntitlementLedgerConservationTest {
                 // instead of being refused, so more under-acked moves land and the residue grows
                 // past `e1`'s cover.
                 //
-                // **The reach is platform-dependent, which is why the bound below exists rather than
-                // a frequency floor.** `Random(seed)` is portable but the trajectory is not: the run
-                // walks `allEdges()`/`allReplicas()`, which are `Set`s, and JVM and Kotlin/Native do
-                // not agree on their iteration order. Measured — `prefixSafety` is 0 on JVM across
-                // 80 seeded runs and 76 under-acks, and non-zero on `iosSimulatorArm64`, where the
-                // breach reads 17 against a residue of 36. So neither "it always fires" nor "it
-                // never fires" is assertable, and a bare tolerance would be green on both whether or
-                // not the report is explained.
+                // **The reach used to be platform-dependent, which is why the bound below exists
+                // rather than a frequency floor — that is no longer true, and the bound is kept for
+                // a different reason (#2592).** `Random(seed)` is portable, but until [chargersIn]
+                // imposed an order the under-ack victim was drawn out of a `HashSet`-backed map, so
+                // the same seed walked a different trajectory per target: `prefixSafety` read 0 on
+                // JVM across 80 runs and 76 under-acks while `iosSimulatorArm64` reached the case,
+                // and neither "it always fires" nor "it never fires" was assertable. With the draw
+                // ordered, all four measured targets (JVM, `macosArm64`, `iosSimulatorArm64`,
+                // `wasmJs`) now walk one trajectory and `prefixSafety` reads 1 across 80 runs and
+                // 67 under-acks on every one of them.
                 //
-                // What IS assertable on every target is the soundness claim itself: when `e1` does
-                // break, the breach must be no larger than the lie that was fed. That bounds the
-                // tolerance to what the residue can account for instead of waving the edge through.
+                // A floor is therefore now *available*, and is deliberately not taken: at exactly 1
+                // occurrence in 80 runs `>= 1` is a knife edge that any unrelated generator tweak
+                // reds, which buys less than it costs. What the bound below asserts is the stronger
+                // and stabler claim anyway — when `e1` does break, the breach must be no larger than
+                // the lie that was fed, which bounds the tolerance to what the residue can account
+                // for instead of waving the edge through.
                 val stray = conflicts.filterNot {
                     it is LedgerConflict.PerEdgeSafety && (it.edge in strands || it.edge == e1) ||
                         it is LedgerConflict.ClosureViolation && it.edge in strands ||
@@ -570,9 +659,9 @@ class EntitlementLedgerConservationTest {
             },
             {
                 // The bound the tolerance above rests on, and the whole of what makes it a check
-                // rather than a pass. Vacuous where `e1` does not break (JVM, today) and live where
-                // it does (Kotlin/Native) — which is the point: it fires on whichever target reaches
-                // the state, so neither target has to be the one that happens to.
+                // rather than a pass. It used to be live on Kotlin/Native and vacuous on the JVM,
+                // from one seed; since #2592 ordered the under-ack draw it is live on **every**
+                // target, reached once per 80 runs.
                 if (LedgerConflict.PerEdgeSafety(e1) in conflicts) {
                     val summary = checkNotNull(l.edge(e1)) { "the prefix edge must be known" }
                     val breach = summary.spent + summary.returned - summary.issued
@@ -794,7 +883,7 @@ class EntitlementLedgerConservationTest {
         ): Pair<Map<ReplicaId, SlotFinals>, UnderAckedRollup?> {
             val honest = l.baseFinalsOn(strand)
             if (!underAck) return honest to null
-            val chargers = honest.entries.filter { it.value.rollupSpent > 0L }
+            val chargers = honest.chargersIn { it.rollupSpent }
             if (chargers.isEmpty()) return honest to null // nothing rolled up here: nothing to understate
             val victim = chargers.random(rnd)
             val base = victim.value.rollupSpent

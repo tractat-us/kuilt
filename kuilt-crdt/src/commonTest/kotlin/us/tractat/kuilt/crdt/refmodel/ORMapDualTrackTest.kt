@@ -68,7 +68,11 @@ class ORMapDualTrackTest {
         r: Int,
         random: Random,
     ) {
-        val candidates = (sut[r].keys + ref[r].keys).toList()
+        // Sorted, not merely listed: `ORMap.keys` is a `HashMap`'s key set, whose iteration order
+        // the JVM and Kotlin/Native do not agree on, so an unsorted draw makes this seed walk a
+        // different sequence of removals per target (#2592). Nothing here rests on *which* key is
+        // removed, but "seed 7 covers the remove-then-merge case" would be a target-local claim.
+        val candidates = (sut[r].keys + ref[r].keys).sorted()
         if (candidates.isEmpty()) return
         val key = candidates.random(random)
         sut[r] = sut[r].piece { it.remove(key) }
