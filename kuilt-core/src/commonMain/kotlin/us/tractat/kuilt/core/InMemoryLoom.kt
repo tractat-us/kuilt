@@ -52,6 +52,23 @@ import us.tractat.kuilt.core.SeamState.Woven
  * Not a production transport — no discovery, no network, no serialization.
  * Intended to be the test bedrock for `:session-protocol` and every layer
  * above it.
+ *
+ * **Three of the four universal factory knobs are deliberately absent (#1430).** The convention
+ * puts `selfId`, `policy`, `weaveTimeout` and `dispatcher` on a fabric factory *only where the
+ * fabric honours them* — an accepted-then-ignored argument is worse than an absent one — and here
+ * only [policy] survives that test:
+ *
+ * - **`selfId`** — one loom is one mesh with *many* seams, and the link registry is keyed by each
+ *   seam's [PeerId]. A loom-level identity would hand every seam the same key, so a second
+ *   [weave] would evict the first from the registry and [peers] would collapse to a single entry.
+ *   The knob is not merely meaningless here, as it is on a one-seam-per-loom fabric; it is
+ *   structurally incompatible with one-loom-many-seams. Identity is minted per seam by
+ *   `nextMeshPeerId` instead, whose KDoc explains why it is a counter and not [freshPeerId].
+ * - **`weaveTimeout`** — [weave] reaches no remote and never suspends on one: both branches take
+ *   the mutex and hand back an already-live seam. There is no rendezvous for a clock to bound,
+ *   so [LoomDefaults.WEAVE_TIMEOUT] has nothing to apply to.
+ * - **`dispatcher`** — this loom owns no [kotlinx.coroutines.CoroutineScope] and launches nothing.
+ *   There is no work here for a dispatcher to schedule.
  */
 public class InMemoryLoom(
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
