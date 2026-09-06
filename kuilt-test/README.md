@@ -17,6 +17,8 @@ assertEquals(PeerId("alice"), frame.sender)
 
 Lifecycle helpers: `weave()`, `tear(reason)`, `addPeer(id)`, `removePeer(id)`, `close(reason)`.
 
+`removePeer` models a *membership drain* — a remote leaves while the seam stays `Woven` — so it **refuses `selfId`**: a seam's roster holds its own id in every state, and dropping it would make `peers.value.size > 1` (the contract's sentinel for "at least one remote is connected") read `false` with a live remote still there. Use `tear(reason)` for the collapse to `{ selfId }`.
+
 Outgoing inspection: `seam.broadcasts: List<ByteArray>`, `seam.directed: List<Pair<PeerId, ByteArray>>`.
 
 ## fakeSeamPair — wired two-peer scenario

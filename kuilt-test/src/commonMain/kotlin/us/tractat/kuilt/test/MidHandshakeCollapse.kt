@@ -45,6 +45,9 @@ import kotlin.time.Duration.Companion.seconds
  * @param seam the controllable seam the consumer establishes over — must be the same [FakeSeam]
  *   [establish] reads, so [drainedPeer]'s removal is observed by the in-flight handshake.
  * @param drainedPeer the co-elector to drop mid-handshake (the elected host, or the awaited member).
+ *   Must be a **remote** — [FakeSeam.removePeer] refuses [seam]'s own `selfId` (#2546), since
+ *   `Seam.peers` holds it in every state and the event modelled here is somebody else leaving. A
+ *   `selfId` here throws [IllegalArgumentException] out of this helper rather than draining anything.
  * @param E the terminal exception [establish] must throw on the collapse (e.g. `LobbyTornException`).
  *
  * [#1466]: https://github.com/tractat-us/kuilt/issues/1466
