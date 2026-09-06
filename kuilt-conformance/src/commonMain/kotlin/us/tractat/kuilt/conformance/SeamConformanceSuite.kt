@@ -1242,14 +1242,32 @@ public abstract class SeamConformanceSuite {
     // even now `SeamStateGate` is `public` (#1803) and an out-of-tree fabric *can* reach for it —
     // reachability is not adoption, and this obligation is what catches a fabric that did not.
     //
-    // **STILL HOST-ONLY, and no longer blocked — see `closeDrivesStateTornNormal`'s comment for the
-    // argument and the measurement (#2601 / #2372).** The joiner arm here needs the joiner to reach
-    // `Torn` at all before "does it STAY Torn" means anything; `MuxBase.ChannelView` never did, and
-    // since #2372 it does. Landing the arm is #2601's slice. Its shape is the mirror image of round one:
-    // assert the joiner's own `Torn` as a precondition after its close, then drive frames from the
-    // host toward the torn joiner plus a redundant close on each end, then assert both terminals
-    // and both reasons are unchanged. A second `close()` is where an idempotent-close path most
-    // easily re-runs its state write with a stale value, which is this obligation's subject.
+    // **Both ends are checked (#2601), and this row was held back on #2372 until now — see
+    // `closeDrivesStateTornNormal`'s comment for the shared argument.** The joiner arm here needs the
+    // joiner to reach `Torn` at all before "does it STAY Torn" means anything; `MuxBase.ChannelView`
+    // never did, and since #2372 it does.
+    //
+    // **The joiner half is a second phase appended AFTER the host half, not woven into it.** The host
+    // sequence — close, sample, churn, re-read — is left byte-identical, so a red on it stays
+    // attributable to what it always meant rather than to this edit; #2601's own delivery slice
+    // records a false red born of exactly that kind of in-place strengthening. The joiner phase then
+    // pins its own terminal value as a **precondition** (a joiner that never latched `Torn` has
+    // nothing to keep, and asserting "it stayed Torn" against a `Woven` seam would report the wrong
+    // defect), drives the churn a torn joiner can be subjected to, and re-reads.
+    //
+    // **What the joiner's churn can and cannot be.** The host is already torn by this point, so its
+    // `broadcast` is refused rather than delivered — `tolerateTornChurn` absorbs that, and the frames
+    // are a *stimulus on the host's send path*, not a delivery the joiner observes. What actually
+    // carries the weight is the **redundant close on each end**: a second `close()` is where an
+    // idempotent-close path most easily re-runs its state write with a stale value, which is this
+    // obligation's subject. Stated rather than left for a reader to discover, because a comment
+    // promising "frames driven at the torn joiner" would overstate what a two-torn-seams pair can do.
+    //
+    // **Where the joiner arm can fail.** Nothing in a fixture holds a terminal value steady; a
+    // clobber comes from the seam's own second writer (a view's rollup, a delegating decorator's
+    // combine). The arm is strongest exactly where `closeDrivesStateTornNormal`'s is — a view whose
+    // `state` is computed from something else — and weakest on a seam whose `SeamStateGate` makes the
+    // terminal write structurally final, where it can only pass.
 
     internal suspend fun runStateStaysTornAfterClose(scope: TestScope) {
         if (!capabilities().staysTornAfterClose) return
@@ -1265,6 +1283,35 @@ public abstract class SeamConformanceSuite {
             val after = host.state.value
             assertIs<SeamState.Torn>(after, "state must STAY Torn after post-close churn")
             assertEquals(torn.reason, after.reason, "the terminal Torn reason must not change under churn")
+
+            // ── the joiner half (#2601) ──
+            val joinerTorn = joiner.state.value
+            assertIs<SeamState.Torn>(
+                joinerTorn,
+                "precondition: the JOINER's close() must latch Torn before 'does it STAY Torn' means " +
+                    "anything — that is `closeDrivesStateTornNormal`'s obligation, and a joiner still " +
+                    "reporting $joinerTorn here fails this row for its reason rather than for this one",
+            )
+
+            repeat(5) { i -> tolerateTornChurn { host.broadcast(byteArrayOf(i.toByte())) } }
+            tolerateTornChurn { host.close() }
+            tolerateTornChurn { joiner.close() }
+
+            // Sequential, mirroring the host half above rather than batching: a joiner that is no
+            // longer Torn has no reason to compare, so the second assertion would only report the
+            // first one's defect a second time in a less legible form.
+            val joinerAfter = joiner.state.value
+            assertIs<SeamState.Torn>(
+                joinerAfter,
+                "the JOINER's state must STAY Torn after post-close churn too (#2601) — a role-split " +
+                    "fabric ships a different Seam on each end, and a joiner that overwrites its own " +
+                    "terminal Torn wedges every waiter on the joining device. Got $joinerAfter",
+            )
+            assertEquals(
+                joinerTorn.reason,
+                joinerAfter.reason,
+                "the JOINER's terminal Torn reason must not change under churn either (#2601)",
+            )
         }
     }
 
