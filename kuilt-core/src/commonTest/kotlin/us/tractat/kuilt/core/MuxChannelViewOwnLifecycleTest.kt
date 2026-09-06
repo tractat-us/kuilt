@@ -256,7 +256,10 @@ class MuxChannelViewOwnLifecycleTest {
         backgroundScope.launch { muxB.channel("chat").incoming.collect { received.add(it) } }
 
         chatA.close()
-        runCatching { chatA.broadcast(byteArrayOf(99)) }
+        // Refused — `sendingOnATornViewThrows` owns that claim; here the throw is incidental and what
+        // matters is what did NOT reach the wire. Caught by type rather than with `runCatching`, which
+        // would swallow a cancellation of this test's own coroutine.
+        assertFailsWith<IllegalStateException> { chatA.broadcast(byteArrayOf(99)) }
 
         // Prove the base is still carrying traffic, so an empty inbox is a refusal rather than a
         // dead fixture.
