@@ -173,38 +173,72 @@ class LWWRegisterTest {
      * The law over a swept tag space rather than one hand-picked pair — losing writes, winning
      * writes, duplicate tags and tombstones all in the same stream.
      *
-     * The draw indexes a `List` with a seeded [Random] and never walks a hash-ordered collection, so
-     * the trajectory is identical on every target.
+     * **The reference is built by hand, not through [LWWRegister.piece].** Spelling the law as
+     * `before.piece(after) == after` would be `x == x`: with `set` defined as `piece(cell)` that
+     * reduces to `piece` being idempotent and associative, which a *wrong* `piece` satisfies too, so
+     * the sweep would stay green under any tie-break the type happened to have. The expected winner
+     * is therefore maxed here, over `(timestamp, replica)` directly. The shadow tag is
+     * **non-decreasing by construction** — only ever replaced by one that strictly dominates it —
+     * and every step asserts the register equals it, which is `X <= m(X)` stated without the
+     * operation under test.
      *
-     * Both rig counters are load-bearing: `dropped == 0` would mean no write ever lost and the law
-     * was never at risk; `landed == 0` would mean the sweep asserted over no-ops only.
+     * The draw indexes a `List` with a seeded [Random] and never walks a hash-ordered collection, so
+     * the trajectory is identical on every target. Chains restart every six steps; otherwise the
+     * shadow tag saturates at the top of the band and nothing after it can land.
+     *
+     * All four rig counters are load-bearing: a zero in any of them means the stream never reached
+     * that case, and the arm it was meant to pin asserted nothing.
      */
     @Test
     fun setAndUnsetAreInflationaryOverASweptTagSpace() {
         val random = Random(2087)
-        val replicas = listOf(ReplicaId("A"), ReplicaId("B"), ReplicaId("C"))
+        val replicas = listOf("A", "B", "C")
         var dropped = 0
         var landed = 0
+        var duplicateTags = 0
+        var tombstonesLanded = 0
 
         repeat(500) {
             var state = LWWRegister.empty<String>()
+            // The shadow model: the winning tag and value, maxed by hand.
+            var winningTimestamp = Long.MIN_VALUE
+            var winningReplica = ""
+            var winningValue: String? = null
+
             repeat(6) {
                 val replica = replicas[random.nextInt(replicas.size)]
                 val timestamp = random.nextLong(0L, 8L)
-                val before = state
-                state = if (random.nextBoolean()) {
-                    state.set(replica, timestamp, "v-${replica.value}-$timestamp")
+                val written: String? = if (random.nextBoolean()) "v-$replica-$timestamp" else null
+
+                if (timestamp == winningTimestamp && replica == winningReplica) duplicateTags++
+                val wins = timestamp > winningTimestamp ||
+                    (timestamp == winningTimestamp && replica > winningReplica)
+                if (wins) {
+                    winningTimestamp = timestamp
+                    winningReplica = replica
+                    winningValue = written
+                    landed++
+                    if (written == null) tombstonesLanded++
                 } else {
-                    state.unset(replica, timestamp)
+                    dropped++
                 }
-                if (state == before) dropped++ else landed++
-                assertEquals(state, before.piece(state), "X <= m(X) violated at $before -> $state")
+
+                state = if (written == null) {
+                    state.unset(ReplicaId(replica), timestamp)
+                } else {
+                    state.set(ReplicaId(replica), timestamp, written)
+                }
+
+                assertEquals(winningTimestamp, state.timestamp, "tag moved off the hand-maxed winner")
+                assertEquals(winningValue, state.value, "value moved off the hand-maxed winner")
             }
         }
 
         assertAll(
-            { assertTrue(dropped > 0, "rig: no write ever lost, so the law was never at risk ($dropped)") },
-            { assertTrue(landed > 0, "rig: no write ever landed, so the sweep asserted over no-ops ($landed)") },
+            { assertTrue(dropped > 0, "rig: no write ever lost, so the law was never at risk") },
+            { assertTrue(landed > 0, "rig: no write ever landed, so the sweep asserted over no-ops only") },
+            { assertTrue(duplicateTags > 0, "rig: the equal-tag arm of `piece` was never reached") },
+            { assertTrue(tombstonesLanded > 0, "rig: no unset ever won, so `unset` was never swept") },
         )
     }
 }
