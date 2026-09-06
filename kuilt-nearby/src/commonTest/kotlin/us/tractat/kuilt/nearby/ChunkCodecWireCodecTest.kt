@@ -69,7 +69,8 @@ class ChunkCodecWireCodecTest : WireCodecConformanceSuite() {
      * a whole one in exactly the way a peer's short frame does.
      */
     private fun chunkOfSize(size: Int): ByteArray {
-        val whole = ChunkCodec.encode(ByteArray(size), msgId = 1).single()
+        val payloadBytes = (size - ChunkCodec.HEADER_SIZE).coerceAtLeast(0)
+        val whole = ChunkCodec.encode(ByteArray(payloadBytes), msgId = 1).single()
         return whole.copyOf(size)
     }
 }
