@@ -39,6 +39,27 @@ public class RetirementReAssertion<S : Quilted<S>>(
      * Reads [subject] off the binding's public value surface — `"votes" in it.keys`,
      * `it.contains("x")`, `it.store.values.isNotEmpty()`. Must be a function of the *value*, not of
      * object identity; the suite checks that by evaluating it on a freshly joined equal state.
+     *
+     * **It must also be a function of the SUBJECT, and that half the suite cannot check.** A
+     * predicate written in terms of the sibling samples — `{ it != retired }`,
+     * `{ it == asserted || it == reAsserted }` — reads true → false → true, is a function of the
+     * value, and satisfies the freshly-joined check too, since `retired.piece(asserted) == retired`
+     * by the ascent the guard has already established. It passes every arm and carries no
+     * information at all. So: **name a subject and read that**, and never write this predicate in
+     * terms of [asserted], [retired] or [reAsserted].
+     *
+     * This is #2157's own lesson one level up. Naming the three states is not evidence, which is
+     * why [shows] exists; naming a predicate is not evidence either unless the predicate is about a
+     * subject rather than about the states. Closing it structurally would mean inspecting a lambda,
+     * which the suite cannot do — `SiblingReferencingShowsRigTest` in this module's `commonTest`
+     * pins the limit instead, by being a green binding whose predicate is exactly the one above, on
+     * a lattice with no retirement in it at all (#2184).
+     *
+     * **A one-dimensional subject space is not the same defect.** `Causal<DotSet>` and
+     * `Causal<DotFun<V>>` have exactly one thing to show — membership, or "the register has a
+     * value" — so `it.store.dots.isNotEmpty()` and `it.store.values.isNotEmpty()` are correct
+     * there. Those *are* about a subject; it simply has no key to name. The rule is what the
+     * predicate is written in terms of, not how many keys it mentions.
      */
     public val shows: (S) -> Boolean,
 )
