@@ -15,9 +15,9 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.yield
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -36,7 +36,7 @@ import kotlin.test.assertTrue
  *
  * ### The trigger is version skew, not an attacker
  *
- * `raftCbor` is `Cbor { ignoreUnknownKeys = true }`, which buys forward-compatibility for an unknown
+ * `raftCbor` sets `ignoreUnknownKeys`, which buys forward-compatibility for an unknown
  * *field* — a new peer adding `RequestVote.leadershipTransfer` does not break an old one. It buys
  * nothing for an unknown **sealed-class discriminator**: a peer on a newer build sending a
  * `RaftMessage` variant this build's hierarchy has never heard of decodes to a
@@ -212,7 +212,7 @@ class UndecodableFrameTest {
         solo.network.deliver(
             from = ghost,
             to = solo.self,
-            bytes = Cbor.encodeToByteArray<RaftMessage>(
+            bytes = raftCbor.encodeToByteArray<RaftMessage>(
                 RaftMessage.RequestVote(term = probeTerm, lastLogIndex = 0L, lastLogTerm = 0L),
             ),
         )
@@ -284,8 +284,14 @@ class UndecodableFrameTest {
         /** Enough dispatch turns for the inbound pump to pick the injected frame up and act on it. */
         const val SETTLE_YIELDS = 10
 
-        /** Mirrors `RaftEngine.raftCbor`, so the reproducer's bytes are the ones that codec produces. */
-        val futureWireCodec = Cbor { ignoreUnknownKeys = true }
+        /**
+         * The engine's own codec, so the reproducer's bytes are the ones a real peer produces.
+         *
+         * This used to be a hand-written mirror (`Cbor { ignoreUnknownKeys = true }`). #2160 added an
+         * *encoding* option to the engine's instance, at which point a mirror would have had to be
+         * kept in step by hand — so it reads the real one instead.
+         */
+        val futureWireCodec = raftCbor
     }
 }
 

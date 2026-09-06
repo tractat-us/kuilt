@@ -2,9 +2,9 @@
 
 package us.tractat.kuilt.raft
 
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -105,7 +105,7 @@ class AppendEntriesBatchBoundTest {
         val log = sim.storages.getValue(leaderId).entries(1L)
         val term = sim.storages.getValue(leaderId).term()
         val tail = log.filter { it.index >= FIRST_UNREPLICATED }
-        fun frameBytes(entries: List<LogEntry>): Int = Cbor.encodeToByteArray<RaftMessage>(
+        fun frameBytes(entries: List<LogEntry>): Int = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.AppendEntries(
                 term = term,
                 prevLogIndex = FIRST_UNREPLICATED - 1L,

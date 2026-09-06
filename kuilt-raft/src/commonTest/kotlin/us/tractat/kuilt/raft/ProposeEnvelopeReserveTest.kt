@@ -2,10 +2,10 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.serialization.builtins.ByteArraySerializer
-import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -66,10 +66,17 @@ class ProposeEnvelopeReserveTest {
     private val plausibleCeiling = 1L shl 60
 
     /**
-     * A bare [Cbor] suffices: the engine's instance differs only by `ignoreUnknownKeys`, a *decoding*
-     * option. `encodeDefaults` is off in both, so a defaulted `round` / `isNoOp` is omitted in both.
+     * The engine's own codec, not a bare `Cbor`.
+     *
+     * This used to be `Cbor`, on the argument that the engine's instance differed only by
+     * `ignoreUnknownKeys`, a *decoding* option. #2160 falsified that: `alwaysUseByteString` is an
+     * **encoding** option, and a bare `Cbor` would measure an envelope around a command framed as an
+     * array of integers while the engine reserves against one framed as a byte string. The frames
+     * are the same size either way — the command is empty in every probe here — but the identity
+     * [theEnvelopeOverheadIsAdditiveInTheCommand] asserts is not, and neither is
+     * [commandOfWireSize]'s arithmetic.
      */
-    private val cbor = Cbor
+    private val cbor = raftCbor
 
     private fun wireBytes(command: ByteArray): Int =
         cbor.encodeToByteArray(ByteArraySerializer(), command).size
@@ -113,12 +120,18 @@ class ProposeEnvelopeReserveTest {
 
     /**
      * A command of exactly [wire] encoded bytes — copied from [ProposePayloadBudgetTest] so both
-     * suites sit the propose on the same edge. `0x7F` costs two wire bytes, `0x00` costs one, and the
-     * array header costs two (kotlinx CBOR writes an indefinite-length array, so that two is a
-     * constant rather than a function of the length).
+     * suites sit the propose on the same edge. Found by walking down from `wire - 1` rather than
+     * computed: since #2160 the raw→wire relation is a CBOR byte-string header stepping 1/2/3/5 with
+     * the length, and a test that modelled it would agree with a model of the codec rather than with
+     * the codec.
      */
-    private fun commandOfWireSize(wire: Int, wide: Int = 100): ByteArray =
-        ByteArray(wide + (wire - 2 - 2 * wide)) { if (it < wide) 0x7F else 0 }
+    private fun commandOfWireSize(wire: Int): ByteArray {
+        for (raw in (wire - 1) downTo maxOf(0, wire - 8)) {
+            val candidate = ByteArray(raw) { if (it % 2 == 0) 0x7F else 0 }
+            if (wireBytes(candidate) == wire) return candidate
+        }
+        error("no command encodes to exactly $wire wire bytes")
+    }
 
     /**
      * A `ClientIdentity.Durable` id long enough to outrun a flat 256 B reserve even on a young log.
@@ -284,7 +297,7 @@ class ProposeEnvelopeReserveTest {
      *
      * True because CBOR is definite in structure and indefinite in array length here: every enclosing
      * map/array header is a function of element *count*, and the only payload-sized header is the
-     * command array's own, which the gate measures separately. Asserted rather than reasoned, across
+     * command's own byte-string header, which the gate measures separately. Asserted rather than reasoned, across
      * three payload sizes and both a short and a long id, because if it ever stops holding the probe
      * silently under-measures and the bound goes quietly unsound again.
      */
@@ -360,10 +373,15 @@ class ProposeEnvelopeReserveTest {
      * The premise the measured enforcement exists for — kept under a test so it cannot quietly stop
      * being true.
      *
-     * If this ever reds, the envelope shrank (`@ByteString` framing, #2160, or a dropped field) far
-     * enough that a flat [headerBudget] covers it again at the top of the admitted range, and
+     * If this ever reds, the envelope shrank (a dropped field, say) far enough that a flat
+     * [headerBudget] covers it again at the top of the admitted range, and
      * `checkProposeFitsTransport`'s measurement could be reconsidered — so the red is an instruction
      * to revisit #2156, not a defect.
+     *
+     * **#2160's byte-string framing was the candidate for that and did not move it at all.** The
+     * overhead is `frame(empty) − wire(empty)`, and the change moves both terms by the same byte, so
+     * it cancels: measured 268 B for the id below under either framing. What byte-string framing
+     * shrank is the *command's* cost, which is not this quantity.
      *
      * The id measured is `ClientId.auto`'s **shortest possible** form, `"auto:" + a one-character
      * NodeId + "-" + 16 hex`. That is the sharpest statement of the refutation: no consumer-supplied

@@ -4,9 +4,9 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -123,7 +123,7 @@ internal class TermJumpBoundTest {
         voter.network.deliver(
             from = peer,
             to = self,
-            bytes = Cbor.encodeToByteArray<RaftMessage>(
+            bytes = raftCbor.encodeToByteArray<RaftMessage>(
                 RaftMessage.AppendEntries(term, 0L, 0L, emptyList(), 0L, 0L),
             ),
         )

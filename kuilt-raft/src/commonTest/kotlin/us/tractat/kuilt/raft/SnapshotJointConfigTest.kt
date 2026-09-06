@@ -5,10 +5,10 @@
 
 package us.tractat.kuilt.raft
 
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -45,7 +45,7 @@ class SnapshotJointConfigTest {
             term = 2L, lastIncludedIndex = 5L, lastIncludedTerm = 1L,
             offset = 0L, data = byteArrayOf(1, 2, 3), done = true, config = joint,
         )
-        val decoded = Cbor.decodeFromByteArray<RaftMessage>(Cbor.encodeToByteArray<RaftMessage>(msg))
+        val decoded = raftCbor.decodeFromByteArray<RaftMessage>(raftCbor.encodeToByteArray<RaftMessage>(msg))
         assertIs<RaftMessage.InstallSnapshot>(decoded)
         assertEquals(joint, decoded.config, "joint config must survive the CBOR wire round-trip")
     }
