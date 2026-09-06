@@ -3202,13 +3202,27 @@ internal class RaftEngine(
      * than before — while the refusal is taken against [proposeEnvelopeBytes], measured around this
      * node's actual id. The reserve therefore stops being an assumption the bound rests on.
      *
-     * **The measurement is conservative, not exact**, and that is the one place this differs from
-     * `SeamRoom`. The entry's `index` and `term` do not exist yet — they are assigned on the actor
-     * loop, and this gate deliberately runs before it — so [proposeEnvelopeBytes] charges the widest
-     * values the engine will admit rather than the ones this entry will get. On a young log that
-     * over-reserves by up to ~70 B. That is the safe direction and the same one [HEADER_BUDGET]'s own
-     * KDoc argues: a byte reserved and not needed costs a byte of payload, one that falls short costs
-     * a silently dropped frame the sender believed it had sized to fit.
+     * **The measurement is deliberately conservative rather than exact, so that the published bound
+     * is stable over the node's lifetime.** The entry's `index` and `term` do not exist yet — they
+     * are assigned on the actor loop, and this gate deliberately runs before it — so
+     * [proposeEnvelopeBytes] charges the widest values the engine will admit. The reserve therefore
+     * depends only on this node's [ClientId], and the limit is a constant a caller may read once.
+     *
+     * Measuring the *true* envelope instead — on the actor loop, where those values are known — would
+     * be exact, and would make the limit **drift with log position**: `index` and `term` widen through
+     * CBOR's size steps as the log grows, so a command accepted yesterday is refused today with
+     * nothing about the payload having changed, which reads as a transport fault. That is the same
+     * objection that rules out subtracting the actual `dedupKey` size — exactness destroys the single
+     * readable number — reached from the other direction. Recorded as #2729, whose reopen trigger is a
+     * fabric publishing a budget small enough that the over-reserve is material.
+     *
+     * The cost is ~70 B of over-reserve on a young log. That is **~0.1%** of a real fabric's budget,
+     * which runs to tens of kilobytes; it looks large only against a deliberately tiny test budget
+     * (`InstallSnapshotTest` uses 296 B so `chunkBytes` yields an observable chunk count). And it is
+     * the safe direction, the same one [HEADER_BUDGET]'s own KDoc argues: a byte reserved and not
+     * needed costs a byte of payload, one that falls short costs a silently dropped frame the sender
+     * believed it had sized to fit. Pessimism fails safe and is diagnosable from the published bound;
+     * drift fails open, then closed.
      *
      * **Why `coerceAtLeast(0)` and not `maxOf(1, …)`.** [chunkBytes] floors at 1 because a zero-byte
      * chunk would never terminate a transfer. Here `0` is the honest answer: a transport whose whole
