@@ -99,7 +99,30 @@ internal data class Cluster(
     val voters: Set<NodeId>,
     val partitions: Set<Pair<NodeId, NodeId>> = emptySet(),
     val nextCommandByte: Byte = 1,
+    /**
+     * Upper bound on the entries one [ModelMsg.AppendEntries] may carry, or `null` for the whole
+     * un-replicated tail — mirroring `RaftEngine.boundedBatch`, which returns the tail untouched when
+     * the transport publishes no `maxPayloadBytes` and truncates it to a *prefix* when it does. Both
+     * are real engine configurations, so the model carries both rather than picking one.
+     *
+     * It is a **count** here where the engine's is a byte budget, because the model's commands are
+     * one byte and its no-ops are zero, so an encoded-size bound would be a bound on nothing. What
+     * both spellings share is the property that matters: the batch still *begins* at the follower's
+     * `nextIndex` and stops short of the leader's last entry, so the follower acks a prefix.
+     *
+     * That prefix is the whole point. With an unbounded tail every accepting follower reports a
+     * `matchIndex` at or above the current-term no-op [becomeLeader] appended, so the quorum-th
+     * `matchIndex` can only ever name a current-term entry and Raft §5.4.2 (Figure 8) is vacuous —
+     * measured at zero prior-term majority-commit states in 450 000 trajectories (#2114).
+     */
+    val maxEntriesPerAppend: Int? = null,
 ) {
+    init {
+        require(maxEntriesPerAppend == null || maxEntriesPerAppend >= 1) {
+            "maxEntriesPerAppend must be null (unbounded) or at least 1, was $maxEntriesPerAppend"
+        }
+    }
+
     val quorum: Int get() = (voters.size / 2) + 1
 
     fun isPartitioned(a: NodeId, b: NodeId): Boolean =
@@ -110,11 +133,12 @@ internal data class Cluster(
 
 // ── Cluster builder helper ──────────────────────────────────────────────────
 
-internal fun cluster(vararg nodeIds: String): Cluster {
+internal fun cluster(vararg nodeIds: String, maxEntriesPerAppend: Int? = null): Cluster {
     val ids = nodeIds.map { NodeId(it) }.toSet()
     return Cluster(
         replicas = ids.associateWith { Replica(id = it) },
         voters = ids,
+        maxEntriesPerAppend = maxEntriesPerAppend,
     )
 }
 
@@ -326,22 +350,74 @@ private fun Cluster.onAppendEntries(m: ModelMsg.AppendEntries): Cluster {
         }
     }
 
-    // Truncate + append
+    // Truncate + append — Fig. 2 rule 3, applied to EVERY entry in the batch, not just the first.
+    // Scan in index order for the first entry that diverges: an entry whose index we already hold with
+    // the same term is an exact duplicate (keep scanning, so re-delivery is idempotent and never rolls
+    // the log back); the first entry we hold with a DIFFERENT term is a conflict (delete it and every
+    // entry after it, then append this entry and the rest of the batch); the first entry past our tail
+    // begins the new suffix.
+    //
+    // The first-entry-only form this replaces is the pre-#1248 shape, which `RaftEngine` no longer has:
+    // it silently KEPT a later entry whose index existed locally with a different term, then appended
+    // around it. It is not merely a proof obligation here — it is reachable, and it produces a State
+    // Machine Safety violation with no mutation applied. `nextIndex` backing all the way to 1 makes
+    // `prevLogIndex` 0, which skips the §5.3 consistency check entirely, so a batch can begin at an
+    // index that MATCHES while the divergence sits one entry later; the leader's own entry at that
+    // index is then discarded and the follower's stale one survives underneath a matching suffix.
+    // Measured at 5 violations in 20 000 compaction-free 3-node trajectories of up to 200 actions
+    // The random surface does NOT pin this — the shipped unbounded properties never run long enough to
+    // reach it, and the bounded ones send one entry per frame, where "first" and "every" coincide. The
+    // pin is the directed `onAppendEntries truncates on a conflict later in the batch` self-check.
     if (m.entries.isNotEmpty()) {
-        val first = m.entries.first()
-        val conflict = r.log.firstOrNull { it.index == first.index && it.term != first.term }
-        var newLog = if (conflict != null) r.log.filter { it.index < conflict.index } else r.log
-        val toAdd = m.entries.filter { new -> newLog.none { it.index == new.index } }
-        newLog = newLog + toAdd
-        r = r.copy(log = newLog)
+        var appendFrom = -1
+        for ((i, entry) in m.entries.withIndex()) {
+            // In the cluster-agreed snapshot prefix: it can never diverge, and re-appending it would
+            // leave the retained log starting below the baseline.
+            if (entry.index <= r.snapshotIndex) continue
+            val existing = r.entryAt(entry.index)
+            if (existing == null) { appendFrom = i; break }
+            if (existing.term != entry.term) {
+                r = r.copy(log = r.log.filter { it.index < entry.index })
+                appendFrom = i
+                break
+            }
+        }
+        if (appendFrom >= 0) r = r.copy(log = r.log + m.entries.subList(appendFrom, m.entries.size))
     }
 
+    // Exact attestation (RaftEngine's `lastNewIndex`, issues #1248/#1249): the last index THIS frame
+    // covered, which under a bounded batch is a prefix of the leader's log and no longer coincides
+    // with `r.lastLogIndex` — the latter can run past the just-verified prefix when a stale suffix
+    // survives beyond the batch. Both the follower's commit bound and the success reply's matchIndex
+    // key to it.
+    //
+    // Spelled as the batch's own last index rather than the engine's `prevLogIndex + entries.size`
+    // because the two diverge in one place the engine has no analogue for: this model has no
+    // InstallSnapshot, so `appendEntriesMsgs` synthesises `prevLogIndex = 0` when the leader compacted
+    // past `nextIndex - 1`, and the arithmetic form would then under-report by the whole snapshot
+    // prefix. On every frame the engine can mint the two are the same quantity, because the batch is
+    // contiguous from `prevLogIndex + 1`.
+    val lastNewIndex = m.entries.lastOrNull()?.index ?: m.prevLogIndex
+
     if (m.leaderCommit > r.commitIndex) {
-        r = r.copy(commitIndex = minOf(m.leaderCommit, r.lastLogIndex))
+        // Commit only as far as this frame attested. A truncated batch carries the leader's own
+        // `leaderCommit`, which sits ABOVE where the batch ends on the first frame of every catch-up;
+        // committing to it would commit entries this follower does not hold. THAT half is load-bearing
+        // and pinned — reverting it to `r.lastLogIndex` reds both bounded properties on State Machine
+        // Safety.
+        //
+        // `maxOf(_, r.commitIndex)` is the forward-only half, and it is **unreachable in this model, so
+        // nothing reds when it breaks** — said plainly rather than left for a reader to assume. It
+        // guards a batch attesting BELOW our committed prefix, which needs `nextIndex` to back up below
+        // the follower's own tail; `nextIndexAfterFailure` here is fed a `conflictIndex` of
+        // `lastLogIndex + 1`, so it never does. It is kept because `RaftEngine` has it and this model's
+        // job is to mirror the engine — a conflict-term-driven backup (the engine's other arm) reaches
+        // exactly the state it defends. Modelling that arm is what would pin it.
+        r = r.copy(commitIndex = minOf(m.leaderCommit, maxOf(lastNewIndex, r.commitIndex)))
     }
 
     val accept = ModelMsg.AppendEntriesResp(
-        from = m.to, to = m.from, term = r.term, success = true, matchIndex = r.lastLogIndex,
+        from = m.to, to = m.from, term = r.term, success = true, matchIndex = lastNewIndex,
     )
     return copy(replicas = replicas + (r.id to r), inFlight = inFlight + accept)
 }
@@ -410,10 +486,13 @@ private fun Cluster.becomeLeader(nodeId: NodeId): Cluster {
 
 // ── Helper: build AppendEntries for a peer from leader state ────────────────
 
-private fun appendEntriesMsgs(leader: Replica, peer: NodeId): List<ModelMsg.AppendEntries> {
+private fun Cluster.appendEntriesMsgs(leader: Replica, peer: NodeId): List<ModelMsg.AppendEntries> {
     val ni = leader.nextIndex[peer] ?: 1L
     val prev = leader.entryAt(ni - 1L)
-    val entries = leader.log.filter { it.index >= ni }
+    val tail = leader.log.filter { it.index >= ni }
+    // `RaftEngine.boundedBatch`: truncate to a PREFIX of the tail, never a different slice. The batch
+    // still begins at `ni`, so the follower's §5.3 consistency check sees exactly what it saw before.
+    val entries = maxEntriesPerAppend?.let { tail.take(it) } ?: tail
     return listOf(
         ModelMsg.AppendEntries(
             from = leader.id,
