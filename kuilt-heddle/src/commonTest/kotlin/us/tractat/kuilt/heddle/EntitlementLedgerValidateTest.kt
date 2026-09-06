@@ -7,6 +7,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -1028,5 +1029,411 @@ class EntitlementLedgerValidateTest {
         val second = LedgerConflict.OrphanedTransferPath(PathKey.of(e2))
         val other = LedgerConflict.NegativeEffectiveSpend(e1)
         assertEquals(listOf(other, first, second), listOf(second, first, other).sorted())
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // FrozenCarriedHandoff (#2600) — the donor a blocked generation move waits on
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private val carol = ReplicaId("carol")
+
+    /**
+     * A hand-off an earlier move **carried** onto `e2` — the row lives in
+     * `transferRelocIn[PathKey.of(e2)]` and in the base matrix nowhere, which is exactly what a
+     * `relocationPatch` carry produces (#1691). `e2` has since retired and `e3` is `g2`'s live
+     * inbound, so the second move is the one that must carry it onward.
+     *
+     * **Funded, not counter-free.** The report itself reads only the transfer matrices and the
+     * topology, so a bare pair of rows would reach it — but then `alice` would be handing away credit
+     * she never had, the pockets would derive negative and `PersistentNegativeHoldings` would
+     * dominate every arm below. The counters here are the ones the *first* move left: `e2` drained to
+     * `returned`, its 60 re-credited to `e3` in `issuedRelocIn`, exactly the shape
+     * [reHomedAwayFromTheRows] uses. The production-derived state, built by the real mutators, is
+     * `EntitlementLedgerReconcileTest.theFrozenGenerationMoveNamesItsDepartedDonorOnTheLedger`.
+     *
+     * The knobs, and what each one switches **off** if moved:
+     *  - `cancelled` — how much of the 40 a later move already carried onward. At `40` the residual
+     *    is zero and there is nothing to report; at `0` nothing was carried on. Anything between is
+     *    a partial carry, where the reported total must be the remainder rather than either end.
+     *  - `successor` — `ACTIVE` is the replaced generation, `PREPARED` the reshape window in which
+     *    `g2` has no live inbound at all and every report here is deliberately silent.
+     *  - `deadKey` — which key the carried row sits on. Pointing it at `e3` makes it the *live* key,
+     *    the control for the liveness clause.
+     */
+    private fun carryFrozenOnADeadGeneration(
+        cancelled: Long = 0L,
+        successor: Lifecycle = Lifecycle.ACTIVE,
+        deadKey: AttachmentId = e2,
+    ): EntitlementLedger = EntitlementLedger.of(
+        records = mapOf(
+            e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE)),
+            e2 to setOf(AttachmentRecord(e2, g1, g2, Weight.ONE)),
+            e3 to setOf(AttachmentRecord(e3, g1, g2, Weight.ONE)),
+        ),
+        minted = mapOf(MintId("m") to MintRecord(root, alice, 100L)),
+        issued = mapOf(e1 to GCounter.of(alice to 100L), e2 to GCounter.of(alice to 60L)),
+        returned = mapOf(e2 to GCounter.of(alice to 60L)), // the first move drained the strand…
+        issuedRelocIn = mapOf(e3 to GCounter.of(alice to 60L)), // …and credited the successor
+        transferRelocIn = mapOf(PathKey.of(deadKey) to mapOf(alice to GCounter.of(bob to 40L))),
+        transferRelocOut = if (cancelled == 0L) {
+            emptyMap()
+        } else {
+            mapOf(PathKey.of(deadKey) to mapOf(alice to GCounter.of(bob to cancelled)))
+        },
+        lifecycle = mapOf(e1 to Lifecycle.ACTIVE, e2 to Lifecycle.RETIRED, e3 to successor),
+    )
+
+    /**
+     * **#2600 — the deliverable.** The frozen state names the *donor*, on the ledger, not only the
+     * generation. Before this arm the same state reported a path key and an edge id, and the peer
+     * whose ack releases the whole group was recoverable only from a refusal string the control
+     * plane hands back to a caller and stores nowhere.
+     */
+    @Test
+    fun aCarriedHandoffFrozenOnADeadGenerationNamesItsDonor() {
+        val frozen = carryFrozenOnADeadGeneration()
+        assertAll(
+            // ── the rig: the state really is the frozen one, in each of its three premises.
+            {
+                assertEquals(
+                    40L,
+                    frozen.carriedResidualOn(e2, alice, bob),
+                    "rig: the carried row at the dead key is uncancelled — otherwise nothing is blocked",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(e1, e3),
+                    frozen.lineageOf(g2),
+                    "rig: g2's live lineage really has moved on to e3, so PathKey.of(e2) is dead",
+                )
+            },
+            {
+                assertEquals(
+                    emptyMap(),
+                    frozen.transfersAt(PathKey.of(e2)),
+                    "rig: the row is in the relocation matrix and NOWHERE in the base one — the " +
+                        "shape a carry produces, and the shape a base-only enumeration cannot see",
+                )
+            },
+            // ── the property: donor, key and residual, on the durable surface — added to the
+            // path-keyed report that was the whole diagnosis before, never replacing it.
+            {
+                assertEquals(
+                    listOf(
+                        LedgerConflict.OrphanedTransferPath(PathKey.of(e2)),
+                        LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 40L),
+                    ),
+                    frozen.validate(),
+                    "the blocked move's donor must be named on the ledger",
+                )
+            },
+        )
+    }
+
+    /**
+     * The liveness clause's control arm: the identical carried row at the key `g2`'s lineage still
+     * reads. Nothing is blocked there — the next move is the one that will carry it — so the report
+     * is about the key having gone dead, not about a carried row existing.
+     */
+    @Test
+    fun aCarriedHandoffAtTheGroupsLiveKeyIsNotFrozen() {
+        val live = carryFrozenOnADeadGeneration(deadKey = e3)
+        assertAll(
+            {
+                assertEquals(
+                    40L,
+                    live.carriedResidualOn(e3, alice, bob),
+                    "rig: the same uncancelled residual, moved onto the live key",
+                )
+            },
+            { assertEquals(listOf(e1, e3), live.lineageOf(g2), "rig: …which is the key g2 reads") },
+            { assertTrue(live.validate().isEmpty(), "a live key blocks nothing: ${live.validate()}") },
+        )
+    }
+
+    /**
+     * The residual clause's control arm, and the §5.4 (iii) idempotence correspondence: a row a
+     * later move already carried onward is cancelled to exactly zero by `transferRelocOut`, so it
+     * blocks nothing and is not reported. This is the same predicate
+     * `EntitlementLedger.relocationPatch` refuses on, which is why the two agree by construction
+     * rather than by coincidence — see `aDrainedCarriedRowDoesNotReRefuseWhenItsDonorIsGone`.
+     */
+    @Test
+    fun aCarriedHandoffTheNextMoveAlreadyCarriedOnwardIsNotFrozen() {
+        val drained = carryFrozenOnADeadGeneration(cancelled = 40L)
+        assertAll(
+            {
+                assertTrue(
+                    alice in drained.carriedDonorsOn(e2),
+                    "rig: alice is still reachable by the enumeration — a donor it never reaches " +
+                        "proves nothing about the residual filter",
+                )
+            },
+            { assertEquals(0L, drained.carriedResidualOn(e2, alice, bob), "rig: …and her row is cancelled") },
+            { assertTrue(drained.validate().isEmpty(), "a carried-onward row is not frozen: ${drained.validate()}") },
+        )
+    }
+
+    /**
+     * A **partial** carry reports the remainder, not the original magnitude and not zero. The arm
+     * exists because both ends of the knob are green under a derivation that reads only
+     * `transferRelocIn`: `40` at the top and `0` at the bottom are both reachable by ignoring
+     * `transferRelocOut` entirely, and only a value strictly between them separates them.
+     */
+    @Test
+    fun aPartiallyCarriedHandoffReportsOnlyWhatIsLeft() {
+        val partial = carryFrozenOnADeadGeneration(cancelled = 15L)
+        assertEquals(
+            listOf(
+                LedgerConflict.OrphanedTransferPath(PathKey.of(e2)),
+                LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 25L),
+            ),
+            partial.validate(),
+            "the reported total is the uncancelled remainder, 40 − 15",
+        )
+    }
+
+    /**
+     * The standing silent exception (§10.11), shared with [EntitlementLedger.holdings] and with
+     * [LedgerConflict.OrphanedTransferPath]: while `g2` has no live inbound at all — the window
+     * after the old generation retires and before the new one activates — there is no move to be
+     * blocked, and reporting one would fire on the normal middle of an honest reshape.
+     */
+    @Test
+    fun theReshapeWindowIsNotAFrozenHandoff() {
+        val midReshape = carryFrozenOnADeadGeneration(successor = Lifecycle.PREPARED)
+        assertAll(
+            { assertEquals(null, midReshape.lineageOf(g2), "rig: g2 has no live inbound at all") },
+            {
+                assertEquals(
+                    40L,
+                    midReshape.carriedResidualOn(e2, alice, bob),
+                    "rig: …while the uncancelled residual is exactly the one reported above",
+                )
+            },
+            { assertTrue(midReshape.validate().isEmpty(), "the reshape window stays silent: ${midReshape.validate()}") },
+        )
+    }
+
+    /**
+     * **Per-donor attribution, which is the whole point of the arm.** Two donors hold a carried row
+     * at the same dead key and only one of them still blocks the move; the report names that one and
+     * says nothing about the other. A report keyed on the path — which is all `main` had — cannot
+     * make this distinction at all, and an operator reading it has no way to tell which peer to go
+     * looking for.
+     */
+    @Test
+    fun onlyTheDonorsWhoseRowsAreStillUncancelledAreNamed() {
+        val twoDonors = carryFrozenOnADeadGeneration().piece(
+            EntitlementLedger.of(
+                transferRelocIn = mapOf(PathKey.of(e2) to mapOf(carol to GCounter.of(bob to 70L))),
+                transferRelocOut = mapOf(PathKey.of(e2) to mapOf(carol to GCounter.of(bob to 70L))),
+            ),
+        )
+        assertAll(
+            {
+                assertEquals(
+                    setOf(alice, carol),
+                    twoDonors.carriedDonorsOn(e2),
+                    "rig: BOTH donors are reachable by the enumeration",
+                )
+            },
+            {
+                assertEquals(
+                    0L,
+                    twoDonors.carriedResidualOn(e2, carol, bob),
+                    "rig: …and carol's is already carried onward, so only the residual filter separates them",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(
+                        LedgerConflict.OrphanedTransferPath(PathKey.of(e2)),
+                        LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 40L),
+                    ),
+                    twoDonors.validate(),
+                    "only the donor still blocking the move is named",
+                )
+            },
+        )
+    }
+
+    /**
+     * A key naming no generation this ledger knows is unreadable by construction, so there is no
+     * move for it to block — [LedgerConflict.OrphanedTransferPath] owns that state and this arm is
+     * deliberately silent on it. The root path falls out the same way: it names no edge, and no
+     * reshape can move it out from under its rows.
+     */
+    @Test
+    fun aCarriedRowAtAnUnknownOrRootKeyIsNotAFrozenHandoff() {
+        val dangling = EntitlementLedger.of(
+            records = mapOf(e1 to setOf(AttachmentRecord(e1, root, g1, Weight.ONE))),
+            transferRelocIn = mapOf(
+                PathKey.of(AttachmentId("unknown")) to mapOf(alice to GCounter.of(bob to 40L)),
+                PathKey.ROOT to mapOf(alice to GCounter.of(carol to 10L)),
+            ),
+        )
+        assertAll(
+            {
+                assertEquals(
+                    listOf(LedgerConflict.OrphanedTransferPath(PathKey.of(AttachmentId("unknown")))),
+                    dangling.validate().filterIsInstance<LedgerConflict.OrphanedTransferPath>(),
+                    "rig: the dangling key is reported, by the arm that owns it",
+                )
+            },
+            {
+                assertEquals(
+                    emptyList(),
+                    dangling.validate().filterIsInstance<LedgerConflict.FrozenCarriedHandoff>(),
+                    "neither an unknown generation nor the root path can block a move",
+                )
+            },
+        )
+    }
+
+    /**
+     * **The amnesiac rejoiner (#2577 / `SlotFinals.transfers`), and why this arm does not reward
+     * it.** A donor back with a fresh durable store honestly declares `transfers = emptyMap()`,
+     * which clears the `unackedCarriedDonors` refusal while under-declaring her base rows. The
+     * question this arm answers is what that buys her *here*.
+     *
+     * The answer is nothing on the blocking row: it lives in `transferRelocIn`, which is
+     * control-plane-authored and held on the **receiver**, so no ack can under-declare it and the
+     * only thing that clears this report is the row genuinely moving — modelled below exactly as
+     * `relocationPatch` writes it. What the amnesiac ack *does* buy is the abandonment of her base
+     * row, and that stays [LedgerConflict.OrphanedTransferPath]'s business.
+     *
+     * Both magnitudes are asserted rather than the flattering one, because
+     * [LedgerConflict.OrphanedTransferPath]'s clause 2 is a documented **magnitude** test: where the
+     * carried row is the larger of the two it covers the abandoned base row and masks the report, so
+     * the state goes fully silent. That blind spot is pre-existing and this arm does not close it;
+     * pinning it here is what stops a later reader concluding from the 55 case that it was closed.
+     */
+    @Test
+    fun anAmnesiacAckClearsTheFrozenReportOnlyByMovingTheRowAndNotTheOrphanItLeaves() {
+        fun withBaseRow(base: Long): EntitlementLedger = carryFrozenOnADeadGeneration().piece(
+            EntitlementLedger.of(transfers = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to base)))),
+        )
+
+        // The carry an amnesiac ack still produces: the control-plane row moves in full, the
+        // under-declared base row does not move at all.
+        val amnesiacCarry = EntitlementLedger.of(
+            transferRelocOut = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(bob to 40L))),
+            transferRelocIn = mapOf(PathKey.of(e3) to mapOf(alice to GCounter.of(bob to 40L))),
+        )
+        val biggerBase = withBaseRow(55L)
+        val smallerBase = withBaseRow(25L)
+        assertAll(
+            // ── the rig: both states are frozen before the ack, and named on the donor.
+            {
+                assertEquals(
+                    listOf(LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 40L)),
+                    biggerBase.validate().filterIsInstance<LedgerConflict.FrozenCarriedHandoff>(),
+                    "rig: the move really is blocked on alice before she acks",
+                )
+            },
+            // ── the property: the report clears only because the row MOVED, base row or no.
+            {
+                assertEquals(
+                    emptyList(),
+                    biggerBase.piece(amnesiacCarry).validate()
+                        .filterIsInstance<LedgerConflict.FrozenCarriedHandoff>(),
+                    "the carried row was moved in full — an ack cannot under-declare a row it does not own",
+                )
+            },
+            {
+                assertEquals(
+                    40L,
+                    biggerBase.piece(amnesiacCarry).carriedResidualOn(e3, alice, bob),
+                    "…and it landed at the live key, so the recipient's credit really is readable again",
+                )
+            },
+            // ── what the amnesiac ack DOES buy: the base row is abandoned, and still voiced.
+            {
+                assertEquals(
+                    listOf(LedgerConflict.OrphanedTransferPath(PathKey.of(e2))),
+                    biggerBase.piece(amnesiacCarry).validate()
+                        .filterIsInstance<LedgerConflict.OrphanedTransferPath>(),
+                    "the under-declared base row stays loud, on the arm that owns it",
+                )
+            },
+            // ── …except where clause 2's magnitude test masks it. Pre-existing, not closed here.
+            {
+                assertTrue(
+                    smallerBase.piece(amnesiacCarry).validate().isEmpty(),
+                    "a base row smaller than the carried one is MASKED and the state goes silent: " +
+                        "${smallerBase.piece(amnesiacCarry).validate()}",
+                )
+            },
+        )
+    }
+
+    /**
+     * The residual is summed over its **positive** cells, never netted — and the arm exists because
+     * the two spellings differ only on a state no other arm reaches, so netting was green across the
+     * whole suite.
+     *
+     * A negative cell is a `transferRelocOut` observed without the `transferRelocIn` it cancels: an
+     * observer-completeness break (§6.4), reachable on a partially-delivered state. Netting it
+     * against a live positive cell elsewhere lets an incomplete delivery **retire a real refusal** —
+     * which is why both halves are asserted here. `EntitlementLedger.relocationPatch` reads the same
+     * `carriedResidualTotal`, so the mis-spelling would not merely lose a report: it would let the
+     * move proceed and reassign `bob`'s credit to the donor upstream of `alice`, the #2366 defect the
+     * whole refusal exists to prevent.
+     */
+    @Test
+    fun aNegativeCellFromAPartialDeliveryDoesNotCancelALiveResidualElsewhere() {
+        val partiallyDelivered = carryFrozenOnADeadGeneration().piece(
+            // `Out` for a recipient whose matching `In` has not arrived: −50 against the live +40.
+            EntitlementLedger.of(
+                transferRelocOut = mapOf(PathKey.of(e2) to mapOf(alice to GCounter.of(carol to 50L))),
+            ),
+        )
+        assertAll(
+            {
+                assertEquals(
+                    40L to -50L,
+                    partiallyDelivered.carriedResidualOn(e2, alice, bob) to
+                        partiallyDelivered.carriedResidualOn(e2, alice, carol),
+                    "rig: one live cell and one negative one, netting to −10 — the state that separates " +
+                        "a positive-cells sum from a net",
+                )
+            },
+            {
+                assertEquals(
+                    listOf(LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 40L)),
+                    partiallyDelivered.validate().filterIsInstance<LedgerConflict.FrozenCarriedHandoff>(),
+                    "the live 40 is still frozen and still reported — an undelivered cancellation " +
+                        "elsewhere does not pay for it",
+                )
+            },
+            {
+                assertIs<Relocation.Refused>(
+                    partiallyDelivered.relocationPatch(e3, mapOf(e2 to mapOf(bob to SlotFinals.ZERO))),
+                    "…and the refusal that shares the same helper still refuses, so a partial delivery " +
+                        "cannot retire it",
+                )
+            },
+        )
+    }
+
+    /**
+     * The report's canonical order (the [Comparable] contract every peer folds): the new kind takes
+     * the last rank, and two frozen hand-offs sort by path, then donor, then residual. Asserted
+     * directly on the sealed subtypes so `compareTo` is pinned without needing one state that
+     * reaches every kind at once.
+     */
+    @Test
+    fun frozenCarriedHandoffTakesTheLastRankAndSortsByPathThenDonor() {
+        val onE1 = LedgerConflict.FrozenCarriedHandoff(PathKey.of(e1), bob, 1L)
+        val onE2Alice = LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), alice, 9L)
+        val onE2Bob = LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), bob, 1L)
+        val onE2BobMore = LedgerConflict.FrozenCarriedHandoff(PathKey.of(e2), bob, 2L)
+        val other = LedgerConflict.OrphanedTransferPath(PathKey.of(e2))
+        assertEquals(
+            listOf(other, onE1, onE2Alice, onE2Bob, onE2BobMore),
+            listOf(onE2BobMore, onE2Bob, onE2Alice, onE1, other).sorted(),
+        )
     }
 }

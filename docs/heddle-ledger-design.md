@@ -325,6 +325,26 @@ list a false conflict that self-heals on anti-entropy. The checks:
   alone touches no topology at all, so the two cases separate cleanly. Alone among these checks
   it is **not** a delivery transient in either direction: `minted` is grow-only and a record's
   root never changes, so once two roots are on a state they stay.
+- **`FrozenCarriedHandoff(path, donor, carried)`** — the donors a blocked generation move is
+  waiting on (#2600). `relocationPatch` refuses when a still-uncancelled *carried* row's donor is
+  absent from the fence's acks, and the refusal is per **edge**: one absent donor freezes every
+  pocket at the group — measured at 150 units and four of four peers on zero, 60% of it belonging
+  to peers who never left. The aggregate was already visible (`edge(e).outstanding`,
+  `ClosureViolation`, `OrphanedTransferPath`); the *donor* existed only in
+  `Relocation.Refused.reason`, returned to the caller of a `Reconcile` and recorded nowhere.
+  Predicate: `transferRelocIn − transferRelocOut > 0` for some recipient, at a key whose edge is no
+  longer its child's live inbound. Both matrices are written by `relocationPatch` and by nothing
+  else, so the residual is **provenance**, not a magnitude coincidence — which is why it needs no
+  consequence clause (a row carried onward cancels to exactly zero) and why it survives the masking
+  blind spot `OrphanedTransferPath` documents. Enumerated over `transferRelocIn` alone: a *base*
+  row at a dead key is the documented left-untouched case and blocks nothing. Ackedness is
+  `FenceState`, not ledger state, so the report names every donor whose ack the move **requires**
+  — a superset of the one that is missing, and exactly the actionable set. Deliberately silent in
+  the reshape window and on keys naming no known generation. ⚠ It is not silenced by an ack that
+  under-declares: the blocking row is control-plane-authored, so the amnesiac rejoiner of
+  `SlotFinals.transfers` clears it only by the row genuinely moving — what such an ack still buys
+  is the abandonment of that donor's *base* rows, which stays `OrphanedTransferPath`'s business and
+  is masked by its clause 2 wherever the carried row is the larger of the two.
 
 **Honest scope note (fix 6, from C/D reviews):** under the stated non-Byzantine model,
 `piece`'s max erases the loser of an *equivocated* one-writer slot, so `heddle-design.md`

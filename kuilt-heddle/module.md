@@ -97,8 +97,11 @@ whole ledger inherits the three merge laws for free.
   (inbound edges that loop instead of reaching a root), `OrphanedTransferPath`
   (a peer-to-peer hand-off the topology moved out from under, which conservation
   is structurally blind to), `MultipleRoots` (supply minted at more than one root —
-  two bootstraps merged into one ledger) and `ConservationViolation` (the global
-  backstop: more service charged than supply ever minted).
+  two bootstraps merged into one ledger), `ConservationViolation` (the global
+  backstop: more service charged than supply ever minted) and
+  `FrozenCarriedHandoff` (a hand-off frozen on a replaced generation, naming the
+  peer whose fence ack the blocked move is waiting on — the one report here that
+  names a peer as the *cause* rather than as a party to the fault).
 - `EdgeSummary` — the parent-facing projection of one edge (`issued`/`returned`/
   `spent` and the derived `outstanding`).
 - `EntitlementLedger` — the replicated `Quilted` state itself.
