@@ -310,13 +310,19 @@ internal class VacuityBreakdownProbe {
         // "the probe emitted 152 clean rows" are the same green without these.
         //
         // TWO assertions, because the obvious one alone contains the very defect it is here to close.
-        // `expected` is DERIVED from `bindings().size`, so an emptied `bindings()` makes it 0 against
-        // an `emitted` of 0 — a counter compared against itself, green on exactly the input that
-        // matters most. [MIN_BINDINGS] is the floor that makes it falsifiable. It is a FLOOR, not a
-        // census: adding a CRDT raises the real count and leaves it satisfied, while emptying or
-        // gutting the list reds. The shape assertion still earns its place — it is what catches a
-        // loop LEVEL that stopped running (a trimmed `windows`, a removed `enum` arm) with
-        // `bindings()` untouched.
+        // `expected` is DERIVED from every loop bound, `bindings().size` included, so an emptied
+        // `bindings()` makes it 0 against an `emitted` of 0 — a counter compared against itself,
+        // green on exactly the input that matters most. MEASURED, not reasoned: with the floor below
+        // disabled and `bindings()` returning `emptyList()`, this test reports `tests=1 failures=0`.
+        // [MIN_BINDINGS] is what makes it falsifiable. It is a FLOOR, not a census — adding a CRDT
+        // raises the real count and leaves it satisfied, while emptying or gutting the list reds.
+        //
+        // The arm-count assertion is not thereby redundant: it catches an emit that stops happening
+        // while the bounds stay — a `continue`, a guard, an early return inside the nest. Measured
+        // too: a `continue` on one `Retirement` arm reds it with "measured 76 of 152 arms". What it
+        // CANNOT catch, since `expected` reads the same bounds the loops do, is a trimmed bound —
+        // `windows` cut to one entry moves both sides equally and stays green. That is what
+        // [MIN_BINDINGS] pins for the one bound where a silent shrink is plausible.
         assertTrue(
             bindings().size >= MIN_BINDINGS,
             "the probe models only ${bindings().size} bindings (floor $MIN_BINDINGS) — a gutted " +
