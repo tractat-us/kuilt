@@ -13,9 +13,8 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.peerMesh
+import us.tractat.kuilt.core.freshPeerId
 import kotlin.random.Random
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
 
 /**
  * Client-side [Loom] that joins a **hub-spoke mesh** — the spoke counterpart of a
@@ -67,11 +66,10 @@ import kotlin.uuid.Uuid
  * @see peerMesh the composition this loom produces — a peer-mesh spoke that latches Torn when the
  *   hub drops its single link (honouring the incoming-completes-on-Torn contract).
  */
-@OptIn(ExperimentalUuidApi::class)
 public class KtorMeshClientLoom(
     private val httpClient: HttpClient,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    public val selfPeerId: PeerId = PeerId(Uuid.random().toString()),
+    public val selfPeerId: PeerId = freshPeerId(),
     private val random: Random = Random.Default,
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Loom {
