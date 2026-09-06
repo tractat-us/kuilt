@@ -8,8 +8,7 @@ description: The contract for a background worker dispatched into an isolated gi
 **A dispatched worker already has the CLAUDE.md hierarchy.** Measured 2026-09-03: a
 `isolation: "worktree"` subagent's starting context contains `~/.claude/CLAUDE.md`,
 `~/tractatus/CLAUDE.md` and the worktree's own `CLAUDE.md`, verbatim. A probe agent asked to answer
-*without reading any file* quoted back the `detektAll` rule, the `pkill` ban, JDK 21 and the SDKMAN
-rule. So **do not restate them in a brief** — a forty-line preamble of rules the worker already holds
+*without reading any file* quoted back the `pkill` ban, JDK 21 and the SDKMAN rule. So **do not restate them in a brief** — a forty-line preamble of rules the worker already holds
 buries the handful that are genuinely new.
 
 Re-probe after a Claude Code upgrade, or for an agent type with a restricted `tools:` list. It costs
@@ -89,11 +88,13 @@ evidence.
   live in `appleTest` and `wasmJsTest`, so a new abstract member's compile break **cannot** appear in
   `jvmTest`. Run the full `./gradlew build`.
 
-- **Bare `detekt` is `NO-SOURCE`** and reports success without analysing anything. Use `detektAll`.
-  Know its reach: it covers `commonMain` + `jvmMain` + `androidMain` production + `jvmTest`, and
-  reaches **nothing** in `appleMain`/`appleTest`, the native/wasm source sets, `commonTest`, or
-  `spike/`. A green `detektAll` on a PR touching only those proves nothing — say so rather than
-  citing it as a gate.
+- **There is no linter (#2540).** `detekt` and `detektAll` are not tasks — a brief or a doc telling
+  you to run either is stale. Static analysis here is the `check`-wired source-scan guards in the root
+  `build.gradle.kts` (`forbidTightRunTestTimeout`, `forbidProductionDispatcherInTests`,
+  `forbidBareRunCatching`, `forbidPortProbeRebind`, `verifyDocCitations`, and siblings). Because they
+  are source scans rather than a linter's per-source-set task graph, they cover **every** source set on
+  **every** platform — `appleMain`, `commonTest` and `spike/` included — so there is no reach caveat to
+  state. `./gradlew check` runs them all; each has a header comment saying what it does and does not see.
 
 - **The build cache can serve a stale `FROM-CACHE` success** for a test-compile task whose source is
   broken. If any test-compile task shows `FROM-CACHE`, re-run with `--rerun-tasks` (add

@@ -37,7 +37,8 @@ internal suspend fun <T> capturingLogsOf(
     block: suspend (List<ILoggingEvent>) -> T,
 ): T {
     // Through a declared non-null slf4j type first: `getLogger` returns a platform type, and casting
-    // one straight to logback's `Logger` is a nullable-to-non-nullable cast detekt rejects.
+    // one straight to logback's `Logger` is a nullable-to-non-nullable cast detekt rejected, before
+    // #2540 dropped it. Kept: the indirection is the clearer spelling regardless of who enforces it.
     val slf4j: org.slf4j.Logger = LoggerFactory.getLogger(loggerName)
     val logger = slf4j as Logger
     val appender = ListAppender<ILoggingEvent>().apply { start() }
