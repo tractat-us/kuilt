@@ -1156,7 +1156,8 @@ public abstract class SeamConformanceSuite {
     // tolerable while there was only one. With two collectors, `null` plus a named assertion is the
     // difference between "something hung" and "the joiner's flow never terminated". The virtual-
     // time caveat is identical either way: this body runs on `runTest`'s clock, so the 5 s is
-    // virtual and bounds the *trajectory*, not the host.
+    // virtual and bounds the *trajectory*, not the host. That caveat is not academic — see the
+    // collector-ordering comment in the body, which is there because it bit this obligation once.
 
     internal suspend fun runIncomingCompletesWhenSeamCloses(scope: TestScope) {
         if (!capabilities().terminatesIncomingOnClose) return
