@@ -11,9 +11,10 @@ import kotlin.test.assertTrue
 
 /**
  * Shared machinery for the #2601 positive-control rigs — [SymmetricLifecycleObligationRigTest],
- * [SymmetricDeliveryObligationRigTest] and [SymmetricRefusalObligationRigTest].
+ * [SymmetricDeliveryObligationRigTest], [SymmetricRefusalObligationRigTest] and
+ * [SymmetricSelfDialObligationRigTest].
  *
- * All three rigs make the same move: break the **joiner** end of a reference pair, drive one
+ * All four rigs make the same move: break the **joiner** end of a reference pair, drive one
  * [SeamConformanceSuite] obligation body against it, and assert the red lands on the joiner arm that
  * names the defect rather than anywhere else in the same obligation. The mechanism is identical in
  * each, so it lives here once — a second private copy would be the thing this file exists to avoid,

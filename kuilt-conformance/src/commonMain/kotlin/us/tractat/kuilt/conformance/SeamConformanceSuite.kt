@@ -2242,6 +2242,28 @@ public abstract class SeamConformanceSuite {
     // The default [injectSelfDial] returns false, so harnesses that cannot self-dial early-return (a
     // silent skip declared via [selfDialDeclaration]). `incoming` is single-collection (ADR-034) and [connectedPair]
     // does NOT collect either end's `incoming`, so the collectors below are their sole readers.
+    //
+    // **Both ends are checked (#2601), and this row is the one that needed a wider hook.** The other
+    // fourteen rows the sweep found could be asserted on the joiner with no signature change; this one
+    // could not, because its stimulus is *injected* and [injectSelfDial] took only a host — so a joiner
+    // arm written against the old hook would have asserted three properties of a seam nothing had
+    // dialled, which is a green that means nothing. The hook now takes both ends and must inject at
+    // both. What it still cannot do is verify the harness dialled the end it named: a correctly guarded
+    // self-dial is invisible by construction, so there is no observable to check against, the same
+    // structural gap [selfDialDeclaration] records for its `NotConstructible` arm.
+    //
+    // **Where the joiner arms can fail, and where they cannot.** No fixture supplies a self-dial —
+    // unlike the roster, which a shared registry can fill ([JoinerRosterOrigin] is the declaration for
+    // exactly that) — so the joiner arms rest entirely on the joining seam's own guard. On every
+    // in-tree harness that declares Proven, both ends are the same class (`NwSeam`, `BridgePeerLink`,
+    // `MCSessionLink`) or the guard is a factory-level `require` (mDNS), so the arms currently pass by
+    // sharing an implementation rather than by two independent guards agreeing. That is worth writing
+    // down rather than counting as proof: the row's value is that a fabric which later splits its ends
+    // — or gains a joiner whose guard lives elsewhere — cannot regress on the joining device while the
+    // host keeps looking healthy. Two of the three joiner arms are also weaker than they read: the
+    // roster arm is structurally blind on a fabric that republishes `registry.peers + selfId`
+    // (`MCSessionLink` does), and the literal #1466 direction — evicting *self* — reds
+    // [connectedPair]'s continuous monitor before this arm is reached.
 
     @Test
     public fun selfDialIsRejected(): TestResult = runTest { runSelfDialIsRejected(this) }
@@ -2249,6 +2271,7 @@ public abstract class SeamConformanceSuite {
     internal suspend fun runSelfDialIsRejected(scope: TestScope) {
         scope.connectedPair { host, joiner ->
             val hostPeersBefore = host.peers.value
+            val joinerPeersBefore = joiner.peers.value
             // Declaration first — see incomingCompletesOnInjectedMidSessionDeath for why.
             if (selfDialDeclaration() !is ObligationDeclaration.Proven) return@connectedPair
             val injected = injectSelfDial(host, joiner)
@@ -2263,6 +2286,7 @@ public abstract class SeamConformanceSuite {
             // each end its own window costs virtual time and nothing else, and leaves the host arms
             // byte-identical to the host-only form.
             val hostEcho = probeForSelfEcho(host)
+            val joinerEcho = probeForSelfEcho(joiner)
 
             assertAll(
                 {
@@ -2277,6 +2301,29 @@ public abstract class SeamConformanceSuite {
                     assertIs<SeamState.Woven>(
                         host.state.value,
                         "a rejected self-dial must not re-flip Weaving→Woven nor tear the seam — state stays Woven",
+                    )
+                },
+                {
+                    assertNull(
+                        joinerEcho,
+                        "the JOINER's own broadcast must never loop back to it attributed to selfId either — " +
+                            "a role-split fabric ships a different Seam on each end (#2601), so the host's " +
+                            "guard proves nothing about the one a joining device runs",
+                    )
+                },
+                {
+                    assertEquals(
+                        joinerPeersBefore,
+                        joiner.peers.value,
+                        "a rejected self-dial must not change the JOINER's peers either (self never " +
+                            "registered as a remote there)",
+                    )
+                },
+                {
+                    assertIs<SeamState.Woven>(
+                        joiner.state.value,
+                        "the JOINER's state must stay Woven through a rejected self-dial too — no re-flip " +
+                            "Weaving→Woven, no tear",
                     )
                 },
             )
