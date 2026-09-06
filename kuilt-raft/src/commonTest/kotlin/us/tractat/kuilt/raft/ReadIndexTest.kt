@@ -9,9 +9,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -273,14 +273,14 @@ class ReadIndexTest {
         val pv = awaitSent(network) { it is RaftMessage.PreVote } as RaftMessage.PreVote
         network.deliver(
             from = f1, to = l,
-            bytes = Cbor.encodeToByteArray<RaftMessage>(
+            bytes = raftCbor.encodeToByteArray<RaftMessage>(
                 RaftMessage.PreVoteResponse(term = pv.term - 1, voteGranted = true, proposedTerm = pv.term, round = pv.round),
             ),
         )
         val rv = awaitSent(network) { it is RaftMessage.RequestVote } as RaftMessage.RequestVote
         network.deliver(
             from = f1, to = l,
-            bytes = Cbor.encodeToByteArray<RaftMessage>(
+            bytes = raftCbor.encodeToByteArray<RaftMessage>(
                 RaftMessage.RequestVoteResponse(term = rv.term, voteGranted = true),
             ),
         )
@@ -483,7 +483,7 @@ class ReadIndexTest {
             // the round-H heartbeat, BEFORE the read was queued). With the round-nonce fix,
             // echoedRound=H ≤ sinceRound=H → excluded. Without the fix, credited to current
             // heartbeatRound=H+1 > sinceRound=H → would confirm (quorum: self+f1 = 2).
-            val staleAck = Cbor.encodeToByteArray<RaftMessage>(
+            val staleAck = raftCbor.encodeToByteArray<RaftMessage>(
                 RaftMessage.AppendEntriesResponse(term = 1L, success = true, matchIndex = 1L, echoedRound = 0L)
             )
             network.deliver(from = f1, to = l, bytes = staleAck)
@@ -558,7 +558,7 @@ class ReadIndexTest {
         // Inject stale ACKs from staleA, staleB — arrive at current heartbeatRound H.
         // These set lastAckRound[staleA] = lastAckRound[staleB] = H.
         // The read is queued AFTER these ACKs, so sinceRound = H = their lastAckRound.
-        val staleAck = Cbor.encodeToByteArray<RaftMessage>(
+        val staleAck = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.AppendEntriesResponse(term = leaderTerm, success = true, matchIndex = 1L)
         )
         sim.network.deliver(from = staleA, to = leaderId, bytes = staleAck)
@@ -577,7 +577,7 @@ class ReadIndexTest {
             // Bug: recentVoterContacts = {staleA, staleB, freshC} → 3+1 = 4 ≥ 3 → CONFIRMED.
             // Fix: lastAckRound[staleA]=H=sinceRound → excluded; same for staleB.
             //   Only freshC (lastAckRound=H+1) counts → 1+1=2 < 3 → NOT confirmed.
-            val freshAck = Cbor.encodeToByteArray<RaftMessage>(
+            val freshAck = raftCbor.encodeToByteArray<RaftMessage>(
                 RaftMessage.AppendEntriesResponse(term = leaderTerm, success = true, matchIndex = 1L)
             )
             sim.network.deliver(from = freshC, to = leaderId, bytes = freshAck)
