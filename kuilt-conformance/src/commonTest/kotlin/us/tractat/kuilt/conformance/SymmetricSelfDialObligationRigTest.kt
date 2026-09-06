@@ -159,13 +159,19 @@ class SymmetricSelfDialObligationRigTest {
     }
 
     /**
-     * The second gate, pinned on its own: a harness that claims `Proven` and injects nothing still
-     * asserts nothing, because the row cannot tell a dropped self-dial from one that never happened.
-     * Delete the `injected` check and this test reds. What it costs is answered by the next test —
-     * the meta-test refuses the claim.
+     * The second gate, pinned on its own: a hook that returns `false` must skip every arm **even
+     * though it perturbed something**. That is the case [SeamConformanceSuite.injectSelfDial]'s KDoc
+     * names — a harness that can dial one end and not the other must return `false` — and a row that
+     * asserted anyway would judge a fabric on a half-applied injection. Delete the `injected` check
+     * and this test reds.
+     *
+     * **This control was vacuous when first written and its own mutation row caught it.** The harness
+     * used to return `false` *without* touching the joiner, so removing the gate left the row
+     * asserting against an intact pair, and M7 came back green — a control proving nothing. The
+     * stimulus has to be "dialled AND reported false", not "not dialled".
      */
     @Test
-    fun theInjectionGateSkipsEveryArmWhenNothingWasDialled(): TestResult = runTest {
+    fun theInjectionGateSkipsEveryArmEvenWhenSomethingWasDialled(): TestResult = runTest {
         brokenJoinerHarness(::SeamThatLoopsItsOwnBroadcastBack, injects = false).runSelfDialIsRejected(this)
     }
 
@@ -268,10 +274,12 @@ class SymmetricSelfDialObligationRigTest {
         override fun selfDialDeclaration(): ObligationDeclaration =
             if (gap) ObligationDeclaration.Gap(GAP_URL) else ObligationDeclaration.Proven
 
+        // The perturbation runs whatever [injects] says, so a `false` return models the harness that
+        // dialled one end and could not dial the other — the shape the row's second gate exists for.
+        // Returning early instead would leave the pair intact and make that gate's control vacuous.
         override suspend fun injectSelfDial(host: Seam, joiner: Seam): Boolean {
-            if (!injects) return false
             onInject()
-            return true
+            return injects
         }
     }
 
