@@ -48,6 +48,14 @@ tasks.withType<AbstractTestTask>().configureEach {
     }
 }
 
+// One asymmetry worth knowing before it wastes someone's afternoon, measured rather than assumed.
+// Asking for an excluded probe BY NAME without its flag behaves differently on the two task types:
+// a JVM `Test` fails loudly (`No tests found for given includes: [*VacuityBreakdownProbe*]`), while
+// `macosArm64Test --tests '*NwConnectionDrainStressTest*'` reports BUILD SUCCESSFUL and writes no XML
+// at all. So a native run that "passed" in two seconds ran nothing — pass -Pconcurrency.stress.tests=true.
+// That is still strictly better than the self-skip it replaced: no results row is written, so the
+// standard "count the test in build/test-results/" check sees an ABSENCE rather than a green PASS.
+
 // A SECOND block, on `Test` rather than `AbstractTestTask`, because `jvmArgs` is declared on `Test`
 // and does not exist on the common supertype — so this cannot be folded into an `else` above.
 if (runConcurrencyStress) {
