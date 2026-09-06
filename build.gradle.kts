@@ -6995,6 +6995,104 @@ val forbidBoltRejoiningTheLattice by tasks.registering {
 // The stale direction is checked too, for the same reason `forbidUnlintedModule` checks its own
 // allowlist: a row for a module that has since been renamed or deleted describes a repo that no
 // longer exists, and nothing else in the build would ever notice.
+// A skill's `description:` is EAGER context — Claude Code puts it in the skill listing on every
+// turn of every session and every subagent, in every repo that vendors it — and the harness caps
+// each one at `skillListingMaxDescChars`, default **1536 characters**, truncating the overflow with
+// an ellipsis. Past that boundary a trigger phrase is not weak, it is ABSENT: it never reaches the
+// deciding model, so it can never route anything (#2662).
+//
+// That failure is invisible from inside the repo, which is why it needs a guard rather than a note.
+// Nothing reds, no build fails, the file still reads as if it covers the concept — and the natural
+// response to "the skill didn't fire" is to APPEND another phrase, which lands in the dead zone too
+// and makes the file longer without making it more capable. `kuilt-primitives` reached 7,903
+// characters that way: 81% of it had never been seen by any model, including the routes added by
+// #2541 and #2572 specifically to fix a skill that was failing to route.
+//
+// So the budget is zero-sum by construction, and that is the point. Adding a trigger means choosing
+// one to drop. `.claude/skills/kuilt-primitives/SKILL.md` is also SOURCE OF TRUTH — consumer repos
+// vendor a byte-identical copy on a sync job and cannot fix it locally — so an overflow here
+// propagates unreviewed to every consumer.
+//
+// The second check is a different failure with the same silence. The description is one enormous
+// unquoted YAML plain scalar, in which `: ` opens a mapping and ` #` opens a comment; either one
+// breaks the whole frontmatter block, and a skill whose frontmatter does not parse simply STOPS
+// LOADING. It fails open — no error, no red, the skill just quietly stops being offered. Prefer an
+// em-dash. (This is lexical, not a YAML parse: the build has no YAML library on its classpath, and
+// these are the two hazards that have actually bitten.)
+val verifySkillDescriptionBudget by tasks.registering {
+    group = "verification"
+    description = "Fails if a SKILL.md `description:` exceeds the skill-listing cap or breaks its " +
+        "YAML plain scalar (#2662)."
+    val skillFiles = rootDir.resolve(".claude/skills").listFiles()
+        ?.filter { it.isDirectory }
+        ?.map { it.resolve("SKILL.md") }
+        ?.filter { it.isFile }
+        ?.sortedBy { it.parentFile.name }
+        .orEmpty()
+    inputs.files(skillFiles).withPropertyName("skillFiles")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // The SET of skill directories is half the verdict and is not itself a file this task reads —
+    // same reason `verifyModuleTable` declares `modulePaths`. Without it, ADDING a skill would land
+    // on a cached green.
+    inputs.property("skillNames", skillFiles.map { it.parentFile.name })
+    val stamp = layout.buildDirectory.file("verification/verify-skill-description-budget.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    doLast {
+        // Claude Code's `skillListingMaxDescChars` default, read out of the shipped CLI bundle and
+        // confirmed against a live listing, whose ellipsis fell at exactly character 1536.
+        val cap = 1536
+        val failures = mutableListOf<String>()
+        skillFiles.forEach { file ->
+            val text = file.readText()
+            val frontmatter = Regex("""\A---\R(.*?)\R---\R""", RegexOption.DOT_MATCHES_ALL)
+                .find(text)?.groupValues?.get(1)
+            if (frontmatter == null) {
+                failures += "${file.parentFile.name}: no YAML frontmatter block, so the skill " +
+                    "cannot declare a name or a description and will not load at all."
+                return@forEach
+            }
+            // The scalar runs from `description:` to the next line that starts a new key, which is
+            // how a multi-line plain scalar is folded. Mirrors the audit tool's reader.
+            val body = Regex("""^description:[ \t]*(.*?)(?=^\w[\w-]*:|\z)""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.MULTILINE))
+                .find(frontmatter)?.groupValues?.get(1)?.trim()
+            if (body.isNullOrEmpty()) {
+                failures += "${file.parentFile.name}: frontmatter has no non-empty `description:`. " +
+                    "Without one the harness falls back to the first paragraph of the body, so the " +
+                    "skill routes on text nobody wrote as a trigger."
+                return@forEach
+            }
+            if (body.length > cap) {
+                failures += "${file.parentFile.name}: `description:` is ${body.length} characters, " +
+                    "${body.length - cap} over the $cap-character skill-listing cap. The last " +
+                    "${body.length - cap} characters are TRUNCATED before any model sees them, so " +
+                    "every trigger phrase in them routes nothing. THE FIX is to remove a trigger, " +
+                    "not to add one — the budget is zero-sum. Explanatory prose belongs in the " +
+                    "body (lazy, unbounded) or in the cookbook; the description holds triggers only."
+            }
+            if (body.contains(": ")) {
+                failures += "${file.parentFile.name}: `description:` contains a colon-space, which " +
+                    "ends the YAML plain scalar and breaks the whole frontmatter block. The skill " +
+                    "then stops loading entirely, with nothing going red. Use an em-dash."
+            }
+            if (body.contains(" #")) {
+                failures += "${file.parentFile.name}: `description:` contains a space-hash, which " +
+                    "starts a YAML comment and truncates the scalar. Same silent unloading as " +
+                    "colon-space. Reword it."
+            }
+        }
+        if (failures.isNotEmpty()) {
+            error(
+                "Skill description(s) violate the eager-context contract (#2662):\n  " +
+                    failures.joinToString("\n  "),
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — ${skillFiles.size} skill description(s) within the $cap-char cap\n")
+    }
+}
+
 val verifyModuleTable by tasks.registering {
     group = "verification"
     description = "Fails if a :kuilt-* module has no row in CLAUDE.md's module table (#2257)."
@@ -8162,6 +8260,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("verifySampleLinks"))
         dependsOn(rootProject.tasks.named("verifySamplesAreRun"))
         dependsOn(rootProject.tasks.named("verifyModuleTable"))
+        dependsOn(rootProject.tasks.named("verifySkillDescriptionBudget"))
         dependsOn(rootProject.tasks.named("verifySeamHarnessCoverage"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
         dependsOn(rootProject.tasks.named("forbidCancellationRethrowAroundBound"))
