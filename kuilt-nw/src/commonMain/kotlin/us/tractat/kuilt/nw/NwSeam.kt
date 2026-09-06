@@ -446,6 +446,28 @@ internal class NwSeam(
      */
     internal val settledEndpoints: StateFlow<Set<String>> = _settledEndpoints.asStateFlow()
 
+    /**
+     * The roster. Written ONLY through [publishPeersLocked], and therefore only under [lock] and only
+     * while this seam has not begun tearing down — the collapse [latchTorn] publishes is **final**, not
+     * merely last-so-far (#2648).
+     *
+     * The guard is what makes the collapse safe to move ahead of the `Torn` write rather than merely
+     * earlier. [close] used to collapse in a SECOND lock acquisition after [latchTorn] had already
+     * published `Torn`, so a receive-loop coroutine blocked on [lock] could resolve an identity in
+     * between and re-add a remote to a seam that was already `Torn` — healed only because the collapse
+     * came afterwards. Moving the collapse ahead of the latch without this guard would turn that
+     * self-healing window into a permanent contract violation: the collapse would run first, the late
+     * [addRemotePeer] would resurrect the peer, and nothing would run after it to discard it again.
+     *
+     * The guard reads [closed] rather than a second marker, and rather than `_state`. `_state` is
+     * unusable for it — between the collapse and the latch this seam is not yet `Torn`, so a publish
+     * landing there would be admitted (the argument `BridgePeerLink.publishRoster` makes at length).
+     * [closed] is not `_state`: it is CAS-set at the very top of [latchTorn], strictly BEFORE the lock
+     * that collapses is even taken, so it is *conservative* — it refuses a publish in the window before
+     * the collapse too, and every publish it refuses there is one the imminent collapse would have
+     * discarded anyway. Reusing it keeps "teardown has begun" a single fact; this file already reads it
+     * for exactly that in five loops.
+     */
     private val _peers = MutableStateFlow(setOf(selfId))
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
@@ -1365,9 +1387,27 @@ internal class NwSeam(
         )
     }
 
+    /**
+     * The single writer of [_peers]. **Called under [lock]**, which is what lets it be a plain
+     * read-then-write: [lock] already serialises every roster writer, so a `_peers.update { }` CAS would
+     * add nothing here — and could not carry the guard anyway, since the collapse stores `setOf(selfId)`,
+     * frequently the value the flow already holds, so a concurrent `compareAndSet` succeeds against it
+     * rather than retrying (`BridgePeerLink.publishRoster`).
+     *
+     * Refuses every publish once [closed] is set: see [_peers] for why the collapse must be final and why
+     * the guard keys on [closed]. Deliberately guards the SUBTRACTIVE writer ([evictPeerLocked]) too. That
+     * one cannot resurrect a peer today and so is safe by arithmetic rather than by rule, which is exactly
+     * the kind of accident this is meant to stop resting on: "nothing is published after the collapse" is
+     * a property of the flow, not of which operations happen to be subtractive.
+     */
+    private fun publishPeersLocked(transform: (Set<PeerId>) -> Set<PeerId>) {
+        if (closed.value) return
+        _peers.value = transform(_peers.value)
+    }
+
     /** Add [remoteId] to the peer set and flip Weaving→Woven. Called under [lock]. */
     private fun addRemotePeer(remoteId: PeerId) {
-        _peers.update { it + remoteId }
+        publishPeersLocked { it + remoteId }
         val wove = _state.value is SeamState.Weaving
         if (wove) _state.value = SeamState.Woven
         refreshSettledLocked()
@@ -1427,7 +1467,7 @@ internal class NwSeam(
      */
     private fun evictPeerLocked(peer: PeerId) {
         registry.remove(peer)
-        _peers.update { it - peer }
+        publishPeersLocked { it - peer }
         refreshSettledLocked()
         if (registry.isEmpty() && _state.value is SeamState.Woven) {
             _state.value = SeamState.Weaving
@@ -2196,7 +2236,10 @@ internal class NwSeam(
             peerEndpoint.clear()
             selfEndpointIds.clear()
             _settledEndpoints.value = emptySet()
-            _peers.value = setOf(selfId)
+            // The roster collapse used to live HERE, one lock acquisition too late (#2648) — it is now
+            // published atomically with the `Torn` latch in [latchTorn], which this method has already
+            // called. Nothing replaces it: [publishPeersLocked] refuses every write from here on, so the
+            // registry/conns clearing below cannot disturb the collapsed roster.
             snapshot
         }
         for (connId in targets) {
@@ -2242,6 +2285,16 @@ internal class NwSeam(
         }
         log.info { "nw.seam.TORN self=${selfId.value} reason=$reason peers-were=${_peers.value.map { it.value }}" }
         lock.withLock {
+            // #2648: the collapse is published ATOMICALLY WITH the terminal latch, not after it. A torn
+            // fabric can reach nobody, so `Seam.peers` requires the collapsed roster to be observable by
+            // anyone the `Torn` write wakes. [close] used to do this in a SECOND lock acquisition after
+            // this method returned, so a `state` collector resuming inline inside the write below read
+            // `Torn` alongside the pre-close roster — every time, not as a race (`NwCloseCollapseOrderTest`
+            // measured 200 of 200). Ahead of the `_state` write and inside the SAME critical section is
+            // the "atomically with" the contract allows; the write itself must stay under [lock] for the
+            // separate reason this method's KDoc gives. The [closed] CAS above already refuses every later
+            // publish (see [_peers]), which is what makes going first safe rather than merely early.
+            _peers.value = setOf(selfId)
             _state.value = SeamState.Torn(reason)
             spool.close()
         }
