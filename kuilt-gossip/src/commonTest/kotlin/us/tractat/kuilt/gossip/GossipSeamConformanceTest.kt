@@ -94,6 +94,9 @@ class GossipSeamConformanceTest : SeamConformanceSuite() {
      */
     override fun midSessionDeathDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
+    /** Proven: this harness drains a peer without tearing the survivor, so no gap (#2623). */
+    override fun membershipDrainDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
+
     // overlay adds no crypto, inherits its base; dissemination is deliberate
     // multi-hop flood — not direct p2p; and the overlay wires no path observer (#1712).
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(
