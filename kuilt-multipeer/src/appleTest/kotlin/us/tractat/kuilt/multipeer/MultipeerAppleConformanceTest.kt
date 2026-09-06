@@ -150,7 +150,7 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
      */
     override suspend fun injectSelfDial(host: Seam, joiner: Seam): Boolean = pair?.injectSelfDial() ?: false
 
-    /** Proven: this harness offers the host a connection to its own identity, so no gap. */
+    /** Proven: this harness offers each end a connection to its own identity, so no gap. */
     override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 }
 
