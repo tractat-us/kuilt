@@ -54,6 +54,9 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            // The WireCodecConformanceSuite TCK (#1822). `:kuilt-conformance` does not depend on
+            // this module at all, so there is no cycle to reason about here.
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.coroutines.test)
         }
         // The Apple wiring test references MultipeerPeerLinkFactory to prove the fabric links
