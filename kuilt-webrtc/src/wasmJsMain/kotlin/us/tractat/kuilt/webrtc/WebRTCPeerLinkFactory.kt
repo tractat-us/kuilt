@@ -34,35 +34,45 @@ import kotlin.random.Random
  *
  * ## Where this stands against the universal factory convention (#1430)
  *
- * This is a [Loom] with a public constructor, so the convention's four shared knobs — `selfId`,
- * `policy`, `weaveTimeout`, `dispatcher` — do apply to it. One of them is a genuine exemption; the
- * other three are **honoured internally but unreachable through [weave]**, which is a gap rather
- * than an exemption. Recorded here so the next reader does not mistake the second group for the
- * first:
+ * This is a [Loom] with a **public** constructor, so the convention's shared knobs do apply to it.
+ * The epic's survey table lists this fabric as having no identity, policy, timeout *or* dispatcher
+ * wiring, and its option (a) states outright that "WebRTC has no timeout wiring"; three of those
+ * four entries are wrong, so what is actually here is recorded below.
  *
- * - **`selfId` — exempt.** Identity is minted per weave inside `connect`, from the rendezvous's own
- *   `sessionName` (`"<displayName>-<8 random letters>"`), and that prefix is what labels this peer
- *   at the far end once the id frame crosses the data channel. A loom-level `selfId` would either
- *   be overwritten per weave — the silently-ignored argument the convention exists to prevent — or
- *   would displace the display-name labelling this fabric's [Loom.join] contract promises. Determinism
- *   for tests already has its seam here: the `random` parameter.
- * - **`policy` — honoured, unreachable.** `buildLink` takes a [DeliveryPolicy] and feeds it to the
- *   user-payload [Spool], but its single call site passes nothing, so every seam this factory
- *   weaves is pinned to [DeliveryPolicy.Reliable].
- * - **`dispatcher` — honoured, unreachable.** [WebRTCPeerLink] accepts a dispatcher for its
- *   internal scope; this factory constructs it without one, pinning it to
- *   [kotlinx.coroutines.Dispatchers.Default].
- * - **`weaveTimeout` — honoured, unreachable, and the gap is user-visible.** The handshake clock is
- *   real: `HandshakeRunner.awaitConnected` wraps the data-channel wait in a `withTimeout`, and
- *   [us.tractat.kuilt.core.LoomDefaults.WEAVE_TIMEOUT] is the same 30 s this fabric already chose.
- *   But [weave] calls `connect` without a timeout, so it always takes that default, and the only
- *   public surface that can widen it is [openWithServerRoleResult] — which additionally requires a
- *   [WebSocketSignalingChannel]. So a consumer arriving through the plain [Loom] contract cannot
- *   change it, even though `DEFAULT_HANDSHAKE_TIMEOUT_MS`'s own documentation says two WASM tabs
- *   may stagger by 30–60 s during bundle load and that such callers *should* pass a larger value.
- *   Note the clock also starts late — it covers the offer/answer/ICE exchange but not the
- *   preceding `signaling.open(room)` dial — so it bounds the fabric's handshake rather than the
- *   whole rendezvous that constant describes.
+ * - **`selfId` — genuinely exempt.** Identity is minted per weave inside `connect`, from the
+ *   rendezvous's own `sessionName` (`"<displayName>-<8 random letters>"`), and that prefix is what
+ *   labels this peer at the far end once the id frame crosses the data channel. A loom-level
+ *   `selfId` would either be overwritten per weave — the silently-ignored argument the convention
+ *   exists to prevent — or would displace the display-name labelling this fabric's [Loom.join]
+ *   contract promises. Same conclusion as `InMemoryLoom` and `NearbyLoom`, for the same reason.
+ *   Test determinism already has its seam here: the `random` parameter.
+ * - **`policy` — real wiring, unreachable.** `buildLink` takes a [DeliveryPolicy] and feeds it to
+ *   the user-payload [Spool], but its single call site passes nothing, so every seam this factory
+ *   weaves is pinned to [DeliveryPolicy.Reliable] whatever the consumer asked for — the same
+ *   defect `:kuilt-nearby` found and fixed. The `handshaking` barrier that blocked the knob on
+ *   `:kuilt-tcp` is not in the way here: this fabric builds its seam directly.
+ * - **`weaveTimeout` — real wiring, unreachable, and the gap is user-visible.** Apply the
+ *   discriminator the `:kuilt-nearby` slice established — *what does the clock start and stop
+ *   on?* — and this fabric reaches the **opposite** verdict from Nearby's. `HandshakeRunner` wraps
+ *   the data-channel wait in a `withTimeout`, and the wait for the far peer to appear is *inside*
+ *   it: a weave nobody ever joins fails at 30 s rather than hanging. That is exactly the bound
+ *   [us.tractat.kuilt.core.LoomDefaults.WEAVE_TIMEOUT] describes, and the value already matches;
+ *   only the relay dial (`signaling.open(room)`) sits outside the clock. But [weave] calls
+ *   `connect` without a timeout, so it always takes the default, and the one public surface that
+ *   can widen it is [openWithServerRoleResult] — which additionally requires a
+ *   [WebSocketSignalingChannel] and server-assigned roles. So a consumer arriving through the
+ *   plain [Loom] contract cannot change it, even though `DEFAULT_HANDSHAKE_TIMEOUT_MS`'s own
+ *   documentation says two WASM tabs may stagger by 30–60 s during bundle load and that such
+ *   callers *should* pass a larger value.
+ * - **`dispatcher` — omitted, following the convention as amended.** The 2026-07-13 second review
+ *   dropped `dispatcher` from the universal set: new fabrics inherit caller context at weave time
+ *   and dispatcher params stay fabric-specific, which is why `:kuilt-nearby` omits it too.
+ *   [WebRTCPeerLink] does take one for its internal scope and this factory constructs it without
+ *   one, pinning it to [kotlinx.coroutines.Dispatchers.Default] — worth knowing, but not a knob
+ *   this convention asks for.
+ *
+ * Closing the two reachability gaps means adding parameters to a public constructor, so it is left
+ * as a follow-up rather than folded in here.
  */
 public class WebRTCPeerLinkFactory
     internal constructor(
