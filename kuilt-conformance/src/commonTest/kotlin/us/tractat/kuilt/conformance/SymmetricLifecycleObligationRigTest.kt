@@ -1,5 +1,6 @@
 package us.tractat.kuilt.conformance
 
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +16,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
@@ -25,7 +27,7 @@ import kotlin.test.assertTrue
 
 /**
  * The **positive control** for #2601's lifecycle/identity slice: proof that the joiner half each of
- * four [SeamConformanceSuite] obligations gained can actually go red, and that it reds on the arm
+ * seven [SeamConformanceSuite] obligations gained can actually go red, and that it reds on the arm
  * it names rather than somewhere else in the same obligation.
  *
  * `Seam` is *one peer's symmetric view of a session*, but a role-split fabric ships two different
@@ -33,17 +35,23 @@ import kotlin.test.assertTrue
  * so an obligation asserted on `host` alone proves at most half of what the harness under test
  * ships, and the other half is what a joining phone runs.
  *
- * ## Four of the slice's seven rows, and the other three are not forgotten
+ * ## Four rows, then the three that were held back on #2372
  *
  * `closeDrivesStateTornNormal`, `stateStaysTornAfterClose` and `peersCollapseToSelfIdWhenTorn` were
- * **held back on #2372**, not skipped: their joiner arms were written, run, and red on a real
- * in-tree harness. `MuxServerLoomConformanceTest`'s joiner is a `NamedMux` channel view, and
+ * **held back**, not skipped: their joiner arms were written, run, and red on a real in-tree
+ * harness. `MuxServerLoomConformanceTest`'s joiner is a `NamedMux` channel view, and
  * `MuxBase.ChannelView` used to keep `state` and `peers` delegating to a live base, so it never
  * reached `Torn` and a *closed* view still advertised `PeerId(server)`. One value, read from three
- * places. #2372 fixed it — a channel view now owns both — so the hold is discharged and the three
- * arms land with #2601's remaining slice. Each of those obligations carries the measurement and the
- * exact assertion to restore; a rig pair belongs beside each of them, and lands with them. Adding a
- * control here for an assertion that is not yet in the suite would assert nothing.
+ * places. #2372 fixed it — a channel view now owns both — so the hold is discharged, the three arms
+ * are in the suite, and their controls join the four here.
+ *
+ * They are **terminal-state** rows rather than identity ones, and that changes what a broken joiner
+ * has to be. The first four are broken by a decorator that lies about a *static* property (an empty
+ * `selfId`, a fabricated availability); these three are broken by a decorator that lies about a
+ * value **across a transition** — a `state` that never tears, a terminal `Torn` a second `close()`
+ * clobbers, a roster frozen at its pre-tear contents. So each of the three defects is expressed as
+ * *when* the decorator diverges, not as *what* it returns, and each control arm is the same
+ * decorator with the divergence removed.
  *
  * ## The shape, copied deliberately from [JoinerRosterObligationRigTest]
  *
@@ -168,6 +176,171 @@ class SymmetricLifecycleObligationRigTest {
         reference().runWovenSeamCapabilityIsHonest(this)
     }
 
+    // ── (5) closeDrivesStateTornNormal ───────────────────────────────────────
+
+    @Test
+    fun aJoinerWhoseStateNeverTearsFailsTheTornLatchObligation(): TestResult = runTest {
+        val failure = assertFailsWith<AssertionError>(
+            "a joiner whose close() never latches Torn must FAIL — every `state.first { it is Torn }` " +
+                "waiter on the joining device wedges while the host looks perfectly healthy",
+        ) {
+            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamWhoseStateNeverTears))
+                .runCloseDrivesStateTornNormal(this)
+        }
+        assertAll(
+            { assertRedOn("the JOINER's state must be Torn after close()", failure) },
+            // The host latches its own Torn: one arm of two.
+            { assertArmCount(1, failure) },
+        )
+    }
+
+    @Test
+    fun aJoinerThatLatchesTornPassesTheTornLatchObligation(): TestResult = runTest {
+        reference().runCloseDrivesStateTornNormal(this)
+    }
+
+    // ── (6) stateStaysTornAfterClose ─────────────────────────────────────────
+
+    /**
+     * The clobber is bound to the joiner's **second** `close()` on purpose: the obligation samples
+     * the terminal value after the first one and re-reads after the churn, so a decorator that
+     * simply never tears would red the *precondition* instead and prove nothing about this row. What
+     * this rig has to reproduce is a terminal `Torn` that was reached and then overwritten.
+     */
+    @Test
+    fun aJoinerThatClobbersItsTerminalTornFailsTheStaysTornObligation(): TestResult = runTest {
+        val failure = assertFailsWith<AssertionError>(
+            "a joiner whose second close() overwrites its terminal Torn must FAIL — that is the " +
+                "lost-terminal-transition class this obligation exists to keep dead",
+        ) {
+            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamThatClobbersTornOnSecondClose))
+                .runStateStaysTornAfterClose(this)
+        }
+        // Sequential, not batched: the joiner half mirrors the host half, so the first red aborts
+        // and the message alone carries the shape.
+        assertRedOn("the JOINER's state must STAY Torn after post-close churn too", failure)
+    }
+
+    @Test
+    fun aJoinerThatKeepsItsTerminalTornPassesTheStaysTornObligation(): TestResult = runTest {
+        reference().runStateStaysTornAfterClose(this)
+    }
+
+    /**
+     * The row's other joiner arm. A seam that stays `Torn` but reports a *different* reason under
+     * churn has still re-run its terminal write with a stale value — the same defect, one field
+     * over — and without this arm that `assertEquals` would be a GREEN mutation row, i.e. an
+     * assertion nothing proves.
+     */
+    @Test
+    fun aJoinerThatRewritesItsTornReasonFailsTheStaysTornObligation(): TestResult = runTest {
+        val failure = assertFailsWith<AssertionError>(
+            "a joiner that keeps Torn but rewrites its reason under churn must FAIL",
+        ) {
+            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamThatRewritesItsTornReasonOnSecondClose))
+                .runStateStaysTornAfterClose(this)
+        }
+        assertRedOn("the JOINER's terminal Torn reason must not change under churn either", failure)
+    }
+
+    /**
+     * The row's joiner **precondition**. Asserting "it stayed Torn" against a seam that never
+     * latched Torn would report `closeDrivesStateTornNormal`'s defect under this row's name, so the
+     * precondition exists — and an unpinned precondition is exactly what #2669 refused to leave as a
+     * GREEN mutation row.
+     */
+    @Test
+    fun aJoinerThatNeverLatchesTornFailsTheStaysTornPrecondition(): TestResult = runTest {
+        val failure = assertFailsWith<AssertionError>(
+            "a joiner that never latches Torn must fail this row's PRECONDITION, not its obligation",
+        ) {
+            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamWhoseStateNeverTears))
+                .runStateStaysTornAfterClose(this)
+        }
+        assertRedOn("precondition: the JOINER's close() must latch Torn before", failure)
+    }
+
+    // ── (7) peersCollapseToSelfIdWhenTorn ────────────────────────────────────
+
+    @Test
+    fun aJoinerStillAdvertisingARemotePeerFailsTheCollapseObligation(): TestResult = runTest {
+        val failure = assertFailsWith<AssertionError>(
+            "a joiner still advertising a remote peer once Torn must FAIL — a CompositeSeam on the " +
+                "JOINING device folds that peer as reachable when only sendTo can disprove it",
+        ) {
+            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamThatKeepsAdvertisingARemotePeerOnceTorn))
+                .runPeersCollapseToSelfIdWhenTorn(this)
+        }
+        assertAll(
+            { assertRedOn("the JOINER must advertise NO reachable remote peer once Torn", failure) },
+            // Two host arms and two joiner arms; the phantom is added ALONGSIDE selfId rather than
+            // replacing it, so the joiner's collapsed-too-far arm must stay green. One of four.
+            { assertArmCount(1, failure) },
+        )
+    }
+
+    @Test
+    fun aJoinerThatCollapsesItsRosterPassesTheCollapseObligation(): TestResult = runTest {
+        reference().runPeersCollapseToSelfIdWhenTorn(this)
+    }
+
+    /**
+     * The other half of the collapse: a joiner that drops its **own** `selfId` has collapsed too
+     * far, and the two deviations have different causes and different fixes — which is why the
+     * obligation asserts them separately rather than as one set equality. Without this arm the
+     * `selfId ∈ peers` assertion would be a GREEN mutation row, i.e. an unproven assertion.
+     *
+     * Both roster decorators lie on `peers.value` and leave `peers.collect` delegating to the real
+     * flow — stated because it is a real limit on what they demonstrate, not a detail. It keeps
+     * `connectedPair`'s continuous `selfId ∈ peers` monitor reading the honest values, so the red is
+     * attributable to the one named assertion instead of racing a monitor that would reach the same
+     * defect an instant earlier and report it under a different message. A genuinely broken seam
+     * would of course be wrong on both surfaces; what these rigs prove is that the obligation's own
+     * assertion catches it, not that it is the only thing that would.
+     */
+    @Test
+    fun aJoinerThatDropsItsOwnSelfIdFailsTheCollapseObligation(): TestResult = runTest {
+        val failure = assertFailsWith<AssertionError>(
+            "a joiner whose torn roster is empty rather than { selfId } must FAIL — peers always " +
+                "includes this peer's own id",
+        ) {
+            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamWhoseRosterCollapsesTooFar))
+                .runPeersCollapseToSelfIdWhenTorn(this)
+        }
+        assertAll(
+            { assertRedOn("the JOINER's collapsed roster is { selfId }, not empty", failure) },
+            { assertArmCount(1, failure) },
+        )
+    }
+
+    /**
+     * The collapse row's two joiner **preconditions**, one test each. Both exist to stop an arm
+     * being green by absence — a joiner that never named a remote peer has nothing to collapse, and
+     * one that never latched `Torn` is not under this obligation at all — and an unpinned
+     * precondition is the GREEN mutation row #2669 refused to leave behind.
+     */
+    @Test
+    fun aJoinerThatNeverNamedTheHostFailsTheCollapsePrecondition(): TestResult = runTest {
+        val failure = assertFailsWith<AssertionError>(
+            "a joiner whose roster never named the host must fail this row's roster PRECONDITION",
+        ) {
+            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamWhoseRosterNeverNamesTheHost))
+                .runPeersCollapseToSelfIdWhenTorn(this)
+        }
+        assertRedOn("precondition: the JOINER must name a remote peer before the tear too", failure)
+    }
+
+    @Test
+    fun aJoinerThatNeverLatchesTornFailsTheCollapsePrecondition(): TestResult = runTest {
+        val failure = assertFailsWith<AssertionError>(
+            "a joiner that never latches Torn must fail this row's Torn PRECONDITION",
+        ) {
+            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamWhoseStateNeverTears))
+                .runPeersCollapseToSelfIdWhenTorn(this)
+        }
+        assertRedOn("precondition: the JOINER's close() must latch Torn", failure)
+    }
+
     // ── the rig's own premise ────────────────────────────────────────────────
 
     /**
@@ -250,11 +423,133 @@ class SymmetricLifecycleObligationRigTest {
             MutableStateFlow(TransportCapability(setOf(TransportRole.Data), FabricAvailability.Available))
     }
 
+    /**
+     * A joiner whose `state` never leaves [SeamState.Woven] — the shape `MuxBase.ChannelView` had
+     * before #2372, where `state` delegated to a base connection that is still alive.
+     *
+     * The real close still runs underneath, so the joiner genuinely tears; only what it *reports*
+     * is wrong, which is the defect a consumer meets.
+     */
+    private class SeamWhoseStateNeverTears(delegate: Seam) : Seam by delegate {
+        override val state: StateFlow<SeamState> = MutableStateFlow(SeamState.Woven)
+    }
+
+    /**
+     * A joiner that reaches [SeamState.Torn] and then overwrites it on a **second** `close()` — the
+     * multi-writer clobber `stateStaysTornAfterClose` exists to keep dead.
+     *
+     * `state` mirrors the delegate until the clobber, so the obligation's precondition (the first
+     * close latched Torn) is honestly satisfied and only the re-read after the churn diverges.
+     */
+    private class SeamThatClobbersTornOnSecondClose(private val delegate: Seam) : Seam by delegate {
+        private var closes = 0
+        private val clobbered = MutableStateFlow<SeamState>(SeamState.Woven)
+        private var clobbering = false
+        override val state: StateFlow<SeamState>
+            get() = if (clobbering) clobbered else delegate.state
+
+        override suspend fun close(reason: CloseReason) {
+            closes++
+            delegate.close(reason)
+            if (closes >= 2) clobbering = true
+        }
+    }
+
+    /**
+     * A joiner that reaches [SeamState.Torn] and keeps it, but rewrites its **reason** on a second
+     * `close()` — the same stale re-write as [SeamThatClobbersTornOnSecondClose], one field over.
+     */
+    private class SeamThatRewritesItsTornReasonOnSecondClose(private val delegate: Seam) : Seam by delegate {
+        private var closes = 0
+        private val rewritten = MutableStateFlow<SeamState>(SeamState.Torn(CloseReason.Unreachable))
+        private var rewriting = false
+        override val state: StateFlow<SeamState>
+            get() = if (rewriting) rewritten else delegate.state
+
+        override suspend fun close(reason: CloseReason) {
+            closes++
+            delegate.close(reason)
+            if (closes >= 2) rewriting = true
+        }
+    }
+
+    /**
+     * A joiner whose roster never names the host — the state the collapse row's own precondition
+     * exists to refuse, since a joiner with nothing to lose satisfies the collapse by absence.
+     */
+    private class SeamWhoseRosterNeverNamesTheHost(delegate: Seam) : Seam by delegate {
+        override val peers: StateFlow<Set<PeerId>> = MutableStateFlow(setOf(delegate.selfId))
+    }
+
+    /**
+     * A joiner that still advertises a remote peer once `Torn` — the shape `MuxBase.ChannelView` had
+     * before #2372, where a closed view still advertised `PeerId(server)`.
+     *
+     * **It fabricates the symptom rather than replaying the mechanism, and the reason is a finding
+     * about the reference harness rather than a convenience.** The obvious rig — freeze the roster at
+     * whatever it held when `close()` was called — does **not** red here, and that was measured
+     * before this shape was written. On `InMemoryLoom` the two ends share one registry, and the
+     * obligation closes the **host** first: `host.close()` removes the host from the shared registry,
+     * so the joiner's roster is already `{ joinerSelfId }` by the time the joiner tears. A freeze
+     * taken at that instant captures an *already-collapsed* set and passes.
+     *
+     * That is not the rig failing to reproduce the defect; it is the collapse being supplied by the
+     * fixture — the `JoinerRosterOrigin.FilledByConstruction` shape one level over, recorded on the
+     * obligation itself. A phantom remote is independent of who departed first, so it isolates the
+     * assertion, which is all a positive control is for. What it consequently does **not** prove is
+     * that any in-tree harness can reach this failure by its own mechanism; the obligation's comment
+     * says which fabric shapes can.
+     */
+    private class SeamThatKeepsAdvertisingARemotePeerOnceTorn(private val delegate: Seam) : Seam by delegate {
+        private val overridden = OverridablePeers(delegate.peers)
+        override val peers: StateFlow<Set<PeerId>> = overridden
+        override suspend fun close(reason: CloseReason) {
+            delegate.close(reason)
+            overridden.overrideWith(delegate.peers.value + PHANTOM_REMOTE)
+        }
+    }
+
+    /**
+     * A joiner whose torn roster collapses to `emptySet()` rather than to `{ selfId }` — the *other*
+     * deviation `peersCollapseToSelfIdWhenTorn` names, and the one a single set-equality assertion
+     * would have folded into the first.
+     */
+    private class SeamWhoseRosterCollapsesTooFar(private val delegate: Seam) : Seam by delegate {
+        private val overridden = OverridablePeers(delegate.peers)
+        override val peers: StateFlow<Set<PeerId>> = overridden
+        override suspend fun close(reason: CloseReason) {
+            delegate.close(reason)
+            overridden.overrideWith(emptySet())
+        }
+    }
+
+    /**
+     * A [StateFlow] that reports [overrideWith]'s value from `value` once set, and delegates
+     * everything else — `collect` included — to the real flow. See
+     * [aJoinerThatDropsItsOwnSelfIdFailsTheCollapseObligation] for why `collect` is deliberately
+     * left honest.
+     */
+    @OptIn(ExperimentalForInheritanceCoroutinesApi::class)
+    private class OverridablePeers(
+        private val delegate: StateFlow<Set<PeerId>>,
+    ) : StateFlow<Set<PeerId>> by delegate {
+        private var override: Set<PeerId>? = null
+        fun overrideWith(value: Set<PeerId>) {
+            override = value
+        }
+
+        override val value: Set<PeerId> get() = override ?: delegate.value
+        override val replayCache: List<Set<PeerId>> get() = listOf(value)
+    }
+
     // `assertRedOn` / `assertArmCount` are shared with [SymmetricDeliveryObligationRigTest]; see
     // `JoinerRigSupport.kt` for what each one is guarding against.
 
     private companion object {
         private const val GAP_URL = "https://github.com/tractat-us/kuilt/issues/2601"
         private const val SECOND_CLOSE_THREW = "rig: this joiner's second close() throws"
+
+        /** The unreachable remote a torn joiner must not go on advertising. */
+        private val PHANTOM_REMOTE = PeerId("rig-remote-the-torn-joiner-cannot-reach")
     }
 }

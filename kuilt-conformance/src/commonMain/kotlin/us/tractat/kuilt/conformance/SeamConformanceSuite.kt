@@ -880,43 +880,69 @@ public abstract class SeamConformanceSuite {
     public fun hostStateIsWovenEvenAlone(): TestResult =
         runTest { runHostStateIsWovenEvenAlone(this) }
 
-    // ── (9) close drives state to Torn(Normal) ──────────────────────────────
+    // ── (9) close drives state to Torn(Normal) — on BOTH ends ───────────────
     //
-    // **STILL HOST-ONLY, and now only because #2601 owns the edit (#2372).** `SeamState` is symmetric
-    // — there is no client/server split at this layer — and a joiner that never latches `Torn` wedges
-    // every `state.first { it is Torn }` waiter on the joining device while the host looks perfectly
-    // healthy. That is the first of the three shipped `:kuilt-nearby` symptoms #2591 records. The
-    // joiner arm belongs here and is written; it was held back because one in-tree harness reds on it
-    // and the red was a real defect this suite must not paper over.
+    // **Both ends are checked (#2601), and this row was held back on #2372 until now.** `SeamState` is
+    // symmetric — there is no client/server split at this layer — and a joiner that never latches
+    // `Torn` wedges every `state.first { it is Torn }` waiter on the joining device while the host
+    // looks perfectly healthy. That is the first of the three shipped `:kuilt-nearby` symptoms #2591
+    // records. The arm was written and red on a real in-tree harness:
+    // `MuxServerLoomConformanceTest` hands back a `NamedMux` channel view as its joiner, and
+    // `MuxBase.ChannelView` used to delegate `state`/`peers` to a base connection that is still alive,
+    // so `joiner.state` read `Woven` after `joiner.close()`. Since #2372 a channel view owns its own
+    // `SeamState` and its own roster, so the hold is discharged and the arm lands here.
     //
-    // **That defect is fixed.** `MuxServerLoomConformanceTest` hands back a `NamedMux` channel view as
-    // its joiner, and `MuxBase.ChannelView` used to delegate `state`/`peers` to a base connection that
-    // is still alive, so `joiner.state` read `Woven` after `joiner.close()`. Since #2372 a channel view
-    // owns its own `SeamState` and its own roster: its `close()` latches `Torn` and collapses `peers`
-    // to `{ selfId }`, while the base stays `Woven` for its other channels (#949). Nothing here blocks
-    // the joiner arm any more; landing it is #2601's slice, not #2372's, and the assertion is one line:
+    // Two sibling rows were held back by the same one value, and only that one, and land in the same
+    // slice: `stateStaysTornAfterClose` and `peersCollapseToSelfIdWhenTorn`.
     //
-    //     assertAll(
-    //         { assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()") },
-    //         { assertIs<SeamState.Torn>(joiner.state.value, "joiner state must be Torn after close()") },
-    //     )
-    //
-    // Two sibling rows were held back by the same one value, and only that one:
-    // `stateStaysTornAfterClose` and `peersCollapseToSelfIdWhenTorn`. Measured by neutralising the
-    // joiner-`Torn` assertions and re-running — every other joiner arm in that slice went green,
-    // including `incomingCompletesWhenSeamCloses`, whose joiner flow terminates correctly (the view
-    // did close its spool even then). So it was one defect, not four, and all three unblock together.
-    //
-    // What the fix did NOT unblock is `survivorStopsAdvertisingADepartedPeer` on that harness: a
+    // What #2372 did NOT unblock is `survivorStopsAdvertisingADepartedPeer` on that harness: a
     // per-channel close still has no wire representation, so the hub keeps advertising a client that
-    // told it nothing. Measured, and tracked separately as #2665 — do not read this paragraph as
-    // saying every mux gap is closed.
+    // told it nothing. Tracked separately as #2665 — do not read this comment as saying every mux gap
+    // is closed.
+    //
+    // **The host's state is read BEFORE the joiner closes, and the deviation from the assertion this
+    // comment used to prescribe is deliberate.** That sketch batched two `state.value` reads *after*
+    // both closes, which would have made this row — UNGATED CORE — depend on the host's terminal
+    // `Torn` surviving another seam's `close()`. That is a real and separate obligation, it is
+    // `stateStaysTornAfterClose`, and it is **capability-gated** on `staysTornAfterClose`: a fabric
+    // legitimately declaring that flag `false` would start failing ungated core here, for a property
+    // it had declared a tracked gap on. Reading each end's state immediately after its own close keeps
+    // the two obligations disjoint and keeps the host arm's meaning byte-identical to the host-only
+    // form, which is what makes a red here attributable to the new direction.
+    //
+    // **The joiner is closed AFTER the host, and that is the harder path** — its remote is already
+    // gone, which is where an implementation reaches for a bounded or retrying teardown.
+    // `closeIsIdempotent` and `closeDoesNotReportFailureAsCancellation` close in the same order and
+    // say the same thing about why.
+    //
+    // **Where the joiner arm can fail.** Nothing in a fixture supplies a `Torn` latch — it is the
+    // seam's own close-once state write, which every implementation writes for itself, and a
+    // role-split fabric writes twice. The arm is weakest on a harness whose two ends are one class
+    // (it then re-proves the host's latch on a second instance) and strongest on a decorator or view
+    // that delegates `state` to something still live — which is exactly the shape that red on
+    // `MuxServerLoomConformanceTest`.
 
     internal suspend fun runCloseDrivesStateTornNormal(scope: TestScope): Unit =
-        scope.connectedPair { host, _ ->
+        scope.connectedPair { host, joiner ->
             host.close()
+            val hostState = host.state.value
+            joiner.close()
+            val joinerState = joiner.state.value
 
-            assertIs<SeamState.Torn>(host.state.value, "state must be Torn after close()")
+            // Batched: the two are independent facts about two different seams, and a sequential run
+            // would cost a reader the joiner diagnosis that is the point of this arm.
+            assertAll(
+                { assertIs<SeamState.Torn>(hostState, "state must be Torn after close()") },
+                {
+                    assertIs<SeamState.Torn>(
+                        joinerState,
+                        "the JOINER's state must be Torn after close() too (#2601) — a role-split " +
+                            "fabric ships a different Seam on each end, and a joiner that never " +
+                            "latches Torn wedges every `state.first { it is Torn }` waiter on the " +
+                            "joining device while the host looks healthy. Got $joinerState",
+                    )
+                },
+            )
         }
 
     @Test
@@ -1216,14 +1242,32 @@ public abstract class SeamConformanceSuite {
     // even now `SeamStateGate` is `public` (#1803) and an out-of-tree fabric *can* reach for it —
     // reachability is not adoption, and this obligation is what catches a fabric that did not.
     //
-    // **STILL HOST-ONLY, and no longer blocked — see `closeDrivesStateTornNormal`'s comment for the
-    // argument and the measurement (#2601 / #2372).** The joiner arm here needs the joiner to reach
-    // `Torn` at all before "does it STAY Torn" means anything; `MuxBase.ChannelView` never did, and
-    // since #2372 it does. Landing the arm is #2601's slice. Its shape is the mirror image of round one:
-    // assert the joiner's own `Torn` as a precondition after its close, then drive frames from the
-    // host toward the torn joiner plus a redundant close on each end, then assert both terminals
-    // and both reasons are unchanged. A second `close()` is where an idempotent-close path most
-    // easily re-runs its state write with a stale value, which is this obligation's subject.
+    // **Both ends are checked (#2601), and this row was held back on #2372 until now — see
+    // `closeDrivesStateTornNormal`'s comment for the shared argument.** The joiner arm here needs the
+    // joiner to reach `Torn` at all before "does it STAY Torn" means anything; `MuxBase.ChannelView`
+    // never did, and since #2372 it does.
+    //
+    // **The joiner half is a second phase appended AFTER the host half, not woven into it.** The host
+    // sequence — close, sample, churn, re-read — is left byte-identical, so a red on it stays
+    // attributable to what it always meant rather than to this edit; #2601's own delivery slice
+    // records a false red born of exactly that kind of in-place strengthening. The joiner phase then
+    // pins its own terminal value as a **precondition** (a joiner that never latched `Torn` has
+    // nothing to keep, and asserting "it stayed Torn" against a `Woven` seam would report the wrong
+    // defect), drives the churn a torn joiner can be subjected to, and re-reads.
+    //
+    // **What the joiner's churn can and cannot be.** The host is already torn by this point, so its
+    // `broadcast` is refused rather than delivered — `tolerateTornChurn` absorbs that, and the frames
+    // are a *stimulus on the host's send path*, not a delivery the joiner observes. What actually
+    // carries the weight is the **redundant close on each end**: a second `close()` is where an
+    // idempotent-close path most easily re-runs its state write with a stale value, which is this
+    // obligation's subject. Stated rather than left for a reader to discover, because a comment
+    // promising "frames driven at the torn joiner" would overstate what a two-torn-seams pair can do.
+    //
+    // **Where the joiner arm can fail.** Nothing in a fixture holds a terminal value steady; a
+    // clobber comes from the seam's own second writer (a view's rollup, a delegating decorator's
+    // combine). The arm is strongest exactly where `closeDrivesStateTornNormal`'s is — a view whose
+    // `state` is computed from something else — and weakest on a seam whose `SeamStateGate` makes the
+    // terminal write structurally final, where it can only pass.
 
     internal suspend fun runStateStaysTornAfterClose(scope: TestScope) {
         if (!capabilities().staysTornAfterClose) return
@@ -1239,6 +1283,35 @@ public abstract class SeamConformanceSuite {
             val after = host.state.value
             assertIs<SeamState.Torn>(after, "state must STAY Torn after post-close churn")
             assertEquals(torn.reason, after.reason, "the terminal Torn reason must not change under churn")
+
+            // ── the joiner half (#2601) ──
+            val joinerTorn = joiner.state.value
+            assertIs<SeamState.Torn>(
+                joinerTorn,
+                "precondition: the JOINER's close() must latch Torn before 'does it STAY Torn' means " +
+                    "anything — that is `closeDrivesStateTornNormal`'s obligation, and a joiner still " +
+                    "reporting $joinerTorn here fails this row for its reason rather than for this one",
+            )
+
+            repeat(5) { i -> tolerateTornChurn { host.broadcast(byteArrayOf(i.toByte())) } }
+            tolerateTornChurn { host.close() }
+            tolerateTornChurn { joiner.close() }
+
+            // Sequential, mirroring the host half above rather than batching: a joiner that is no
+            // longer Torn has no reason to compare, so the second assertion would only report the
+            // first one's defect a second time in a less legible form.
+            val joinerAfter = joiner.state.value
+            assertIs<SeamState.Torn>(
+                joinerAfter,
+                "the JOINER's state must STAY Torn after post-close churn too (#2601) — a role-split " +
+                    "fabric ships a different Seam on each end, and a joiner that overwrites its own " +
+                    "terminal Torn wedges every waiter on the joining device. Got $joinerAfter",
+            )
+            assertEquals(
+                joinerTorn.reason,
+                joinerAfter.reason,
+                "the JOINER's terminal Torn reason must not change under churn either (#2601)",
+            )
         }
     }
 
@@ -1600,11 +1673,11 @@ public abstract class SeamConformanceSuite {
     //
     // Gated on `collapsesPeersOnTear`; every `false` is a tracked bug, not a by-design gap.
     //
-    // **STILL HOST-ONLY, and no longer blocked — this row is what measured the SECOND half of #2372
-    // (#2601).** `Seam.peers` is symmetric — that is the whole argument #2591 turned on — and the
-    // consumer this protects, `CompositeSeam`'s reachability fold, folds whichever seam it was
-    // given: a joiner freezing its pre-tear roster leaves a composite on the joining device
-    // advertising a peer only `sendTo` can disprove. The joiner arm belongs here.
+    // **Both ends are checked (#2601), and this row is what measured the SECOND half of #2372.**
+    // `Seam.peers` is symmetric — that is the whole argument #2591 turned on — and the consumer this
+    // protects, `CompositeSeam`'s reachability fold, folds whichever seam it was given: a joiner
+    // freezing its pre-tear roster leaves a composite on the joining device advertising a peer only
+    // `sendTo` can disprove. The joiner arm belongs here.
     //
     // It was held back because `MuxServerLoomConformanceTest`'s joiner is a `NamedMux` channel view
     // whose `peers` delegated to a still-live base, so a *closed* view advertised `PeerId(server)` —
@@ -1612,27 +1685,68 @@ public abstract class SeamConformanceSuite {
     // `peers`: a closed view advertises the base's roster, i.e. peers it will no longer deliver to —
     // the lie `Seam.peers`' KDoc forbids") and had no property that could reach it. This row was that
     // property, it red, and the fix collapses a torn view's roster to `{ selfId }` inside the same
-    // critical section as the latch. Landing the arm is #2601's slice. See
-    // `closeDrivesStateTornNormal` for why all three held-back rows were one defect.
+    // critical section as the latch. See `closeDrivesStateTornNormal` for why all three held-back
+    // rows were one defect.
     //
-    // **When it lands, note where the joiner PRECONDITION is weak, which is not where the
-    // obligation is.** `joiner.peers.size >= 2` before the tear is satisfied by the fixture on any
-    // harness declaring [JoinerRosterOrigin.FilledByConstruction], exactly as the joiner arm of
+    // **Where the joiner PRECONDITION is weak, which is not where the obligation is.**
+    // `joiner.peers.size >= 2` before the tear is satisfied by the fixture on any harness declaring
+    // [JoinerRosterOrigin.FilledByConstruction], exactly as the joiner arm of
     // [peersReportsSelfIdAndAtLeastTwoAfterJoin] is. What no fixture supplies is the *collapse*: a
     // seeded roster (`LinkSeam`'s `setOf(selfId, remoteId)` constructor literal) is precisely the
     // shape that cannot collapse unless the seam collapses it — so the obligation is strongest
-    // exactly where its precondition is weakest. The joiner's tear may be its own `close()` or the
-    // host's reaching it remotely; either satisfies the contract.
+    // exactly where its precondition is weakest.
+    //
+    // **And on a SHARED-REGISTRY harness the collapse itself is supplied by the fixture — measured,
+    // not argued (#2601).** The two ends of `InMemoryLoom` read one registry, and this row closes the
+    // **host** first, which removes the host from it: the joiner's roster is already `{ selfId }`
+    // before the joiner tears at all. So on those harnesses the joiner arm reads a terminal value the
+    // *host's departure* produced, and would stay green on a joiner with no collapse-on-tear
+    // whatsoever. That is the [JoinerRosterOrigin.FilledByConstruction] shape one level over, and it
+    // is what a rig for this row runs into: a decorator freezing the joiner's roster at its close
+    // does not red, because there is nothing left to freeze. Closing the joiner first would only move
+    // the launder onto the host arm, symmetrically — a 2-peer suite over one shared registry cannot
+    // put both ends on the strong side of this. The role-split fabrics are where the arm bites, and
+    // they are the ones that ship two implementations.
+    //
+    // **BOTH preconditions are sampled before EITHER close, and that ordering is load-bearing.** On a
+    // role-split fabric the host's `close()` reaches the joiner remotely, so a `joiner.peers` read
+    // taken after it may legitimately have collapsed already — and a precondition that the tear
+    // itself can satisfy is no precondition at all. Sampling both up front is what keeps
+    // "the joiner had a remote peer to lose" a fact about the *join*, not about the teardown.
+    //
+    // **The host's roster is likewise read before the joiner closes**, for the reason
+    // `closeDrivesStateTornNormal` gives at length: it keeps the host arms' meaning byte-identical to
+    // the host-only form, so a red here is attributable to the new direction rather than to a
+    // shared-registry fabric reacting to a second departure.
+    //
+    // The joiner's tear is its own `close()` here. The contract admits either that or the host's
+    // reaching it remotely, and on a role-split fabric both have usually happened by this point; what
+    // the assertion reads is the terminal roster, which is the same value either way.
 
     internal suspend fun runPeersCollapseToSelfIdWhenTorn(scope: TestScope) {
         if (!capabilities().collapsesPeersOnTear) return
-        scope.connectedPair { host, _ ->
+        scope.connectedPair { host, joiner ->
             assertTrue(host.peers.value.size >= 2, "precondition: the pair must be connected before the tear")
+            assertTrue(
+                joiner.peers.value.size >= 2,
+                "precondition: the JOINER must name a remote peer before the tear too, or it has " +
+                    "nothing to collapse and its arms below would be green by absence (#2601); got " +
+                    "${joiner.peers.value.map { it.value }}",
+            )
 
             host.close()
             assertIs<SeamState.Torn>(host.state.value, "precondition: close() must latch Torn")
-
             val peers = host.peers.value
+
+            joiner.close()
+            assertIs<SeamState.Torn>(
+                joiner.state.value,
+                "precondition: the JOINER's close() must latch Torn — that is " +
+                    "`closeDrivesStateTornNormal`'s obligation, and a joiner still live here would " +
+                    "fail this row for its reason rather than for this one",
+            )
+            val joinerPeers = joiner.peers.value
+
             assertAll(
                 {
                     assertEquals(
@@ -1649,6 +1763,23 @@ public abstract class SeamConformanceSuite {
                         "a Torn seam's collapsed roster is { selfId }, not empty: peers always includes " +
                             "this peer's own id, so a seam that drops selfId on tear has collapsed too far " +
                             "(got ${peers.map { it.value }})",
+                    )
+                },
+                {
+                    assertEquals(
+                        emptySet(),
+                        joinerPeers - joiner.selfId,
+                        "the JOINER must advertise NO reachable remote peer once Torn either (#2601) — a " +
+                            "role-split fabric ships a different Seam on each end, and a joiner freezing " +
+                            "its pre-tear roster leaves a CompositeSeam on the JOINING device folding a " +
+                            "peer only sendTo can disprove. Got ${joinerPeers.map { it.value }}",
+                    )
+                },
+                {
+                    assertTrue(
+                        joiner.selfId in joinerPeers,
+                        "the JOINER's collapsed roster is { selfId }, not empty, for the same reason the " +
+                            "host's is (#2601); got ${joinerPeers.map { it.value }}",
                     )
                 },
             )
