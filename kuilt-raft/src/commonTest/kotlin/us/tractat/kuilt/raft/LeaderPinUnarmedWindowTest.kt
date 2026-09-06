@@ -2,10 +2,12 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.test.TestScope
+import us.tractat.kuilt.raft.internal.WEDGE_SUSPECTED_RUN
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -208,6 +210,85 @@ class LeaderPinUnarmedWindowTest {
         sim.changeMembershipOnLeader(ClusterConfig(voters = bootstrapVoters, learners = setOf(joiner)))
         sim.awaitCommit(committed.index, on = setOf(joiner))
     }
+
+    /**
+     * The denial used to be **invisible**: measured at 5001 `FrameRefused` traces against
+     * `metrics = [] count = 0`. [RefusalGate.ForgedLeaderForTerm]'s `wedgeGate` is `null`, and the
+     * counter [RaftMetric.WedgeSuspected] is built from is reset by every frame clearing both dispatch
+     * gates — which every frame reaching this refusal has done — so that report structurally could not
+     * fire. [RaftMetric.LeaderPinDenial] carries its own counter for that reason.
+     *
+     * Driven in the **armed** window, which is where the denial remains reachable after this change
+     * (#2674's open half): a plain voter that is not the leader seizes the pin, and thereafter the
+     * honest leader is refused. Adding the report changes no decision there — the frame is dropped
+     * exactly as before.
+     *
+     * ### The reset is pinned, not assumed
+     *
+     * A bare counter that never reset would reach the threshold across an ordinary node's whole life
+     * and the "sustained run" in the name would be a lie. So this drives `threshold - 1` refusals,
+     * lets one **honest** frame through and waits for the victim to commit from it (proof the pin
+     * admitted a frame), drives `threshold - 1` again, and asserts **nothing has been reported** —
+     * only then does the final frame trip it. The rig's own firing is what the last assertion checks,
+     * so an arm that silently stopped refusing could not pass by absence.
+     */
+    @Test
+    fun aSustainedRunOfPinRefusals_isReported_withThePinnedIdentityTheRefusedSenderAndTheTerm() =
+        raftRunTest {
+            val metricsBy = mutableMapOf<NodeId, MutableList<RaftMetric>>()
+            val ids = (1..3).map { NodeId("v$it") }
+            val cluster = ClusterConfig(voters = ids.toSet())
+            val raftCfg = fastRaftConfig()
+            val sim = RaftSimulation(
+                nodeIds = ids,
+                scope = this,
+                nodeScope = backgroundScope,
+                nodeFactory = { id, transport, storage, childScope ->
+                    childScope.raftNode(
+                        cluster, transport, storage, raftCfg,
+                        onMetric = { metricsBy.getOrPut(id) { mutableListOf() } += it },
+                    )
+                },
+            )
+            val leader = awaitLeader(sim)
+            val leaderId = sim.nodeIds.first { sim.nodes[it] === leader }
+            val (victimId, forgerId) = sim.nodeIds.filter { it != leaderId }
+            sim.awaitTrue("$victimId recognises $leaderId") {
+                sim.nodes.getValue(victimId).leader.value == leaderId
+            }
+            val term = sim.storages.getValue(victimId).term()
+            fun denials() = metricsBy[victimId].orEmpty().filterIsInstance<RaftMetric.LeaderPinDenial>()
+
+            suspend fun forge(times: Int) = repeat(times) {
+                sim.deliverAppendEntries(to = victimId, from = forgerId, term = term)
+                sim.settle()
+            }
+
+            // One short of the threshold, twice, with an admitted honest frame in between.
+            forge(WEDGE_SUSPECTED_RUN - 1)
+            assertTrue(denials().isEmpty(), "below the threshold nothing is reported")
+
+            val committed = sim.proposeOnLeader(byteArrayOf(0x42))
+            sim.awaitCommit(committed.index, on = setOf(victimId))   // an honest frame WAS admitted
+
+            forge(WEDGE_SUSPECTED_RUN - 1)
+            assertTrue(
+                denials().isEmpty(),
+                "an admitted frame from the pinned leader must reset the run — otherwise the run in " +
+                    "the report is not a run at all, and this reported ${denials()}",
+            )
+
+            // The frame that trips it.
+            forge(1)
+            val denial = denials().singleOrNull()
+            assertNotNull(denial, "a sustained run must be reported exactly once — got ${denials()}")
+            assertAll(
+                { assertEquals(leaderId, denial.pinnedLeader, "the report must name the pinned identity") },
+                { assertEquals(forgerId, denial.refusedSender, "…and the sender being refused") },
+                { assertEquals(term, denial.term, "…and the term the pin belongs to") },
+                { assertEquals(WEDGE_SUSPECTED_RUN, denial.run, "…and how long the run had got") },
+            )
+        }
 
     /**
      * The blast-radius bound, and the main risk this change carries: **armed** behaviour is unchanged.

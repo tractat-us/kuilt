@@ -250,4 +250,59 @@ public sealed interface RaftMetric {
             TermJump,
         }
     }
+
+    /**
+     * This node has spent a sustained run dropping same-term leader→peer frames because the term is
+     * already pinned to a *different* node — the per-term leader pin (#1906) refusing everything the
+     * node it established did not send (#2674).
+     *
+     * **This changes no decision**, like [WedgeSuspected]: §5.2 Election Safety permits one leader per
+     * term, so two same-term senders mean one is forged, and which one is **not locally decidable**.
+     * Read this as *"I am refusing everything [pinnedLeader] did not send"*, never as
+     * *"[pinnedLeader] is hostile"* — on the honest reading [pinnedLeader] simply got there first and
+     * [refusedSender] is the real leader; on the hostile one it is the other way round, and nothing in
+     * this node's state separates them.
+     *
+     * ### Why it is not a [WedgeSuspected]
+     *
+     * It reports the same *kind* of condition — a node that can no longer be reached — from a
+     * different place, and the two cannot share a counter. `WedgeSuspected` is raised by the two gates
+     * at the engine's **dispatch boundary**, whose run is reset by any leader→peer frame that clears
+     * both of them; every frame reaching this refusal has cleared both by definition, so a report
+     * built on that counter can never fire here (measured: 5001 refusals, zero metrics). The
+     * identities differ too: a wedge report names the possibly-stale *voter set* doing the refusing,
+     * which is meaningless here — what a reader needs is who is pinned and who is being refused.
+     *
+     * ### Latched once per pin epoch
+     *
+     * Emitted once per `(term, pinnedLeader)` pair. Everything it carries is a function of that pair,
+     * and the pin is write-once within a term, so one emission is exactly one denial episode. A finer
+     * latch would be a log-amplification lever handed to the peer this refusal contains. Re-arming
+     * needs this node's term to move — and once it is *above* the honest leader's, that leader's
+     * frames take the §5.1 stale-term reply instead of this gate, so an extra report costs a full
+     * cluster term advance, which is also the only thing that ends the denial.
+     *
+     * ### What to do about one
+     *
+     * Nothing self-heals. If [refusedSender] is in fact the cluster's leader, this node cannot be
+     * caught up in place: bring it back as a **genuinely new member — a fresh [NodeId] over empty
+     * storage**, admitted by an ordinary single-server membership change. ⚠ **Never wipe storage under
+     * the same [NodeId]** — it returns having forgotten a term it already voted in and votes again,
+     * which is two leaders in one term.
+     *
+     * @property pinnedLeader the node this term is pinned to — the identity doing the refusing. It is
+     *   the value nothing else exposes: after a restart the pin is restored while [RaftNode.leader] is
+     *   `null`, so without this a stuck node is being denied by a value no consumer can read.
+     * @property refusedSender the peer whose frame was dropped — the true origin, already unwrapped
+     *   from any relay envelope. On the honest reading this is the **real leader**.
+     * @property term the term the pin belongs to, and this node's own term (the pin is by construction
+     *   a fact about `currentTerm`).
+     * @property run how many consecutive refusals had accumulated when the report fired.
+     */
+    public data class LeaderPinDenial(
+        val pinnedLeader: NodeId,
+        val refusedSender: NodeId,
+        val term: Long,
+        val run: Int,
+    ) : RaftMetric
 }
