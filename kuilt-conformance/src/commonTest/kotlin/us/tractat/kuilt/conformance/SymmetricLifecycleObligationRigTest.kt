@@ -27,14 +27,24 @@ import kotlin.test.assertTrue
 
 /**
  * The **positive control** for #2601's lifecycle/identity slice: proof that the joiner half each of
- * seven [SeamConformanceSuite] obligations gained can actually go red, and that it reds on the arm
+ * four [SeamConformanceSuite] obligations gained can actually go red, and that it reds on the arm
  * it names rather than somewhere else in the same obligation.
  *
  * `Seam` is *one peer's symmetric view of a session*, but a role-split fabric ships two different
  * `Seam` implementations behind one harness — websocket hosts a `MeshSeam` and joins a `LinkSeam` —
  * so an obligation asserted on `host` alone proves at most half of what the harness under test
- * ships, and the other half is what a joining phone runs. Seven rows were host-only; each is now
- * asserted on both ends, and each has a pair below.
+ * ships, and the other half is what a joining phone runs.
+ *
+ * ## Four of the slice's seven rows, and the other three are not forgotten
+ *
+ * `closeDrivesStateTornNormal`, `stateStaysTornAfterClose` and `peersCollapseToSelfIdWhenTorn` are
+ * **held back on #2372**, not skipped: their joiner arms were written, run, and red on a real
+ * in-tree harness. `MuxServerLoomConformanceTest`'s joiner is a `NamedMux` channel view whose
+ * `close()` drains its own spool while `state` and `peers` keep delegating to a live base, so it
+ * never reaches `Torn` and a *closed* view still advertises `PeerId(server)`. One value, read from
+ * three places. Each of those obligations carries the measurement and the exact assertion to
+ * restore; a rig pair belongs beside each of them, and lands with them. Adding a control here for
+ * an assertion that is not in the suite would assert nothing.
  *
  * ## The shape, copied deliberately from [JoinerRosterObligationRigTest]
  *
@@ -81,7 +91,10 @@ class SymmetricLifecycleObligationRigTest {
             harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamWithEmptySelfId))
                 .runHostYieldsUsableSeam(this)
         }
-        assertRedOn("joiner selfId must be non-empty", failure)
+        assertAll(
+            { assertRedOn("joiner selfId must be non-empty", failure) },
+            { assertArmCount(1, failure) },
+        )
     }
 
     @Test
@@ -112,51 +125,7 @@ class SymmetricLifecycleObligationRigTest {
         reference().runCloseIsIdempotent(this)
     }
 
-    // ── (3) closeDrivesStateTornNormal ───────────────────────────────────────
-
-    @Test
-    fun aJoinerThatNeverLatchesTornFailsTheCloseDrivesTornObligation(): TestResult = runTest {
-        val failure = assertFailsWith<AssertionError>(
-            "a joiner whose close() leaves state non-Torn must FAIL",
-        ) {
-            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamThatNeverLatchesTorn))
-                .runCloseDrivesStateTornNormal(this)
-        }
-        assertAll(
-            { assertRedOn("joiner state must be Torn after close()", failure) },
-            { assertArmCount(1, failure) },
-        )
-    }
-
-    @Test
-    fun aJoinerThatLatchesTornPassesTheCloseDrivesTornObligation(): TestResult = runTest {
-        reference().runCloseDrivesStateTornNormal(this)
-    }
-
-    // ── (4) stateStaysTornAfterClose ─────────────────────────────────────────
-
-    @Test
-    fun aJoinerThatClobbersItsTornUnderChurnFailsTheStaysTornObligation(): TestResult = runTest {
-        val failure = assertFailsWith<AssertionError>(
-            "a joiner whose post-close path overwrites the terminal Torn must FAIL — that is the " +
-                "lost-terminal-transition class, and it wedges every state.first { it is Torn } waiter",
-        ) {
-            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamThatClobbersTornOnSecondClose))
-                .runStateStaysTornAfterClose(this)
-        }
-        assertAll(
-            { assertRedOn("the JOINER's state must STAY Torn", failure) },
-            // The host's terminal Torn is untouched, so exactly one of the two final arms may red.
-            { assertArmCount(1, failure) },
-        )
-    }
-
-    @Test
-    fun aJoinerThatKeepsItsTornPassesTheStaysTornObligation(): TestResult = runTest {
-        reference().runStateStaysTornAfterClose(this)
-    }
-
-    // ── (5) incomingCompletesWhenSeamCloses ──────────────────────────────────
+    // ── (3) incomingCompletesWhenSeamCloses ──────────────────────────────────
 
     @Test
     fun aJoinerWhoseIncomingNeverCompletesFailsTheTerminationObligation(): TestResult = runTest {
@@ -169,7 +138,7 @@ class SymmetricLifecycleObligationRigTest {
         }
         assertAll(
             { assertRedOn("the JOINER's incoming must COMPLETE", failure) },
-            // The joiner still reaches Torn, and the host is untouched: one arm of four.
+            // The host is untouched: one arm of three.
             { assertArmCount(1, failure) },
         )
     }
@@ -179,30 +148,7 @@ class SymmetricLifecycleObligationRigTest {
         reference().runIncomingCompletesWhenSeamCloses(this)
     }
 
-    // ── (6) peersCollapseToSelfIdWhenTorn ────────────────────────────────────
-
-    @Test
-    fun aJoinerThatFreezesItsPreTearRosterFailsTheCollapseObligation(): TestResult = runTest {
-        val failure = assertFailsWith<AssertionError>(
-            "a joiner still advertising a remote after its tear must FAIL — a decorator folding it " +
-                "reads that peer as reachable when nothing can reach it",
-        ) {
-            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamWithAFrozenRoster))
-                .runPeersCollapseToSelfIdWhenTorn(this)
-        }
-        assertAll(
-            { assertRedOn("a Torn JOINER must advertise NO reachable remote peer", failure) },
-            // selfId is still in the frozen roster, and the host collapses correctly: one arm of four.
-            { assertArmCount(1, failure) },
-        )
-    }
-
-    @Test
-    fun aJoinerThatCollapsesItsRosterPassesTheCollapseObligation(): TestResult = runTest {
-        reference().runPeersCollapseToSelfIdWhenTorn(this)
-    }
-
-    // ── (7) wovenSeamCapabilityIsHonest ──────────────────────────────────────
+    // ── (4) wovenSeamCapabilityIsHonest ──────────────────────────────────────
 
     @Test
     fun aJoinerFabricatingAnAvailabilityVerdictFailsTheHonestyObligation(): TestResult = runTest {
@@ -309,43 +255,12 @@ class SymmetricLifecycleObligationRigTest {
         }
     }
 
-    /** A joiner that closes its transport but never latches [SeamState.Torn]. */
-    private class SeamThatNeverLatchesTorn(delegate: Seam) : Seam by delegate {
-        override val state: StateFlow<SeamState> = MutableStateFlow(SeamState.Woven)
-    }
-
-    /**
-     * A joiner whose *second* close overwrites the terminal `Torn` with a stale non-terminal value —
-     * the multi-writer clobber `stateStaysTornAfterClose` exists to keep dead, in the one shape a
-     * deterministic rig can reach: an idempotent-close path that re-runs the state write.
-     */
-    private class SeamThatClobbersTornOnSecondClose(private val delegate: Seam) : Seam by delegate {
-        private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
-        override val state: StateFlow<SeamState> = _state
-        private var closes = 0
-        override suspend fun close(reason: CloseReason) {
-            closes++
-            delegate.close(reason)
-            _state.value = if (closes == 1) SeamState.Torn(CloseReason.Normal) else SeamState.Weaving
-        }
-    }
-
     /** A joiner whose `incoming` relays the real flow and then never terminates. */
     private class SeamWhoseIncomingNeverCompletes(private val delegate: Seam) : Seam by delegate {
         override val incoming: Flow<Swatch> = flow {
             delegate.incoming.collect { emit(it) }
             awaitCancellation()
         }
-    }
-
-    /**
-     * A joiner advertising a remote that survives its own tear — a frozen pre-tear roster. `selfId`
-     * stays in it, so the *second* arm of the collapse obligation still passes and the red is
-     * attributable to the first.
-     */
-    private class SeamWithAFrozenRoster(delegate: Seam) : Seam by delegate {
-        override val peers: StateFlow<Set<PeerId>> =
-            MutableStateFlow(setOf(delegate.selfId, PeerId("ghost-remote-that-never-leaves")))
     }
 
     /** A joiner with no live path observer reporting a confident verdict anyway. */

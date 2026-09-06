@@ -505,11 +505,26 @@ public abstract class SeamConformanceSuite {
     //  bare per-obligation `runTest` returns an un-awaited Promise.
     // ─────────────────────────────────────────────────────────────────────────
 
-    // ── (1) host yields a usable Seam with a non-empty selfId ───────────────
+    // ── (1) host yields a usable Seam with a non-empty selfId — BOTH ends ────
+    //
+    // **Both ends are checked (#2601), for the reason `sendToSelfIsRefused` gives:** a role-split
+    // fabric is two different implementations behind one suite, so asserting only on `host` proves
+    // at most half of what the harness under test actually ships — and the other half is the one a
+    // joining phone runs.
+    //
+    // **Where the joiner arm can fail.** `selfId` is minted on the *join* path, which on every
+    // role-split fabric is a different code path from the host's: a `LinkSeam` joiner takes the id
+    // its handshake resolved, a `MeshSeam` host takes the one its Loom minted. The two ends of the
+    // same fabric can and do disagree about where an id comes from, so this is not the
+    // fixture-vacuity shape [JoinerRosterOrigin] describes — nothing about a shared in-process
+    // backend makes an empty joiner id unreachable, because no fixture supplies the id at all.
 
     internal suspend fun runHostYieldsUsableSeam(scope: TestScope): Unit =
-        scope.connectedPair { host, _ ->
-            assertFalse(host.selfId.value.isEmpty(), "selfId must be non-empty")
+        scope.connectedPair { host, joiner ->
+            assertAll(
+                { assertFalse(host.selfId.value.isEmpty(), "host selfId must be non-empty") },
+                { assertFalse(joiner.selfId.value.isEmpty(), "joiner selfId must be non-empty") },
+            )
         }
 
     @Test
@@ -630,12 +645,27 @@ public abstract class SeamConformanceSuite {
     public fun peersReportsSelfIdAndAtLeastTwoAfterJoin(): TestResult =
         runTest { runPeersReportsSelfIdAndAtLeastTwo(this) }
 
-    // ── (5) close is idempotent — calling twice must not throw ──────────────
+    // ── (5) close is idempotent — calling twice must not throw, on BOTH ends ─
+    //
+    // **Both ends are checked (#2601).** A role-split fabric ships a different `Seam` on each end,
+    // and a close path that latches close-once on one is no evidence about the other.
+    //
+    // **The joiner is deliberately closed AFTER the host, and that is the harder path, not a
+    // weaker one.** Its remote is already gone, which is exactly where an implementation reaches
+    // for a bounded or retrying teardown and where a second close is most likely to find state the
+    // first one moved. `closeDoesNotReportFailureAsCancellation` closes the joiner in the same
+    // order and says the same thing about why.
+    //
+    // **Where the joiner arm can fail.** Nowhere is idempotency supplied by a fixture — it is a
+    // property of the seam's own close-once latch, which every implementation writes for itself.
+    // The in-process harnesses are not vacuous here; they simply happen to pass.
 
     internal suspend fun runCloseIsIdempotent(scope: TestScope): Unit =
-        scope.connectedPair { host, _ ->
+        scope.connectedPair { host, joiner ->
             host.close()
             host.close() // must not throw
+            joiner.close()
+            joiner.close() // must not throw either
         }
 
     @Test
@@ -695,6 +725,37 @@ public abstract class SeamConformanceSuite {
         runTest { runHostStateIsWovenEvenAlone(this) }
 
     // ── (9) close drives state to Torn(Normal) ──────────────────────────────
+    //
+    // **STILL HOST-ONLY, and now for a measured reason rather than by omission (#2601).** `SeamState`
+    // is symmetric — there is no client/server split at this layer — and a joiner that never latches
+    // `Torn` wedges every `state.first { it is Torn }` waiter on the joining device while the host
+    // looks perfectly healthy. That is the first of the three shipped `:kuilt-nearby` symptoms #2591
+    // records. The joiner arm belongs here and is written; it does not land yet because one in-tree
+    // harness reds on it, and the red is a real defect that this suite must not paper over.
+    //
+    // `MuxServerLoomConformanceTest` hands back a `NamedMux` **channel view** as its joiner, and
+    // `MuxBase.ChannelView.close` closes its own delivery spool while `state` and `peers` keep
+    // delegating to a base connection that is still alive — so `joiner.state` reads `Woven` after
+    // `joiner.close()`. That is **#2372**, filed and open, and it is *blocked on a design decision*
+    // (does a channel view own its own `SeamState`?) rather than on anyone writing code.
+    //
+    // **What #2601 adds to #2372 is that the harness it asks for already exists.** That issue's
+    // acceptance criteria ask for "a `SeamConformanceSuite` subclass that puts a channel view in the
+    // **host** position, so ungated core actually covers it", and its comment records that such a
+    // harness was built, red on 6 rows, and not landed. Symmetrising *this* row reaches the same
+    // defect through the harness already in tree, in the position it already occupies — no new
+    // subclass required. Land the joiner arm with #2372's fix; the assertion is one line:
+    //
+    //     assertAll(
+    //         { assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()") },
+    //         { assertIs<SeamState.Torn>(joiner.state.value, "joiner state must be Torn after close()") },
+    //     )
+    //
+    // Two sibling rows are held back by the same one value, and only that one: `stateStaysTornAfterClose`
+    // and `peersCollapseToSelfIdWhenTorn`. Measured by neutralising the joiner-`Torn` assertions and
+    // re-running — every other joiner arm in this slice went green, including
+    // `incomingCompletesWhenSeamCloses`, whose joiner flow terminates correctly (the view does close
+    // its spool). So this is one defect, not four.
 
     internal suspend fun runCloseDrivesStateTornNormal(scope: TestScope): Unit =
         scope.connectedPair { host, _ ->
@@ -901,9 +962,22 @@ public abstract class SeamConformanceSuite {
     // ─────────────────────────────────────────────────────────────────────────
 
     // ── (6b) live capability is honest about whether it is observed ─────────
+    //
+    // **Both ends are checked (#2601).** `Seam.capability`'s default is a roleless `Unknown` floor
+    // that an implementation overrides only when it has a real OS path observer — so "does this
+    // seam have an observer?" is a per-implementation fact, and a role-split fabric answers it
+    // twice. A joiner fabricating a confident `Available` it cannot have is a lie told to the
+    // device that has to decide whether to keep retrying; the host's honesty says nothing about it.
+    //
+    // **Where the joiner arm can fail.** Nothing in a fixture supplies `capability` — it is the
+    // seam's own property, defaulted by the interface. This is among the least fixture-dependent
+    // rows in the suite. The `reportsLiveCapability = true` branch is the weaker of the two here,
+    // for the reason its own comment gives: the await IS the assertion, so a joiner whose observer
+    // never fires hangs rather than reds, and only `NwLoopbackConformanceTest` reaches that branch
+    // against a real observer at all.
 
     internal suspend fun runWovenSeamCapabilityIsHonest(scope: TestScope): Unit =
-        scope.connectedPair { host, _ ->
+        scope.connectedPair { host, joiner ->
             if (capabilities().reportsLiveCapability) {
                 // A fabric claiming a live observer must REACH a real verdict, so AWAIT one rather than
                 // sample: a real OS path monitor (`NWPathMonitor`) reports asynchronously from a cold
@@ -922,14 +996,34 @@ public abstract class SeamConformanceSuite {
                 // time elapse; `stateIsWovenAfterConnect` awaits the same way for the same reason. Only
                 // `NwLoopbackConformanceTest` reaches this against a real observer, so a stalled macOS
                 // runner is the worst case: one test, 60 s, then a hard failure — not a silent pass.
+                // Sequentially, not batched: `assertAll` takes plain non-suspend lambdas, and these are
+                // suspending awaits. A fabric whose HOST observer never fires hangs before the joiner's
+                // is reached — which costs nothing a batch would have bought, since the failure mode of
+                // this branch is a hang rather than an assertion either way.
                 host.capability.first { it.availability !is FabricAvailability.Unknown }
+                joiner.capability.first { it.availability !is FabricAvailability.Unknown }
             } else {
                 // No observer ⇒ the floor is the answer NOW; there is nothing to wait for, and a sample
                 // is what catches a fabric fabricating a verdict it cannot have.
-                val availability = host.capability.value.availability
-                assertTrue(
-                    availability is FabricAvailability.Unknown,
-                    "a fabric with no live path observer must report Unknown, not a fabricated verdict, got $availability",
+                val hostAvailability = host.capability.value.availability
+                val joinerAvailability = joiner.capability.value.availability
+                assertAll(
+                    {
+                        assertTrue(
+                            hostAvailability is FabricAvailability.Unknown,
+                            "the HOST of a fabric with no live path observer must report Unknown, not a " +
+                                "fabricated verdict, got $hostAvailability",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            joinerAvailability is FabricAvailability.Unknown,
+                            "the JOINER of a fabric with no live path observer must report Unknown either " +
+                                "(#2601) — a role-split fabric ships a different Seam on each end, and a " +
+                                "fabricated Available is a lie told to the device deciding whether to keep " +
+                                "retrying. Got $joinerAvailability",
+                        )
+                    },
                 )
             }
         }
@@ -966,6 +1060,15 @@ public abstract class SeamConformanceSuite {
     // *contract*: it converts "the next seam ships the bug silently" into a red test. That matters
     // even now `SeamStateGate` is `public` (#1803) and an out-of-tree fabric *can* reach for it —
     // reachability is not adoption, and this obligation is what catches a fabric that did not.
+    //
+    // **STILL HOST-ONLY, blocked on the same one value as `closeDrivesStateTornNormal` — see that
+    // obligation's comment for the argument and the measurement (#2601 / #2372).** The joiner arm
+    // here needs the joiner to reach `Torn` at all before "does it STAY Torn" means anything, and
+    // `MuxBase.ChannelView` never does. Its shape when it lands is the mirror image of round one:
+    // assert the joiner's own `Torn` as a precondition after its close, then drive frames from the
+    // host toward the torn joiner plus a redundant close on each end, then assert both terminals
+    // and both reasons are unchanged. A second `close()` is where an idempotent-close path most
+    // easily re-runs its state write with a stale value, which is this obligation's subject.
 
     internal suspend fun runStateStaysTornAfterClose(scope: TestScope) {
         if (!capabilities().staysTornAfterClose) return
@@ -1034,23 +1137,67 @@ public abstract class SeamConformanceSuite {
     //
     // Gated on `terminatesIncomingOnClose` for a future fabric that can't honour it; WebRTC was
     // the historical non-conformer (#335), since fixed — every fabric in-tree passes this today.
+    //
+    // **Both ends are checked (#2601).** `incoming`'s termination contract is stated on the
+    // *interface*, not on a role, and the consumer that leaks when it is broken is the one holding
+    // the joining end: a `Quilter` self-closes via `onCompletion`, so a joiner whose flow never
+    // terminates leaks its replication scope on the joining device while the host tears down
+    // cleanly. That is the third of the three shipped `:kuilt-nearby` symptoms in #2591, and it is
+    // structurally invisible from the host.
+    //
+    // **Where the joiner arm can fail.** No harness supplies flow termination; each seam's own
+    // close path completes (or fails to complete) its own spool. The arm is weakest on a fabric
+    // whose ends share one spool object — but no in-tree harness does, because `incoming` is
+    // single-collection per seam by contract (ADR-034).
+    //
+    // **`withTimeoutOrNull`, not `withTimeout` (#2601).** The bound is unchanged; what changed is
+    // what a breach reports. `withTimeout` cancels the collector and the raw
+    // `TimeoutCancellationException` escapes `await()` — a red that names no end, which was
+    // tolerable while there was only one. With two collectors, `null` plus a named assertion is the
+    // difference between "something hung" and "the joiner's flow never terminated". The virtual-
+    // time caveat is identical either way: this body runs on `runTest`'s clock, so the 5 s is
+    // virtual and bounds the *trajectory*, not the host.
 
     internal suspend fun runIncomingCompletesWhenSeamCloses(scope: TestScope) {
         if (!capabilities().terminatesIncomingOnClose) return
-        scope.connectedPair { host, _ ->
-            // Collect host.incoming in the background; it should complete once host closes.
-            val collectingJob = async {
-                withTimeout(5.seconds) {
-                    host.incoming.toList()
-                }
-            }
+        scope.connectedPair { host, joiner ->
+            // Both collectors start before either close: a role-split fabric may complete the
+            // joiner's flow from the HOST's close (a remote disconnect), which is conforming, and a
+            // collector started after that had happened would miss it.
+            val hostCollecting = async { withTimeoutOrNull(5.seconds) { host.incoming.toList() } }
+            val joinerCollecting = async { withTimeoutOrNull(5.seconds) { joiner.incoming.toList() } }
 
             host.close()
+            val hostFrames = hostCollecting.await()
+            joiner.close()
+            val joinerFrames = joinerCollecting.await()
 
-            // If the fabric honours the contract, toList() completes (flow terminated).
-            // withTimeout(5s) guards against fabrics that hang instead of completing.
-            collectingJob.await()
-            assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()")
+            assertAll(
+                {
+                    assertNotNull(
+                        hostFrames,
+                        "the HOST's incoming must COMPLETE once the seam is Torn — a consumer that " +
+                            "self-cleans via onCompletion never runs otherwise",
+                    )
+                },
+                {
+                    assertNotNull(
+                        joinerFrames,
+                        "the JOINER's incoming must COMPLETE once the seam is Torn too — a role-split " +
+                            "fabric ships a different Seam on each end, so the host's termination proves " +
+                            "nothing about this one (#2601), and the leak lands on the joining device " +
+                            "while the host tears down looking healthy",
+                    )
+                },
+                { assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()") },
+                // There is deliberately NO `assertIs<Torn>(joiner.state.value)` arm here, and the
+                // asymmetry is tracked rather than silent: it would duplicate the claim
+                // `closeDrivesStateTornNormal` owns, and that row's joiner arm is held back on #2372.
+                // Landing it here as well would report ONE defect (a `NamedMux` channel view's
+                // `state` delegating to a live base) as reds on two rows, which is exactly the
+                // diagnosability #2601 asks a per-row split to preserve. Add it when #2372 lands and
+                // `closeDrivesStateTornNormal` gains its joiner arm — not before, and not instead.
+            )
         }
     }
 
@@ -1201,6 +1348,29 @@ public abstract class SeamConformanceSuite {
     // `emptySet()`). A single set-equality assertion would report both as one opaque mismatch.
     //
     // Gated on `collapsesPeersOnTear`; every `false` is a tracked bug, not a by-design gap.
+    //
+    // **STILL HOST-ONLY, blocked on #2372 — and this row measured the SECOND half of that issue
+    // (#2601).** `Seam.peers` is symmetric — that is the whole argument #2591 turned on — and the
+    // consumer this protects, `CompositeSeam`'s reachability fold, folds whichever seam it was
+    // given: a joiner freezing its pre-tear roster leaves a composite on the joining device
+    // advertising a peer only `sendTo` can disprove. The joiner arm belongs here.
+    //
+    // It does not land yet because `MuxServerLoomConformanceTest`'s joiner is a `NamedMux` channel
+    // view whose `peers` delegates to a still-live base, so a *closed* view advertises
+    // `PeerId(server)` — measured, not argued. #2372 raises exactly this as its open second
+    // question ("Same question for `peers`: a closed view advertises the base's roster, i.e. peers
+    // it will no longer deliver to — the lie `Seam.peers`' KDoc forbids") and had no property that
+    // could reach it. This row is that property, and it reds. See `closeDrivesStateTornNormal` for
+    // why all three held-back rows are one defect.
+    //
+    // **When it lands, note where the joiner PRECONDITION is weak, which is not where the
+    // obligation is.** `joiner.peers.size >= 2` before the tear is satisfied by the fixture on any
+    // harness declaring [JoinerRosterOrigin.FilledByConstruction], exactly as the joiner arm of
+    // [peersReportsSelfIdAndAtLeastTwoAfterJoin] is. What no fixture supplies is the *collapse*: a
+    // seeded roster (`LinkSeam`'s `setOf(selfId, remoteId)` constructor literal) is precisely the
+    // shape that cannot collapse unless the seam collapses it — so the obligation is strongest
+    // exactly where its precondition is weakest. The joiner's tear may be its own `close()` or the
+    // host's reaching it remotely; either satisfies the contract.
 
     internal suspend fun runPeersCollapseToSelfIdWhenTorn(scope: TestScope) {
         if (!capabilities().collapsesPeersOnTear) return
