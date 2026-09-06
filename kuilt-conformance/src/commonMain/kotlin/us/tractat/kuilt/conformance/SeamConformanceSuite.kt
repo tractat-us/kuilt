@@ -1413,10 +1413,27 @@ public abstract class SeamConformanceSuite {
     // which until #2303/#2304 no property read — the flag was a free declaration every fabric set
     // `true` while nothing held anyone to it. It is also the one departure event **every** harness can
     // reach with no injection at all: `peersDrainWithoutTearOnInjectedMembershipDrain` needs the
-    // `injectMembershipDrain` hook, which 3 of 19 subclasses override — all three of them in-process
-    // shared-roster harnesses — so every real fabric skipped the only neighbouring obligation.
-    // `peersCollapseToSelfIdWhenTorn` does not cover it either: that closes the seam **being
-    // inspected**. Nothing closed one end and then looked at the other while it was still live.
+    // `injectMembershipDrain` hook, and that hook's own KDoc names who can honour it — only an N-peer
+    // harness whose shared roster survives one peer leaving. A strictly-2-peer role-split fabric
+    // structurally cannot, because losing its only link IS a tear, so every such harness skips the
+    // only neighbouring obligation. `peersCollapseToSelfIdWhenTorn` does not cover it either: that
+    // closes the seam **being inspected**. Nothing closed one end and then looked at the other while
+    // it was still live.
+    //
+    // **That paragraph used to carry a census — "which 3 of 19 subclasses override — all three of
+    // them in-process shared-roster harnesses" — and both halves had gone stale before anyone read
+    // them again (#2601).** Four overrode on `main`; #2652 took it to six. The count is not what the
+    // argument rests on: what does the work is the *discriminator* the hook's KDoc already states,
+    // and a reader who wants the current population can grep for the override in a second. A
+    // hardcoded number in a comment is a claim nothing re-measures — it reads as a measured fact,
+    // ages silently, and the sentence around it goes on being quoted long after it stops being true.
+    // So state the discriminator; let the count be whatever it is.
+    //
+    // Note the sibling case this deliberately does NOT touch: `sendOnTornSeamThrows`' "measured …
+    // across all 19 in-tree harnesses" a few hundred lines up. That is a *dated record of a
+    // measurement*, and its denominator is part of what was measured — it stays true as written
+    // however many harnesses exist today. The rule is not "no numbers in comments"; it is that a
+    // count asserting the tree's PRESENT state has no way to stay true.
     //
     // **The assertion is a disjunction, and the naive form is wrong.** Three conforming shapes exist:
     // an N-peer mesh drops the peer and stays Woven; a strictly-2-peer link latches Torn (losing its
