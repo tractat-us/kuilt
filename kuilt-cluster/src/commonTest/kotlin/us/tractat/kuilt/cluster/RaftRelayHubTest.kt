@@ -14,12 +14,12 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftEnvelope
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * The server-side fan-in point where M in-process voters share one spoke set:
@@ -29,16 +29,17 @@ import kotlin.time.Duration.Companion.seconds
  * engine.
  *
  * Like [RoutedRaftTransportTest] these drive real [Seam]s ([InMemoryLoom]) under
- * `UnconfinedTestDispatcher` with a tight timeout — no Raft cluster, so no
- * `MultiNodeRaftSim`; the hub itself is the unit under test. Each voter inbound is
- * a plain [MutableSharedFlow] a test collects, so every routing decision is
- * asserted structurally.
+ * `UnconfinedTestDispatcher` — no Raft cluster, so no `MultiNodeRaftSim`, and the
+ * `runTest` budget is [TEST_WEDGE_BACKSTOP], a wall-clock backstop for a wedge
+ * rather than a performance assertion; the hub itself is the unit under test.
+ * Each voter inbound is a plain [MutableSharedFlow] a test collects, so every
+ * routing decision is asserted structurally.
  */
 class RaftRelayHubTest {
 
     @Test
     fun destRoutingHitsExactlyTheNamedVoterAndNoOther() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val v1 = NodeId("v1")
             val v2 = NodeId("v2")
             val hub = RaftRelayHub(voters = setOf(v1, v2))
@@ -70,7 +71,7 @@ class RaftRelayHubTest {
 
     @Test
     fun spokeSpoofingAnotherOriginReachesNoInbound() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val v1 = NodeId("v1")
             val hub = RaftRelayHub(voters = setOf(v1))
             val at1 = registerVoter(hub, v1)
@@ -94,7 +95,7 @@ class RaftRelayHubTest {
 
     @Test
     fun frameForANonVoterDestIsDropped() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val v1 = NodeId("v1")
             val hub = RaftRelayHub(voters = setOf(v1))
             val at1 = registerVoter(hub, v1)
@@ -114,7 +115,7 @@ class RaftRelayHubTest {
 
     @Test
     fun sendToLearnerWrapsWithTheTrueVoterOrigin() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val v1 = NodeId("v1")
             val hub = RaftRelayHub(voters = setOf(v1))
             registerVoter(hub, v1)
@@ -141,7 +142,7 @@ class RaftRelayHubTest {
 
     @Test
     fun removeSpokeStopsInboundDelivery() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val v1 = NodeId("v1")
             val hub = RaftRelayHub(voters = setOf(v1))
             val at1 = registerVoter(hub, v1)
@@ -165,7 +166,7 @@ class RaftRelayHubTest {
 
     @Test
     fun learnersFlowReflectsAddAndRemove() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val hub = RaftRelayHub(voters = setOf(NodeId("v1")))
             val (hubSide, learnerSide) = spokePair()
             val learnerId = NodeId(learnerSide.selfId.value)
@@ -185,7 +186,7 @@ class RaftRelayHubTest {
 
     @Test
     fun reAdmitCancelsThePriorCollectorForTheSameLearner() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val v1 = NodeId("v1")
             val hub = RaftRelayHub(voters = setOf(v1))
             val at1 = registerVoter(hub, v1)
@@ -218,7 +219,7 @@ class RaftRelayHubTest {
 
     @Test
     fun staleRemoveSpokeFromOldRoomDoesNotCancelTheFreshSpoke() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val v1 = NodeId("v1")
             val hub = RaftRelayHub(voters = setOf(v1))
             val at1 = registerVoter(hub, v1)

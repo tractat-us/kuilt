@@ -18,11 +18,11 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.test.FakeSeam
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * F7 diagnostic: a **player**'s relay channel must be point-to-point. When it is mis-wired with more
@@ -38,7 +38,7 @@ class RoutedRaftTransportMisWiredRelayTest {
 
     @Test
     fun multiPeerPlayerRelayChannel_warnsOnce_andDropsEverySend() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val (logger, appender) = attachCapture()
             try {
                 val player = NodeId("player")

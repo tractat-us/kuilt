@@ -4123,20 +4123,15 @@ val forbidTightRunTestTimeout by tasks.registering {
     // `gradle.properties` or a resource would silently drop it out and reintroduce the stale-green
     // class the stamps were made safe against. Regenerate after a sweep with the same scanner rather
     // than by hand. Entries are paths relative to the root, violation counts as of #1739's first PR.
+    //
+    // THE GRANDFATHERED POPULATION IS GONE. `:kuilt-cluster` was the last module with a sweepable
+    // one and its thirteen entries are retired; what remains is not migration debt at all but two
+    // deliberate KEEPS, whose ceilings sit ABOVE the named constant. Migrating them would TIGHTEN
+    // them, which is the defect this guard exists to stop, so they stay as literals and stay
+    // baselined. That makes the ratchet's floor zero-for-everything-else: any bare literal in any
+    // other file is now a regression against no baseline, which is what makes a green run of this
+    // task a completeness proof rather than a "no worse than before".
     val baseline = mapOf(
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/AttachmentDirectoryTest.kt" to 2,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/ClusterClientFailoverTest.kt" to 7,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/ClusterClientTest.kt" to 8,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/EndpointRotationTest.kt" to 5,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/FederatedCoreAdmissionTest.kt" to 5,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/OverlayServerFailoverTest.kt" to 3,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/RaftRelayHubTest.kt" to 8,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/RelayDialectOriginPreservationTest.kt" to 1,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/RoutedRaftTransportTest.kt" to 16,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/RoutedUnicastRouterTest.kt" to 4,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/ServerClusterDirectoryConvergenceTest.kt" to 1,
-        "kuilt-cluster/src/commonTest/kotlin/us/tractat/kuilt/cluster/VoterReconnectionSupervisorTest.kt" to 4,
-        "kuilt-cluster/src/jvmTest/kotlin/us/tractat/kuilt/cluster/RoutedRaftTransportMisWiredRelayTest.kt" to 1,
         "kuilt-warp-compiler/src/jvmTest/kotlin/us/tractat/kuilt/warp/RealVariantTieringTest.kt" to 1,
         "kuilt-warp-runtime/src/jvmTest/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntimeTest.kt" to 1,
     )

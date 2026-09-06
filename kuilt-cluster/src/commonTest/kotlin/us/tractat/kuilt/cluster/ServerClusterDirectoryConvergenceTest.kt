@@ -9,9 +9,9 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * The directory-replication contract behind [ServerCluster]'s **federated** overload
@@ -26,8 +26,10 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Drives real [us.tractat.kuilt.core.Seam]s ([InMemoryLoom]) under
  * `UnconfinedTestDispatcher` — the established replicator-test harness (mirrors
- * [OverlayServerFailoverTest]); no Raft cluster is in the loop, so a tight timeout
- * keeps a non-converging run fast to fail.
+ * [OverlayServerFailoverTest]); no Raft cluster is in the loop. The `runTest` budget
+ * is [TEST_WEDGE_BACKSTOP] — a generous wall-clock backstop for a wedge, not a
+ * performance assertion; a non-converging run fails fast on the bounded virtual-time
+ * assertions inside the body instead.
  */
 class ServerClusterDirectoryConvergenceTest {
 
@@ -35,7 +37,7 @@ class ServerClusterDirectoryConvergenceTest {
 
     @Test
     fun admitOnOneServerConvergesToTheOther_andReAdmitSupersedes() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val coreLoom = InMemoryLoom()
             val s1Core = coreLoom.host(Pattern("core"))
             val s2Core = coreLoom.join(InMemoryTag("core"))

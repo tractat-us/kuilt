@@ -13,13 +13,13 @@ import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
 import us.tractat.kuilt.session.partition.ServerClusterReconnect
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Tier-(a) tests for the [ServerClusterReconnect] endpoint-rotation policy
@@ -39,7 +39,7 @@ class EndpointRotationTest {
 
     @Test
     fun `initial endpoint is index 0 with round-robin starting at 0`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val endpoints = listOf(endpointA, endpointB, endpointC)
             val reconnect = ServerClusterReconnect(
                 endpoints = endpoints,
@@ -50,7 +50,7 @@ class EndpointRotationTest {
 
     @Test
     fun `onTransportTear advances to next endpoint in round-robin order`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val endpoints = listOf(endpointA, endpointB, endpointC)
             val reconnect = ServerClusterReconnect(
                 endpoints = endpoints,
@@ -75,7 +75,7 @@ class EndpointRotationTest {
 
     @Test
     fun `ResumeToken survives endpoint rotation and is re-presented to next server`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val endpoints = listOf(endpointA, endpointB)
             val reconnect = ServerClusterReconnect(
                 endpoints = endpoints,
@@ -101,7 +101,7 @@ class EndpointRotationTest {
 
     @Test
     fun `a terminal cross-server refusal is a fresh-join signal not an error`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // This test encodes the ClusterClient's required policy from the O4/#532 finding:
             // presenting a token from server-A to server-B is always terminally refused, because
             // server-B mints its own RoomId and keeps its reconnect windows in memory. The real
@@ -140,7 +140,7 @@ class EndpointRotationTest {
 
     @Test
     fun `seeded selector produces deterministic rotation order`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val endpoints = listOf(endpointA, endpointB, endpointC)
 
             // Two reconnect helpers with the same seeded selector must produce identical order.

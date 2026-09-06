@@ -45,10 +45,11 @@ import kotlin.time.Duration.Companion.seconds
  *
  * ## Do not tighten this back
  *
- * The repo's coroutine-test guidance asks for "a *tight* timeout, never the 60 s default", and that
- * is what produced this failure — it is sound advice about *virtual* bounds and unsound when applied
- * to the wall clock. Virtual bounds are the detector; this is only the wedge backstop, and it must
- * stay generous. See kuilt #1739 for the repo-wide class (461 sites still carry a copy-pasted 5 s
- * literal) and #1891 for this instance.
+ * The repo's coroutine-test guidance used to ask for "a *tight* timeout, never the 60 s default",
+ * and that is what produced this failure — it is sound advice about *virtual* bounds and unsound
+ * when applied to the wall clock (#1918 corrected the prose). Virtual bounds are the detector; this
+ * is only the wedge backstop, and it must stay generous. See kuilt #1739 for the repo-wide class —
+ * the copy-pasted literals it named are swept, and `forbidTightRunTestTimeout` now reds on a new
+ * one — and #1891 for this instance.
  */
 internal val WEDGE_BACKSTOP: Duration = 30.seconds

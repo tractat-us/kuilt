@@ -17,11 +17,11 @@ import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Tier-(a) behavioral tests for [ClusterClient] using [FakeRaftNode].
@@ -41,7 +41,7 @@ class ClusterClientTest {
 
     @Test
     fun `propose delegates to underlying raftNode and returns committed entry`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val fakeNode = FakeRaftNode(initialRole = RaftRole.Leader)
             val client = clusterClientWithNode(fakeNode)
 
@@ -53,7 +53,7 @@ class ClusterClientTest {
 
     @Test
     fun `propose with requestId returns entry stamped with that requestId`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val clientId = ClientId("stable-client")
             val fakeNode = FakeRaftNode(
                 initialRole = RaftRole.Leader,
@@ -69,7 +69,7 @@ class ClusterClientTest {
 
     @Test
     fun `committed streams entries pushed by underlying node`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val fakeNode = FakeRaftNode()
             val client = clusterClientWithNode(fakeNode)
 
@@ -96,7 +96,7 @@ class ClusterClientTest {
 
     @Test
     fun `role mirrors underlying node role`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val fakeNode = FakeRaftNode(initialRole = RaftRole.Learner)
             val client = clusterClientWithNode(fakeNode)
 
@@ -108,7 +108,7 @@ class ClusterClientTest {
 
     @Test
     fun `retry same requestId is deduplicated by ClientSessionTable`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val clientId = ClientId("retry-client")
             val fakeNode = FakeRaftNode(
                 initialRole = RaftRole.Leader,
@@ -134,7 +134,7 @@ class ClusterClientTest {
 
     @Test
     fun `shouldApply dedup allows first apply and rejects retry across failover simulation`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Simulate the lifecycle of a single proposal that survives an entry-server failover:
             //   1. Client proposes with requestId=7 → committed on first server.
             //   2. Connection tears (entry-server dies).
@@ -172,7 +172,7 @@ class ClusterClientTest {
 
     @Test
     fun `close terminates the committed stream`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val fakeNode = FakeRaftNode()
             val client = clusterClientWithNode(fakeNode)
 
@@ -195,7 +195,7 @@ class ClusterClientTest {
 
     @Test
     fun `ClusterEndpoints requires non-empty endpoint list`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val result = runCatchingCancellable { ClusterEndpoints(endpoints = emptyList()) }
             assertTrue(result.isFailure, "empty endpoint list must throw")
         }

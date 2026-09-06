@@ -28,12 +28,12 @@ import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
 import us.tractat.kuilt.session.partition.ServerClusterReconnect
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Tier-(b) failover tests for [ClusterClient] and its swappable relay [ManagedSeam].
@@ -57,7 +57,7 @@ class ClusterClientFailoverTest {
 
     @Test
     fun `ManagedSeam swap keeps the same selfId across backing-seam replacement`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // ManagedSeam is the swappable relay channel the player transport (and thus the
             // RaftNode) holds. Swapping the backing Seam must NOT change its identity — the
             // transport observes the same selfId and the same peers StateFlow reference.
@@ -83,7 +83,7 @@ class ClusterClientFailoverTest {
 
     @Test
     fun `player sendTo over ManagedSeam wraps RaftRelay dest leader and addresses the single relay peer`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // A learner's room seam is strictly 2-peer: { learner, relay }. The Raft engine
             // forwards a proposal addressed to the *real* leader NodeId, which is generally NOT
             // the relay's PeerId. The player relay transport wraps every send as
@@ -126,7 +126,7 @@ class ClusterClientFailoverTest {
 
     @Test
     fun `ServerClusterReconnect advances through endpoints in round-robin order on tear`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val endpointA = InMemoryTag("server-a")
             val endpointB = InMemoryTag("server-b")
             val endpointC = InMemoryTag("server-c")
@@ -149,7 +149,7 @@ class ClusterClientFailoverTest {
 
     @Test
     fun `ManagedSeam swap reflects the new backing seam peers after an InMemoryLoom seam tear`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val seamA = loom.join(InMemoryTag("server-a"))
             val seamB = loom.join(InMemoryTag("server-b"))
@@ -177,7 +177,7 @@ class ClusterClientFailoverTest {
 
     @Test
     fun `a terminal cross-server refusal is treated as fresh-join signal not error`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Per #532: a cross-server resume is always terminally refused, because each server
             // mints its own RoomId and keeps its reconnect windows in memory.
             // The correct policy: treat that refusal as a signal to do a fresh join.
@@ -200,7 +200,7 @@ class ClusterClientFailoverTest {
 
     @Test
     fun `retry same requestId after failover is deduplicated by ClientSessionTable`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Simulate exactly-once semantics across a transport failover:
             //   1. Client proposes with requestId=99 — committed on first server.
             //   2. Entry server tears — client reconnects via ManagedSeam.swap.
@@ -232,7 +232,7 @@ class ClusterClientFailoverTest {
 
     @Test
     fun `propose survives ManagedSeam swap when using FakeRaftNode`(): TestResult =
-        runTest(StandardTestDispatcher(), timeout = 5.seconds) {
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Model: a ClusterClient backed by a FakeRaftNode. Separately, the ManagedSeam
             // swaps backing Seams (simulating the reconnect loop). The FakeRaftNode is the
             // RaftNode identity — it does NOT change.

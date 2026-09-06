@@ -14,11 +14,11 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Client failover for the two-tier overlay (slice 5D): when a client's entry server
@@ -33,7 +33,9 @@ import kotlin.time.Duration.Companion.seconds
  * [Seam]s ([InMemoryLoom]) under `UnconfinedTestDispatcher` — the established
  * replicator-test harness. No Raft cluster is in the loop (durable membership is
  * *assumed* Raft-held; this slice is only the overlay consequence), so no
- * `MultiNodeRaftSim`; the tight timeout keeps a non-converging run fast to fail.
+ * `MultiNodeRaftSim`. The `runTest` budget is [TEST_WEDGE_BACKSTOP] — a generous
+ * wall-clock backstop for a wedge, not a performance assertion; a non-converging
+ * run fails fast on the bounded virtual-time assertions inside the body instead.
  */
 class OverlayServerFailoverTest {
 
@@ -41,7 +43,7 @@ class OverlayServerFailoverTest {
 
     @Test
     fun admitPublishesAttachmentAndRegistersLocalDelivery() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // admit does BOTH halves: the directory names this server AND a unicast for
             // the client is delivered down its local link. (register-without-attach or
             // attach-without-register would each be a silent drop.)
@@ -75,7 +77,7 @@ class OverlayServerFailoverTest {
 
     @Test
     fun evictRetractsAttachmentAndDropsLocalDelivery() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val coreLoom = InMemoryLoom()
             val s1Core = coreLoom.host(Pattern("core"))
             val s2Core = coreLoom.join(InMemoryTag("core"))
@@ -115,7 +117,7 @@ class OverlayServerFailoverTest {
      */
     @Test
     fun frameSentDuringFailoverIsRetriedAndLands_staleWindowGuard() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             // Three-server core. S1 is the sender; S2 is Bob's entry server (it will
             // die); S3 is the survivor Bob fails over to.
             val coreLoom = InMemoryLoom()

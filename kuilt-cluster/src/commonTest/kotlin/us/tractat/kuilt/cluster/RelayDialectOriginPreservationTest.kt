@@ -16,10 +16,10 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftTransport
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * End-to-end proof that the relay dialect keeps the Raft `from` intact **in both
@@ -36,7 +36,7 @@ class RelayDialectOriginPreservationTest {
 
     @Test
     fun originSurvivesBothLegsOfTheClientToVoterRelay() =
-        runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+        runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val voterA = NodeId("voter-a")
 
             // A 2-peer spoke: server side (host) collected by the hub, client side driven by the player transport.

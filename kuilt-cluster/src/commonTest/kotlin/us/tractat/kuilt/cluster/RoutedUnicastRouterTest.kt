@@ -17,10 +17,10 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * The cross-core routed unicast (slice 5C): a per-recipient message reaches
@@ -29,8 +29,9 @@ import kotlin.time.Duration.Companion.seconds
  * recipient (the leak-boundary invariant this slice exists to protect).
  *
  * Like the [AttachmentDirectoryTest], this drives real [Seam]s ([InMemoryLoom]) under
- * `UnconfinedTestDispatcher` — no Raft cluster, so no `MultiNodeRaftSim`; the tight
- * timeout keeps a non-converging run fast to fail. Players (`bob`, `carol`) carry
+ * `UnconfinedTestDispatcher` — no Raft cluster, so no `MultiNodeRaftSim`, and the
+ * `runTest` budget is [TEST_WEDGE_BACKSTOP], a wall-clock backstop for a wedge
+ * rather than a performance assertion. Players (`bob`, `carol`) carry
  * explicit *logical* ids — the directory/envelope key — while servers are their
  * core-seam ids; delivery down a player's own two-peer link doesn't depend on the
  * transport-assigned id of that link.
@@ -41,7 +42,7 @@ class RoutedUnicastRouterTest {
     private val carol = PeerId("carol")
 
     @Test
-    fun routedUnicastCrossesCoreAndLandsOnAddressee() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun routedUnicastCrossesCoreAndLandsOnAddressee() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Two-server core; player Bob is behind S2. A message S1 holds for Bob must
         // travel S1 → core → S2 → Bob.
         val coreLoom = InMemoryLoom()
@@ -73,7 +74,7 @@ class RoutedUnicastRouterTest {
     }
 
     @Test
-    fun fannedUnicastIsImpossible_leakBoundaryGuard() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun fannedUnicastIsImpossible_leakBoundaryGuard() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Three-server core; Bob behind S2, Carol behind S3. S1 routes a unicast for
         // Bob. The guard: it lands on Bob and NOWHERE else — not on Carol (another
         // server's player), not on the non-destination server S3.
@@ -124,7 +125,7 @@ class RoutedUnicastRouterTest {
     }
 
     @Test
-    fun unknownRecipientDroppedNotFanned() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun unknownRecipientDroppedNotFanned() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // Directory returns null for the recipient (unattached/unknown): the frame is
         // dropped at the origin — sent nowhere, broadcast nowhere.
         val coreLoom = InMemoryLoom()
@@ -155,7 +156,7 @@ class RoutedUnicastRouterTest {
     }
 
     @Test
-    fun wiresRealAttachmentDirectoryLookup() = runTest(UnconfinedTestDispatcher(), timeout = 10.seconds) {
+    fun wiresRealAttachmentDirectoryLookup() = runTest(UnconfinedTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         // End-to-end with slice 5B's real AttachmentDirectory as the lookup: S2 attaches
         // Bob, it replicates to S1, and S1 then routes a unicast for Bob across the core.
         val coreLoom = InMemoryLoom()
