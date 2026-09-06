@@ -3,6 +3,8 @@ package us.tractat.kuilt.conformance.lattice
 import us.tractat.kuilt.crdt.DDSketch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import kotlin.test.Test
+import kotlin.test.assertEquals
 
 /**
  * Magnitudes spread over five decades, so `⌈log_γ v⌉` puts them in five clearly distinct log
@@ -71,4 +73,31 @@ internal class DDSketchConvergenceTest : LatticeLawSuite<DDSketch>() {
         replicaCount = 3,
         opsPerReplica = 8,
     )
+
+    /**
+     * **Rig receipt: every magnitude reaches its own bucket, in both stores.**
+     *
+     * The byte law can only fail where a store holds more than one key, so [MAGNITUDES] spanning
+     * distinct buckets is the fixture's load-bearing property — and it is a *computed* one
+     * (`⌈ln v / ln γ⌉`), which makes it exactly the sort of thing a later edit to α, or to the
+     * magnitudes, can collapse without anyone noticing. A collapse reds here rather than turning
+     * five green tests vacuous.
+     */
+    @Test
+    fun everyMagnitudeReachesItsOwnBucket() {
+        val empty = newHarness().initial
+        val replica = ReplicaId("R0")
+        val positive = MAGNITUDES.map { empty.piece(empty.add(replica, it)).positiveBuckets.keys.single() }
+        val negative = MAGNITUDES.map { empty.piece(empty.add(replica, -it)).negativeBuckets.keys.single() }
+        assertEquals(
+            MAGNITUDES.size, positive.toSet().size,
+            "the magnitudes must land in DISTINCT positive buckets — a one-key store has exactly " +
+                "one iteration order and makes the byte law unfalsifiable: $positive",
+        )
+        assertEquals(
+            MAGNITUDES.size, negative.toSet().size,
+            "and in distinct negative buckets — the mirrored store is a second, independent " +
+                "non-canonical map: $negative",
+        )
+    }
 }

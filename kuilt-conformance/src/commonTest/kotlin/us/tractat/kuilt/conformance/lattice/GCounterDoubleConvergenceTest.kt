@@ -3,6 +3,9 @@ package us.tractat.kuilt.conformance.lattice
 import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import kotlin.random.Random
+import kotlin.test.Test
+import kotlin.test.assertEquals
 
 /**
  * The `Double`-valued sibling of [GCounterConvergenceTest], bound here because it had **no**
@@ -45,4 +48,31 @@ internal class GCounterDoubleConvergenceTest : LatticeLawSuite<GCounterDouble>()
         replicaCount = 3,
         opsPerReplica = 8,
     )
+
+    /**
+     * **Rig receipt: a merged state really does hold one slot per replica.**
+     *
+     * This binding is the one the JVM cannot judge — `HashMap` bucket order over three short
+     * `ReplicaId` keys is largely a function of the key set, so `jvmTest` is green whether or not
+     * the type is canonical, and the whole verdict rests on Kotlin/Native and wasmJs. That makes
+     * the fixture's only reachability condition — **more than one key in the map** — worth
+     * asserting rather than assuming: at `replicaCount = 1` the map is a singleton, has exactly one
+     * iteration order, and the byte law is unfalsifiable on every input.
+     *
+     * Driven through the harness's own alphabet, so the receipt cannot drift from the binding.
+     */
+    @Test
+    fun everyReplicaOwnsASlotInTheMergedState() {
+        val harness = newHarness()
+        val inc = harness.alphabet.single()
+        val random = Random(0)
+        val merged = (0 until harness.replicaCount)
+            .fold(harness.initial) { state, replicaIndex -> inc.apply(state, replicaIndex, random) }
+        assertEquals(
+            harness.replicaCount,
+            (0 until harness.replicaCount).count { merged.count(ReplicaId("R$it")) > 0.0 },
+            "every replica must hold a slot — a single-key map has one iteration order, so the " +
+                "byte law could not fail on any input: $merged",
+        )
+    }
 }

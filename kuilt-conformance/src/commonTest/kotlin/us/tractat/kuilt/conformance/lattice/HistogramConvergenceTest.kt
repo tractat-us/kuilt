@@ -3,6 +3,8 @@ package us.tractat.kuilt.conformance.lattice
 import us.tractat.kuilt.crdt.Histogram
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import kotlin.test.Test
+import kotlin.test.assertEquals
 
 /** Seventeen upper bounds — eighteen buckets, so the `buckets` map has room to hold many keys. */
 private val BOUNDARIES: List<Double> = List(17) { (it + 1) * 10.0 }
@@ -70,4 +72,36 @@ internal class HistogramConvergenceTest : LatticeLawSuite<Histogram>() {
         replicaCount = 3,
         opsPerReplica = 8,
     )
+
+    /**
+     * **Rig receipt: the bucket space is wide, and the alphabet actually spreads across it.**
+     *
+     * The byte law this binding exists for can only fail where the `buckets` map holds more than
+     * one key, so the fixture's width is load-bearing and this asserts it rather than leaving it
+     * chosen. `Histogram.empty(emptyList())` is a legal configuration on which the property is
+     * unfalsifiable on every input; so is any alphabet whose values all land in one bucket. A
+     * future edit that shrinks [BOUNDARIES], or collapses `record-own-bucket`'s spread, reds here
+     * instead of quietly turning five green tests into five vacuous ones.
+     *
+     * Read off the harness rather than restated, so the receipt cannot drift from the binding.
+     */
+    @Test
+    fun theAlphabetSpreadsAcrossDistinctBuckets() {
+        val harness = newHarness()
+        val empty = harness.initial
+        val firstPopulated = (0 until harness.replicaCount).map { replicaIndex ->
+            empty.piece(empty.record(ReplicaId("R$replicaIndex"), inBucket(replicaIndex * 6)))
+                .bucketCounts.indexOfFirst { it > 0L }
+        }
+        assertEquals(
+            BUCKET_COUNT, empty.bucketCounts.size,
+            "the bucket space must stay wide — a one-bucket histogram makes the byte law " +
+                "unfalsifiable on every input",
+        )
+        assertEquals(
+            harness.replicaCount, firstPopulated.toSet().size,
+            "each replica's pinned op must land in a DIFFERENT bucket, else the merged key order " +
+                "is not a function of the fold order: $firstPopulated",
+        )
+    }
 }
