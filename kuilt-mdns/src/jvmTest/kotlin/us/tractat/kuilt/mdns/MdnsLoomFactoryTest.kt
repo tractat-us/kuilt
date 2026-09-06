@@ -35,8 +35,9 @@ import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
  * reaches rather than merely to the constructor it is passed to.
  *
  * Two knobs are deliberately absent and so cannot be tested for: `policy`, which no WebSocket-backed
- * seam can carry (`WebSocketSeam` never forwards one to `identified`), and `weaveTimeout`, which
- * would have to invent a `withTimeout` that does not exist on either path. See [mdnsLoom]'s KDoc.
+ * seam can carry (`WebSocketSeam` never forwards one to `identified` — #2687), and `weaveTimeout`,
+ * which would have to invent a `withTimeout` that does not exist on either path. See [mdnsLoom]'s
+ * KDoc.
  *
  * Driven over the **real localhost byte path** — real Netty server, real OkHttp client — with JmDNS
  * absorbed by [CapturingJmDNS], so no multicast and no `-P` gate. `embeddedServer` is called outside

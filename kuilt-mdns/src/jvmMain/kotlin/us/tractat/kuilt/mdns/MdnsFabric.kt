@@ -33,8 +33,8 @@ import javax.jmdns.JmDNS
  *   [us.tractat.kuilt.core.fabric.identified] without one — so every WebSocket-backed seam takes
  *   that function's `DeliveryPolicy.Reliable` default and there is no path an argument could
  *   travel. That is the same shape as `:kuilt-tcp`'s #2323 and the fix belongs at the same layer,
- *   in `:kuilt-websocket`, not here. This factory gains a `policy` parameter when that lands, and
- *   not before.
+ *   in `:kuilt-websocket`, not here — tracked as #2687. This factory gains a `policy` parameter
+ *   when that lands, and not before.
  *
  * - **`weaveTimeout`** — `weave` puts no ceiling on either path. Hosting parks on
  *   [us.tractat.kuilt.websocket.KtorServerLoom.nextLink] until a peer dials in, which is what a
