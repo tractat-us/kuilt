@@ -1161,14 +1161,28 @@ public abstract class SeamConformanceSuite {
     internal suspend fun runIncomingCompletesWhenSeamCloses(scope: TestScope) {
         if (!capabilities().terminatesIncomingOnClose) return
         scope.connectedPair { host, joiner ->
-            // Both collectors start before either close: a role-split fabric may complete the
-            // joiner's flow from the HOST's close (a remote disconnect), which is conforming, and a
-            // collector started after that had happened would miss it.
+            // **The two collectors are started SEQUENTIALLY, and that is load-bearing (#2601).**
+            // The obvious shape — start both, close both, await both — is wrong on a real-IO
+            // harness, and it reds one: `NwBridgeLoopbackConformanceTest` runs real TLS-PSK sockets
+            // through `libkuilt.dylib` with its weave on a real dispatcher, precisely because (its
+            // own KDoc) a virtual-clock bound "would fast-forward past the real socket connect". So
+            // while `hostCollecting.await()` suspends on a real callback, `runTest` finds nothing to
+            // run and advances VIRTUAL time — spending the joiner collector's whole 5 s budget
+            // before `joiner.close()` is ever called. The joiner arm then reds on a seam that was
+            // still live and had never been asked to close: a measurement bug wearing a defect's
+            // clothes, and it is invisible on every in-memory harness because there the host's await
+            // returns without the clock moving at all.
+            //
+            // Starting the joiner's collector only after the host arm has settled gives each end its
+            // own budget, and leaves the host arm's preconditions byte-identical to the host-only
+            // form. If the host's close already completed the joiner's flow remotely — conforming,
+            // and what a role-split fabric does — the late collection sees an already-closed spool
+            // and returns immediately, which is a pass.
             val hostCollecting = async { withTimeoutOrNull(5.seconds) { host.incoming.toList() } }
-            val joinerCollecting = async { withTimeoutOrNull(5.seconds) { joiner.incoming.toList() } }
-
             host.close()
             val hostFrames = hostCollecting.await()
+
+            val joinerCollecting = async { withTimeoutOrNull(5.seconds) { joiner.incoming.toList() } }
             joiner.close()
             val joinerFrames = joinerCollecting.await()
 
