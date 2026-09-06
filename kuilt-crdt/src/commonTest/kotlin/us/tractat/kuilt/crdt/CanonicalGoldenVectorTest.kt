@@ -108,10 +108,10 @@ import kotlin.test.assertEquals
  * bytes in the repo an older encoder actually produced, and what makes
  * [thePreFloorGoldenStillDecodesToTheSameValue] a receipt rather than a restatement.
  *
- * **Regenerate only on a deliberate encoding change, and expect every vector to move together.**
- * A single vector changing on one target and not another is the exact defect this file exists to
- * catch — investigate, do not re-record. Recording a per-target vector would defeat the file's
- * entire purpose.
+ * **Regenerate only on a deliberate encoding change, and expect every vector to move together**
+ * (every vector *but* [RGA_PRE_FLOOR], which is frozen — see its own KDoc). A single vector changing
+ * on one target and not another is the exact defect this file exists to catch — investigate, do not
+ * re-record. Recording a per-target vector would defeat the file's entire purpose.
  */
 @OptIn(ExperimentalSerializationApi::class)
 class CanonicalGoldenVectorTest {
@@ -911,6 +911,19 @@ class CanonicalGoldenVectorTest {
          * proves the decoder tolerates an absent field, but it builds the legacy blob from a
          * hand-written `LegacyRgaFrame` stand-in — so it can only ever show that today's decoder
          * accepts today's idea of the old shape. These bytes were written by the old encoder.
+         *
+         * **Frozen. Never re-record it.** The class rule above — regenerate on a deliberate
+         * encoding change and expect every vector to move together — is *destructive* here, and
+         * this constant is its one exception. Its whole value is that it does **not** move when
+         * the encoding does: re-recording would compare today's encoder against today's encoder
+         * and pass forever, laundering a real backward-compatibility guarantee into a tautology.
+         * That is the same failure `constructionsStillHaveTheShapeTheyClaim` exists to catch one
+         * layer over.
+         *
+         * On a future format change, the thing that moves is the **re-encode** assertion in
+         * [thePreFloorGoldenStillDecodesToTheSameValue] — `assertEquals(RGA, hex(ser, decoded))`,
+         * which follows [RGA] like every other vector. These bytes stay exactly as they are, or
+         * are deleted outright if the decoder deliberately stops tolerating the old shape.
          */
         const val RGA_PRE_FLOOR =
             "bf636f70739fbf617400626964bf676c616d706f727401697265706c696361496465616c7068616373657101ff617661" +
