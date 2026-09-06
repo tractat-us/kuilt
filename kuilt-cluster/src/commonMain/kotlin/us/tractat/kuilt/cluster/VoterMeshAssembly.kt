@@ -97,7 +97,8 @@ import kotlin.time.Duration
  *   it is a real one — a redial is cancelled on the ordinary shutdown path, since [VoterMesh.close]
  *   begins by cancelling the scope the supervisors run on. This is **documented, not enforced**: no
  *   in-tree fabric can even demonstrate the window (the in-memory ones do not suspend inside `dial`
- *   at all, so it is zero-width in every harness and non-zero only over a real socket).
+ *   at all, so it is zero-width in every harness and non-zero only over a real socket). A fixture
+ *   that could, and therefore a property that could red, is tracked by #2708.
  * @param dispatcher Scheduler for each mesh's per-link read loops (scheduling only — the mesh guards
  *   its own state with primitives). Production passes `Dispatchers.Default`; tests pass a dispatcher
  *   derived from the test scheduler.

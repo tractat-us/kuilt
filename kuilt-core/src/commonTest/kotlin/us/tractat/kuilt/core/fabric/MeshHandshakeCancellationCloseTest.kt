@@ -126,11 +126,86 @@ class MeshHandshakeCancellationCloseTest {
 
             pump.cancelAndJoin()
 
-            assertTrue(
-                accepted.closed.isCompleted,
-                "a pump cancelled while a conn is mid-handshake must close it; the pump's own " +
-                    "throw/timeout closes are keyed on failure modes a cancellation never reaches",
+            assertAll(
+                {
+                    assertTrue(
+                        accepted.closed.isCompleted,
+                        "a pump cancelled while a conn is mid-handshake must close it; the pump's own " +
+                            "throw/timeout closes are keyed on failure modes a cancellation never reaches",
+                    )
+                },
+                {
+                    assertEquals(
+                        1,
+                        accepted.closeCalls,
+                        "exactly once: the handshake frame closes it and the pump's own closes stay " +
+                            "unreached on this exit, so the fix adds an obligation rather than a second close",
+                    )
+                },
             )
+        }
+
+    /**
+     * The admission-rejection route's close count is **unchanged** by the #2587 fix — it stays two.
+     *
+     * Measured rather than reasoned about, because the audit that produced this change predicted a
+     * *third* close here and that prediction is wrong: `admitLink` runs **after** `handshakeLink` has
+     * already returned a `Link`, so the new failure-close is never on this path. The two are
+     * `admitLink`'s own rejection close and [acceptPump]'s `onFailure` close on the resulting
+     * `LinkRejectedException`, and both predate this change.
+     *
+     * Worth pinning rather than deleting once measured: it is the one route where a *successful*
+     * handshake is followed by a close, so it is where a future "close in `handshakeLink`'s `finally`
+     * instead of its `catch`" refactor would first show up as an over-reach.
+     */
+    @Test
+    fun anAdmissionRejectionClosesTheConnExactlyTwice() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val hub = hubMesh(
+                selfId = PeerId("hub"),
+                connections = emptyList(),
+                dispatcher = dispatcher,
+                random = Random(7),
+                admission = LinkAdmission { _, _ -> false },
+            )
+            val (theirs, mine) = connectionPair()
+            val accepted = CloseCountingConnection(mine)
+            val rejections = mutableListOf<Throwable>()
+
+            val pump = acceptPump(
+                source = OneShotConnectionSource(accepted),
+                handshakeTimeout = HANDSHAKE_CEILING,
+                onFailure = { rejections += it },
+            ) { conn -> hub.addLink(conn) }
+            runCurrent()
+
+            // Complete the far end's half of the preamble so the handshake SUCCEEDS and admission is
+            // reached — the arms above never get here, which is exactly why they cannot see this route.
+            theirs.incoming.first()
+            theirs.send(MeshWire.encodeHello(PeerId("spoke"), meshNonce(1)))
+            runCurrent()
+
+            assertAll(
+                {
+                    assertTrue(
+                        rejections.any { it is LinkRejectedException },
+                        "rig: the handshake completed and admission rejected it — reached: $rejections",
+                    )
+                },
+                { assertEquals(setOf(PeerId("hub")), hub.peers.value, "a rejected link is never published") },
+                {
+                    assertEquals(
+                        2,
+                        accepted.closeCalls,
+                        "admitLink closes the rejected link and the pump closes it again on the " +
+                            "LinkRejectedException — both predate #2587, which touches only exits that " +
+                            "produce no Link at all",
+                    )
+                },
+            )
+
+            pump.cancelAndJoin()
         }
 
     private companion object {
