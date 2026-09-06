@@ -49,6 +49,10 @@ import us.tractat.kuilt.core.Swatch
  * `initialPeers` must be `setOf(selfId)` (the default), because [Seam.peers] requires a torn seam's
  * roster to be exactly that. Anything else throws [IllegalArgumentException] — see the `init` block.
  * A seam constructed `Torn` also starts with [incoming] already completed, as [tear] leaves it.
+ *
+ * **`Torn` is terminal here too**: [weave] refuses once torn rather than silently un-tearing, so a
+ * test cannot drive this fake through a transition no real seam performs. See [weave] for why that arm
+ * throws while [tear] is a silent no-op.
  */
 public class FakeSeam(
     override val selfId: PeerId = PeerId("self"),
@@ -158,8 +162,37 @@ public class FakeSeam(
         _peers.update { it - peer }
     }
 
-    /** Transition state from [SeamState.Weaving] to [SeamState.Woven]. */
+    /**
+     * Transition state from [SeamState.Weaving] to [SeamState.Woven]. Re-asserting [SeamState.Woven]
+     * on an already-woven seam is a harmless no-op.
+     *
+     * **Refused once [SeamState.Torn]**, throwing [IllegalStateException]: `Torn` is terminal on every
+     * real seam — the invariant `SeamStateGate` exists to make unrepresentable — so a fake that can be
+     * un-torn lets a test construct an input no conforming seam can present. That is the same
+     * permissive-fake shape as the constructor guards above (#2432/#2536), one arm over: they close
+     * the *entry* into a state production cannot reach, this closes the *exit* from one it can.
+     *
+     * **Why this is loud where [tear] is a silent no-op.** The two arms differ deliberately, and the
+     * asymmetry is the contract's, not an oversight. `tear()` after `tear()` asks for the state the
+     * seam is already in, and `Seam.close` is idempotent on every real seam (`SeamStateGate.tear`
+     * returns `false` rather than throwing) — so silence there *is* the contract. `weave()` after
+     * `tear()` asks for a transition no seam performs, and has no idempotent reading: the caller
+     * believes something false about the seam it holds. Silently ignoring it would leave that belief
+     * in place and the assertions built on it green. [deliver] is the established precedent — also a
+     * test-driver helper, also refusing loudly on a torn seam, for the same reason.
+     *
+     * Note this is reachable only from a test holding a concrete [FakeSeam]: `weave` is not on [Seam],
+     * so a component under test can never drive it (#2622).
+     */
     public fun weave() {
+        check(_state.value !is SeamState.Torn) {
+            "Torn is terminal (SeamState) — a seam never leaves it, so weave() cannot un-tear the fake " +
+                "for $selfId. A test reaching here believes something about this seam that no " +
+                "conforming seam can make true; build a fresh FakeSeam for the post-tear scenario, or " +
+                "if you deliberately need a tier that violates terminality, declare that " +
+                "non-conformance locally rather than borrowing it from the shared fake. " +
+                "Got state=${_state.value}"
+        }
         _state.value = SeamState.Woven
     }
 
