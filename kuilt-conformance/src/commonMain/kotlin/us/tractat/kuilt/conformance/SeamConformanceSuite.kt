@@ -2607,16 +2607,23 @@ public abstract class SeamConformanceSuite {
      *
      * **The joiner phase gates on `joiner.maxPayloadBytes` separately**, for the same reason the row
      * gates on the host's: a fabric whose joiner names nothing has promised nothing on that end.
-     * [payloadBudgetObligationIsTrackedWhenUnpublished] reads the host, so an end that publishes
-     * nothing here is a silent skip — recorded rather than papered over; widening the accountability
-     * hook to both ends is its own change, and no in-tree fabric is asymmetric today.
+     * [payloadBudgetObligationIsTrackedWhenUnpublished] reads the *host*, so an end that publishes
+     * nothing would be a **silent skip** — this row's own gating shape, one end over, and #2601's
+     * named failure mode. It is measured rather than assumed: a probe reversing the gate (red when
+     * the joiner *does* publish) named every harness that reaches these arms — `TcpConformanceTest`
+     * (16777215 B), `NwConformanceTest` (jvm and macosArm64), `NwBridgeLoopbackConformanceTest` and
+     * `NwLoopbackConformanceTest` (16777216 B) — and the complementary probe (red when the host
+     * publishes and the joiner does not) reddened **nothing**, so no in-tree fabric is asymmetric and
+     * no joiner arm is silently skipped. Widening the accountability hook to both ends is its own
+     * change; asserting symmetry here would make this row depend on a contract claim `Seam` does not
+     * make, which is the prescription #2601's terminal-state slice refused.
      *
      * **Where the joiner arm can fail.** Nothing in a fixture carries a frame — the at-budget payload
      * has to traverse the joiner's own outbound framing, which is where a fabric truncates, splits, or
      * refuses at a ceiling one byte below the one it published. On a harness whose two ends share one
      * in-process backend both directions run the same code and the arm is weak ([joinerRosterOrigin]
-     * records that shape); on the four harnesses that actually publish a budget — all real-IO, all
-     * role-split or loopback-over-a-real-socket — the joiner's write path is its own.
+     * records that shape); every harness that actually reaches these arms is real-IO — a TCP socket
+     * or Network.framework, role-split or loopback — so the joiner's write path is its own.
      */
     @Test
     public fun payloadOfExactlyTheBudgetIsCarried(): TestResult =
