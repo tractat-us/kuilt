@@ -4,11 +4,20 @@ plugins {
     alias(libs.plugins.kover)
 }
 
-// Forward -Plattice.vacuity.breakdown=true to the JVM test process so that
-// VacuityBreakdownProbe can read it via System.getProperty(). The probe is a measuring
-// instrument rather than a check — it asserts nothing about any binding — so it is off by
-// default and costs a normal run nothing. JVM only: it is a developer surface, and every
-// number it produces is target-independent (the pool builder is seeded).
+// `*Probe` — the measuring instruments, gated by -Plattice.vacuity.breakdown=true
+// (`VacuityBreakdownProbe`). A probe asserts nothing about any binding, so it is off by default and
+// costs a normal run nothing; every number it produces is target-independent (the pool builder is
+// seeded), which is why it lives on the JVM alone.
+//
+// ⚠ EXCLUDED at the task level, not skipped from inside the test (#2621). The probe used to read
+// `System.getProperty("lattice.vacuity.breakdown")` and `return` when it was absent, and a `@Test`
+// that returns early reports **passed**, not `skipped` — so the results XML said the same thing
+// whether the probe had cross-checked all 152 arms against the shipped harness or had done
+// nothing — measured: `time="0.011"` self-skipping against `time="1.481"` doing the work, and the
+// XML row is identical. The JVM alternative that reports honestly is a JUnit assumption; task-level
+// exclusion is preferred here because it is the mechanism every other gated probe in this repo now
+// uses, needs no test-framework dependency, and makes an un-run probe *absent* from the XML rather
+// than present.
 // Every `*ConcurrencyTest` in this module is a real-threaded probe (the name is the contract,
 // mirroring :kuilt-core and :kuilt-nw — deliberately not an enumeration, which is what went stale
 // there as probes were added). They race dedicated OS threads rather than coroutines, so sibling
@@ -16,13 +25,14 @@ plugins {
 // under -Pconcurrency.stress.tests=true, on a dedicated CI runner with no co-scheduled test forks
 // (the `concurrency-probes` job in ci.yml). See #1158.
 val runConcurrencyStress = providers.gradleProperty("concurrency.stress.tests").orNull == "true"
+val runVacuityBreakdown = providers.gradleProperty("lattice.vacuity.breakdown").orNull == "true"
 tasks.withType<Test>().configureEach {
-    val flag = providers.gradleProperty("lattice.vacuity.breakdown").orNull
-    if (flag != null) systemProperty("lattice.vacuity.breakdown", flag)
-
-    // Apply the exclusion only when the flag is OFF. With the flag ON the exclusion is absent, so a
+    // Apply each exclusion only when its flag is OFF. With the flag ON the exclusion is absent, so a
     // command-line `--tests "*ConcurrencyTest"` include filter runs them (a build-defined exclude
     // would otherwise win over the include and match nothing).
+    if (!runVacuityBreakdown) {
+        filter { excludeTestsMatching("*Probe") }
+    }
     if (!runConcurrencyStress) {
         filter { excludeTestsMatching("*ConcurrencyTest") }
     } else {

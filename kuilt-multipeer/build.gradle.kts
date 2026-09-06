@@ -27,16 +27,20 @@ val runConcurrencyStress = providers.gradleProperty("concurrency.stress.tests").
 // `withType<Test>` exclusion silently misses `macosArm64Test` entirely. `AbstractTestTask` is the
 // common supertype and covers both with one rule.
 //
-// Chosen over the env-var-plus-`getenv`-self-skip mechanism `:kuilt-nw` uses for its native probe.
-// That shape was tried here first and it WORKS — the variable does arrive (measured directly with a
-// throwaway `assertEquals("true", getenv(...)?.toKString())` on this task); an earlier comment here
-// claimed it did not, and that claim was wrong. See the K/N-timing note below for how the wrong
-// conclusion was reached.
+// Chosen over the env-var-plus-`getenv`-self-skip that `:kuilt-nw` and `:kuilt-mdns` used for their
+// native probes until #2621 moved both to this mechanism. That shape was tried here first and it
+// WORKS — the variable does arrive (measured directly with a throwaway
+// `assertEquals("true", getenv(...)?.toKString())` on this task); an earlier comment here claimed it
+// did not, and that claim was wrong. See the K/N-timing note below for how the wrong conclusion was
+// reached.
 //
 // The task-level exclusion is still preferred, for two reasons that survive the correction: it is
 // ONE mechanism covering both the JVM and native probes instead of two, and an excluded test is
 // *absent* from the results XML rather than present and passing. A self-skip reports a green
 // testcase whether it skipped or ran, which is a poor signal for a test whose whole job is to red.
+// That second reason is why #2621 generalised this choice: `forbidRuntimeSelfSkippingProbe` in the
+// root build now fails on a gate read in a test source that does not route through an assumption,
+// so the shape this module rejected by hand cannot be reintroduced anywhere by accident.
 //
 // ⚠ K/N result-XML `time` IS NOT A WITNESS that a test ran. `macosArm64Test` reported `time="0.0"`
 // for a run that provably completed all 3 000 of its iterations (the probe asserts its own loop

@@ -8,36 +8,58 @@ tasks.withType<Test>().configureEach {
     if (flag != null) systemProperty("nw.realnet.tests", flag)
 }
 
-// Forward -Pconcurrency.stress.tests to the Kotlin/Native macOS **host** test binary as the
-// environment variable CONCURRENCY_STRESS_TESTS, readable via platform.posix.getenv. This gates
-// the heavy, opt-in RealNwApi connection-leak stress probe (NwConnectionDrainStressTest) — hundreds
-// of concurrent real Network.framework open/close cycles on Dispatchers.Default — so it is NEVER in
-// ci-required; absent the flag the test self-skips at runtime. K/N test binaries don't support JVM
-// system properties, so env vars are the mechanism (mirrors :kuilt-mdns's MDNS_MULTICAST_TESTS
-// forwarding to the K/N simulator; here the target is the macosArm64 host test, KotlinNativeHostTest).
-val concurrencyStressFlag = providers.gradleProperty("concurrency.stress.tests").orNull
-if (concurrencyStressFlag != null) {
-    tasks
-        .withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeHostTest>()
-        .configureEach { environment("CONCURRENCY_STRESS_TESTS", concurrencyStressFlag) }
-}
-
-// The JVM half of the same flag, copied verbatim from kuilt-core/build.gradle.kts (#2481).
-// Every `*ConcurrencyTest` here is a real-threaded probe — the name is the contract, deliberately
-// NOT an enumeration, which is what went stale in kuilt-core as probes were added. They run on real
-// threads rather than virtual time, so their background pump coroutines get starved of CPU when the
-// machine is saturated by sibling test JVMs, and an unbounded await can then blow the per-Test task
-// budget → the task is killed and writes no XML (the #1135 hang). So they are EXCLUDED from the
-// normal test run and only run under -Pconcurrency.stress.tests=true, on a dedicated CI runner with
-// no co-scheduled test JVMs (the `nw-concurrency-probes` job in ci.yml). See #1158.
-val runConcurrencyStress = concurrencyStressFlag == "true"
-tasks.withType<Test>().configureEach {
+// `-Pconcurrency.stress.tests=true` opts this module's real-threaded probes in. Two name contracts,
+// deliberately NOT an enumeration (which is what went stale in kuilt-core as probes were added):
+//
+//   *ConcurrencyTest — the JVM probes (`NwSeamConcurrencyTest`), copied verbatim from
+//                      kuilt-core/build.gradle.kts (#2481).
+//   *StressTest      — the Kotlin/Native probe (`NwConnectionDrainStressTest`), hundreds of
+//                      concurrent real Network.framework open/close cycles on Dispatchers.Default.
+//
+// Both run on real threads rather than virtual time, so their background pump coroutines get starved
+// of CPU when the machine is saturated by sibling test JVMs, and an unbounded await can then blow the
+// per-task budget → the task is killed and writes no XML (the #1135 hang). So they are EXCLUDED from
+// the normal test run and only run under the flag, on a dedicated runner with no co-scheduled test
+// JVMs (the `nw-concurrency-probes` job in ci.yml). See #1158.
+//
+// `AbstractTestTask`, NOT `Test` (#2621). `KotlinNativeHostTest`/`KotlinNativeSimulatorTest` are not
+// `Test` tasks, so a `withType<Test>` exclusion silently misses `macosArm64Test` and
+// `iosSimulatorArm64Test` entirely — the trap `:kuilt-multipeer`'s build file already records.
+// `filter.excludeTestsMatching(...)`, not `filter { … }`: the Action-taking overload is declared on
+// `Test`, so on the `AbstractTestTask` receiver the lambda form resolves to `CopySpec.filter` and
+// fails to compile.
+//
+// ⚠ This REPLACES an env-var-plus-`getenv`-self-skip that gated the native probe from inside the test
+// body (#2621). That mechanism is unsound as a *reporting* device: a self-skipped `@Test` reports
+// **passed**, not `skipped`, so a green results XML could not distinguish "ran all 240 cycles" from
+// "never ran one". `build-native` in ci.yml runs `macosArm64Test iosSimulatorArm64Test` WITHOUT this
+// flag, so that self-skip was reporting a green testcase on every `ci-required` run. An excluded test
+// is *absent* from the XML instead, which is a verdict a reader can act on. And duration is no
+// substitute: `macosArm64Test` reports `time="0.0"` for a K/N run that provably completed 3 000
+// iterations — on this target the clock is not a witness that anything ran.
+val runConcurrencyStress = providers.gradleProperty("concurrency.stress.tests").orNull == "true"
+tasks.withType<AbstractTestTask>().configureEach {
     // Apply the exclusion only when the flag is OFF. With the flag ON the exclusion is absent, so a
     // command-line `--tests "*ConcurrencyTest"` include filter runs them (a build-defined exclude
     // would otherwise win over the include and match nothing — the CI job would be green by vacuity).
     if (!runConcurrencyStress) {
-        filter { excludeTestsMatching("*ConcurrencyTest") }
-    } else {
+        filter.excludeTestsMatching("*ConcurrencyTest")
+        filter.excludeTestsMatching("*StressTest")
+    }
+}
+
+// One asymmetry worth knowing before it wastes someone's afternoon, measured rather than assumed.
+// Asking for an excluded probe BY NAME without its flag behaves differently on the two task types:
+// a JVM `Test` fails loudly (`No tests found for given includes: [*VacuityBreakdownProbe*]`), while
+// `macosArm64Test --tests '*NwConnectionDrainStressTest*'` reports BUILD SUCCESSFUL and writes no XML
+// at all. So a native run that "passed" in two seconds ran nothing — pass -Pconcurrency.stress.tests=true.
+// That is still strictly better than the self-skip it replaced: no results row is written, so the
+// standard "count the test in build/test-results/" check sees an ABSENCE rather than a green PASS.
+
+// A SECOND block, on `Test` rather than `AbstractTestTask`, because `jvmArgs` is declared on `Test`
+// and does not exist on the common supertype — so this cannot be folded into an `else` above.
+if (runConcurrencyStress) {
+    tasks.withType<Test>().configureEach {
         // The probe harness installs DebugProbes to dump *coroutine* stacks on a hang (#1784), which
         // attaches a java agent at runtime. JDK 21+ warns on stderr when that happens (JEP 451), and
         // stderr cleanliness is itself evidence on these hangs. Scoped to the stress runs, so the

@@ -4,6 +4,8 @@ import us.tractat.kuilt.crdt.Quilted
 import kotlin.math.round
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
@@ -27,6 +29,13 @@ import kotlin.test.fail
  * and would tell CI nothing; what pins the behaviour it measures is the per-binding
  * [VacuityFloors.maxNoOpSteps] the retiring bindings now declare.
  *
+ * The gate is at the **task** level — the `*Probe` name contract in this module's `build.gradle.kts`
+ * — so an un-run probe is **absent** from the results XML. It used to read the property here and
+ * `return` when it was missing, and a `@Test` that returns early reports **passed**, not `skipped`
+ * (#2621): a green XML row said the same thing whether the probe had cross-checked every arm against
+ * the shipped harness or had done nothing at all. Since the cross-check is the only thing that makes
+ * this probe's numbers trustworthy, that is exactly the row a reader must not be misled by.
+ *
  * ```
  * ./gradlew :kuilt-conformance:jvmTest --tests "*VacuityBreakdownProbe*" \
  *     -Plattice.vacuity.breakdown=true --rerun-tasks
@@ -44,7 +53,12 @@ internal class VacuityBreakdownProbe {
         /** Which arm the shipped pool builder implements — the one the cross-check applies to. */
         val SHIPPED = Bootstrap.EVERY_REPLICA
 
-        const val GATE = "lattice.vacuity.breakdown"
+        /**
+         * Floor on `bindings()`, so the arm-count assertion cannot be satisfied by an empty list
+         * (#2621). Deliberately below the real count (19 when this landed) — a floor rather than a
+         * census, so adding a CRDT does not red a probe that has nothing to do with it.
+         */
+        const val MIN_BINDINGS = 15
     }
 
     /** Which pool builder to model. */
@@ -272,25 +286,55 @@ internal class VacuityBreakdownProbe {
 
     @Test
     fun breakdown() {
-        if (System.getProperty(GATE) != "true") {
-            println("VacuityBreakdownProbe skipped — run with -P$GATE=true")
-            return
-        }
         val mismatches = mutableListOf<String>()
         println(
             "ROW|window|bootstrap|retirement|binding|noOp|steps|noOp%|fromBottom|fromBottomRETIRE|" +
                 "explNoOp|explSteps|explNoOp%|effRetire|retire%|leadRetire|explRetire|explRetire%|" +
                 "anc%|conc%|pairs|equal%",
         )
-        for (seeds in listOf(0L..15L, 0L..63L)) {
+        val windows = listOf(0L..15L, 0L..63L)
+        var emitted = 0
+        for (seeds in windows) {
             for (bootstrap in Bootstrap.entries) {
                 for (retirement in Retirement.entries) {
                     for ((name, suite) in bindings()) {
                         emit<Nothing>(name, suite, seeds, bootstrap, retirement, mismatches)
+                        emitted++
                     }
                 }
             }
         }
+        // Rig preconditions (#2621): the cross-check below asserts an ABSENCE — no arm diverged from
+        // the shipped harness — which passes trivially if no arm was measured. `bindings()` is a
+        // hand-maintained list and the loop nest is four deep, so "the probe emitted nothing" and
+        // "the probe emitted 152 clean rows" are the same green without these.
+        //
+        // TWO assertions, because the obvious one alone contains the very defect it is here to close.
+        // `expected` is DERIVED from every loop bound, `bindings().size` included, so an emptied
+        // `bindings()` makes it 0 against an `emitted` of 0 — a counter compared against itself,
+        // green on exactly the input that matters most. MEASURED, not reasoned: with the floor below
+        // disabled and `bindings()` returning `emptyList()`, this test reports `tests=1 failures=0`.
+        // [MIN_BINDINGS] is what makes it falsifiable. It is a FLOOR, not a census — adding a CRDT
+        // raises the real count and leaves it satisfied, while emptying or gutting the list reds.
+        //
+        // The arm-count assertion is not thereby redundant: it catches an emit that stops happening
+        // while the bounds stay — a `continue`, a guard, an early return inside the nest. Measured
+        // too: a `continue` on one `Retirement` arm reds it with "measured 76 of 152 arms". What it
+        // CANNOT catch, since `expected` reads the same bounds the loops do, is a trimmed bound —
+        // `windows` cut to one entry moves both sides equally and stays green. That is what
+        // [MIN_BINDINGS] pins for the one bound where a silent shrink is plausible.
+        assertTrue(
+            bindings().size >= MIN_BINDINGS,
+            "the probe models only ${bindings().size} bindings (floor $MIN_BINDINGS) — a gutted " +
+                "`bindings()` would otherwise satisfy the arm count below by making BOTH sides zero",
+        )
+        val expected = windows.size * Bootstrap.entries.size * Retirement.entries.size * bindings().size
+        assertEquals(
+            expected,
+            emitted,
+            "the probe measured $emitted of $expected arms — its cross-check against the shipped " +
+                "harness is an absence claim, so a loop nest that did not run reads as a clean pass",
+        )
         if (mismatches.isNotEmpty()) fail("probe diverged from the harness:\n${mismatches.joinToString("\n")}")
     }
 }

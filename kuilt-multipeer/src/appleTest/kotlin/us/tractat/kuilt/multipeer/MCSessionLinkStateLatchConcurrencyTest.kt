@@ -82,9 +82,9 @@ import kotlin.test.assertIs
  * Excluded from the normal run by this module's `build.gradle.kts` unless
  * `-Pconcurrency.stress.tests=true`, so the probe never reds the merge gate for a scheduling delay
  * on a saturated runner (#1135 / #1158). The exclusion is at the **task** level rather than the
- * env-var-plus-`getenv`-self-skip `:kuilt-nw` uses for its native probe — one mechanism for this
- * module's JVM and native probes instead of two, and an excluded test is *absent* from the results
- * XML rather than present and passing.
+ * env-var-plus-`getenv`-self-skip `:kuilt-nw` and `:kuilt-mdns` used for their native probes until
+ * #2621 moved both here — one mechanism for this module's JVM and native probes instead of two, and
+ * an excluded test is *absent* from the results XML rather than present and passing.
  *
  * ## Do not trust this task's reported duration — assert the work instead
  *
@@ -206,9 +206,16 @@ class MCSessionLinkStateLatchConcurrencyTest {
 
         // Rig precondition: the loop actually ran every iteration it claims. Asserted rather than
         // inferred from the reported duration, because the duration is exactly what lied earlier in
-        // this PR — a self-skipping probe reported 3 000 races as a PASS in 0.0s, and the K/N result
-        // XML's `time` attribute is not a trustworthy witness either. A race arm that asserts only an
-        // ABSENCE must prove it did the work, or a loop that never executed reads as a clean pass.
+        // this PR: `macosArm64Test` reported `time="0.0"` for a run of this test that completed all
+        // 3 000 iterations, and that 0.0 was read as a self-skip it was not (see the class KDoc —
+        // the env var arrives fine). A race arm that asserts only an ABSENCE must prove it did the
+        // work, or a loop that never executed reads as a clean pass.
+        //
+        // The earlier revision of this comment stated the withdrawn version — "a self-skipping probe
+        // reported 3 000 races as a PASS in 0.0s" — as established fact, twenty lines under a KDoc
+        // that already retracted it (#2621). A self-skip DOES report `passed` rather than `skipped`,
+        // and that is a real defect, since fixed at three sites; it was simply never what happened
+        // here.
         assertEquals(ITERATIONS, completed, "the race loop did not complete every iteration")
 
         // One unraced link carries both teardown rig preconditions, and it is given a guest BEFORE
