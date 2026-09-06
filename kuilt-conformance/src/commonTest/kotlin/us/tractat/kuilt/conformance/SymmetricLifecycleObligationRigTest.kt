@@ -14,7 +14,6 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
@@ -211,26 +210,8 @@ class SymmetricLifecycleObligationRigTest {
             JoinerRosterOrigin.FilledByConstruction("a rig over one InMemoryLoom (#2601 positive control)")
     }
 
-    /**
-     * Applies [decorate] to the seam handed back by `weave(Rendezvous.Existing)` — the joiner — and
-     * nothing else.
-     *
-     * Implemented rather than delegated (`Loom by inner`) on purpose, the reason
-     * [JoinerRosterObligationRigTest] gives: [Loom.host] and [Loom.join] are *default* members, so
-     * delegation would forward them to the inner loom's own `weave` and route straight past this
-     * override.
-     */
-    private class DecoratingJoinerLoom(
-        private val inner: Loom,
-        private val decorate: (Seam) -> Seam,
-    ) : Loom {
-        override suspend fun weave(rendezvous: Rendezvous): Seam {
-            val seam = inner.weave(rendezvous)
-            return if (rendezvous is Rendezvous.Existing) decorate(seam) else seam
-        }
-
-        override fun capability(): TransportCapability = inner.capability()
-    }
+    // [DecoratingJoinerLoom] — the joiner-only decoration every arm above rests on — is shared with
+    // [SymmetricDeliveryObligationRigTest]; see `JoinerRigSupport.kt`.
 
     // ── the broken joiners, one per row ──────────────────────────────────────
 
@@ -268,23 +249,8 @@ class SymmetricLifecycleObligationRigTest {
             MutableStateFlow(TransportCapability(setOf(TransportRole.Data), FabricAvailability.Available))
     }
 
-    // ── shared assertions ────────────────────────────────────────────────────
-
-    private fun assertRedOn(fragment: String, failure: Throwable) {
-        assertTrue(
-            fragment in failure.message.orEmpty(),
-            "the red must come from the JOINER arm specifically (looking for \"$fragment\"); " +
-                "got: ${failure.message}",
-        )
-    }
-
-    private fun assertArmCount(expected: Int, failure: Throwable) {
-        assertTrue(
-            "$expected assertion(s) failed" in failure.message.orEmpty(),
-            "exactly $expected arm(s) may red — a broader red means the rig broke the pair rather " +
-                "than the one end it names; got: ${failure.message}",
-        )
-    }
+    // `assertRedOn` / `assertArmCount` are shared with [SymmetricDeliveryObligationRigTest]; see
+    // `JoinerRigSupport.kt` for what each one is guarding against.
 
     private companion object {
         private const val GAP_URL = "https://github.com/tractat-us/kuilt/issues/2601"
