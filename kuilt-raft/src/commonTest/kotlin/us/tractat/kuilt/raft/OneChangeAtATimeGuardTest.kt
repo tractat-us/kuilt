@@ -229,8 +229,11 @@ class OneChangeAtATimeGuardTest {
      * guards' predicates hold at the probing instant — the premises below assert exactly that, since
      * `pendingConfigChange != null` implies an uncommitted trailing config entry on the leader (class
      * KDoc) — so every *state effect* of this refusal is identical either way, and the assertion that
-     * discriminates them is the [MembershipChangeInProgressException.reason] one after the probe. Delete
-     * that assertion and this test silently reverts to pinning the pair.
+     * discriminates them is the [MembershipChangeInProgressException.reason] one after the probe.
+     *
+     * **That single `assertEquals` is the whole pin.** Delete the line and this test silently reverts
+     * to pinning the pair — the suite stays green, `assertFailsWith` still passes, and nothing marks
+     * the loss. This paragraph is the only mitigation, and prose is not a mechanism.
      *
      * The premises are therefore stated as what they are: the in-memory guard's predicate holds (the
      * first call has not returned), the log-grounded guard's predicate *also* holds, and the

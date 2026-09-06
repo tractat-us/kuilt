@@ -40,7 +40,19 @@ package us.tractat.kuilt.raft
  * [UnsettledJointConfig] is reachable in the source and, as far as can be shown, not at run time:
  * see its own KDoc. It is declared because the guard that would throw it must name *something*, and
  * left unclaimed rather than given a test that would only prove the fixture. Do not read this enum
- * as a coverage list.
+ * as a coverage list. Which of *delete it / keep it as documented depth / find the missed
+ * trajectory* is right stays open under #2737.
+ *
+ * ### No declared→emitted reachability suite, deliberately
+ *
+ * `RefusalGate` has one — `FrameRefusedTest.everyRefusalGateIsReachable` drives every emit site in
+ * one simulation and compares the observed set against `RefusalGate.entries`, so a value with no
+ * emit site reds. Copying it here was considered and **rejected**: with an unreachable value
+ * declared, such a suite can only go green by *excluding* it, and an "I cannot reach this state"
+ * opt-out moves the vacuity one level up, where it is harder to see — the exclusion list becomes the
+ * thing nobody re-reads, and the next value added under it inherits a green suite that has stopped
+ * asserting anything about it. So the suite is worth writing only once no unreachable value is
+ * declared; that resolution is the trigger, not noticing the test is missing. Tracked under #2737.
  */
 public enum class MembershipRefusal {
     /**
@@ -93,6 +105,13 @@ public enum class MembershipRefusal {
      * and the argument above is a *derivation over five call sites*, which is exactly the kind of thing
      * that stops holding quietly. What it is **not** is coverage — no test claims this value, and one
      * that reached it through a hand-built engine state would be proving its own fixture.
+     *
+     * **The load-bearing premise is `demoteToFollowerOnLeaderContact` firing unconditionally**, which
+     * is what puts every other `recomputeMembership()` site on a Follower. Make that demotion
+     * conditional, add a fifth call site, or let a leader adopt a config without appending an entry,
+     * and this guard goes live again — silently, since nothing asserts the premise or the guard.
+     * Whether to delete it, keep it as documented depth, or hunt the missed trajectory stays open
+     * under #2737.
      */
     UnsettledJointConfig,
     ;
