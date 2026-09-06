@@ -10,8 +10,13 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * [Seam.peers] always holds [Seam.selfId] — **from construction onward, in every state** — and
- * [FakeSeam]'s constructor is the one place that obligation can be entered wrongly (#2536).
+ * [Seam.peers] always holds [Seam.selfId] — **from construction onward, in every state** — and this
+ * file owns the **constructor** half of that obligation (#2536).
+ *
+ * It is not the only door, and this file used to say it was. Two more reached the identical state from
+ * a consumer's test *body* rather than its fixture — [FakeSeam.removePeer] applied to `selfId`, and a
+ * caller mutating the very `MutableSet` it passed as `initialPeers`. Both are closed and owned by
+ * [FakeSeamRosterHoleAfterConstructionTest] (#2546); this file stays scoped to construction.
  *
  * `initialPeers` is an independent parameter, so a caller could hand the fake a roster naming only a
  * remote, or no one at all. Both are states no conforming seam reaches, and both read *backwards* in

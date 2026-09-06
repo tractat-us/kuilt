@@ -45,6 +45,11 @@ import us.tractat.kuilt.core.Swatch
  * connected", so a roster without [selfId] under-counts by one and a seam holding one remote reads as
  * alone. Passing one throws [IllegalArgumentException].
  *
+ * **That obligation is an invariant, not a construction-time snapshot** (#2546). Two doors used to
+ * reach the identical state the `require` refuses: [removePeer] applied to [selfId] now throws rather
+ * than holing the roster, and `initialPeers` is **copied** rather than retained, so a caller holding a
+ * `MutableSet` reference cannot edit the seam's roster out from under it after construction.
+ *
  * **Constructing one already `Torn` is allowed, but only in the shape a real seam reaches**:
  * `initialPeers` must be `setOf(selfId)` (the default), because [Seam.peers] requires a torn seam's
  * roster to be exactly that. Anything else throws [IllegalArgumentException] — see the `init` block.
@@ -60,7 +65,12 @@ public class FakeSeam(
     initialState: SeamState = SeamState.Woven,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
-    private val _peers = MutableStateFlow(initialPeers)
+    // Copied, not retained (#2546). `MutableStateFlow(initialPeers)` holds the caller's own instance,
+    // so a caller passing a `MutableSet` could drop `selfId` from it one line after the `require`
+    // below had passed — reaching the refused state with no FakeSeam method called at all. The copy is
+    // also what the `init` guards read (`_peers.value`, not the parameter), so what is validated and
+    // what is retained are the same object rather than two reads of a set the caller can still edit.
+    private val _peers = MutableStateFlow(initialPeers.toSet())
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     private val _state = MutableStateFlow(initialState)
@@ -81,12 +91,12 @@ public class FakeSeam(
         // contract's sentinel for "a remote is connected", so a roster missing `selfId` under-counts by
         // one and a seam with one live remote reads as alone. The fake would also disagree with itself
         // about who `selfId` is — `sendTo` refuses a self-send before consulting the roster (#2428).
-        require(selfId in initialPeers) {
+        require(selfId in _peers.value) {
             "A Seam's peers always contains selfId, from construction onward (Seam.peers, #2536) — " +
                 "`peers.value.size > 1` is the contract's sentinel for \"at least one remote is " +
                 "connected\", and a roster without selfId under-counts by one, so a seam holding one " +
                 "remote reads as alone. Pass initialPeers containing selfId (setOf(selfId) is the " +
-                "default). Got selfId=${selfId.value}, peers=${initialPeers.map { it.value }}"
+                "default). Got selfId=${selfId.value}, peers=${_peers.value.map { it.value }}"
         }
         // The constructor is the OTHER entry into `Torn`, and fixing `tear()` left it open (#2432).
         // `initialState` and `initialPeers` are independent parameters, so a caller could *start* in
@@ -103,11 +113,11 @@ public class FakeSeam(
         // demands `selfId ∈ peers` and says nothing about remotes. Folding either into the other loses
         // a shape — `FakeSeamRosterAlwaysHoldsSelfIdTest.tornAndLiveGuardsStayDistinct` is the check.
         val torn = initialState as? SeamState.Torn
-        require(torn == null || initialPeers == setOf(selfId)) {
+        require(torn == null || _peers.value == setOf(selfId)) {
             "A Torn seam's peers is exactly { selfId } (Seam.peers, #1816) — a torn fabric can reach " +
                 "nobody, and selfId is never absent. Construct with initialPeers = setOf(selfId) (the " +
                 "default), or start Woven/Weaving and call tear(). Got state=$initialState, " +
-                "peers=${initialPeers.map { it.value }}, selfId=${selfId.value}"
+                "peers=${_peers.value.map { it.value }}, selfId=${selfId.value}"
         }
         // The spool dimension of the same obligation: every real seam completes `incoming` on tear, and
         // `tear()` below closes the spool for exactly that reason. A seam that starts `Torn` with an
@@ -157,8 +167,30 @@ public class FakeSeam(
         _peers.update { it + peer }
     }
 
-    /** Remove [peer] from the live peers set. */
+    /**
+     * Remove [peer] from the live peers set, leaving [state] untouched — the *membership drain* a real
+     * peer-mesh performs when one link dies while others survive.
+     *
+     * **Refuses [selfId]**, throwing [IllegalArgumentException]. [Seam.peers] holds `selfId` in every
+     * state, so `removePeer(selfId)` reaches the roster the constructor already refuses (#2536) — one
+     * transition later, and from a consumer's test *body* rather than its fixture. The inversion that
+     * guard exists to prevent fires exactly as it describes: a `Woven` seam with one live remote whose
+     * `peers.value.size > 1` — the contract's sentinel for "at least one remote is connected" — reads
+     * `false`, so the seam reads *alone*. It also brings this helper into line with [sendTo], which has
+     * refused `selfId` since #2428; without it the fake disagreed with itself on the same axis in two
+     * places, refusing to *address* self while accepting *forgetting* self (#2546).
+     *
+     * Use [tear] for the collapse to `{ selfId }`. Removing a peer the roster never held stays a silent
+     * no-op — the guard is on `selfId`, not on membership.
+     */
     public fun removePeer(peer: PeerId) {
+        require(peer != selfId) {
+            "A Seam's peers always contains selfId, in every state (Seam.peers, #2536/#2546) — " +
+                "removing it holes the roster: `peers.value.size > 1` is the contract's sentinel for " +
+                "\"at least one remote is connected\", so a seam still holding one live remote would " +
+                "read as alone. To model a membership drain, remove the remote; to collapse the roster " +
+                "to { selfId }, call tear(). Got selfId=${selfId.value}, peer=${peer.value}"
+        }
         _peers.update { it - peer }
     }
 
