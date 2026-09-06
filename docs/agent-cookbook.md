@@ -207,6 +207,7 @@ wired, and it is held to the same `SeamConformanceSuite` as every other fabric.
 <!-- verbatim from kuilt-tcp/src/jvmTest/kotlin/us/tractat/kuilt/tcp/TcpConformanceTest.kt#TcpConformanceTest -->
 ```kotlin
 override fun newLoomPair(): Pair<Loom, Loom> {
+    // …
     val hostLoom = TcpLoom.host(serverSocket, PeerId("tcp-host"), selector)
     val joinerLoom = TcpLoom.join(PeerId("tcp-joiner"), selector)
     return hostLoom to joinerLoom

@@ -388,14 +388,16 @@ idempotency, availability).
 ```kotlin
 class TcpConformanceTest : SeamConformanceSuite() {
 
+    // …
+
     private val selector = SelectorManager(Dispatchers.IO)
-    private lateinit var serverSocket: ServerSocket
+    private lateinit var serverSocket: AcceptRecordingServerSocket
     private var port: Int = 0
 
     @BeforeTest
     fun setUp() = runBlocking {
         // …
-        serverSocket = aSocket(selector).tcp().bind("127.0.0.1", 0)
+        serverSocket = AcceptRecordingServerSocket(aSocket(selector).tcp().bind("127.0.0.1", 0))
         port = (serverSocket.localAddress as InetSocketAddress).port
     }
 
@@ -406,6 +408,7 @@ class TcpConformanceTest : SeamConformanceSuite() {
     }
 
     override fun newLoomPair(): Pair<Loom, Loom> {
+        // …
         val hostLoom = TcpLoom.host(serverSocket, PeerId("tcp-host"), selector)
         val joinerLoom = TcpLoom.join(PeerId("tcp-joiner"), selector)
         return hostLoom to joinerLoom
@@ -451,6 +454,24 @@ Key points:
   other over the shared `serverSocket`. The suite drives `host()` and `join()`
   concurrently; the host's `accept()`-then-handshake suspends until the joiner
   connects, satisfying the suite's concurrent weave contract.
+- **Decorate the handle you already own to reach the live transport.** The suite's
+  `injectMidSessionDeath` hook proves the remote-disconnect half of the
+  `incoming`-completes contract, and it needs a way to kill the transport *under* a live
+  pair. A loom that dials or accepts internally exposes nothing — but the harness passes
+  the listening socket **in**, and Ktor's `ServerSocket` is an interface, so
+  `AcceptRecordingServerSocket` above wraps it and keeps whatever the loom accepts. Reach
+  for that before adding production API: it is the harness's own object, so nothing on the
+  fabric's public surface changes. Two things make the rig honest rather than merely
+  green — assert both seams were live *before* the kill, and return how many links you
+  **actually** severed, so a partial injection reads as unproven (#1442, #2637).
+- **A real-IO rig needs a real-time barrier before it returns.** The suite's assertions
+  are bounded by `withTimeout` on `runTest`'s **virtual** clock, which fast-forwards the
+  whole bound the instant the test coroutine parks — so an injection whose effect lands
+  asynchronously (a socket FIN crossing loopback into two read loops) times out at
+  `time="0.008"` on a fabric that is working perfectly. Wait for the tear inside the
+  injector under `withContext(Dispatchers.IO)`, where the delay is real. Keep that wait
+  `withTimeoutOrNull` and keep it **out of** the return value: it is a synchronisation
+  barrier, not the verdict, so a fabric that stops tearing still reds the obligation.
 
 ---
 
