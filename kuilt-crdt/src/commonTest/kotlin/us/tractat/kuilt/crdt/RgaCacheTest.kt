@@ -222,4 +222,72 @@ class RgaCacheTest {
             { assertEquals(fromScratch, incremental, "and the two are one value") },
         )
     }
+
+    /**
+     * The same equivalence over a state that has absorbed a remote [RgaOp.Compact] whose dots sit
+     * **above** the local high-water (#2173).
+     *
+     * [cachedStateEqualsFromScratchOverAFlooredState] above is green *by accident of its fixture*:
+     * its residue `Compact` carries `(b, 1)` while `b`'s live max is 3, so folding the `Compact`'s
+     * dots changes nothing and the two paths agree without the property being exercised. Every
+     * other `Compact` in this file is at-or-below the local high-water the same way — the textbook
+     * fixture-configured-where-the-property-cannot-fail shape. Raise one dot above it and the two
+     * part company: `withCompactCaches` passed `maxSeqByReplica` through unchanged while
+     * `computeMaxSeqByReplica` folds the `Compact` in through [OpLogEngine].
+     *
+     * The scenario is ordinary op-based gossip, not a synthetic op: `b` compacts its own seq-3
+     * element and broadcasts the `Compact`, which reaches a peer that has delivered only seqs 1
+     * and 2. `apply` is the documented receive path for exactly this.
+     *
+     * The divergence is publicly observable, which is what the last assertion pins: the two states
+     * are `equal` by [Rga.equals] (same ops, same floor) yet disagree about the next seq, so
+     * minting as `b` off the threaded one re-issues the very dot the `Compact` just recorded as
+     * collected — the #639 re-mint class, reached through the cache rather than through the floor.
+     */
+    @Test
+    fun cachedStateEqualsFromScratchAfterACompactAboveTheHighWater() {
+        // b mints p1..p3 locally, tombstones p3, and compacts it away.
+        val (t1, p1) = Rga.empty<String>().insertAfter(b, RgaId.HEAD, "p1")
+        val (t2, p2) = t1.insertAfter(b, p1.id, "p2")
+        val (t3, p3) = t2.insertAfter(b, p2.id, "p3")
+        val (t4, _) = t3.removeAt(t3.toList().indexOf("p3"))!!
+        val stable = VersionVector.of(mapOf(b to p3.id.seq))
+        val (_, compactOp) = t4.compact(stable, stable, stable)!!
+
+        // A peer that has delivered only p1 and p2 — an ordinary out-of-order gossip window —
+        // then receives the Compact through the raw op-based receive path.
+        val seeded = Rga.empty<String>().apply(p1).apply(p2)
+        val incremental = seeded.apply(compactOp)
+        val fromScratch = Rga.fromOps(incremental.ops, incremental.lamport, incremental.compactedBelow)
+
+        assertAll(
+            // The rig. Without these the assertions below stay green on a fixture that never
+            // reached the state under test — which is precisely how the floored case above passes.
+            { assertEquals(2L, seeded.maxSeqByReplica[b], "precondition: b's local high-water is 2") },
+            {
+                assertEquals(
+                    setOf(Dot(b, 3L)),
+                    compactOp.positions.keys.mapTo(mutableSetOf()) { it.dot },
+                    "and the Compact's dot sits above it",
+                )
+            },
+            {
+                assertEquals(
+                    fromScratch.maxSeqByReplica,
+                    incremental.maxSeqByReplica,
+                    "the threaded high-water must fold the Compact exactly as the recompute does",
+                )
+            },
+            { assertEquals(fromScratch.insertsById, incremental.insertsById) },
+            { assertEquals(fromScratch.compactedIds, incremental.compactedIds) },
+            { assertEquals(fromScratch, incremental, "and the two are one value") },
+            {
+                assertEquals(
+                    fromScratch.insertAfter(b, RgaId.HEAD, "next").second.id.seq,
+                    incremental.insertAfter(b, RgaId.HEAD, "next").second.id.seq,
+                    "so minting as b must not re-issue the seq the Compact recorded",
+                )
+            },
+        )
+    }
 }
