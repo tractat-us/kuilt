@@ -149,6 +149,30 @@ public enum class WireRejectionMode {
  * has no arm for "we reshape on purpose" because reshaping an identity is not a design choice this
  * contract recognises; a codec that does it declares `ContractDiffers` and has to demonstrate it.)
  *
+ * ## Where the check belongs — the constructor, not the decoder (#1822 remedy 3)
+ *
+ * This suite is the regression lock; it does not say where the check goes. It goes in the wire
+ * **type's** `init { require(...) }`. kotlinx-serialization invokes the constructor, so the
+ * invariant then holds on every decode path automatically, including one a future consumer adds
+ * and forgets to guard — whereas a decoder-side check sits one call site away from the type and
+ * covers only the paths somebody remembered. `LogRecord`, `SpanRecord` and `MetricKey` in
+ * `:kuilt-otel` are the exemplars; `MeshHello`, `NwHello` and `TapAdmitMessage.Challenge` are the
+ * fabric-side ones.
+ *
+ * Two consequences, both of which have bitten:
+ *
+ * - **`require` throws, so a [WireRejectionMode.ReturningNull] codec must catch it.** A constructor
+ *   throw is a rejection only under [WireRejectionMode.Throwing]. Left to escape from a decoder on
+ *   a long-lived pump it ends the pump — #1819, where 16 bytes from any peer left a `NearbySeam`
+ *   permanently deaf with no `Torn` to observe. The `require` still belongs on the type; the
+ *   decoder is what turns it into `null`.
+ * - **It can delete a test's detection while leaving the test green.** A harness that builds its
+ *   malformed frame by handing the *local* encoder a wrong-width value stops exercising the
+ *   receiver the moment the constructor refuses: the sender throws, the frame never exists, and
+ *   the assertion still passes. That is why [ExactWidthField] requires a width-unconstrained
+ *   surrogate with a byte-identity receipt rather than the real encoder — the same reasoning, met
+ *   one level earlier.
+ *
  * ## The knobs, and what each of them switches off
  *
  * A fixture's configuration is a prescription too, and it drifts toward the setting where the

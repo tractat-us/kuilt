@@ -246,6 +246,40 @@ merge; the deterministic virtual-time siblings do.
   one assertion of six and a reader scanning for "did it red" would have ticked it off. Where a suite
   already pairs subclasses over complementary configurations, **thread the budget through a new hook
   the way the existing hooks do** — hardcoding it collapses every subclass onto one configuration.
+- **A documented fixed width is enforced in the wire type's `init { require(...) }`, not in the
+  decoder.** kotlinx-serialization invokes the constructor, so an invariant stated there holds on
+  **every** decode path automatically — including the one a future consumer adds and forgets to
+  guard. A decoder-side check sits one call site away from the type and covers only the paths
+  somebody remembered: #1822 found the same defect — *a nonce whose width is documented by a
+  `NONCE_BYTES` constant and unenforced on decode* — at three sites in three modules with three
+  serializers, and the third was an **independent re-derivation** by a different hand, which is what
+  separates a recurring class from a duplicated mistake. `LogRecord`, `SpanRecord` and `MetricKey`
+  in `:kuilt-otel` are the exemplars; `MeshHello`, `NwHello` and `TapAdmitMessage.Challenge` are the
+  fabric-side ones. `WireCodecConformanceSuite` (`:kuilt-conformance`) is the regression lock —
+  subclass it for a new wire type rather than trusting the `require` alone.
+
+  Two things make this more than a one-line move, both learned in-tree rather than reasoned out:
+
+  - **`require` throws, so on a `ReturningNull` codec the decoder must catch it.** A constructor
+    throw is a *rejection* only where the codec's `WireRejectionMode` is `Throwing` — a handshake
+    path whose caller tears the one connection the bad frame arrived on. On a decoder called from a
+    long-lived pump an escaping `IllegalArgumentException` is not a rejection at all: it ends the
+    pump. That is #1819 exactly, where 16 bytes from any peer left a `NearbySeam` permanently deaf
+    with **no `Torn` to observe**. Writing the `require` and stopping converts a width bug into a
+    liveness bug. The width check still belongs on the type; the decoder turns the throw into `null`.
+  - **Moving the check into `init` can delete a test's detection while leaving it green.** A test
+    that builds its malformed frame by handing the **local** encoder a wrong-width value stops
+    exercising the receiver the moment the constructor refuses: the *sender* now throws, the frame
+    never exists, and the test passes without the receiver being involved. Inject raw bytes through
+    a width-unconstrained **surrogate** instead, and prove the surrogate with a byte-identity
+    receipt against the real encoder — an unproven surrogate just moves the vacuity one level up.
+    `TapAdmitChallengeWireCodecTest` is the worked pattern. This is "removing vacuity can remove
+    detection", and #2650 is the open instance of it.
+
+  **Rejection, never reshaping.** Every field of this kind is an identity or a MAC input, not a
+  quantity. Clamping a quantity into range is fine; truncating or padding a wrong-width nonce
+  launders the proof of a malformed or forged frame into a valid-looking value, and the forger
+  simply receives whichever in-range value the reshaping picks.
 - **After fixing anything, ask what the fix itself is now unpinned on.** The same defect recurs one
   level up, and on the `:kuilt-bolt` epic it landed *inside* the fix for the previous instance twice.
   Make it the explicit closing step of every fix and every review: name the property the fix now rests
