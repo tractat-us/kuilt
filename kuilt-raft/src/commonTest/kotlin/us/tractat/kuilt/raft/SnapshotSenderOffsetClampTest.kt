@@ -57,7 +57,7 @@ internal class SnapshotSenderOffsetClampTest {
     private suspend fun senderWithTransferInFlight(): SnapshotSender {
         val storage = InMemoryRaftStorage()
         storage.saveSnapshot(meta, snapshotBytes)
-        return SnapshotSender(storage) { chunkBytes }.also { it.nextChunk(peer) }
+        return SnapshotSender(storage) { _, _ -> chunkBytes }.also { it.nextChunk(peer) }
     }
 
     /**

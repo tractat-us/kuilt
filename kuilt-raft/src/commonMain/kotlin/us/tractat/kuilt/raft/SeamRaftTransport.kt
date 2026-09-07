@@ -93,14 +93,14 @@ public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
             //  2. The budget can move DOWN after an entry is already in the log. `maxPayloadBytes`
             //     is a reading, not a lease: a mesh peer attaching over a tighter link shrinks it.
             //     Nothing checked at propose time can close that race.
-            //  3. Two of the engine's three sizing gates still spend `HEADER_BUDGET` as a flat
+            //  3. One of the engine's three sizing gates still spends `HEADER_BUDGET` as a flat
             //     *reserve* for the envelope rather than measuring it (#2069/#2150). The propose
             //     bound no longer does — it measures the envelope around this node's own `ClientId`
-            //     (#2156) — but `chunkBytes` charges 256 B around an `InstallSnapshot` whose
-            //     `ConfigPayload` of consumer-supplied `NodeId`s can exceed it on an ordinary
-            //     five-voter cluster (#2720), and `boundedBatch`'s always-send-at-least-one clause
-            //     can meet the same payload as a config entry no gate refuses (#2721). Both still
-            //     arrive here.
+            //     (#2156) — and neither does `chunkBytes`, which measures the `InstallSnapshot`
+            //     envelope around the snapshot's own `ConfigPayload` and refuses outright when the
+            //     budget cannot carry it (#2720). But `boundedBatch`'s always-send-at-least-one
+            //     clause can still meet a `ConfigPayload` no gate refuses (#2721), and that one
+            //     arrives here.
             //
             // Dropped, therefore, but loudly: unlike a partition this is a misconfiguration, not
             // weather. The engine will retry the frame forever and never make progress on that
