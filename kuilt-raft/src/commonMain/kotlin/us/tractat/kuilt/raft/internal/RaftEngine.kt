@@ -376,6 +376,22 @@ internal class RaftEngine(
      */
     private var snapshotSizeRejectionWarnLogged: Boolean = false
 
+    /**
+     * `true` once [reportSnapshotChunkEnvelopeOverBudget] has logged its `warn`, latching it to **once
+     * per node** — the same "log once, measure continuously" split as [snapshotSizeRejectionWarnLogged].
+     *
+     * Latched for a plainer reason than that one: the condition is checked on every heartbeat divert
+     * for every stranded peer, so an unlatched `warn` would repeat at the heartbeat interval for as
+     * long as the misconfiguration stands. Nothing about the second occurrence adds information — the
+     * remedy is the same two numbers — and the [RaftMetric.SnapshotChunkEnvelopeOverBudget] emit is
+     * deliberately *un*latched for the case where repetition is the signal.
+     *
+     * Not re-armed when the budget recovers. That is the conservative direction: the alternative is a
+     * `warn` per flap for a transport whose published budget oscillates, which is the shape most
+     * likely to produce one.
+     */
+    private var snapshotEnvelopeOverBudgetWarnLogged: Boolean = false
+
     // ── Wedge detection (#1898) ───────────────────────────────────────────────
     /**
      * How many leader→peer frames this node has refused in a row, without accepting one and without
@@ -2131,9 +2147,10 @@ internal class RaftEngine(
     // ── §7 InstallSnapshot ──────────────────────────────────────────────────────
 
     /**
-     * Raw state bytes carried per chunk: the configured ceiling, or what the transport's payload
-     * budget leaves once the envelope reserve and CBOR's byte-array expansion are paid — whichever is
-     * smaller — floored at 1.
+     * Raw state bytes carried per chunk of the snapshot described by [meta], on its way to [peer]: the
+     * configured ceiling, or what the transport's payload budget leaves once the **measured** envelope
+     * reserve and CBOR's byte-array expansion are paid — whichever is smaller. `null` refuses the
+     * transfer outright; see "Why a refusal" below.
      *
      * The two inputs are in **different units**, which is what this used to get wrong.
      * `snapshotChunkCeiling` bounds the *raw* state bytes in a chunk; `maxPayloadBytes` bounds the
@@ -2143,16 +2160,173 @@ internal class RaftEngine(
      * the wire budget into raw bytes via [CBOR_BYTE_EXPANSION] before comparing keeps the units
      * straight.
      *
-     * A consequence worth naming: with **no** published budget this now returns `snapshotChunkCeiling`
-     * whole, where it used to subtract [HEADER_BUDGET] from it. That subtraction was never right —
+     * **Why the reserve is measured and not [HEADER_BUDGET] (#2720).** [RaftMessage.InstallSnapshot]
+     * carries `config: ConfigPayload?` — a [ClusterConfig] of consumer-supplied [NodeId]s — on *every*
+     * chunk, deliberately, so an installer can adopt the membership whichever chunk it finalizes on. A
+     * flat 256 B cannot cover that and no bound on anything the library controls can make it: five
+     * twenty-character ids cost 309 B in a simple payload and 445 B in a joint one at the plausibility
+     * ceiling, against an envelope of 175 B with no config at all. Every full chunk was therefore
+     * minted over the transport's budget, refused at [SeamRaftTransport.sendTo] (which must swallow
+     * `PayloadTooLarge`), never acked — so [SnapshotSender] never advanced that peer's offset and the
+     * leader re-sent the identical frame forever. A follower needing a snapshot could never be caught
+     * up, and `AppendEntries` could not help it either: its prefix was compacted away.
+     *
+     * So this follows [checkProposeFitsTransport], which took the same shape one lane over for the
+     * same reason: **published conservatively, enforced by measuring.** [HEADER_BUDGET] survives as
+     * the floor — it binds only in the config-free case, where it preserves the sizing this module's
+     * existing chunking tests were calibrated against — while a config-carrying snapshot is charged
+     * what [snapshotChunkReserve] measures around its actual membership.
+     *
+     * **Correctness does not rest on that floor, and nothing pins it.** [snapshotChunkReserve] is
+     * already the true worst case, so dropping the `maxOf` would leave every frame inside the budget;
+     * it would only make config-free chunks larger (1960 raw bytes rather than 1920 at a 4 KiB
+     * budget), which is why no test reds on its removal. It is kept for compatibility — the existing
+     * chunking tests' arithmetic — and as the one number a reader of [HEADER_BUDGET] may still rely
+     * on. Stated here so a future reader does not mistake an unpinned constant for an unverified one.
+     *
+     * **Why the reserve is the whole probe frame here, where the propose lane subtracts its empty
+     * payload.** [checkProposeFitsTransport] measures the command's *encoded* size and compares it to
+     * `budget − reserved`, so the payload array's own header is inside the measured half. This lane
+     * has no bytes to measure yet — it must choose a slice *before* there are any — so it converts a
+     * raw count through [CBOR_BYTE_EXPANSION], which accounts for the per-element cost and nothing
+     * else. The array header has nowhere else to live but the reserve, and a reserve short by its
+     * width produces a frame over budget on every chunk, forever. Pinned by
+     * `SnapshotEnvelopeReserveTest.theReserveMustIncludeTheChunkArraysOwnHeader`.
+     *
+     * **Why a refusal, and why there is no `coerceAtLeast(0)` escape.** This used to floor at 1,
+     * because a zero-byte chunk would never terminate a transfer. That floor is right for its original
+     * reason and wrong once the envelope can exhaust the whole budget: the one-byte chunk is minted
+     * over budget, refused at the transport, never acked, and re-sent forever — the same permanent
+     * wedge, now produced *by* the guard, and silently, because a dropped frame emits nothing the
+     * sender can see. Nor can this return `0` the way [checkProposeFitsTransport] does: there is no
+     * caller on the stack to hand a typed `PayloadTooLarge` to, since a transfer runs on the actor
+     * loop driven by heartbeats. So the honest answer is to send nothing and *say so* —
+     * [reportSnapshotChunkEnvelopeOverBudget], whose [RaftMetric.SnapshotChunkEnvelopeOverBudget]
+     * names both numbers an operator can move.
+     *
+     * **The `maxOf(1, …)` floor survives the refusal, and guards a different thing.** It is easy to
+     * read the two as the same guard and drop it here; they are not. The refusal covers the *wire*
+     * term — no room left in the budget — while the floor covers the *ceiling* term:
+     * `RaftConfig.snapshotChunkCeiling` is a public `Int` with no `require` on it, so a consumer
+     * passing `0` would otherwise get a zero-byte slice that never advances `done` and never
+     * terminates the transfer. Both orderings are safe because the refusal has already established
+     * `rawFromWire >= 1`, so the floor can only ever raise a non-positive *ceiling* to one byte the
+     * budget is known to have room for.
+     *
+     * A consequence worth naming: with **no** published budget this returns `snapshotChunkCeiling`
+     * whole, where it once subtracted [HEADER_BUDGET] from it. That subtraction was never right —
      * `snapshotChunkCeiling` bounds the chunk's *state bytes*, and there is no frame limit to reserve
      * against when the transport names none.
      */
-    private fun chunkBytes(): Int {
+    private fun chunkBytes(peer: NodeId, meta: SnapshotMeta): Int? {
         val wireCap = transport.maxPayloadBytes ?: return raftConfig.snapshotChunkCeiling
-        val rawFromWire = (wireCap - HEADER_BUDGET).coerceAtLeast(0) / CBOR_BYTE_EXPANSION
+        val reserved = maxOf(HEADER_BUDGET, snapshotChunkReserve(meta.config))
+        val rawFromWire = (wireCap - reserved).coerceAtLeast(0) / CBOR_BYTE_EXPANSION
+        if (rawFromWire < 1) {
+            reportSnapshotChunkEnvelopeOverBudget(peer, reserved, wireCap)
+            return null
+        }
         return maxOf(1, minOf(raftConfig.snapshotChunkCeiling, rawFromWire))
     }
+
+    /**
+     * What a [RaftMessage.InstallSnapshot] carrying [config] and an **empty** payload costs on the
+     * wire — the quantity [chunkBytes] holds back, **measured** around the snapshot's actual
+     * membership rather than assumed to be [HEADER_BUDGET] (#2720).
+     *
+     * **Why an empty payload, and the codec property that makes it sound.** CBOR is definite in
+     * structure and every enclosing header here is a function of element *count*, so the envelope's
+     * cost is additive in the payload — `frame(data) == reserve − wire(empty) + wire(data)`. The half
+     * that is not merely structural, and that this rests on entirely, is that `raftCbor` renders a
+     * [ByteArray] as an **indefinite-length array** (`0x9F` … `0xFF`), whose wrapper is a constant two
+     * bytes *at every length*. That length-independence is what lets a measurement taken with no data
+     * stand in for a full chunk, and it is what makes the probe `O(|config|)` rather than a second
+     * `O(chunk)` encode.
+     *
+     * ⚠ **A codec change that gives the payload a length-dependent header invalidates this, silently.**
+     * `@ByteString` framing (#2160) replaces the wrapper with a real CBOR byte string whose header
+     * steps 1 → 2 → 3 → 5 bytes across payload lengths 24 / 256 / 65536, so an empty-payload probe
+     * would charge the *narrowest* header while every real chunk carries a wider one, and the wedge
+     * above returns deterministically at every budget. Worse, the [HEADER_BUDGET] floor would absorb
+     * the difference at the budgets this module's tests use, so it would land green. Whoever lands
+     * that change owns re-deriving the arithmetic — strip the empty payload's header from the
+     * measurement, spend the budget on the wire quantity, then subtract the header of the *whole*
+     * remaining window, which is safe because the step function is monotone.
+     * `SnapshotEnvelopeReserveTest.theWireWrapperAroundAChunkIsLengthIndependent` reds when the
+     * premise goes, which is the only thing standing between that change and a silent regression.
+     *
+     * **Why the widest `Long`s.** `offset` grows across the very transfer this reserve bounds, and
+     * `term` / `lastIncludedIndex` / `round` move on their own; charging [MAX_PLAUSIBLE_INDEX] /
+     * [MAX_PLAUSIBLE_TERM] / [Long.MAX_VALUE] makes the result independent of when it is taken, so a
+     * chunk sized at the start of a transfer is still sized correctly at the end. It is the same
+     * conservatism [proposeEnvelopeBytes] takes and for the same reason; the cost is ~40 B of
+     * over-reserve early in a transfer, and it is the direction that fails safe.
+     *
+     * **Why it is not cached.** The result is a pure function of the snapshot's `config`, which
+     * changes only at a compaction; a cache keyed on it would be sound. But this runs once per chunk
+     * on the actor loop against a `copyOfRange` of up to `snapshotChunkCeiling` bytes taken in the
+     * same call, and it encodes only the config — the copy dominates it by orders of magnitude.
+     */
+    private fun snapshotChunkReserve(config: ConfigPayload?): Int {
+        val probe: RaftMessage = RaftMessage.InstallSnapshot(
+            term = MAX_PLAUSIBLE_TERM,
+            lastIncludedIndex = MAX_PLAUSIBLE_INDEX,
+            lastIncludedTerm = MAX_PLAUSIBLE_TERM,
+            offset = MAX_PLAUSIBLE_INDEX,
+            data = ByteArray(0),
+            done = false,
+            config = config,
+            round = Long.MAX_VALUE,
+        )
+        return raftCbor.encodeToByteArray(probe).size
+    }
+
+    /**
+     * Report that no snapshot chunk can be sent to [peer] at all: the envelope alone costs
+     * [reserved] B inside a [wireCap] B payload budget (#2720).
+     *
+     * Same split as [reportSnapshotRejectedSizeCeiling], and for the same reason. The
+     * [RaftMetric.SnapshotChunkEnvelopeOverBudget] emit is **unlatched**, because a consumer samples
+     * it as a level and "is this still happening?" is exactly what separates the two readings: a
+     * transient dip — `Seam.maxPayloadBytes` is a reading, not a lease, so a peer attaching over a
+     * tighter link lowers it and the transfer resumes on its own when that peer leaves — from a
+     * standing misconfiguration in which this follower never converges and nothing recovers. The
+     * `warn` is latched to once per node, since the remedy it names does not change with repetition
+     * and an unlatched one would fire every heartbeat, for every stranded peer, forever.
+     *
+     * Never throws: this runs on the actor loop, where an escaping exception unwinds the loop and
+     * tears the node down (#1818).
+     */
+    private fun reportSnapshotChunkEnvelopeOverBudget(peer: NodeId, reserved: Int, wireCap: Int) {
+        emitMetric(RaftMetric.SnapshotChunkEnvelopeOverBudget(peer, reserved, wireCap))
+        if (!snapshotEnvelopeOverBudgetWarnLogged) {
+            snapshotEnvelopeOverBudgetWarnLogged = true
+            logger.warn { "[raft:${transport.selfId}] ${snapshotEnvelopeDiagnostic(peer, reserved, wireCap)}" }
+        } else {
+            debug { snapshotEnvelopeDiagnostic(peer, reserved, wireCap) }
+        }
+    }
+
+    /**
+     * The operator-facing diagnostic for [reportSnapshotChunkEnvelopeOverBudget].
+     *
+     * Built by a function rather than inlined so the `warn` and `debug` call sites share one text
+     * while both stay lazy — neither builds the string unless its level is enabled. Mirrors
+     * [snapshotCeilingDiagnostic].
+     *
+     * Names the two numbers an operator can actually move, and the third thing that moves on its own:
+     * a joint configuration carries two [ClusterConfig]s, so a cluster whose settled membership fits
+     * can still be stranded for the duration of a membership change, and that case clears without
+     * intervention.
+     */
+    private fun snapshotEnvelopeDiagnostic(peer: NodeId, reserved: Int, wireCap: Int): String =
+        "sendSnapshotChunk($peer): REFUSED — the InstallSnapshot envelope costs $reserved bytes and the " +
+            "transport publishes maxPayloadBytes=$wireCap, so no chunk can carry any state bytes at all. " +
+            "$peer cannot be caught up until one of those moves: raise the transport's payload budget " +
+            "above $reserved with room for a chunk, or shorten the NodeIds — the envelope is dominated by " +
+            "the snapshot's ConfigPayload, which rides on every chunk. A joint configuration carries two " +
+            "ClusterConfigs and costs roughly twice a simple one, so a refusal that appears at the start " +
+            "of a membership change and stops at the end needs no action (#2720)."
 
     /**
      * Sends the next snapshot chunk to [peer], resuming its in-flight transfer from the peer's acked
@@ -2162,7 +2336,9 @@ internal class RaftEngine(
      * side-effects.
      */
     private suspend fun sendSnapshotChunk(peer: NodeId) {
-        val chunk = snapshotSender.nextChunk(peer) ?: return   // nothing to send yet
+        // null = nothing to send yet, or chunkBytes refused this transfer outright (#2720) — in which
+        // case it has already emitted RaftMetric.SnapshotChunkEnvelopeOverBudget naming why.
+        val chunk = snapshotSender.nextChunk(peer) ?: return
         val start = chunk.offset.toInt()
         val end = start + chunk.data.size
         debug { "sendSnapshotChunk($peer): through=${chunk.meta.lastIncludedIndex} offset=$start..$end/${chunk.totalBytes} done=${chunk.done}" }
@@ -3241,8 +3417,10 @@ internal class RaftEngine(
      *
      * **What this does not bound.** The *aggregate*: N individually-legal entries can still sum past
      * the budget, which is [boundedBatch]'s job, not this one's. And it covers the **propose** lane
-     * only — an internally-minted config entry never passes through here (#2721), and the snapshot
-     * lane spends the same constant around a `ConfigPayload` this measurement cannot see (#2720).
+     * only — an internally-minted config entry never passes through here (#2721). The snapshot lane
+     * had the same exposure through a `ConfigPayload` this measurement cannot see, and now takes this
+     * gate's shape for itself in [chunkBytes] / [snapshotChunkReserve] (#2720); note the reserve
+     * differs there by the payload array's own header, for the reason [snapshotChunkReserve] gives.
      */
     private fun checkProposeFitsTransport(command: ByteArray) {
         val budget = transport.maxPayloadBytes ?: return
@@ -4237,11 +4415,19 @@ internal class RaftEngine(
          * One constant serves all three because the envelopes carry the same *kind* of thing: a handful
          * of `Long`s (`term`, `prevLogIndex` / `lastIncludedIndex`, `leaderCommit` / `offset`, `round`)
          * around opaque bytes. Measured (`:kuilt-raft` commonTest, `raftCbor`): an entry-less
-         * `AppendEntries` encodes to 126 B and an `InstallSnapshot` with no data to 135 B, and the
-         * leading entry's own `index` / `term` / `dedupKey` is another 60 B for a short [ClientId].
-         * Deliberately generous: a byte of framing reserved and not needed costs a byte of payload,
-         * while one that falls short costs a silently dropped frame the sender believed it had sized
-         * to fit.
+         * `AppendEntries` encodes to 126 B and a config-free `InstallSnapshot` with no data to 128 B
+         * on a fresh log, and the leading entry's own `index` / `term` / `dedupKey` is another 60 B for
+         * a short [ClientId]. Deliberately generous: a byte of framing reserved and not needed costs a
+         * byte of payload, while one that falls short costs a silently dropped frame the sender
+         * believed it had sized to fit.
+         *
+         * ⚠ **The `InstallSnapshot` figure is a *fresh-log* number, and `offset` is the field that
+         * grows across the very transfer this reserve bounds.** The same config-free frame costs 167 B
+         * at `offset = 0` once `term` / `lastIncludedIndex` / `round` are at their ceilings, 171 B at a
+         * 2 GiB offset, and 175 B at [MAX_PLAUSIBLE_INDEX] — so a reader taking 128 B as the worst case
+         * is reading a number that only holds before the transfer starts. Still under 256, so this
+         * constant survives as a floor for the config-free case; [chunkBytes] charges
+         * [snapshotChunkReserve] at the ceilings for exactly this reason.
          *
          * **This is a published floor, not a sufficient reserve, and the difference is load-bearing
          * (#2156).** It was written as though 256 B covered every envelope it is spent on. It does
@@ -4253,10 +4439,14 @@ internal class RaftEngine(
          * [proposeEnvelopeBytes] instead, taking whichever is larger. `SeamRoom.maxPayloadBytes`
          * carries the same split for the same reason over a long `PeerId`.
          *
-         * The other two sites still spend it flat and are **not** covered by that: [chunkBytes]'
-         * envelope carries a `ConfigPayload` of consumer-supplied `NodeId`s on every chunk, already
-         * past 256 B for five voters with twenty-character ids (#2720), and [boundedBatch]'s
-         * always-send-at-least-one clause can meet the same payload as a config entry (#2721).
+         * [chunkBytes] now takes the same split, for the same reason reached through a different
+         * field: its envelope carries a `ConfigPayload` of consumer-supplied `NodeId`s on every chunk,
+         * already past 256 B for five voters with twenty-character ids, so it enforces against
+         * [snapshotChunkReserve] and keeps this as the floor (#2720).
+         *
+         * [boundedBatch] is the one site that still spends it flat, and is **not** covered by either:
+         * its always-send-at-least-one clause can meet the same `ConfigPayload` as a config entry, and
+         * no gate refuses one (#2721).
          */
         const val HEADER_BUDGET = 256
 
