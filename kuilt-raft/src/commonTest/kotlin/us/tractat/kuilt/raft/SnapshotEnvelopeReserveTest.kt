@@ -230,12 +230,11 @@ class SnapshotEnvelopeReserveTest {
             }
         }
         sim.settle()                                         // subscribe before the transfer starts
-        return Transfer(sim, leader, behind, through, finalCommit, stamped, bigState, chunkOffsets)
+        return Transfer(sim, behind, through, finalCommit, stamped, bigState, chunkOffsets)
     }
 
     private class Transfer(
         val sim: RaftSimulation,
-        val leader: RaftNode,
         val behind: NodeId,
         val through: Long,
         val finalCommit: Long,
@@ -250,9 +249,11 @@ class SnapshotEnvelopeReserveTest {
      * The settled, five-voters-plus-one membership every cluster ends a promotion in: a *simple*
      * `ConfigPayload`, on every chunk, already past the flat reserve.
      *
-     * Both assertions are fix-agnostic in the sense [ProposeEnvelopeReserveTest] uses: neither says
-     * the transfer must take a particular number of chunks. What must not happen is that the leader
-     * mints a frame larger than the transport it was told about.
+     * The headline statement is the one [ProposeEnvelopeReserveTest] makes: the leader must never
+     * mint a frame larger than the transport it was told about. It is joined here by a deliberately
+     * *implementation*-coupled one — the chunk count, pinned exactly — because on this lane the
+     * headline assertion has slack that hides the errors worth catching. See
+     * [assertTransferFitsTheBudget], which carries the measurement.
      */
     @Test
     fun aSimpleConfigOnTheChunkNeverMintsAnOverBudgetFrame() = raftRunTest {
