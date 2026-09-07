@@ -31,11 +31,13 @@ import kotlin.test.assertTrue
  *
  * ## Reachability
  *
- * Identical to #1855's: kuilt ships **no** durable [RaftStorage] ([InMemoryRaftStorage] is the only
- * implementation in the library), and `RaftStorageConformanceSuite` constrains none of these fields — it
- * checks that entries round-trip and that `truncateFrom`/`entries(fromIndex)` filter correctly, nothing
- * about ranges or contiguity. Every persistent adapter is consumer code that can pass the whole TCK and
- * still return garbage. No attacker and no pre-fix binary required.
+ * Identical to #1855's: `RaftStorageConformanceSuite` constrains none of these fields — it checks that
+ * entries round-trip and that `truncateFrom`/`entries(fromIndex)` filter correctly, nothing about ranges
+ * or contiguity. So any adapter can pass the whole TCK and still hand back garbage. kuilt now ships
+ * [DurableStoreRaftStorage] and that does **not** narrow it: the adapter round-trips the medium
+ * faithfully and validates no ranges by design, leaving the refusal here, so a damaged file reaches this
+ * check through kuilt's own adapter exactly as through a consumer's. No attacker and no pre-fix binary
+ * required.
  *
  * ## Disposition: refuse to start
  *

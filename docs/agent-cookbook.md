@@ -31,6 +31,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | splitting a big blob into frames — picking a chunk size, or chasing a `FrameTooLargeException` that only appears once a peer drops | `Room.maxPayloadBytes` / `Seam.maxPayloadBytes` | [Payload limits](#payload-limits) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](#dedup) |
 | saving bytes so they survive a restart — a write-temp-then-`fsync`-then-atomic-rename dance, a per-platform file helper, an IndexedDB wrapper, "did that write actually land before we crashed?" | `DurableStore` + `StoreKey` | [Durable storage](#durable-storage) |
+| a Raft node's term, vote and log that must survive a restart — a node that comes back having forgotten who it voted for, an `expect`/`actual` `RaftStorage` per platform, a SQLite or IndexedDB schema for consensus state | `DurableStoreRaftStorage.open(store)` | [Durable consensus state](#durable-consensus-state) |
 | a per-line flush loop in a log/telemetry exporter — or a fix for "capturing logs is slow", "the app stalls when it logs a lot" | `WarpLogRecordExporter.export(records)` + `installLogCapture` | [Telemetry & log capture](#telemetry--log-capture) |
 | stamping the session/game/request a log line belongs to — an MDC equivalent, a global holding "the current session" for a log mapper to read, lines from one session tagged with another's id | `withLogContext` | [Telemetry & log capture](#telemetry--log-capture) |
 | deleting a telemetry store's files to reset it, or a "clear on next launch" flag so the delete lands before recovery | `WarpTelemetry.clear()` | [Telemetry & log capture](#telemetry--log-capture) |
@@ -1732,6 +1733,40 @@ check(store.read(StoreKey("never-written")) == null)
 
 store.delete(key)
 check(store.read(key) == null)
+```
+
+## Durable consensus state
+
+**Intent:** make a Raft node remember what it knew across a restart — its current term, who it voted for in that term, the leader it established, its log and its snapshot. A node that forgets any of those can vote twice in one term, which is the single thing Raft exists to prevent. Don't write an `expect`/`actual` `RaftStorage` per platform, and don't invent a SQLite or IndexedDB schema for consensus state.
+**Primitive:** `DurableStoreRaftStorage.open(store)` (`:kuilt-raft`) over any `DurableStore`. `InMemoryRaftStorage` stays the right answer for tests and for peers that rejoin from scratch.
+
+**One store per node.** The three keys are fixed — `raft/meta`, `raft/log`, `raft/snapshot` — so two nodes pointed at one directory or one database overwrite each other's term and vote, and nothing shows it until the cluster splits. There is deliberately no prefix parameter to make sharing safe: a key built from data (a game id) walks into `StoreKey`'s length and case-folding caveats. They are public constants so a consumer re-provisioning a node knows exactly what to delete; `DurableStore` has no key enumeration, which is the gap #2208 recorded.
+
+Every mutator encodes the state it is about to have, waits for `DurableStore.write` to commit it, and only then updates its own memory — so the engine is never told a term is durable when it is not. `saveTermAndVotedFor` and `saveLeaderForTerm` each write **one** record, which is what makes their §5.1/§5.2 atomicity requirements hold on a store that is atomic per key.
+
+An append rewrites the **whole retained log** as one record, so cost is O(retained entries) and what bounds it is how often you compact — publish a state-machine snapshot into `RaftNode.snapshots` and the engine drops the covered prefix. That makes this the reference adapter for a bounded log (a game, a room, a small cluster), not a high-throughput log engine; a log too large to rewrite wants your own `RaftStorage`, bound to `RaftStorageConformanceSuite`. `Bolt` is not the medium for this — it is write-only and forbids authoring from a replay, while a Raft log must be restored from and truncated at the tail.
+
+The stored format is private and versioned, independent of the wire format. A record that will not decode, or one written by a newer build, raises `CorruptDurableStateException` naming the key. `open` validates nothing else: range checks are the engine's (#1887), and an adapter that repaired a bad term would be laundering the evidence that the disk is wrong.
+
+<!-- verbatim from kuilt-raft/src/commonSamples/kotlin/us/tractat/kuilt/raft/RaftSamples.kt#sampleDurableRaftStorage -->
+```kotlin
+// One store per node. In production this is the platform's crash-safe implementation —
+// FileChannelDurableStore(nodeDirectory), NSFileManagerDurableStore(nodeDirectory), or
+// IndexedDbDurableStore.open(nodeDatabase). A sample uses the in-memory one.
+val store: DurableStore = InMemoryDurableStore()
+
+val storage = DurableStoreRaftStorage.open(store)
+
+// Every mutator commits to the medium before it updates its own memory, so a term that has
+// been saved is a term that survives — pass this to `scope.raftNode(cluster, transport, storage)`.
+storage.saveTermAndVotedFor(term = 4L, votedFor = NodeId("node-a"))
+storage.appendEntries(listOf(LogEntry(index = 1L, term = 4L, command = byteArrayOf(7, 8, 9))))
+
+// A restart: a second handle onto the same store, decoding what the first one wrote.
+val restarted = DurableStoreRaftStorage.open(store)
+check(restarted.term() == 4L)
+check(restarted.votedFor() == NodeId("node-a"))
+check(restarted.entries().single().command.contentEquals(byteArrayOf(7, 8, 9)))
 ```
 
 ## Telemetry & log capture

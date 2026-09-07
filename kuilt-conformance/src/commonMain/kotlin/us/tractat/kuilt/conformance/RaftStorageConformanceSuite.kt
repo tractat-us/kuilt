@@ -32,7 +32,7 @@ import kotlin.test.assertTrue
  *
  * ```kotlin
  * class SqliteRaftStorageConformanceTest : RaftStorageConformanceSuite() {
- *     override fun newStorage(): RaftStorage = SqliteRaftStorage(inMemoryDb())
+ *     override suspend fun newStorage(): RaftStorage = SqliteRaftStorage(inMemoryDb())
  *     override suspend fun reopen(storage: RaftStorage): RaftStorage =
  *         SqliteRaftStorage((storage as SqliteRaftStorage).closeAndReopenTheSameFile())
  * }
@@ -45,12 +45,12 @@ import kotlin.test.assertTrue
  *
  * ## Faithfulness, not validation (#1922)
  *
- * kuilt ships **no** durable [RaftStorage] — `InMemoryRaftStorage` is the only implementation in the
- * library, so every persistent adapter is consumer code. Since #1887 the engine refuses to start
- * (`CorruptDurableStateException`) on durable state it cannot believe: a term, snapshot baseline, or
- * restored entry outside `0..2^60`, a log with a gap, or terms that decrease along the log. This suite
- * exists so an adapter bug of that class surfaces at the adapter's own test time rather than at a
- * consumer's startup.
+ * Since #1887 the engine refuses to start (`CorruptDurableStateException`) on durable state it cannot
+ * believe: a term, snapshot baseline, or restored entry outside `0..2^60`, a log with a gap, or terms
+ * that decrease along the log. This suite exists so an adapter bug of that class surfaces at the
+ * adapter's own test time rather than at a consumer's startup — for kuilt's own
+ * `DurableStoreRaftStorage` (bound by `DurableStoreRaftStorageConformanceTest` and its three
+ * platform-medium siblings) as much as for a consumer's.
  *
  * The line this suite holds: it may require an adapter to **round-trip faithfully** the values the
  * engine's restore checks make load-bearing; it may **not** require it to **reject garbage it was never
@@ -66,8 +66,20 @@ public abstract class RaftStorageConformanceSuite {
      * Called once per test — each test drives its own independent storage.
      * The instance must start with `term() == 0L`, `votedFor() == null`,
      * `leaderForTerm() == null`, and `entries() == emptyList()`.
+     *
+     * `suspend`, because opening a durable medium is a suspending act: an adapter over a
+     * [us.tractat.kuilt.store.DurableStore] has to *read* the medium before it can answer a single
+     * one of the four values above, and there is no sound non-suspending way to do that. The
+     * alternative — a constructor that assumes an empty medium — is not a shortcut but a data-loss
+     * bug: an adapter that skipped the read would answer `entries() == emptyList()` for a medium
+     * holding a log, and its first `appendEntries` would then write that empty log back over it.
+     * [DurableStoreConformanceSuite.newStore] has been `suspend` for the same reason since it was
+     * written; this hook was not only because the sole implementation at the time had a
+     * non-suspending constructor.
+     *
+     * Every call site is already inside a `runTest { }` body, so nothing but the modifier changed.
      */
-    public abstract fun newStorage(): RaftStorage
+    public abstract suspend fun newStorage(): RaftStorage
 
     /**
      * A **new handle onto the same durable medium** [storage] wrote to — what a process restart
@@ -141,19 +153,54 @@ public abstract class RaftStorageConformanceSuite {
      * the table because it is the *only* thing measured that moves the cleared-vote assertion, and
      * an assertion nothing has ever reddened is an assertion nobody has checked.
      *
-     * **The fixture rows are the load-bearing ones, and that is the finding rather than a dodge.**
-     * kuilt ships no durable [RaftStorage], so the reference's own `reopen` is the closest this tree
-     * has to an adapter's persistence layer — mutating it *is* mutating the thing under test. Rows 3
-     * to 6 are what make these five properties per-record rather than one property counted five
-     * times.
+     * **The fixture rows were the load-bearing ones, and that was the finding rather than a dodge.**
+     * When they were measured, the reference's own `reopen` was the closest this tree had to an
+     * adapter's persistence layer — mutating it *was* mutating the thing under test. Rows 3 to 6 are
+     * what make these five properties per-record rather than one property counted five times.
      *
-     * **The last row is blast radius, not discrimination, and no production row could be otherwise.**
-     * The reference's reopen reads through the same public surface the same-handle properties read,
-     * so every mutation of `InMemoryRaftStorage` that reaches a restart property reaches an older one
-     * first. Said outright: over `InMemoryRaftStorage` *alone*, these five properties add no
-     * discriminating power at all. They discriminate over the adapters that do not exist in this
-     * tree — which is the whole of #2247's thesis, and the reason the obligation belongs in the TCK
-     * rather than in a backend's own tests.
+     * **The last row is blast radius, not discrimination, and no production row over the reference
+     * could be otherwise.** The reference's reopen reads through the same public surface the
+     * same-handle properties read, so every mutation of `InMemoryRaftStorage` that reaches a restart
+     * property reaches an older one first. Said outright: over `InMemoryRaftStorage` *alone*, these
+     * five properties add no discriminating power at all.
+     *
+     * ## The adapter that closed the gap (#2750)
+     *
+     * The paragraph above used to end *"they discriminate over the adapters that do not exist in this
+     * tree"*. That sentence was the whole of #2247's thesis and it is now **false**: `:kuilt-raft`
+     * ships `DurableStoreRaftStorage`, and `DurableStoreRaftStorageConformanceTest` binds this suite
+     * to it over an `InMemoryDurableStore`, with three more subclasses in `:kuilt-store` binding it
+     * over the real file, Apple and IndexedDB media. Those fixtures do what the reference structurally
+     * cannot: `reopen` throws the handle away and decodes the medium again.
+     *
+     * So the restart properties now have measured discriminating power over **production** code.
+     * There are **eight** of them — every property that calls `reopened(…)`, which is the five the
+     * table above was written against plus the three added since (#2302); the "five" in the
+     * paragraphs above is left as it was measured rather than silently restated.
+     *
+     * These rows are the receipt — measured over `:kuilt-conformance:jvmTest` and
+     * `:kuilt-store:jvmTest` (42 tests each, `failures=0` at baseline), one mutation at a time,
+     * reverted after, with the results XML deleted before every run and the log checked for compile
+     * errors (a mutation that does not compile leaves Gradle serving the previous run's XML):
+     *
+     * | Mutation in `DurableStoreRaftStorage` | Reds in **each** 42-test subclass |
+     * |---|---|
+     * | `appendEntries` updates memory and skips the `raft/log` write | [theLogSurvivesAReopenWhole], [logEntryInternalFields_surviveAReopen] |
+     * | `saveTermAndVotedFor` writes the term and leaves the previous vote in the record | [termAndVoteSurviveAReopen], [saveTermAndVotedFor_persistsBoth], [saveTermAndVotedFor_doesNotDisturbTheEstablishedLeader] |
+     * | `open` ignores `raft/snapshot` | [theSnapshotSurvivesAReopen], [theSnapshotConfigSurvivesAReopen], [saveSnapshot_overwritesThePriorSnapshotWhole] |
+     *
+     * The first row is the one worth reading twice: it is precisely the "buffers each write in a
+     * `HashMap` and flushes on `close()` — or never" adapter this hook's own argument above says
+     * nothing else in the suite could catch, and both properties that red on it are restart
+     * properties.
+     *
+     * **The two fixture arms were re-measured against the new subclass too**, so the rows above are
+     * not resting on a fixture that had stopped discriminating: a `reopen` returning
+     * `open(freshEmptyStore)` reds **7 of those 8** — every one but
+     * [anUnwrittenMediumReopensEmpty], which has no state to lose and so cannot tell a fresh empty
+     * store from a faithful reopen — and one returning the instance it was given reds **8 of 8**,
+     * the extra one being [anUnwrittenMediumReopensEmpty] reached through the `assertNotSame`
+     * precondition rather than through any durability assertion.
      *
      * **Row 2 reds 3 of 4 assertions, not 4** — the cleared-vote arm survives it, because a fresh
      * empty storage happens to have no vote either. Row 7 is the mutation that reds *that* arm, and

@@ -99,7 +99,8 @@ public sealed interface RaftMetric {
      * Two origins are possible, and the cheaper one to check is the likelier:
      * 1. **This node's own durable storage** — a `RaftStorage` adapter that returned a corrupt term (a
      *    truncated column, a sign-extended `Int`, a torn read). No attacker and no malformed frame
-     *    required; kuilt ships no durable `RaftStorage`, so this surface is always consumer code.
+     *    required, and shipping `DurableStoreRaftStorage` does not close it: that adapter returns the
+     *    medium faithfully and validates no ranges, so a damaged file arrives here either way.
      * 2. **A malformed or hostile frame** from a peer, carrying a term at the ceiling — but since #1897
      *    only if this node was within `RaftConfig.maxTermJump` of the ceiling *already*. Such a frame
      *    aimed at a node at an ordinary term is a jump of nearly `2^60`, and the same bound refuses it.

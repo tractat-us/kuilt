@@ -42,6 +42,12 @@ public data class LeaderForTerm(val term: Long, val leaderId: NodeId)
  * RPC reply is sent. In-memory implementations (e.g. [InMemoryRaftStorage])
  * are safe for ephemeral use (tests, transient players) but lose state on
  * process exit.
+ *
+ * kuilt's durable implementation is [DurableStoreRaftStorage], which keeps all
+ * of the above in a [us.tractat.kuilt.store.DurableStore] — one store per node.
+ * Implement this interface directly only when you need a medium `DurableStore`
+ * does not cover, or a log too large to rewrite as one blob; either way, bind
+ * `RaftStorageConformanceSuite` to it.
  */
 public interface RaftStorage {
     /**

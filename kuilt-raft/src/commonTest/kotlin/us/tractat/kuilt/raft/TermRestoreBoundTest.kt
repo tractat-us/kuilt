@@ -22,11 +22,12 @@ import kotlin.test.assertTrue
  *   [RaftStorage.term]'s own "increases monotonically; it is never safe to decrease it" contract, and a
  *   node whose term went backwards has forgotten every vote it cast — the §5.2 double-vote exposure that
  *   #1855 explicitly refused to trade a liveness bug for.
- * - **It is not only a migration concern.** kuilt ships no durable [RaftStorage] at all
- *   ([InMemoryRaftStorage] is the only production implementation), so every persistent one is consumer
- *   code, and `RaftStorageConformanceSuite` constrains `term()` to nothing
- *   but "starts at 0" and "round-trips 7". A conforming third-party store can return garbage from a bad
- *   column, a sign-extended `Int`, or a torn read — no pre-fix binary and no attacker required.
+ * - **It is not only a migration concern.** `RaftStorageConformanceSuite` constrains `term()` to
+ *   nothing but "starts at 0" and "round-trips 7", so a fully conforming store can return garbage from
+ *   a bad column, a sign-extended `Int`, or a torn read — no pre-fix binary and no attacker required.
+ *   kuilt now ships [DurableStoreRaftStorage] and that does **not** narrow this: it round-trips the
+ *   medium faithfully and validates no ranges by design, leaving the refusal here. Any other persistent
+ *   adapter is consumer code and is no more constrained.
  *
  * Disposition is **refuse to start**, not clamp: rewriting persisted consensus state on load lets a node
  * vote twice in a term it forgot. Throwing here is not the #1818 failure mode (a `require` inside the

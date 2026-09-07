@@ -446,7 +446,9 @@ val cluster = ClusterConfig.ofVoters(listOf(NodeId("a"), NodeId("b"), NodeId("c"
 val seam: Seam = loom.host(Pattern("raft-cluster"))
 val transport = SeamRaftTransport(seam)
 
-// 3. Provide storage (use a persistent implementation in production).
+// 3. Provide storage. In production, DurableStoreRaftStorage over the platform's
+//    DurableStore — one store per node — so term, vote and log survive a restart:
+//      DurableStoreRaftStorage.open(FileChannelDurableStore(nodeDirectory))
 val storage = InMemoryRaftStorage()
 
 // 4. Start the node — its lifetime is tied to the scope.
