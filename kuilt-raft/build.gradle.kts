@@ -7,6 +7,11 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-core"))
+            // `api`, not `implementation`: DurableStoreRaftStorage.open(store) takes a DurableStore,
+            // so a consumer wiring one up needs the type on its own compile classpath. :kuilt-store
+            // depends on nothing but coroutines + atomicfu — both already here — so this adds no
+            // transitive weight beyond three suspend methods over opaque bytes.
+            api(project(":kuilt-store"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)
             implementation(libs.kotlinx.serialization.cbor)

@@ -32,7 +32,7 @@ import kotlin.test.assertTrue
  *
  * ```kotlin
  * class SqliteRaftStorageConformanceTest : RaftStorageConformanceSuite() {
- *     override fun newStorage(): RaftStorage = SqliteRaftStorage(inMemoryDb())
+ *     override suspend fun newStorage(): RaftStorage = SqliteRaftStorage(inMemoryDb())
  *     override suspend fun reopen(storage: RaftStorage): RaftStorage =
  *         SqliteRaftStorage((storage as SqliteRaftStorage).closeAndReopenTheSameFile())
  * }
@@ -66,8 +66,20 @@ public abstract class RaftStorageConformanceSuite {
      * Called once per test — each test drives its own independent storage.
      * The instance must start with `term() == 0L`, `votedFor() == null`,
      * `leaderForTerm() == null`, and `entries() == emptyList()`.
+     *
+     * `suspend`, because opening a durable medium is a suspending act: an adapter over a
+     * [us.tractat.kuilt.store.DurableStore] has to *read* the medium before it can answer a single
+     * one of the four values above, and there is no sound non-suspending way to do that. The
+     * alternative — a constructor that assumes an empty medium — is not a shortcut but a data-loss
+     * bug: an adapter that skipped the read would answer `entries() == emptyList()` for a medium
+     * holding a log, and its first `appendEntries` would then write that empty log back over it.
+     * [DurableStoreConformanceSuite.newStore] has been `suspend` for the same reason since it was
+     * written; this hook was not only because the sole implementation at the time had a
+     * non-suspending constructor.
+     *
+     * Every call site is already inside a `runTest { }` body, so nothing but the modifier changed.
      */
-    public abstract fun newStorage(): RaftStorage
+    public abstract suspend fun newStorage(): RaftStorage
 
     /**
      * A **new handle onto the same durable medium** [storage] wrote to — what a process restart

@@ -8,7 +8,7 @@ import us.tractat.kuilt.raft.RaftStorage
  * [RaftStorageConformanceSuite]. Mirrors [InMemoryRoomConformanceTest].
  */
 class InMemoryRaftStorageConformanceTest : RaftStorageConformanceSuite() {
-    override fun newStorage(): RaftStorage = InMemoryRaftStorage()
+    override suspend fun newStorage(): RaftStorage = InMemoryRaftStorage()
 
     /**
      * A restart, modelled the only way an in-memory storage can model one: a **fresh instance
