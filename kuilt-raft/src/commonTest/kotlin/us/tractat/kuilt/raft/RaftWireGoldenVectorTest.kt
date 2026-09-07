@@ -2,13 +2,16 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.builtins.ByteArraySerializer
+import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -68,6 +71,19 @@ class RaftWireGoldenVectorTest {
 
     /** 48 bytes `0x40..0x6F`, every one outside the short range. */
     private val snapshotState = ByteArray(48) { (0x40 + it).toByte() }
+
+    /**
+     * The pre-#2160 codec, reconstructed — `raftCbor` minus `alwaysUseByteString`, and nothing else.
+     *
+     * It exists so the frozen `PRE_BYTE_STRING_*` constants stop being an **unproven surrogate**.
+     * Without it those constants are a hex blob asserted to be "what an older peer really produced"
+     * with no witness: a typo in one would still make [aPreByteStringFrameIsRefusedRatherThanMisread]
+     * pass, because a malformed frame and a genuine old frame are both simply *refused*. Declaring
+     * the old codec here lets [theFrozenVectorsAreWhatTheOldCodecReallyProduced] assert byte
+     * identity instead — which also pins that `alwaysUseByteString` is the *only* difference between
+     * the two builds, the premise the whole file rests on.
+     */
+    private val preByteStringCbor = Cbor { ignoreUnknownKeys = true }
 
     private val clientId = ClientId("auto:dc1-node7-0123456789abcdef")
 
@@ -129,19 +145,71 @@ class RaftWireGoldenVectorTest {
      */
     @Test
     fun aPreByteStringFrameIsRefusedRatherThanMisread() {
-        fun refused(name: String, vector: String, serializer: KSerializer<*>): () -> Unit = {
-            val outcome = runCatchingCancellable { raftCbor.decodeFromByteArray(serializer, unhex(vector)) }
+        fun refused(
+            name: String,
+            codec: Cbor,
+            vector: String,
+            serializer: KSerializer<*>,
+            direction: String,
+        ): () -> Unit = {
+            val outcome = runCatchingCancellable { codec.decodeFromByteArray(serializer, unhex(vector)) }
             assertTrue(
                 outcome.isFailure,
-                "a pre-#2160 $name frame must be REFUSED by today's decoder, not decoded to " +
-                    "something: got ${outcome.getOrNull()}",
+                "a $direction $name frame must be REFUSED, not decoded to something: " +
+                    "got ${outcome.getOrNull()}",
+            )
+            // Narrow deliberately: `isFailure` alone would be satisfied by an OOM or a bounds error,
+            // which are not "the decoder rejected a foreign framing".
+            assertIs<SerializationException>(
+                outcome.exceptionOrNull(),
+                "$name must be refused as a decode failure, not by some incidental throw",
             )
         }
         assertAll(
-            refused("LogEntry", PRE_BYTE_STRING_LOG_ENTRY, LogEntry.serializer()),
-            refused("AppendEntries", PRE_BYTE_STRING_APPEND_ENTRIES, RaftMessage.serializer()),
-            refused("InstallSnapshot", PRE_BYTE_STRING_INSTALL_SNAPSHOT, RaftMessage.serializer()),
-            refused("Forward", PRE_BYTE_STRING_FORWARD, RaftMessage.serializer()),
+            // Old bytes into today's decoder — the direction an upgraded node experiences.
+            refused("LogEntry", raftCbor, PRE_BYTE_STRING_LOG_ENTRY, LogEntry.serializer(), "pre-#2160"),
+            refused("AppendEntries", raftCbor, PRE_BYTE_STRING_APPEND_ENTRIES, RaftMessage.serializer(), "pre-#2160"),
+            refused("InstallSnapshot", raftCbor, PRE_BYTE_STRING_INSTALL_SNAPSHOT, RaftMessage.serializer(), "pre-#2160"),
+            refused("Forward", raftCbor, PRE_BYTE_STRING_FORWARD, RaftMessage.serializer(), "pre-#2160"),
+            // And today's bytes into the old decoder — the direction the peer left behind experiences.
+            // [raftCbor]'s KDoc claims a peer on *either* build refuses the other's frames; only this
+            // arm covers the second half of that sentence.
+            refused("LogEntry", preByteStringCbor, LOG_ENTRY, LogEntry.serializer(), "post-#2160"),
+            refused("AppendEntries", preByteStringCbor, APPEND_ENTRIES, RaftMessage.serializer(), "post-#2160"),
+            refused("InstallSnapshot", preByteStringCbor, INSTALL_SNAPSHOT, RaftMessage.serializer(), "post-#2160"),
+            refused("Forward", preByteStringCbor, FORWARD, RaftMessage.serializer(), "post-#2160"),
+        )
+    }
+
+    /**
+     * The receipt that makes the frozen vectors evidence rather than assertion.
+     *
+     * `:kuilt-crdt`'s precedent and CLAUDE.md both say the same thing: a surrogate used to stand in
+     * for bytes you cannot otherwise produce must itself be proven, or the vacuity simply moves one
+     * level up. Here the surrogate is cheap to prove — the pre-#2160 codec is one line — so there is
+     * no excuse for leaving `PRE_BYTE_STRING_*` as an unwitnessed blob.
+     *
+     * This also pins the premise the rest of the file rests on: that `alwaysUseByteString` is the
+     * **only** difference between the two builds. If some other codec option had changed with it,
+     * these equalities would fail even though every refusal arm still passed.
+     */
+    @Test
+    fun theFrozenVectorsAreWhatTheOldCodecReallyProduced() {
+        assertAll(
+            { assertEquals(PRE_BYTE_STRING_LOG_ENTRY, hexWith(preByteStringCbor, LogEntry.serializer(), entry), "LogEntry") },
+            {
+                assertEquals(
+                    PRE_BYTE_STRING_APPEND_ENTRIES,
+                    hexWith(preByteStringCbor, RaftMessage.serializer(), appendEntries), "AppendEntries",
+                )
+            },
+            {
+                assertEquals(
+                    PRE_BYTE_STRING_INSTALL_SNAPSHOT,
+                    hexWith(preByteStringCbor, RaftMessage.serializer(), installSnapshot), "InstallSnapshot",
+                )
+            },
+            { assertEquals(PRE_BYTE_STRING_FORWARD, hexWith(preByteStringCbor, RaftMessage.serializer(), forward), "Forward") },
         )
     }
 
@@ -209,7 +277,10 @@ class RaftWireGoldenVectorTest {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun <S> hex(serializer: KSerializer<S>, value: S): String =
-        raftCbor.encodeToByteArray(serializer, value).joinToString("") { byte ->
+        hexWith(raftCbor, serializer, value)
+
+    private fun <S> hexWith(codec: Cbor, serializer: KSerializer<S>, value: S): String =
+        codec.encodeToByteArray(serializer, value).joinToString("") { byte ->
             (byte.toInt() and 0xFF).toString(radix = 16).padStart(2, '0')
         }
 
