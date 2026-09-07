@@ -98,11 +98,8 @@ A node remembers a few things between runs: which round of voting it is on, who 
 list of agreed decisions. Lose those and it can accidentally vote twice, which is the one thing the
 whole algorithm is built to prevent. So in production that memory has to survive a restart.
 
-`DurableStoreRaftStorage` does that, on every platform, in one line:
-
-```kotlin
-val storage = DurableStoreRaftStorage.open(FileChannelDurableStore(nodeDirectory))
-```
+`DurableStoreRaftStorage` does that, on every platform, in one line —
+`DurableStoreRaftStorage.open(FileChannelDurableStore(nodeDirectory))`.
 
 Give it whichever durable store the platform provides — a directory on a phone or a server, a
 database in a browser — and hand the result to `raftNode(...)`. **One store per node**: two nodes

@@ -19,7 +19,7 @@ vote twice in one round, which is the single thing the algorithm exists to preve
 `DurableStoreRaftStorage` keeps all of that in a `DurableStore`, so it survives a restart
 on every platform:
 
-```kotlin
+```
 @sample us.tractat.kuilt.raft.sampleDurableRaftStorage
 ```
 
