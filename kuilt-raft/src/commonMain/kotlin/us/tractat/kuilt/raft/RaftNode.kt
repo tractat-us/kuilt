@@ -11,8 +11,9 @@
  * 1. **Build a [ClusterConfig]** — list the voter [NodeId]s (and optional learners).
  * 2. **Provide a [RaftTransport]** — use [SeamRaftTransport] to wrap a kuilt `Seam`,
  *    or implement the interface directly for other transports.
- * 3. **Provide a [RaftStorage]** — use [InMemoryRaftStorage] for tests; inject a
- *    SQLite/IndexedDB-backed implementation for production (durable across restarts).
+ * 3. **Provide a [RaftStorage]** — use [InMemoryRaftStorage] for tests; use
+ *    [DurableStoreRaftStorage] over the platform's [us.tractat.kuilt.store.DurableStore]
+ *    for production (durable across restarts, one store per node).
  * 4. **Call [CoroutineScope.raftNode]** — the node starts running inside the given
  *    scope. Its lifetime is tied to the scope's cancellation.
  * 5. **Propose** from **any** node by calling [RaftNode.propose] — non-leaders forward
@@ -32,7 +33,8 @@
  * // On node "a": wrap a kuilt Seam as the transport
  * val seam: Seam = loom.host(Pattern("raft-cluster"))
  * val transport = SeamRaftTransport(seam)
- * val storage = InMemoryRaftStorage()   // use persistent storage in production
+ * // Durable in production: DurableStoreRaftStorage.open(FileChannelDurableStore(nodeDirectory))
+ * val storage = InMemoryRaftStorage()
  *
  * val node: RaftNode = scope.raftNode(cluster, transport, storage)
  *

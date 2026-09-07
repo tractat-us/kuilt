@@ -1004,11 +1004,13 @@ internal class RaftEngine(
      *    which [persistTermAndVote] then writes to disk. The engine drives its own durable term
      *    *backwards*, against [RaftStorage.term]'s "never safe to decrease it" contract, and a node whose
      *    term went backwards has forgotten every vote it cast.
-     * 2. It is **not confined to a migration**. kuilt ships no durable [RaftStorage] — `InMemoryRaftStorage`
-     *    is the only implementation in the library — so every persistent one is consumer code, and the
-     *    storage TCK constrains `term()` to nothing but "starts at 0" and "round-trips". An out-of-range
-     *    term is an ordinary third-party storage bug (a truncated column, a sign-extended `Int`, a torn
-     *    read), reachable with no pre-fix binary and no attacker.
+     * 2. It is **not confined to a migration**. kuilt's own durable adapter is `DurableStoreRaftStorage`;
+     *    any *other* persistent [RaftStorage] is consumer code, and the storage TCK constrains `term()`
+     *    to nothing but "starts at 0" and "round-trips". An out-of-range term is an ordinary
+     *    third-party storage bug (a truncated column, a sign-extended `Int`, a torn read), reachable
+     *    with no pre-fix binary and no attacker — and shipping an adapter does not narrow that, because
+     *    `DurableStoreRaftStorage` deliberately validates no ranges either. It round-trips faithfully
+     *    and leaves the refusal here, which is the division of labour this check exists to hold.
      *
      * ### Why throwing here is not the #1818 failure mode
      *
@@ -1247,10 +1249,11 @@ internal class RaftEngine(
      * Returns [entries] if they are a log a real node could have persisted; otherwise refuses to start
      * (#1887). Runs after [checkedRestoredTerm] and [checkedRestoredSnapshotMeta], whose results it uses.
      *
-     * Four properties, each of which the engine's own append paths hold by construction and a third-party
-     * [RaftStorage] can break — kuilt ships no durable implementation, and `RaftStorageConformanceSuite`
-     * constrains none of these fields, so every persistent adapter is consumer code that can pass the
-     * whole TCK and still return garbage.
+     * Four properties, each of which the engine's own append paths hold by construction and any
+     * [RaftStorage] can break — `RaftStorageConformanceSuite` constrains none of these fields, so an
+     * adapter can pass the whole TCK and still hand back garbage. That is true of kuilt's own
+     * `DurableStoreRaftStorage` as much as of a consumer's: it faithfully returns whatever is on the
+     * medium, so a damaged file reaches this check rather than being repaired behind it.
      *
      * - **Term in `0..state.currentTerm`.** The wire analogue is [batchRefusal]'s
      *   `entry.term > m.term` — "no entry may carry a term above the leader's"; here the ceiling is the
@@ -1549,9 +1552,10 @@ internal class RaftEngine(
      * both stay lazy — neither builds the string unless its level is enabled.
      *
      * **Names both provenances, and orders the remediation accordingly.** A term at the ceiling is *not*
-     * only reachable from a hostile frame: `storage.term()` is third-party input in every deployment (kuilt
-     * ships no durable [RaftStorage]), so an adapter that returns a corrupt term — a truncated column, a
-     * sign-extended `Int`, a torn read — reaches this state with no attacker and no malformed frame at all.
+     * only reachable from a hostile frame: `storage.term()` is whatever the medium held, so an adapter
+     * that returns a corrupt term — a truncated column, a sign-extended `Int`, a torn read — reaches this
+     * state with no attacker and no malformed frame at all. `DurableStoreRaftStorage` is kuilt's own
+     * adapter and does not change that: it validates no ranges, by design.
      * That is the case [checkedRestoredTerm] argues at length, and an operator told to hunt for an attacker
      * who does not exist would be sent to the wrong half of the system by the very line that is supposed to
      * be this change's whole deliverable. Local storage is checked first because it is the cheaper check and
@@ -3927,9 +3931,10 @@ internal class RaftEngine(
         // this check refuses a negative wire term, the self-increment cannot go down, and the restore is
         // bounded by [checkedRestoredTerm] (#1855). The restore was originally left out on the reading
         // that a poisoned durable term only costs that node's liveness — wrong on both halves: a
-        // one-voter cluster reaches the wrap from there and PERSISTS `Long.MIN_VALUE`, and since kuilt
-        // ships no durable RaftStorage the out-of-range value is an ordinary third-party storage bug,
-        // not a migration artefact. See [checkedRestoredTerm] for why that site refuses to start
+        // one-voter cluster reaches the wrap from there and PERSISTS `Long.MIN_VALUE`, and an
+        // out-of-range value is an ordinary storage bug rather than a migration artefact — reachable
+        // through kuilt's own DurableStoreRaftStorage, which validates no ranges, as much as through a
+        // consumer's adapter. See [checkedRestoredTerm] for why that site refuses to start
         // instead of dropping (there is no frame to drop) or clamping (§5.2).
         //
         // What keeps the `currentTerm + 1` INCREMENT sites free of Long wrap is no longer this check —

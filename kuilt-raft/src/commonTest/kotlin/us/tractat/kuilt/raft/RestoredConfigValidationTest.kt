@@ -26,9 +26,11 @@ import kotlin.test.assertTrue
  *
  * #2663's wire fix closes the two routes a live **peer** has. None of the three that remain is a peer:
  * a snapshot written by a pre-fix binary or an older build (`saveSnapshot` runs on the receive path, so
- * a poisoned payload reached disk before that fix existed), a torn or buggy third-party [RaftStorage] —
- * kuilt ships no durable implementation and `RaftStorageConformanceSuite` constrains none of these
- * fields — and the consumer's own `bootstrapConfig`, which is out of scope here and stays under #2676.
+ * a poisoned payload reached disk before that fix existed), a torn or buggy [RaftStorage] —
+ * `RaftStorageConformanceSuite` constrains none of these fields, and kuilt's own
+ * [DurableStoreRaftStorage] validates none of them either, so a damaged medium reaches the engine
+ * through it exactly as through a consumer's adapter — and the consumer's own `bootstrapConfig`, which
+ * is out of scope here and stays under #2676.
  *
  * ## Two dispositions, because the two sources are not the same kind of thing
  *

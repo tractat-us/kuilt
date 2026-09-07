@@ -81,11 +81,19 @@ public class LeadershipTransferException(message: String) : Exception(message)
  *
  * ### What to do about it
  *
- * kuilt ships no durable [RaftStorage] — [InMemoryRaftStorage] is the only implementation in the library
- * — so this exception is a report about *your* storage adapter. Treat it as you would a failed integrity
- * check: inspect the persisted term (a truncated column, a sign-extended `Int`, a torn or partially
- * deserialised read are the usual causes) and repair or re-provision the node deliberately. Erasing the
- * node's durable state and letting it rejoin as a fresh member is safe; silently continuing is not.
+ * This exception is a report about the **medium**, whichever adapter is reading it. kuilt's own durable
+ * adapter is [DurableStoreRaftStorage]; any other persistent one is consumer code — and the report means
+ * the same thing either way, because that adapter round-trips faithfully and validates no ranges, so a
+ * damaged record reaches this check rather than being repaired behind it. Treat it as you would a failed
+ * integrity check: inspect the persisted term (a truncated column, a sign-extended `Int`, a torn or
+ * partially deserialised read are the usual causes) and repair or re-provision the node deliberately.
+ * Erasing the node's durable state and letting it rejoin as a fresh member is safe; silently continuing
+ * is not — and with [DurableStoreRaftStorage] "erasing" is concrete, because its three
+ * [DurableStoreRaftStorage.META_KEY]-family constants name exactly what to delete.
+ *
+ * Note that [DurableStoreRaftStorage.open] raises this same type for a record it cannot **decode**, or
+ * one carrying a storage format version it does not know. Those messages name the [us.tractat.kuilt.store.StoreKey]
+ * involved; this one names the value.
  *
  * Because the restore runs in the coroutine started by [CoroutineScope.raftNode][raftNode], this
  * surfaces through the scope rather than from the `raftNode(...)` call itself.

@@ -10,9 +10,14 @@ package us.tractat.kuilt.raft
  *   rather than recovering from durable state (they simply catch up via
  *   log replication).
  *
- * **Production servers** should inject a persistent [RaftStorage] backed by
- * SQLite, IndexedDB, or a similar crash-safe store to guarantee Raft's
- * durability properties across restarts.
+ * **Production servers** should inject a persistent [RaftStorage] instead, to
+ * guarantee Raft's durability properties across restarts. kuilt ships one:
+ * [DurableStoreRaftStorage], which keeps all of this state in a
+ * [us.tractat.kuilt.store.DurableStore] — the platform's crash-safe file or
+ * IndexedDB store — and is opened with
+ * `DurableStoreRaftStorage.open(FileChannelDurableStore(nodeDirectory))`.
+ * A consumer with a store of its own (SQLite, say) can implement [RaftStorage]
+ * directly and bind `RaftStorageConformanceSuite` to check it.
  */
 public class InMemoryRaftStorage : RaftStorage {
     private var currentTerm: Long = 0L
