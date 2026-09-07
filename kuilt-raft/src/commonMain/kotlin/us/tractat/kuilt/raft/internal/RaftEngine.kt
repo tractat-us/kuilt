@@ -66,6 +66,30 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
  * Codec for the [RaftMessage] wire envelope. [Cbor.ignoreUnknownKeys] is `true` so a peer running an
  * OLDER build tolerates a field a NEWER peer added — e.g. [RaftMessage.RequestVote.leadershipTransfer].
  *
+ * ## `alwaysUseByteString` — the opaque payloads cost their own length (#2160)
+ *
+ * `kotlinx-serialization`'s CBOR renders a [ByteArray] as an **array of integers** unless told
+ * otherwise: one byte per element inside CBOR's short range (`0..23`, or `-1..-24` — Kotlin's `Byte`
+ * is signed) and **two** outside it. Measured: 768 B of `0x7F` encoded to 1538 B, a flat 2.0026×,
+ * paid by every opaque payload Raft carries — [LogEntry.command], [RaftMessage.InstallSnapshot.data]
+ * and [RaftMessage.Forward.command]. With the flag those are real CBOR byte strings: the payload's
+ * own length plus a 1/2/3/5-byte header, so the same 768 B costs 771 B.
+ *
+ * **This is a breaking wire change and was approved as one.** The two framings are different CBOR
+ * major types, so a peer on either build refuses the other's frames outright rather than mis-reading
+ * them — see `RaftWireGoldenVectorTest.aPreByteStringFrameIsRefusedRatherThanMisread`, which holds
+ * the pre-change bytes and asserts exactly that. A cluster is upgraded by replacing every node, not
+ * by rolling one at a time.
+ *
+ * **Why the codec option and not `@ByteString` on the three fields.** Measured, the two produce
+ * *byte-identical* output, so the choice is only about blast radius, and the annotation's is wider
+ * in two ways this library cannot afford. (1) A `@SerialInfo` annotation lives on the descriptor, so
+ * it changes **every** `Cbor` instance's view of [LogEntry] — including a consumer's own, inside a
+ * [RaftStorage] implementation that persists the log. That would break stored logs as well as the
+ * wire, which is not what was approved; the flag confines the change to frames this engine encodes.
+ * (2) It is per-field opt-in, so a new frame carrying bytes silently reverts to 2×; the flag cannot
+ * be forgotten. `:kuilt-otel`, `:kuilt-otel-otlp` and `:kuilt-otel-tap` already take the same route.
+ *
  * **What the flag buys is participation across a rolling upgrade, and that is the whole reason it is
  * here.** Adding a defaulted field to any `RaftMessage` is forward- and backward-compatible: an old
  * peer that receives it drops the field and behaves as if it were absent (for the disrupt flag:
@@ -81,8 +105,15 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
  * facing a newer one that added a single defaulted field would drop **every** frame from it — a node
  * that is up, traced, emitting [RaftTraceEvent.FrameUndecodable], and completely unable to
  * participate. Forward-compatibility is load-bearing on its own; the crash was never the argument.
+ *
+ * **`internal` rather than `private` so `RaftWireGoldenVectorTest` pins *this* instance.** A golden
+ * vector encoded through a codec the test restates would leave the config itself unpinned — every
+ * vector stays green while every real frame moves.
  */
-private val raftCbor = Cbor { ignoreUnknownKeys = true }
+internal val raftCbor = Cbor {
+    ignoreUnknownKeys = true
+    alwaysUseByteString = true
+}
 
 /**
  * How long a run of refused leader→peer frames has to get before [noteRefusedLeaderFrame]
@@ -2123,8 +2154,10 @@ internal class RaftEngine(
      *
      * CBOR elements are self-delimiting and a definite-length array is its header followed by the
      * concatenated elements, so a batch's cost is exactly the envelope plus the sum of these. It is
-     * measured rather than derived from `command.size` because the two differ by up to a factor of two
-     * — see [CBOR_BYTE_EXPANSION].
+     * measured rather than derived from `command.size` because an entry costs more than its command:
+     * its own `index` / `term` / `dedupKey` / `config`, plus the CBOR byte-string header on the
+     * command itself, which steps with the command's length (#2160). The gap used to be a factor of
+     * two on top of that, and measuring was already the answer then.
      */
     private fun encodedSize(entry: LogEntry): Int = raftCbor.encodeToByteArray(entry).size
 
@@ -2132,25 +2165,37 @@ internal class RaftEngine(
 
     /**
      * Raw state bytes carried per chunk: the configured ceiling, or what the transport's payload
-     * budget leaves once the envelope reserve and CBOR's byte-array expansion are paid — whichever is
-     * smaller — floored at 1.
+     * budget leaves once the envelope reserve is paid — whichever is smaller — floored at 1.
      *
      * The two inputs are in **different units**, which is what this used to get wrong.
      * `snapshotChunkCeiling` bounds the *raw* state bytes in a chunk; `maxPayloadBytes` bounds the
      * *encoded frame*. Taking `minOf` of them directly and subtracting [HEADER_BUDGET] treated a wire
      * bound as a raw one, so a chunk sized to fit could encode to twice the budget and be dropped — at
-     * the 16 KiB default ceiling, a chunk sized to 16128 B encodes to as much as 32258 B. Converting
-     * the wire budget into raw bytes via [CBOR_BYTE_EXPANSION] before comparing keeps the units
-     * straight.
+     * the 16 KiB default ceiling, a chunk sized to 16128 B encodes to as much as 32258 B (#2150).
      *
-     * A consequence worth naming: with **no** published budget this now returns `snapshotChunkCeiling`
+     * **Since #2160 the two units differ by a header rather than by a factor.** `raftCbor` writes an
+     * opaque payload as a CBOR byte string, so `encoded(raw) == raw + 1/2/3/5`, stepping at 24, 256
+     * and 65536 bytes. There is no ratio left to divide by, so the halving is gone; the residual
+     * header rides inside [HEADER_BUDGET], the same way the old array framing's own two-byte
+     * indefinite-length wrapper did. That reserve is generous against a `config`-free envelope
+     * (measured 127 B on a fresh log, 166 B at [MAX_PLAUSIBLE_INDEX] / [MAX_PLAUSIBLE_TERM]) and
+     * insufficient against a real one — see the note in [HEADER_BUDGET] and #2720, which this change
+     * does not fix and barely moves: the frame exceeded the budget under `envelope > 254` before and
+     * under `envelope + header > 256` now.
+     *
+     * What *does* change is that the shortfall stops hiding. Under the old framing a chunk of
+     * short-range bytes encoded 1:1 while the slice had been sized as if it encoded 2:1, so a
+     * sparse or zero-filled snapshot sat at roughly half the budget and #2720 could not bite on it.
+     * Every chunk now sits at the same place regardless of content.
+     *
+     * A consequence worth naming: with **no** published budget this returns `snapshotChunkCeiling`
      * whole, where it used to subtract [HEADER_BUDGET] from it. That subtraction was never right —
      * `snapshotChunkCeiling` bounds the chunk's *state bytes*, and there is no frame limit to reserve
      * against when the transport names none.
      */
     private fun chunkBytes(): Int {
         val wireCap = transport.maxPayloadBytes ?: return raftConfig.snapshotChunkCeiling
-        val rawFromWire = (wireCap - HEADER_BUDGET).coerceAtLeast(0) / CBOR_BYTE_EXPANSION
+        val rawFromWire = (wireCap - HEADER_BUDGET).coerceAtLeast(0)
         return maxOf(1, minOf(raftConfig.snapshotChunkCeiling, rawFromWire))
     }
 
@@ -3231,13 +3276,16 @@ internal class RaftEngine(
      * correct rather than a lie.
      *
      * **Why the cost is measured, and why [PayloadTooLarge.payloadBytes] is therefore not
-     * `command.size`.** The bound compared `command.size` against the budget, which is wrong by up to a
-     * factor of two: `raftCbor` renders a [ByteArray] as an array of integers, so every byte outside
-     * CBOR's one-byte range costs two (see [CBOR_BYTE_EXPANSION]). A command at exactly the old limit
-     * therefore produced a frame the transport refused — the precise wedge this gate exists to prevent,
-     * reached *through* the gate. The refusal now names what the command will actually cost on the
-     * wire; that is the number the budget is denominated in, and the only one a caller can compare
-     * against it. The raw size is still recoverable by the caller — it is the array they passed.
+     * `command.size`.** The bound compared `command.size` against the budget. That was wrong by up to a
+     * factor of two before #2160, when `raftCbor` rendered a [ByteArray] as an array of integers and
+     * every byte outside CBOR's one-byte range cost two; a command at exactly the old limit therefore
+     * produced a frame the transport refused — the precise wedge this gate exists to prevent, reached
+     * *through* the gate. **Byte-string framing narrowed the gap but did not close it**: a command now
+     * costs its own length plus a 1/2/3/5-byte header, so `ByteArray(limit)` still encodes past `limit`
+     * and a raw-counting gate still admits a frame the transport drops. The measurement stays; it is
+     * now exact rather than a correction. The refusal names what the command will actually cost on the
+     * wire — the number the budget is denominated in, and the only one a caller can compare against
+     * it. The raw size is still recoverable by the caller: it is the array they passed.
      *
      * **What this does not bound.** The *aggregate*: N individually-legal entries can still sum past
      * the budget, which is [boundedBatch]'s job, not this one's. And it covers the **propose** lane
@@ -3259,12 +3307,23 @@ internal class RaftEngine(
      *
      * **Why an empty command rather than the real one.** CBOR is definite-length and every enclosing
      * structure here is a map or an array whose header depends on element *count*, never on payload
-     * *size*; the only size-dependent header in the frame is the command array's own, which
+     * *size*; the only size-dependent header in the frame is the command's own, which
      * [checkProposeFitsTransport] already measures separately. The overhead is therefore exactly
      * additive — `frame(command) == overhead + wireBytes(command)` — so the probe costs
      * `O(|clientId|)` instead of a second `O(payload)` encode. Pinned by
      * `ProposeEnvelopeReserveTest`, which measures both sides independently rather than trusting the
-     * identity.
+     * identity. Byte-string framing (#2160) does not disturb this: the command's header is still the
+     * only size-dependent one, it just steps 1→2→3→5 instead of being a flat two.
+     *
+     * **#2160 leaves this quantity numerically unchanged, which is not obvious and was measured
+     * rather than assumed.** The result is a *difference* — `frame(empty) − wire(empty)` — and the
+     * change moves both terms by the same one byte, since the empty command inside the frame and the
+     * empty command encoded alone are the same value under the same codec. Measured across both
+     * codecs for a 23-character [ClientId] at the plausibility ceiling: 268 B either way. So every
+     * figure #2156 derived from this probe — the reserve, the id-length table above, the ~70 B of
+     * over-reserve on a young log recorded in #2729 — carries over as it stands. What *does* move is
+     * the limit the caller sees, because `wireBytes(command)` fell from about twice the command to
+     * the command plus a header: roughly twice the payload now fits the same budget.
      *
      * **Why the widest `Long`s.** `index` / `term` are assigned on the actor loop and do not exist at
      * this call site, and `round` moves on its own; charging [MAX_PLAUSIBLE_INDEX] /
@@ -4236,12 +4295,15 @@ internal class RaftEngine(
          *
          * One constant serves all three because the envelopes carry the same *kind* of thing: a handful
          * of `Long`s (`term`, `prevLogIndex` / `lastIncludedIndex`, `leaderCommit` / `offset`, `round`)
-         * around opaque bytes. Measured (`:kuilt-raft` commonTest, `raftCbor`): an entry-less
-         * `AppendEntries` encodes to 126 B and an `InstallSnapshot` with no data to 135 B, and the
-         * leading entry's own `index` / `term` / `dedupKey` is another 60 B for a short [ClientId].
-         * Deliberately generous: a byte of framing reserved and not needed costs a byte of payload,
-         * while one that falls short costs a silently dropped frame the sender believed it had sized
-         * to fit.
+         * around opaque bytes. Measured (`:kuilt-raft`, `raftCbor`, no `config`): an entry-less
+         * `AppendEntries` costs 119 B on a fresh log and 166 B at [MAX_PLAUSIBLE_INDEX] /
+         * [MAX_PLAUSIBLE_TERM]; an `InstallSnapshot` with no data, 127 B and 166 B. A leading entry
+         * carrying its own `index` / `term` / `dedupKey` adds about another 100 B for a short
+         * [ClientId] — which is why the propose lane measures instead (see [proposeEnvelopeBytes]).
+         * #2160 moved only the `InstallSnapshot` figures, and by one byte: its empty `data` field went
+         * from a two-byte indefinite array to a one-byte byte string. Deliberately generous: a byte of
+         * framing reserved and not needed costs a byte of payload, while one that falls short costs a
+         * silently dropped frame the sender believed it had sized to fit.
          *
          * **This is a published floor, not a sufficient reserve, and the difference is load-bearing
          * (#2156).** It was written as though 256 B covered every envelope it is spent on. It does
@@ -4259,26 +4321,6 @@ internal class RaftEngine(
          * always-send-at-least-one clause can meet the same payload as a config entry (#2721).
          */
         const val HEADER_BUDGET = 256
-
-        /**
-         * Worst-case ratio between a [ByteArray]'s raw length and its encoded length under [raftCbor].
-         *
-         * `kotlinx-serialization`'s CBOR renders a `ByteArray` as an **array of integers**, not as a
-         * CBOR byte string: each element costs one byte when it falls in CBOR's short range (`0..23`,
-         * or `-1..-24` — Kotlin's `Byte` is signed) and two bytes otherwise. So the expansion is 1× for
-         * all-zero or all-`0xFF` data and exactly 2× for anything outside those ranges, which is where
-         * most real payloads sit. Measured at 2.0026 for a 768 B array of `0x7F` (1538 B, the extra two
-         * being the array header).
-         *
-         * Anywhere a *raw* byte count is checked against a transport's *wire* budget, this is the
-         * conversion between the two units. [boundedBatch] and [encodedSize] avoid needing it by
-         * measuring the encoding directly; [chunkBytes] cannot — it must choose a slice size *before*
-         * there are bytes to measure — so it pays the worst case.
-         *
-         * Annotating the payload fields `@ByteString` would make the encoding 1:1 and halve Raft's wire
-         * cost, but it changes the wire format and so is a separate, breaking change (#2160).
-         */
-        const val CBOR_BYTE_EXPANSION = 2
 
         /**
          * Upper sanity bound on a term this node **stores or unpacks** — [checkedRestoredTerm],

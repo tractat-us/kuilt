@@ -4,6 +4,7 @@ package us.tractat.kuilt.raft
 import kotlinx.serialization.builtins.ByteArraySerializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PayloadTooLarge
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -39,12 +40,13 @@ import kotlin.test.assertTrue
  *
  * ### The budget is denominated in WIRE bytes, not raw ones (#2150)
  *
- * The gate originally compared `command.size` against the budget. That is wrong by up to a factor of
- * two: CBOR renders a `ByteArray` as an array of integers, so a command at exactly the old limit
+ * The gate originally compared `command.size` against the budget. That was wrong by up to a factor of
+ * two while CBOR rendered a `ByteArray` as an array of integers, so a command at exactly the old limit
  * produced a frame the transport refused — the wedge the gate exists to prevent, reached *through*
- * the gate. Every size here is now the encoded one ([wireBytes]), and
- * [aCommandInsideTheRawLimitButOverItOnTheWireIsRefused] is the case that separates measuring the
- * encoding from counting the bytes.
+ * the gate. #2160's byte-string framing narrowed the gap to the 1–5 byte length header but did not
+ * close it, and a frame one byte over budget is dropped exactly as one twice over is. Every size here
+ * is the encoded one ([wireBytes]), and [aCommandInsideTheRawLimitButOverItOnTheWireIsRefused] is
+ * still the case that separates measuring the encoding from counting the bytes.
  *
  * That defect was invisible until [InMemoryRaftNetwork] began **enforcing** the `maxPayloadBytes` it
  * publishes. Before, it reported a budget to the engine and then carried a frame of any size, so a
@@ -107,26 +109,41 @@ class ProposePayloadBudgetTest {
      * What [command] costs on the wire, which is what the budget is denominated in and what the gate
      * compares against (#2150).
      *
-     * `kotlinx-serialization`'s CBOR renders a `ByteArray` as an array of integers rather than a byte
-     * string, so a byte outside CBOR's short range (`0..23` / `-1..-24`) costs **two** bytes. Raw length
-     * and wire length therefore differ by up to a factor of two, and the gate used to compare the raw
-     * one against the budget — which is how [aCommandInsideTheRawLimitButOverItOnTheWireIsRefused]
-     * used to slip straight through it.
+     * Raw length and wire length are not the same number. Until #2160 they differed by up to a factor
+     * of two, because CBOR rendered a `ByteArray` as an array of integers and a byte outside the short
+     * range (`0..23` / `-1..-24`) cost two; since it they differ by the CBOR byte-string header, 1 to 5
+     * bytes stepping with the length. The gate used to compare the *raw* one against the budget, which
+     * is how [aCommandInsideTheRawLimitButOverItOnTheWireIsRefused] slipped straight through it — and
+     * still would, a header's worth rather than a factor's.
      *
      * Measured here rather than computed from that rule, so the test and the engine agree by
-     * *measurement* rather than by both hard-coding a model of the codec. A bare `Cbor` suffices:
-     * the engine's instance differs only by `ignoreUnknownKeys`, which is a decoding option.
+     * *measurement* rather than by both hard-coding a model of the codec. It goes through the
+     * engine's own `raftCbor`: a bare `Cbor` differs from it in `alwaysUseByteString`, which is an
+     * **encoding** option, so this would measure a different wire from the one the gate enforces.
      */
     private fun wireBytes(command: ByteArray): Int =
-        Cbor.encodeToByteArray(ByteArraySerializer(), command).size
+        raftCbor.encodeToByteArray(ByteArraySerializer(), command).size
 
     /**
-     * A command of exactly [wire] encoded bytes, built from a mix of two-byte and one-byte values so it
-     * exercises the expansion rather than dodging it. `0x7F` costs two bytes, `0x00` costs one, and the
-     * array header costs two.
+     * A command of exactly [wire] encoded bytes.
+     *
+     * Found by walking down from `wire - 1` rather than computed, for the same reason [wireBytes] is
+     * measured: the relation between raw and wire length is the codec's business, and a test that
+     * modelled it would agree with a *model* of the engine rather than with the engine. The walk is
+     * at most a handful of steps, since the byte-string header is never wider than five bytes.
+     *
+     * The alternating `0x7F`/`0x00` content is deliberate but no longer load-bearing: under
+     * array-of-integers framing those two bytes cost different amounts and the mix was how a command
+     * hit a wire size the raw count could not predict. Under byte strings the size is
+     * content-independent, and the mix survives only so a command is not a run of one value.
      */
-    private fun commandOfWireSize(wire: Int, wide: Int = 100): ByteArray =
-        ByteArray(wide + (wire - 2 - 2 * wide)) { if (it < wide) 0x7F else 0 }
+    private fun commandOfWireSize(wire: Int): ByteArray {
+        for (raw in (wire - 1) downTo maxOf(0, wire - 8)) {
+            val candidate = ByteArray(raw) { if (it % 2 == 0) 0x7F else 0 }
+            if (wireBytes(candidate) == wire) return candidate
+        }
+        error("no command encodes to exactly $wire wire bytes")
+    }
 
     @Test
     fun anOversizeProposeIsRefusedNamingTheDerivedLimit() = raftRunTest {
@@ -167,13 +184,21 @@ class ProposePayloadBudgetTest {
      * *encoded* form is not, is refused.
      *
      * `ByteArray(limit) { 0x7F }` is `limit` raw bytes — exactly what the old gate admitted as "at the
-     * limit" — and `2 * limit + 2` on the wire, twice the whole transport budget. Admitting it produced
-     * precisely the wedge the gate exists to prevent, reached *through* the gate: appended, minted into
-     * an `AppendEntries` no chunking covers, refused by the transport, retried forever.
+     * limit" — and more than that on the wire. Admitting it produced precisely the wedge the gate
+     * exists to prevent, reached *through* the gate: appended, minted into an `AppendEntries` no
+     * chunking covers, refused by the transport, retried forever.
+     *
+     * **#2160 shrank the margin from a factor to a header, and the assertion moved with it.** Under
+     * array-of-integers framing this command cost `2 * limit + 2`, twice the whole transport budget,
+     * and the premise said so. Under byte strings it costs `limit + 3`: past the limit, inside the
+     * budget. The *discrimination* is unchanged — a gate counting raw bytes admits this command and
+     * this gate refuses it — but the premise now has to name the limit rather than the budget, and a
+     * reader should not mistake the smaller number for a weaker test. A frame three bytes over what
+     * the transport published is dropped exactly as a frame twice over is.
      *
      * This is the case that distinguishes measuring the encoding from counting the bytes. Both
      * [anOversizeProposeIsRefusedNamingTheDerivedLimit] and [aProposeAtExactlyTheLimitCommits] stay
-     * green against a gate that still counted raw bytes but halved its limit; only this one does not.
+     * green against a gate that counted raw bytes; only this one does not.
      */
     @Test
     fun aCommandInsideTheRawLimitButOverItOnTheWireIsRefused() = raftRunTest {
@@ -186,7 +211,12 @@ class ProposePayloadBudgetTest {
         val command = ByteArray(limit) { 0x7F }
         assertAll(
             { assertTrue(command.size <= limit, "premise: raw size is INSIDE the limit (${command.size} <= $limit)") },
-            { assertTrue(wireBytes(command) > budget, "premise: wire size exceeds the whole budget (${wireBytes(command)} > $budget)") },
+            {
+                assertTrue(
+                    wireBytes(command) > limit,
+                    "premise: wire size is OUTSIDE the limit (${wireBytes(command)} > $limit)",
+                )
+            },
         )
         assertFailsWith<PayloadTooLarge> { leader.propose(command) }
         sim.settle()
@@ -216,10 +246,10 @@ class ProposePayloadBudgetTest {
         // that could move the entry count across the refused propose is the propose itself.
         sim.awaitCommit(1L)
         val before = sim.storages.getValue(leaderId).entries(1L).size
-        // Over the enforced limit however the reserve is derived: this costs floorLimit + 3 wire
-        // bytes (all-zero, so 1:1, plus the 2-byte array framing), and the reserve is never below
-        // headerBudget — so the enforced limit is never above floorLimit. This test is about the log
-        // not growing, not about where the edge falls; the edge itself is held above.
+        // Over the enforced limit however the reserve is derived: this costs floorLimit + 1 raw
+        // bytes plus a CBOR byte-string header (#2160), and the reserve is never below headerBudget
+        // — so the enforced limit is never above floorLimit. This test is about the log not growing,
+        // not about where the edge falls; the edge itself is held above.
         assertFailsWith<PayloadTooLarge> { leader.propose(ByteArray(floorLimit + 1)) }
         sim.settle()
         val after = sim.storages.getValue(leaderId).entries(1L).size

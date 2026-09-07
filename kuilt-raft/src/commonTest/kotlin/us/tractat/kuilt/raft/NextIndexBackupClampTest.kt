@@ -4,10 +4,10 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
 import kotlin.random.Random
+import us.tractat.kuilt.raft.internal.raftCbor
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -97,7 +97,7 @@ internal class NextIndexBackupClampTest {
         // Poison: a *rejection* pointing the leader three entries past its own tail. An honest
         // follower's conflictIndex is always < the probed nextIndex, so this is only reachable from
         // a malformed/foreign response — exactly what the clamp must contain.
-        val poison = Cbor.encodeToByteArray<RaftMessage>(
+        val poison = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.AppendEntriesResponse(
                 term = leaderTerm,
                 success = false,
@@ -140,7 +140,7 @@ internal class NextIndexBackupClampTest {
         harness.awaitCommit(1L)
 
         val leaderTerm = leaderStorage.term()
-        val poison = Cbor.encodeToByteArray<RaftMessage>(
+        val poison = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.AppendEntriesResponse(
                 term = leaderTerm,
                 success = false,

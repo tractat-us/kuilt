@@ -12,9 +12,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.raft.internal.RaftMessage
 import kotlin.time.Duration
+import us.tractat.kuilt.raft.internal.raftCbor
 
 class InMemoryRaftNetwork(
     /**
@@ -82,7 +82,7 @@ class InMemoryRaftNetwork(
             override val incoming: Flow<RaftEnvelope> = ch.receiveAsFlow()
             override val maxPayloadBytes: Int? = limit
             override suspend fun sendTo(peer: NodeId, message: ByteArray) {
-                if (recording) sent += Sent(id, peer, Cbor.decodeFromByteArray(RaftMessage.serializer(), message))
+                if (recording) sent += Sent(id, peer, raftCbor.decodeFromByteArray(RaftMessage.serializer(), message))
                 if (limit != null && message.size > limit) {
                     // Refused on size, ahead of the partition filter — see [overBudget].
                     overBudget += OverBudget(id, peer, message.size, limit)

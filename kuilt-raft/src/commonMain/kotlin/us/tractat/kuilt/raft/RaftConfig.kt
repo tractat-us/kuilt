@@ -92,9 +92,9 @@ import kotlin.time.Duration.Companion.milliseconds
  *   §7 InstallSnapshot chunk. A fabric with a tighter framing limit shrinks chunks
  *   automatically: when the transport publishes a [RaftTransport.maxPayloadBytes], the
  *   engine takes the lesser of this and what that budget leaves once the envelope reserve
- *   *and* CBOR's byte-array expansion are paid. The expansion matters — CBOR renders a
- *   `ByteArray` as an array of integers, so raw bytes cost up to two on the wire and a
- *   chunk sized against the budget directly would encode to roughly twice it (#2150).
+ *   is paid. Raw and wire bytes are not the same unit and never were: they differed by up
+ *   to a factor of two until #2160, and since it by a 1–5 byte CBOR byte-string header
+ *   that the reserve absorbs (#2150).
  * @param snapshotTotalCeiling Upper bound on the bytes a follower will accumulate
  *   reassembling one §7 snapshot. [snapshotChunkCeiling] bounds a single chunk; this
  *   bounds their **sum**. The sender chooses `done`, so without it a peer that keeps
