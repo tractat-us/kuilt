@@ -153,8 +153,12 @@ else parallel.
 - `Rga`/`Fugue` op-log engine unification (~200 lines of duplication; blocked on
   #779, wire-adjacent).
 - `RaftEngine` decomposition (1868 lines; needs a `RaftState`-holder design first;
-  hottest file in the repo).
-- `SeamRoom` reconnect/resume-machine extraction (1230 lines, cohesive today).
+  hottest file in the repo). Filed as #1121, closed 2026-07-07; the regrowth since is
+  refiled as #2756.
+- `SeamRoom` reconnect/resume-machine extraction (1230 lines, cohesive today). Filed as
+  #1122, closed 2026-07-07; the regrowth since is refiled as #2757.
+- `WarpNode` decomposition. **Not filed when this spec landed** — the non-goal above said it
+  was, and this list omitted it until 2026-09-07. Now #2758.
 - Chicory `catch (e: Exception)` missing cancellation rethrow (inside
   `kuilt-warp-runtime` — hand to the wasm-runtime epics).
 - `FaultProfile` inbound-delay asymmetry (low value; recorded, likely wontfix).
