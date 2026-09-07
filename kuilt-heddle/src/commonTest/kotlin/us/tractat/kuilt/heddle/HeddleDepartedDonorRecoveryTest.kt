@@ -86,8 +86,15 @@ class HeddleDepartedDonorRecoveryTest {
     private val alice = ReplicaId("alice") // the hand-off donor who leaves
     private val bob = ReplicaId("bob") // the recipient, and the peer that drives the control plane
 
-    /** The pockets at `h` before anything is retired — the value every recovery arm must restore. */
-    private val funded = mapOf(alice to 45L, bob to 55L)
+    /**
+     * The pockets at `h` once `e4` is live and funded — the value every recovery arm must restore.
+     * `alice` keeps `MINT − CARRIED − LATE_HANDOFF`; `bob` holds both hand-offs plus his own
+     * `OWN_SUPPLY`, so he is simultaneously the recipient and a peer with an unrelated stake.
+     */
+    private val funded = mapOf(
+        alice to MINT - CARRIED - LATE_HANDOFF,
+        bob to CARRIED + LATE_HANDOFF + OWN_SUPPLY,
+    )
 
     /** The three conflicts the frozen state leaves on the ledger (#2610's measurement, #2677's arm). */
     private val frozenDiagnosis = listOf(
@@ -703,8 +710,17 @@ class HeddleDepartedDonorRecoveryTest {
         val rig = fund()
         rig.race1()
         rig.applied(ControlCommand.Reconcile(h))
+        rig.applied(ControlCommand.Mint(root, bob, OWN_SUPPLY))
         rig.gossip(
-            EntitlementLedger.of(transfers = mapOf(PathKey.of(e4) to mapOf(alice to GCounter.of(bob to LATE_HANDOFF)))),
+            EntitlementLedger.of(
+                // bob's own supply, delegated down across the now-live e4 — his stake in the strand
+                // that owes nothing to anybody's hand-off.
+                issued = mapOf(
+                    e1 to GCounter.of(alice to MINT, bob to OWN_SUPPLY),
+                    e4 to GCounter.of(bob to OWN_SUPPLY),
+                ),
+                transfers = mapOf(PathKey.of(e4) to mapOf(alice to GCounter.of(bob to LATE_HANDOFF))),
+            ),
         )
         assertEquals(
             CARRIED,
@@ -723,5 +739,14 @@ class HeddleDepartedDonorRecoveryTest {
 
         /** Her hand-off across the live `e4` — the BASE row her ack on the fenced edge declares. */
         const val LATE_HANDOFF: Long = 15L
+
+        /**
+         * `bob`'s own supply, delegated across the live `e4` — a counter slot on the frozen strand
+         * that owes nothing to any hand-off. It is what makes the refusal's *absence* observable:
+         * with no drainable slot on `e4` the derivation returns `Relocation.Nothing` whether the
+         * `unackedCarriedDonors` guard fires or not, so a fixture without it can only tell the two
+         * apart by the refusal's wording (measured — see the mutation table on the PR).
+         */
+        const val OWN_SUPPLY: Long = 30L
     }
 }
