@@ -242,14 +242,29 @@ public class DurableStoreRaftStorage private constructor(
 // of the platform's hash layout — which is also what makes the golden vector meaningful, since an
 // unsorted set would encode differently on JVM and Kotlin/Native from the same input.
 //
-// ⚠ Every nullable record below must keep at least one field with NO default. This encoder renders a
-// null *structured* field as an empty CBOR map (`0xA0`) rather than as CBOR null (`0xF6`, which it
-// uses for a null primitive or list) — visible in the golden vectors, where a null `dedupKey` is
-// `a0` and a null `oldVoters` is `f6`. That is unambiguous only because an empty map cannot also be
-// a valid instance: give `StoredLeader`, `StoredConfig`, `StoredDedupKey` or a future sibling a
-// default for every field and `0xA0` would decode as a present-but-empty record, so a node with no
-// established leader would come back holding one. Nothing in the type system enforces this; the
-// golden vectors are what would show it moving.
+// ⚠ A null *structured* field is written as the empty DEFINITE map `0xA0`, not as CBOR null `0xF6`
+// (which this encoder uses only for a null primitive or list) — visible in the golden vectors, where
+// a null `dedupKey` is `a0` and a null `oldVoters` is `f6`. What keeps that unambiguous is the
+// **framing byte**, and it is worth writing down because the obvious reading of it is wrong.
+//
+// Measured on kotlinx-serialization-cbor 1.11.0, by encoding and decoding a two-record fixture:
+//
+//   present record, any field values     -> `bf … ff`   (indefinite map)
+//   present record, ALL fields defaulted -> `bfff`      (empty INDEFINITE map) — decodes as PRESENT
+//   null                                 -> `a0`        (empty DEFINITE map)   — decodes as NULL
+//
+// So a present record can never collide with the null marker: the writer never emits a definite map
+// for one. And the converse — an `a0` on the wire decoding as a present-but-empty record — is not
+// reachable either, at any shape of the record: the reader tests for null before the class is
+// consulted at all, so a forged `a0` came back as `null` both for a nested class whose every field
+// has a default and for one with none. **Field defaults are therefore irrelevant to this**, which is
+// what an earlier version of this comment got backwards: it claimed each nullable record had to keep
+// one field undefaulted, and no measurement supports that.
+//
+// The property this actually rests on is a behaviour of the LIBRARY, not of the records below —
+// that its writer frames a present record indefinitely and its reader reads `0xA0` as null. A
+// kotlinx-serialization version bump could move either. The golden vectors are the tripwire, since
+// any change to the framing moves all three of them at once.
 
 /** The version stamped into every record. Bump it on any change to the encodings below. */
 private const val FORMAT_VERSION: Int = 1

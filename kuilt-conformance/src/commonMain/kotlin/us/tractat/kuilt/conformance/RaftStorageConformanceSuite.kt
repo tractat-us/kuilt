@@ -173,8 +173,12 @@ public abstract class RaftStorageConformanceSuite {
      * over the real file, Apple and IndexedDB media. Those fixtures do what the reference structurally
      * cannot: `reopen` throws the handle away and decodes the medium again.
      *
-     * So these five properties now have measured discriminating power over **production** code, and
-     * these rows are the receipt — measured over `:kuilt-conformance:jvmTest` and
+     * So the restart properties now have measured discriminating power over **production** code.
+     * There are **eight** of them — every property that calls `reopened(…)`, which is the five the
+     * table above was written against plus the three added since (#2302); the "five" in the
+     * paragraphs above is left as it was measured rather than silently restated.
+     *
+     * These rows are the receipt — measured over `:kuilt-conformance:jvmTest` and
      * `:kuilt-store:jvmTest` (42 tests each, `failures=0` at baseline), one mutation at a time,
      * reverted after, with the results XML deleted before every run and the log checked for compile
      * errors (a mutation that does not compile leaves Gradle serving the previous run's XML):
@@ -192,9 +196,11 @@ public abstract class RaftStorageConformanceSuite {
      *
      * **The two fixture arms were re-measured against the new subclass too**, so the rows above are
      * not resting on a fixture that had stopped discriminating: a `reopen` returning
-     * `open(freshEmptyStore)` reds 7 of its 42, and one returning the instance it was given reds 8 —
-     * the extra one being [anUnwrittenMediumReopensEmpty], which has no state to lose and so is
-     * reached only by the `assertNotSame` precondition.
+     * `open(freshEmptyStore)` reds **7 of those 8** — every one but
+     * [anUnwrittenMediumReopensEmpty], which has no state to lose and so cannot tell a fresh empty
+     * store from a faithful reopen — and one returning the instance it was given reds **8 of 8**,
+     * the extra one being [anUnwrittenMediumReopensEmpty] reached through the `assertNotSame`
+     * precondition rather than through any durability assertion.
      *
      * **Row 2 reds 3 of 4 assertions, not 4** — the cleared-vote arm survives it, because a fresh
      * empty storage happens to have no vote either. Row 7 is the mutation that reds *that* arm, and
