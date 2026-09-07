@@ -67,6 +67,27 @@ import kotlin.test.assertTrue
  * ledger-level and reach a peer as gossip, exactly as `HeddleFenceTest` does it. The barrier read is
  * `baseFinalsOn(edge, self)` on that view — `HeddleNode.quiesceLocally`'s own read half verbatim.
  *
+ * ## Mutation receipts
+ *
+ * Every row re-run against the final seven-arm suite (`tests="7" skipped="0"` each time), and every
+ * arm is red under at least one — no arm rides along.
+ *
+ * | # | mutation | red | shape |
+ * |---|---|---|---|
+ * | M1 | `EntitlementLedger.unackedCarriedDonors` → `emptyList()` — the #2600 guard | 4 / 7 | each on the outcome type: the move goes through instead of refusing, and what it leaves is #2366 verbatim — `Applied`, pockets `alice=0, bob=30`, `edge(e4).outstanding=100`, all three conflicts still standing. So 100 of the 130 units are **abandoned**, the recipient losing all 55 of his hand-off credit |
+ * | M2 | `ControlCommand.QuiesceAck`'s gate also requires `replica in roster.enrolled` | 4 / 7 | 2–4 assertions each. Includes the re-enroll arm: the ack fires during replay, *before* the enroll commits, so re-enrolling is not a workaround |
+ * | M3 | the returning plane subscribes from `commitIndex + 1` instead of replaying from `1` (fixture) | 4 / 7 | 2–4 assertions each — the recovery rests entirely on `committedFrom(1)`, which is how `heddleGoverned` wires it |
+ * | M4 | `HeddleControlPlane.reconcile` narrows `fence.acksOn(s)` to currently-enrolled replicas | 4 / 7 | 2–4 assertions each, and the only mutation that reaches [aDonorThatDepartsAfterTheBarrierHasAlreadyAckedAndNothingFreezes] — it is the arm about an ack outliving its author's departure |
+ *
+ * Each row's green arms are green for a stated reason, not by absence: M1 and M3 leave the two
+ * nothing-freezes arms alone because neither depends on the guard or on a return; M2 leaves the
+ * crashed-donor arm alone because a crashed peer never departed, so her ack passes a roster check.
+ *
+ * An earlier cut of this fixture gave [OWN_SUPPLY] no value, and M1 then reddened **one assertion of
+ * twelve** — with nothing drainable on `e4` the derivation returns `Relocation.Nothing` whether the
+ * guard fires or not, so a refusal and a no-op left the identical ledger and only the wording
+ * differed. That is what the constant is for.
+ *
  * **Test discipline (repo CLAUDE.md).** One [FakeRaftNode] with several [HeddleControlPlane]s over
  * it — the `HeddleFenceTest.Fixture.peerPlane` pattern for a peer returning on the same committed
  * log — never a hand-rolled cluster network. `StandardTestDispatcher`, a generous
