@@ -36,8 +36,9 @@ import kotlinx.serialization.Serializable
  * delivery of a **multi-hop transfer-funded** charge it may transiently list a false
  * [LedgerConflict.PerEdgeSafety] / [LedgerConflict.PersistentNegativeHoldings] that a
  * later anti-entropy round dissolves. Each feasibility-consuming mutator carries a
- * witness that keeps the **direct and single-hop-transfer** cases from false-firing;
- * deeper transfer chains are the accepted transient. **Consumers must not hard-gate on
+ * witness that keeps the **direct and single-hop base-transfer** cases from false-firing;
+ * deeper transfer chains — and a **carried** hand-off at any depth, which the witness does
+ * not copy (#2594) — are the accepted transient. **Consumers must not hard-gate on
  * `validate().isEmpty()`** while rebalancing is in flight — gate on the mutator's `null`.
  *
  * ## One root per ledger (structural, plus a diagnostic)
@@ -573,8 +574,10 @@ public class EntitlementLedger private constructor(
     // narrowed): the observed credit slots its holdings check read along the lineage,
     // plus a depth-1 backing of any donor who transferred into the actor — at their
     // absolute values (max-safe). This keeps `validate` (a diagnostic, not a gate)
-    // from false-firing on the direct and single-hop-transfer cases under partial
-    // delivery; a multi-hop transfer-funded charge is an accepted transient.
+    // from false-firing on the direct and single-hop BASE-transfer cases under partial
+    // delivery; a multi-hop transfer-funded charge is an accepted transient, and so is
+    // a carried hand-off at any depth — the witness copies `transfers` but not the
+    // control-plane-owned `transferRelocIn` (#2594, and see `witness`'s KDoc).
     // ─────────────────────────────────────────────────────────────────────────
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1375,13 +1378,41 @@ public class EntitlementLedger private constructor(
      *    [actor];
      *  - a **depth-1 backing** of each donor who transferred into [actor] at a level: the
      *    donor's own `issued`/`returned`[donor] at that edge (or minted, at the root), so
-     *    a *single-hop* transfer-then-charge does not false-fire on a lagging replica.
+     *    a *single-hop* transfer-then-charge does not false-fire on a lagging replica —
+     *    **except where that transfer's credit is carried rather than base**, below.
      *
      * It deliberately does **not** chase a transfer's funding transitively (Iain's call):
      * a *multi-hop* transfer-funded charge may transiently surface a false
      * [LedgerConflict.PerEdgeSafety] / [LedgerConflict.PersistentNegativeHoldings] on a
      * partially-delivered replica. That is an eventually-consistent diagnostic artifact
      * that self-heals on anti-entropy — never an authorized overspend.
+     *
+     * ## ⚠ Carried credit is unwitnessed, deliberately (#2594)
+     *
+     * This copies `transfers` and **not** `transferRelocIn`, so a recipient whose credit
+     * arrived purely by a **carried hand-off** — the row a generation move brings across
+     * (#2366) — spends without a witness. The single-hop guarantee above therefore covers
+     * a *base* transfer only; a single-hop *carried* one falls into the same transient
+     * class as the multi-hop case.
+     *
+     * That is the rule, not an oversight. `issuedRelocIn` is unwitnessed for exactly the
+     * same reason: the relocation families are **control-plane-owned**, and copying one
+     * into a data-plane patch would have the data plane republish control-plane state —
+     * inverting the ownership separation the whole #1691 argument rests on. What changed
+     * with #2577 is the *reachability* of the shape, never the rule.
+     *
+     * The consequence is bounded and is a **report-quality** one: a lagging replica whose
+     * holdings are funded by carried credit can momentarily look net-negative and surface
+     * a false [LedgerConflict.PerEdgeSafety] until the carrying patch arrives. It
+     * self-heals on delivery, nothing is admitted that should not be, and no quantity is
+     * lost — [validate] is a diagnostic, never a safety gate.
+     *
+     * **What would change this call:** if a lagging replica's transient
+     * [LedgerConflict.PerEdgeSafety] ever becomes something a *consumer* acts on — a gate,
+     * an alert, an admission decision — rather than a diagnostic a human reads, this stops
+     * being adequate and becomes a correctness issue. Reopen #2594 at that point; the
+     * options weighed and rejected (suppressing the shape inside [validate]; witnessing the
+     * carried rows and revisiting #1691) are recorded there.
      */
     private fun witness(actor: ReplicaId, lineage: List<AttachmentId>): EntitlementLedger {
         val wIssued = HashMap<AttachmentId, GCounter>()
@@ -1432,9 +1463,10 @@ public class EntitlementLedger private constructor(
      * (identical on every replica). This is an **eventually-consistent diagnostic, not
      * a safety gate** — safety is the local holdings check in the mutators. On a
      * fully-delivered state the report is exact; the per-patch witness keeps the direct
-     * and single-hop-transfer cases honest under partial delivery, but a partially-
-     * delivered **multi-hop transfer-funded** charge may transiently list a false
-     * conflict that self-heals on anti-entropy. The checks:
+     * and single-hop **base**-transfer cases honest under partial delivery, but a
+     * partially-delivered **multi-hop transfer-funded** charge — or a **carried**
+     * hand-off at any depth, which [witness] does not copy (#2594) — may transiently
+     * list a false conflict that self-heals on anti-entropy. The checks:
      *
      *  - [LedgerConflict.PerEdgeSafety] — sum-wise `effLeafSpent + effRollupSpent + returned
      *    > effIssued` on an edge's aggregate **effective** values (base ± relocation).
