@@ -40,8 +40,15 @@ import kotlin.test.assertTrue
  * really produced and asserts today's decoder **rejects** them. That is worth more than a note in a
  * changelog, because the alternative failure mode is the dangerous one: a length-prefixed byte
  * string and an indefinite-length array of integers are different CBOR major types, so a mixed-build
- * cluster gets a typed decode failure that `RaftEngine.onMessage` turns into an observable
- * `FrameRefused`, never a silently mis-read command. These bytes stay exactly as they are.
+ * cluster gets a decode failure rather than a silently mis-read command.
+ *
+ * **What an operator actually sees is [RaftTraceEvent.FrameUndecodable], not `FrameRefused`.** The
+ * failure is raised in `RaftEngine.decodeInbound`, carried to the actor loop as
+ * `EngineCommand.UndecodableMessage`, and emitted by `onUndecodableMessage`. It is deliberately
+ * *not* a `FrameRefused`: that event names a `RaftMessageType` and a `RefusalGate`, neither of which
+ * a frame that failed to decode can supply — see the "Why this is not a [FrameRefused]" section on
+ * [RaftTraceEvent.FrameUndecodable] itself. So the observable carries the peer and a byte count and
+ * nothing more; grep for `FrameUndecodable`. These bytes stay exactly as they are.
  *
  * **Regenerate the `*_VECTOR` constants only on a deliberate encoding change, and expect them to
  * move together.** One vector changing on one target and not another is the defect this file exists
