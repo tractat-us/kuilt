@@ -88,10 +88,12 @@ API and a `@Test` that reads a gate and returns early reports **passed**, not `s
   hand-rolled that latch and three wrote exactly it (#1803). `forbidBareSeamStateFlow` in the root
   build enforces the **type**, since the general shape rule is not viable (#1803: "assign a local
   from a locked block" matches 145 production sites and is the mandated idiom). Nine flows are
-  exempt, each carrying an `// ALLOW-bareSeamState: <reason>` marker naming its argument — one
-  shared lock, an atomic `update {}` CAS, a single-threaded target, a single writer behind a
-  close-once latch, or a constant with no retained handle. A blank reason is itself a violation,
-  and so is a marker with no bare flow left under it — sweeping a site to the gate means deleting
-  its marker in the same change (#2633 swept the tenth, `FlakyLifecycleSeam`, whose own marker
-  said its argument was the weakest of the ten: not "cannot lose a write" but "cannot lose one
-  HERE", resting on the confined dispatcher it is driven from rather than on the field itself).
+  exempt — and that is every bare flow left in production, so a green from this guard says only
+  that no *new* site appeared (#2752) — each carrying an `// ALLOW-bareSeamState: <reason>` marker
+  naming its argument — one shared lock, an atomic `update {}` CAS, a single-threaded target, a
+  single writer behind a close-once latch, or a constant with no retained handle. A blank reason is
+  itself a violation, and so is a marker with no bare flow left under it — sweeping a site to the
+  gate means deleting its marker in the same change (#2633 swept the tenth, `FlakyLifecycleSeam`,
+  whose own marker said its argument was the weakest of the ten: not "cannot lose a write" but
+  "cannot lose one HERE", resting on the confined dispatcher it is driven from rather than on the
+  field itself).

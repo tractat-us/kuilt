@@ -200,6 +200,22 @@ passing by never having executed.
 
 ## Conventions specific to this repo
 
+**Remedy shape — a type before a guard, a guard before a paragraph (#2752).** The structural audit
+behind #2752 measured which fixes ended their defect class and which kept producing instances.
+Where a class got a *type* — `init { require(...) }` on the wire type plus its codec TCK (#1822) —
+it stopped within a week. Where it got a lexical scan, a paragraph in this file, or a TCK
+obligation for a property only a type can carry, the remedy's own blind spot became the next issue:
+47 times in six weeks, the whole cancellation and roster families. So **before wiring a new scan,
+write down whether the property is type-shaped, needs a type-resolving linter, or is genuinely
+lexical, and why the stronger option was rejected — and commit a positive control the scan must red
+on, in the same PR.**
+
+The five recurring shapes — an available-but-optional primitive policed by a scan, a fabric
+implementing `Seam` directly instead of composing `Connection`, a conformance suite whose reference
+cannot fail, a decomposition tracker closed and never re-read, and appending the rationale here —
+are enumerated with their receipts in #2752. This file carries the rule and the pointer rather than
+the evidence, which is the fifth shape applied to itself.
+
 - **`explicitApi()` is enforced** (set in the `kuilt.kmp-library` convention
   plugin). Every public declaration needs an explicit visibility modifier or the
   build fails. New public types get `public`.
@@ -361,9 +377,10 @@ passing by never having executed.
     coroutine draining a `Channel` for FIFO ordering; the single-collection `incoming` contract (ADR-034, one
     event loop per session); running coroutines on an injected dispatcher purely for *scheduling*. The line: a
     dispatcher may decide *where* work runs, but must never be the *only* thing preventing a data race.
-    Exemplars: `Quilter`/`SeamRoom` (lock-guarded). The older `CompositeSeam`/`CompositeLoom`
-    `limitedParallelism(1)` confinement is **legacy being migrated to primitives** — do not copy it.
-
+    Exemplars: `Quilter`/`SeamRoom`/`CompositeSeam` (lock-guarded). `CompositeSeam`/`CompositeLoom`'s
+    old `limitedParallelism(1)` confinement is gone — migrated to `reentrantLock` + `SeamStateGate`,
+    and the #2752 audit found no use left in either file — so do not cite it as the shape to avoid;
+    the dispatcher *defaults* in `:kuilt-tcp`/`:kuilt-websocket` are scheduling, which is permitted.
 - **Exception discipline — never swallow cancellation.** Bare `runCatching` is banned in any
   `suspend`/coroutine context: it catches `CancellationException` and turns a structured-concurrency
   cancel into a normal `Result`, a silent bug. What replaces it turns on one question — **whose
