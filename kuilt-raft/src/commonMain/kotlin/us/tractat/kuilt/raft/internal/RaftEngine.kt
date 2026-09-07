@@ -2204,6 +2204,15 @@ internal class RaftEngine(
      * [reportSnapshotChunkEnvelopeOverBudget], whose [RaftMetric.SnapshotChunkEnvelopeOverBudget]
      * names both numbers an operator can move.
      *
+     * **The `maxOf(1, …)` floor survives the refusal, and guards a different thing.** It is easy to
+     * read the two as the same guard and drop it here; they are not. The refusal covers the *wire*
+     * term — no room left in the budget — while the floor covers the *ceiling* term:
+     * `RaftConfig.snapshotChunkCeiling` is a public `Int` with no `require` on it, so a consumer
+     * passing `0` would otherwise get a zero-byte slice that never advances `done` and never
+     * terminates the transfer. Both orderings are safe because the refusal has already established
+     * `rawFromWire >= 1`, so the floor can only ever raise a non-positive *ceiling* to one byte the
+     * budget is known to have room for.
+     *
      * A consequence worth naming: with **no** published budget this returns `snapshotChunkCeiling`
      * whole, where it once subtracted [HEADER_BUDGET] from it. That subtraction was never right —
      * `snapshotChunkCeiling` bounds the chunk's *state bytes*, and there is no frame limit to reserve
@@ -2217,7 +2226,7 @@ internal class RaftEngine(
             reportSnapshotChunkEnvelopeOverBudget(peer, reserved, wireCap)
             return null
         }
-        return minOf(raftConfig.snapshotChunkCeiling, rawFromWire)
+        return maxOf(1, minOf(raftConfig.snapshotChunkCeiling, rawFromWire))
     }
 
     /**
