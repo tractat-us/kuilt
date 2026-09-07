@@ -102,10 +102,28 @@ class EntitlementLedgerLeafGainsChildRelocationTest {
     private fun conservation(l: EntitlementLedger): Long =
         listOf(root, h2, h3).sumOf { l.holdings(it, p) } + l.leafSpentTotal()
 
+    /**
+     * Every expectation in this file is spelled in terms of [leafCharge] / [rollupCharge], so a
+     * fixture edit that zeroed one would leave the file **self-consistently green** while testing
+     * nothing — #2389's own vacuity, one level up, and measured: with `leafCharge = 0` three of the
+     * four tests below still pass unaided. This is the guard, and it is restated per test
+     * deliberately rather than centralised, because a single central assertion reds one test of
+     * four and a reader scanning for "did it red" ticks that off.
+     */
+    private fun requireBothHalvesAreLive() {
+        assertTrue(leafCharge > 0L, "the fixture must charge the leaf half or this file proves nothing")
+        assertTrue(rollupCharge > 0L, "the fixture must charge the roll-up half or this file proves nothing")
+        assertTrue(
+            leafCharge != rollupCharge,
+            "the two charges must differ, or an assertion could pass by reading the other half",
+        )
+    }
+
     // ── the rig: prove the fenced edge really carries both halves before asserting anything moves ──
 
     @Test
     fun theFencedEdgeCarriesBothHalvesOfTheSpendSplitAtOnce() {
+        requireBothHalvesAreLive()
         val l = formerLeafGainsAChild()
         assertAll(
             // Counted per family, never inferred from `edge(f1).spent` — that read is the SUM, so
@@ -113,7 +131,6 @@ class EntitlementLedgerLeafGainsChildRelocationTest {
             // vacuity this whole file exists to rule out.
             { assertEquals(leafCharge, l.storedSlot(CounterFamily.LEAF_SPENT, f1, p), "f1 carries the leaf charge") },
             { assertEquals(rollupCharge, l.storedSlot(CounterFamily.ROLLUP_SPENT, f1, p), "f1 carries the roll-up charge too") },
-            { assertTrue(leafCharge > 0L && rollupCharge > 0L, "both halves must be non-zero or the move proves nothing") },
             // The reshape actually happened: h2 is no longer a leaf, and f2 is the child that ended it.
             { assertTrue(l.isLeaf(h3), "h3 is the new leaf") },
             { assertTrue(!l.isLeaf(h2), "h2 stopped being a leaf when f2's record landed") },
@@ -141,6 +158,7 @@ class EntitlementLedgerLeafGainsChildRelocationTest {
      */
     @Test
     fun droppingEitherChargeDegeneratesTheFixtureBackToAOneTermStrand() {
+        requireBothHalvesAreLive()
         val noLeaf = formerLeafGainsAChild(leaf = 0L)
         val noRollup = formerLeafGainsAChild(rollup = 0L)
         assertAll(
@@ -155,6 +173,7 @@ class EntitlementLedgerLeafGainsChildRelocationTest {
 
     @Test
     fun bothRelocationHalvesRideOneFencedSlotAndOneLiveSlot() {
+        requireBothHalvesAreLive()
         val l = formerLeafGainsAChild()
         val patch = assertIs<Relocation.Moved>(
             l.relocateFromConvergedView(h2),
@@ -177,6 +196,7 @@ class EntitlementLedgerLeafGainsChildRelocationTest {
 
     @Test
     fun relocatingBothHalvesAtOnceRestoresConservationWithoutMovingTheSpendToTheWrongNode() {
+        requireBothHalvesAreLive()
         val l = formerLeafGainsAChild()
         val moved = l.piece(assertIs<Relocation.Moved>(l.relocateFromConvergedView(h2)).patch)
 
