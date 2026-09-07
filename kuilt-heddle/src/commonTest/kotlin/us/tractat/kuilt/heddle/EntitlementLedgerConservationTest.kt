@@ -237,21 +237,23 @@ class EntitlementLedgerConservationTest {
         /**
          * How many under-acked runs saw `PerEdgeSafety(e1)` — the strand's strict prefix — fire.
          *
-         * Reported, never asserted on. `e1` is in [assertUnderAckIsAttributed]'s tolerated set, and
-         * the natural way to keep such a tolerance honest is a frequency floor ("it must fire at
-         * least once").
+         * **The frequency floor's counter (#2673), and no longer merely reported.** `e1` is in
+         * [assertUnderAckIsAttributed]'s tolerated set, and a tolerance is kept honest two ways at
+         * once: a **bound** on the breach's magnitude (there), and a floor on how often the case is
+         * reached at all (here). They are orthogonal — the bound cannot notice the arm going
+         * silent, and the floor says nothing about the size of what leaks — so both are asserted.
          *
-         * That floor was **unavailable** until #2592: the run's trajectory depended on the order the
+         * The floor was **unavailable** until #2592: the run's trajectory depended on the order the
          * under-ack victim was drawn out of a `HashSet`-backed map, which JVM and Kotlin/Native do
          * not agree on, so this read 0 on one target and non-zero on the other from the same seed.
          * [chargersIn] now imposes the fixture's own order and all four measured targets walk one
-         * trajectory, on which this reads **1** across the 80 runs of
-         * [anUnderAckedLeafFinalBreaksConservationByExactlyTheUnderAckedAmount].
+         * trajectory.
          *
-         * It is still not asserted on, now for a different reason: a `>= 1` floor sitting at exactly
-         * 1 reds on any unrelated generator tweak. The tolerance is kept honest by a **bound** on the
-         * breach instead, which is live on every target. This counter is what makes that legible in a
-         * failure message rather than something the next reader has to rediscover.
+         * It was still declined at that point, because on that trajectory it read **1** across 80
+         * runs, and a `>= 1` floor sitting at exactly 1 reds on any unrelated generator tweak.
+         * What made it takeable was raising the count it sits on rather than weakening the floor —
+         * see [anUnderAckedLeafFinalBreaksConservationByExactlyTheUnderAckedAmount], which now
+         * makes 1,200 runs against a biased under-ack shape and reads 22.
          */
         var prefixSafety = 0
 
@@ -437,7 +439,23 @@ class EntitlementLedgerConservationTest {
             if (chargers.isEmpty()) return honest to null // nothing was charged here: nothing to understate
             val victim = chargers.random(rnd)
             val base = victim.value.leafSpent
-            val delta = rnd.nextLong(1L, base + 1L)
+            // Biased toward `base` — the largest of three uniform draws, mean ≈ ¾`base` rather than
+            // ½ — because a bigger lie leaves a bigger residue, and the residue is the only thing
+            // that can push `e1` past its cover (see the frequency floor in
+            // [anUnderAckedLeafFinalBreaksConservationByExactlyTheUnderAckedAmount]).
+            //
+            // **Deliberately not `delta = base`, which is stronger on reach and measured better on
+            // it (8 vs 5 hits per 400 runs when it was tried).** Understating the whole charge sets
+            // `ackedLeafSpent` to `0` on every under-ack, and [assertUnderAckIsAttributed]'s rig
+            // assertion — `baseFinalsOn(strand, replica).leafSpent > u.ackedLeafSpent` — then
+            // degenerates to `base > 0`, which [chargersIn] has already filtered for. It would buy
+            // reach by deleting a live assertion, which is the trade this fixture keeps being caught
+            // making. Taking the max of three keeps the whole range `[1, base]` reachable, so a
+            // partial under-ack is still drawn, and measured *better* anyway (10 per 400 runs).
+            val delta = maxOf(
+                rnd.nextLong(1L, base + 1L),
+                maxOf(rnd.nextLong(1L, base + 1L), rnd.nextLong(1L, base + 1L)),
+            )
             val understated = honest + mapOf(victim.key to victim.value.copy(leafSpent = base - delta))
             return understated to UnderAck(strand, victim.key, base - delta, delta)
         }
@@ -564,8 +582,15 @@ class EntitlementLedgerConservationTest {
                 // base — so leaving these to miss starves the #1783 arm rather than testing it.
                 3, 4 -> spendAtLeaf(ledger, actor, listOf(g2, g3).random(rnd))
                 5 -> fundLadder(ledger, actor)
-                6 -> relocateOnce(ledger, allowUnderAck && rnd.nextInt(2) == 0)
-                else -> relocateTwiceOntoOneEdge(ledger, allowUnderAck && rnd.nextInt(2) == 0)
+                // No second coin on top of [allowUnderAck]. The honest/dishonest mix these draws
+                // used to buy with `rnd.nextInt(2) == 0` is still there and is not this coin's
+                // doing: [finalsFor] returns the honest finals whenever the strand charged nothing,
+                // which is most moves — 1,794 under-acks against 11,328 moves (16%) with the coin
+                // gone. The coin was a second filter on an already-selective one, and dropping it
+                // is what lifts the under-ack rate enough for the frequency floor below to have
+                // headroom.
+                6 -> relocateOnce(ledger, allowUnderAck)
+                else -> relocateTwiceOntoOneEdge(ledger, allowUnderAck)
             }
             assertConservationWithRelocation(ledger, minted, residual)
         }
@@ -641,15 +666,17 @@ class EntitlementLedgerConservationTest {
                 // JVM across 80 runs and 76 under-acks while `iosSimulatorArm64` reached the case,
                 // and neither "it always fires" nor "it never fires" was assertable. With the draw
                 // ordered, all four measured targets (JVM, `macosArm64`, `iosSimulatorArm64`,
-                // `wasmJs`) now walk one trajectory and `prefixSafety` reads 1 across 80 runs and
-                // 67 under-acks on every one of them.
+                // `wasmJs`) now walk one trajectory — verified again for this change, byte-identical
+                // on all four.
                 //
-                // A floor is therefore now *available*, and is deliberately not taken: at exactly 1
-                // occurrence in 80 runs `>= 1` is a knife edge that any unrelated generator tweak
-                // reds, which buys less than it costs. What the bound below asserts is the stronger
-                // and stabler claim anyway — when `e1` does break, the breach must be no larger than
-                // the lie that was fed, which bounds the tolerance to what the residue can account
-                // for instead of waving the edge through.
+                // **A floor is now taken as well, and it does not replace this (#2673).** The two
+                // answer different questions and neither is the stronger: the floor is about
+                // *reachability* — it reds if the arm stops reaching `e1` at all, which is the
+                // vacuity this tolerance would otherwise hide — and the bound below is about
+                // *magnitude*, that when `e1` does break the breach is no larger than the lie that
+                // was fed. Converting either into the other would drop a property. The floor lives
+                // beside the run count it is derived from, in
+                // [anUnderAckedLeafFinalBreaksConservationByExactlyTheUnderAckedAmount].
                 val stray = conflicts.filterNot {
                     it is LedgerConflict.PerEdgeSafety && (it.edge in strands || it.edge == e1) ||
                         it is LedgerConflict.ClosureViolation && it.edge in strands ||
@@ -658,10 +685,13 @@ class EntitlementLedgerConservationTest {
                 assertTrue(stray.isEmpty(), "an under-acked run disturbed something outside the #1783 shape: $stray")
             },
             {
-                // The bound the tolerance above rests on, and the whole of what makes it a check
-                // rather than a pass. It used to be live on Kotlin/Native and vacuous on the JVM,
-                // from one seed; since #2592 ordered the under-ack draw it is live on **every**
-                // target, reached once per 80 runs.
+                // The **magnitude** half of what the tolerance above rests on — its reachability
+                // half is the frequency floor in
+                // [anUnderAckedLeafFinalBreaksConservationByExactlyTheUnderAckedAmount], which is
+                // what stops this guard going quietly unentered. It used to be live on
+                // Kotlin/Native and vacuous on the JVM, from one seed; since #2592 ordered the
+                // under-ack draw it is live on **every** target, and since #2673 raised the run
+                // count it is reached 22 times per 1,200 runs rather than once per 80.
                 if (LedgerConflict.PerEdgeSafety(e1) in conflicts) {
                     val summary = checkNotNull(l.edge(e1)) { "the prefix edge must be known" }
                     val breach = summary.spent + summary.returned - summary.issued
@@ -697,16 +727,64 @@ class EntitlementLedgerConservationTest {
      * The treatment arm: the same sequence with **under-acked** leaf finals admitted. The identity
      * is expected to break, by exactly the under-acked amount and no more, with the breach named on
      * the edge it happened on — see [assertUnderAckIsAttributed].
+     *
+     * **1,200 runs, not the honest arm's 80 (#2673).** The extra runs buy exactly one thing: a
+     * [RelocationRig.prefixSafety] count large enough to put a *frequency floor* under the `e1`
+     * tolerance. Reaching that case is a tail event — the residue an under-ack strands has to
+     * exceed `e1`'s cover **and** be spent through `g3` before the run ends — and it is a
+     * **chaotic** one, not a smooth function of the generator's knobs: measured at 400 runs,
+     * biasing the coin to ¾ moved the count *down* (3 → 2), so any perturbation re-samples it. The
+     * two levers are therefore bias (which multiplies the per-run rate ~2–3×, to ≈1.8%) and sample
+     * size (which is what makes the count stable).
+     *
+     * **1,200 rather than 600 is where the statistic stops swinging, and that is measured, not
+     * assumed.** Re-seeding the arm (the honest stand-in for an unrelated generator tweak, since
+     * both re-randomise the same chaotic map) gives **3, 7, 13, 18** at 600 runs and **14, 16, 20,
+     * 21, 22, 23, 23** at 1,200. At 600 a floor with any headroom would have to sit below 3 — the
+     * knife edge #2673 declined in the first place. At 1,200 the configured seed reads 22 and the
+     * worst of seven trajectories is 14, so `>= 10` clears every one of them.
+     *
+     * The honest arm keeps its 80 deliberately: it has no tail statistic to stabilise, and neither
+     * knob above reaches it (`&&` short-circuits the coin away, and [finalsFor] returns before the
+     * magnitude draw), so its counters are byte-identical to what they were and its floors are
+     * unchanged. Raising it would only cost wall-clock.
+     *
+     * **Not the inner step count.** Doubling `repeat(60)` to 120 was measured and is
+     * *counter*productive — `prefixSafety` fell to 0 and the end-of-run margin on `e1` never went
+     * negative at all, because the breach is a transient that later honest delegation across `e1`
+     * washes out. Longer runs hide the case; more runs find it.
      */
     @Test
     fun anUnderAckedLeafFinalBreaksConservationByExactlyTheUnderAckedAmount() {
         val rnd = Random(0x1783C0DE)
         val rig = RelocationRig()
-        repeat(80) { randomizedRunWithRelocation(rnd, minted = 1_000L, allowUnderAck = true, rig = rig) }
+        repeat(1_200) { randomizedRunWithRelocation(rnd, minted = 1_000L, allowUnderAck = true, rig = rig) }
         assertAll(
-            { assertTrue(rig.underAcks >= 25, "the under-ack rig fired too rarely — $rig") },
-            { assertTrue(rig.moved >= 250, "too few generations actually moved — $rig") },
-            { assertTrue(rig.accumulated >= 50, "the §12.3 accumulation arm fired too rarely — $rig") },
+            { assertTrue(rig.underAcks >= 600, "the under-ack rig fired too rarely — $rig") },
+            { assertTrue(rig.moved >= 3_500, "too few generations actually moved — $rig") },
+            { assertTrue(rig.accumulated >= 650, "the §12.3 accumulation arm fired too rarely — $rig") },
+            {
+                // The frequency floor (#2673) — reachability, asserted **beside** the magnitude
+                // bound in [assertUnderAckIsAttributed] rather than in place of it. The two are
+                // orthogonal: the bound reds when a move leaks more than the fed lie explains, this
+                // reds when the arm stops reaching the tolerated case at all, and neither implies
+                // the other. Dropping either loses a property.
+                //
+                // 10 against a measured 22 — the same ~2–3× headroom the sibling floors above carry.
+                // It is not a tautology: reverting **both** bias knobs at this same run count reads
+                // 7 and reds it, and `allowUnderAck = false` reads 0. Both were run.
+                //
+                // To re-derive: `prefixSafety` is printed by [RelocationRig.toString] only on
+                // failure, so add a throwaway `{ assertTrue(false, "$rig") }` arm here and read the
+                // count out of the failure message — on a native target as well as the JVM, because
+                // a claim about what this counter reaches is a claim about every target (#2592).
+                assertTrue(
+                    rig.prefixSafety >= 10,
+                    "the strand's strict prefix `e1` stopped reaching per-edge safety — the " +
+                        "tolerance for it in assertUnderAckIsAttributed is now waving through a " +
+                        "case nothing exercises — $rig",
+                )
+            },
         )
     }
 
