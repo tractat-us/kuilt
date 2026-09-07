@@ -198,6 +198,36 @@ merge; the deterministic virtual-time siblings do.
 
 ## Conventions specific to this repo
 
+**Remedy shape — a type before a guard, a guard before a paragraph (#2752).** The structural audit
+behind #2752 measured which fixes ended their defect class and which kept producing instances. Where a
+class got a *type* — `init { require(...) }` on the wire type plus its codec TCK (#1822) — it stopped
+within a week. Where it got a lexical scan, a paragraph in this file, or a TCK obligation for a
+property only a type can carry, the remedy's own blind spot became the next issue: 47 times in six
+weeks, the whole cancellation and roster families. Five patterns to avoid, each with its receipt:
+
+- **Shipping a primitive as *available* and a scan to make it *mandatory*.** `SeamStateGate`,
+  `pumpIn`, `Spool` and `FaultyLoom` each existed before the guard that polices non-adoption, and
+  two of those guards now exempt their entire live population. Put the primitive in the contract's
+  type — a `Seam.state` that a bare flow cannot satisfy, a non-inline lock helper a `suspend` call
+  cannot compile inside — so the wrong shape is unwritable. A `check`-wired scan is the fallback.
+  Before wiring a new one, write down whether the property is type-shaped, needs a type-resolving
+  linter, or is genuinely lexical, and why the stronger option was rejected; and commit a positive
+  control the scan must red on, in the same PR.
+- **Implementing `Seam` directly in a fabric.** A fabric implements `Connection` and composes
+  `identified()`/`handshaking()`/`peerMesh()` (`docs/extending-fabrics.md`). Five radios bypassed
+  that and re-derived `MeshSeam`'s roster, close, budget and dedup by hand; most of the #1816
+  fan-out lives there.
+- **A conformance suite whose reference cannot fail, or a nullable opt-out.** Declare each
+  unreachable failure through `ObligationDeclaration` or a sealed two-armed fixture, take fault
+  injection from `FaultyLoom` rather than a per-module chaos double, and ship an executable rig test
+  that runs the suite against a broken fixture and asserts red.
+- **Closing a decomposition tracker and never re-reading the file.** `RaftEngine` and `SeamRoom`
+  both regrew past their filing size within eight weeks of #1121/#1122 closing. A fix that lands
+  inside a file whose decomposition was declared done is the trigger to check the size and reopen.
+- **Appending the rationale here.** This file is 13,000 words, and the audit found four claims in
+  it that were already false. The *why* belongs in KDoc on the primitive that enforces it, or in an
+  ADR; this file gets the rule, one line, and a pointer.
+
 - **`explicitApi()` is enforced** (set in the `kuilt.kmp-library` convention
   plugin). Every public declaration needs an explicit visibility modifier or the
   build fails. New public types get `public`.
@@ -441,15 +471,18 @@ merge; the deterministic virtual-time siblings do.
     coroutine draining a `Channel` for FIFO ordering; the single-collection `incoming` contract (ADR-034, one
     event loop per session); running coroutines on an injected dispatcher purely for *scheduling*. The line: a
     dispatcher may decide *where* work runs, but must never be the *only* thing preventing a data race.
-    Exemplars: `Quilter`/`SeamRoom` (lock-guarded). The older `CompositeSeam`/`CompositeLoom`
-    `limitedParallelism(1)` confinement is **legacy being migrated to primitives** — do not copy it.
+    Exemplars: `Quilter`/`SeamRoom`/`CompositeSeam` (lock-guarded). `CompositeSeam`/`CompositeLoom`'s
+    old `limitedParallelism(1)` confinement is gone — migrated to `reentrantLock` + `SeamStateGate`,
+    and the #2752 audit found no use left in either file — so do not cite it as the shape to avoid;
+    the dispatcher *defaults* in `:kuilt-tcp`/`:kuilt-websocket` are scheduling, which is permitted.
   - **A seam's `state` is a `SeamStateGate`, not a bare `MutableStateFlow<SeamState>`** (`:kuilt-core`,
     `public`). The close decision and the flow write have to be one atomic step: guarding the write
     with `if (!closed)` does not fix it, because **check-a-flag-then-write IS the race** — four fabrics
     hand-rolled that latch and three wrote exactly it (#1803). `forbidBareSeamStateFlow` in the root
     build enforces the **type**, since the general shape rule is not viable (#1803: "assign a local
     from a locked block" matches 145 production sites and is the mandated idiom). Nine flows are
-    exempt, each carrying an `// ALLOW-bareSeamState: <reason>` marker naming its argument — one
+    exempt — and that is every bare flow left in production, so a green from this guard says only
+    that no *new* site appeared (#2752) — each carrying an `// ALLOW-bareSeamState: <reason>` marker naming its argument — one
     shared lock, an atomic `update {}` CAS, a single-threaded target, a single writer behind a
     close-once latch, or a constant with no retained handle. A blank reason is itself a violation,
     and so is a marker with no bare flow left under it — sweeping a site to the gate means deleting
