@@ -2177,6 +2177,13 @@ internal class RaftEngine(
      * existing chunking tests were calibrated against — while a config-carrying snapshot is charged
      * what [snapshotChunkReserve] measures around its actual membership.
      *
+     * **Correctness does not rest on that floor, and nothing pins it.** [snapshotChunkReserve] is
+     * already the true worst case, so dropping the `maxOf` would leave every frame inside the budget;
+     * it would only make config-free chunks larger (1960 raw bytes rather than 1920 at a 4 KiB
+     * budget), which is why no test reds on its removal. It is kept for compatibility — the existing
+     * chunking tests' arithmetic — and as the one number a reader of [HEADER_BUDGET] may still rely
+     * on. Stated here so a future reader does not mistake an unpinned constant for an unverified one.
+     *
      * **Why the reserve is the whole probe frame here, where the propose lane subtracts its empty
      * payload.** [checkProposeFitsTransport] measures the command's *encoded* size and compares it to
      * `budget − reserved`, so the payload array's own header is inside the measured half. This lane
