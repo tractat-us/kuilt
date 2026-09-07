@@ -12,7 +12,40 @@
 
 ---
 
-## ⛔ DO NOT START — this plan is gated
+## ⛔ DO NOT START — this plan is SUPERSEDED, not merely gated
+
+**An adversarial review on 2026-09-06 found the design unsound and this plan defective.** Do not
+execute any task below until both are revised. Findings against *this plan* specifically:
+
+- **C5 — Tasks 4/5 do not compile as sketched.** `HeddleControlPlane` is constructed **positionally
+  with 8 arguments** across 8 test sites, so inserting a parameter "beside `barrier`" is a compile
+  break — the plan's claim that "no existing construction site changes" is **false**. Worse, the
+  control plane never *reads* `departure`: the only consumer is `GovernedHeddleNode.depart()`, which
+  already holds `node`. Delete the seam. A defaulted functional dependency also contradicts
+  `barrier`'s own KDoc ("Required, never defaulted") and the optional≠tuning rule.
+- **C4 — Task 2's wire test targets the wrong codec.** The log is **CBOR**, not JSON, and `ReplicaId`
+  is a value class encoding as a bare string — the literal cannot decode under either. Pin
+  pre-change CBOR bytes as a hex literal captured on `main`. And name the other direction: a
+  **non-empty** declaration hits the `envelope == null` skip on an old binary (the #1738 exposure).
+- **I1 — `FenceState`'s 4th parameter must NOT be defaulted.** With a default, omitting it in
+  `acked` or `relocated` compiles and silently resets `departedFinals`. **No test in this plan can
+  see it**: the fold iterates a snapshot, so a dropping `acked` stays invisible until a *second*
+  edge is quiesced.
+- **I3 — Task 5's fixture pointer is to the wrong kind of fixture.** `handOffChainWithBystander` is
+  a **pure-ledger** builder whose move 1 never goes through the control plane, so on the production
+  receiver there is no carried row and the refusal cannot fire. A real E2E needs two full fence
+  cycles committed via `Reconcile`, a plane per acker, the departing peer's plane stopped, and the
+  `MultiNodeRaftSim` harness — *"the hardest task in the plan, and it is two lines."*
+- **I4 — the `allEdges()` question is resolvable from source.** Enumerate
+  `transfers.keys + transferRelocIn.keys` and map back via `AttachmentId(key.value)` (a bijection),
+  filtering `PathKey.ROOT`. Also **sort before `associateWith`** — `filterTo(HashSet())` makes the
+  committed `Depart` bytes hash-ordered on the proposer.
+
+This plan's own "Known weaknesses" section named the right three *small* problems and **none** of
+the five above. That is the lesson worth keeping: a self-review catches thin writing, not wrong
+design.
+
+## The original gate
 
 The spec rests on two open questions, **both unresolved as of 2026-09-06**:
 

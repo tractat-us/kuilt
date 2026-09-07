@@ -15,9 +15,22 @@ is above.
 
 ## Status
 
-**Proposed, not accepted.** Written 2026-09-06 for [#2600]. It rests on a premise that is being
-measured as this is written — see [Open question 1](#open-question-1--is-the-ordering-premise-true),
-which can invalidate the whole document. Do not implement ahead of that result.
+**⛔ UNSOUND AS WRITTEN — do not implement.** Written 2026-09-06 for [#2600]; an adversarial review
+the same day found two design defects and one premise inversion. The mechanism is repairable, but
+this document is not the repaired version.
+
+| | finding | where |
+|---|---|---|
+| **C1** | The fold bypasses the enrolled-at-barrier gate. A peer that departs, **re-enrolls**, writes more, and is still enrolled when the barrier commits lands in `acksOn(e)` anyway, so `pendingAcks` reads empty and the move drains from a **stale** declaration. §5.3's mechanism 2 is false *under this proposal's own mechanism*, and the proposal **converts a safe freeze into a wrong move**. | §5.3, and Task 3 of the plan |
+| **C2** | The declaration is **not** "honest by construction". It is read with the writability gate still open, so `reserve`/`schedule`/`complete` can raise the peer's own slots between the read and the applied `Depart` — plus the documented `complete`-after-depart leak. The ack path avoids exactly this by marking and reading under one lock. | §3, §5.4 |
+| **C3** | **No shipped configuration can reach the freeze this prevents.** `EntitlementLedger.transfer` has zero production callers, `HeddleNode` states there is no public `delegate`/`transfer`, and `HeddleControlPlane` is `internal`. | inverts Open Question 1 |
+
+**What the repair looks like** (not applied here): filter the fold by `replica !in roster.enrolledAt(index)`; specify close-gate-then-flush-then-read under the node lock; drop the control-plane `ControlDepartureSink` entirely and let the governed node build its own declaration; and lead the document with C3's reachability fact.
+
+**What survives review:** there is no third route to the refusal; the fold is arithmetically correct
+on the [#2610] fixture; log-purity holds; and §5.3's mechanism 3 — the boot gate, which this document
+originally admitted it had not located in source — **does exist**
+(`GovernedHeddleNode.writable`/`isWritable`). Mechanism 3 was never the problem; mechanism 2 is.
 
 ## 1. The failure, concretely
 
