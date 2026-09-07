@@ -42,8 +42,14 @@ class IndexedDbDurableStoreTest : DurableStoreConformanceSuite() {
     }
 }
 
-/** Drop the whole database at [name], whether or not it exists. */
-private suspend fun deleteDatabase(name: String) {
+/**
+ * Drop the whole database at [name], whether or not it exists.
+ *
+ * `internal` rather than file-private because [DurableStoreRaftStorageIndexedDbConformanceTest]
+ * needs exactly this, and the alternative is a second copy of [idbDeleteDatabase]'s `@JsFun` body
+ * in another file — the duplicated-fixture shape #2515 removed from the two file backends' tests.
+ */
+internal suspend fun deleteDatabase(name: String) {
     val done = CompletableDeferred<Unit>()
     idbDeleteDatabase(name) { done.complete(Unit) }
     done.await()
