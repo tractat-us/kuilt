@@ -10,6 +10,22 @@ Raft consensus over a `Seam`: leader election + PreVote, log replication, log
 compaction with chunked `InstallSnapshot`, dynamic membership, linearizable reads
 (`readIndex()`), and graceful leadership transfer (`transferLeadership()`).
 
+## Every peer in a group runs the same version
+
+The peers in one group talk to each other in a private format, and that format is allowed
+to change between kuilt releases. So upgrade a group **all at once**, not one device at a
+time: a peer on a newer build and a peer on an older one cannot read each other's messages,
+and neither of them will pretend otherwise — each simply ignores what it cannot understand
+and reports it. A half-upgraded group therefore behaves like a group that has been cut in
+half by a broken network, which is a state Raft is designed to survive but not one you want
+to enter by accident.
+
+Concretely: the frames are refused rather than misread, and each refusal is reported as a
+`RaftTraceEvent.FrameUndecodable` naming the peer it came from. If you see those after a
+rollout, some peers are still on the old build.
+
+The wire format last changed in #2160 (byte-string framing for opaque payloads).
+
 ## Proposing from any peer
 
 `RaftNode.propose` may be called on **any** role. The leader appends directly; a
