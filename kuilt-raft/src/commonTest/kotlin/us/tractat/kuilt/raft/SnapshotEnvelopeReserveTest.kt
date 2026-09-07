@@ -37,8 +37,10 @@ import kotlin.test.fail
  *    gate measures the command's *encoded* size and subtracts it, so the payload array's own header
  *    is counted there. `chunkBytes` picks a slice size *before* there are bytes to encode, so it
  *    converts a raw count through `CBOR_BYTE_EXPANSION` instead, and the array header has nowhere
- *    else to live. [theReserveMustIncludeTheChunkArraysOwnHeader] pins that two-byte difference,
- *    which is exactly enough to put every full chunk one byte over.
+ *    else to live. [theReserveMustIncludeTheChunkArraysOwnHeader] *establishes* that two-byte
+ *    difference arithmetically; the **detector** for an engine that gets it wrong is the offset
+ *    stride pinned in [assertTransferFitsTheBudget], and the distinction is measured rather than
+ *    assumed — see the mutation note there.
  * 2. **There is no `coerceAtLeast(0)` escape.** A config large enough to exhaust the budget leaves
  *    no room for any data at all, and a one-byte chunk that can never fit is a silent wedge rather
  *    than a degraded success — so the lane refuses, observably.
@@ -295,6 +297,19 @@ class SnapshotEnvelopeReserveTest {
      * `CBOR_BYTE_EXPANSION` divisor outright) **must** red here and re-derive [expectedStride]. A
      * green suite across such a change would mean nothing pinned how much data a chunk carries —
      * which is the state this arm was written to leave behind.
+     *
+     * ### Measured, not argued
+     *
+     * Two mutations of the engine's reserve, run against this suite:
+     *
+     * | mutation | `overBudget` | this stride assertion |
+     * |---|---|---|
+     * | reserve drops the payload array's header (the propose lane's shape) | green | **red** — 1826 vs 1825 |
+     * | probe measured at `offset = 0` instead of the ceiling | green | **red** — 1829 vs 1825 |
+     *
+     * Both are exactly the mistakes the reserve's KDoc warns against, and `overBudget` — the arm's
+     * headline assertion — saw neither. That is not a defect in it: it is the slack described above,
+     * and it is why this row exists.
      */
     private suspend fun assertTransferFitsTheBudget(t: Transfer) {
         val installs = t.sim.collectInstalls(t.behind)
