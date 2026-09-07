@@ -60,10 +60,12 @@ import kotlin.test.assertTrue
  *
  * The first cut of this file spelled each expectation in terms of the fixture's own constants
  * (`assertEquals(leafCharge, …)`). That is **self-consistency, not verification**: it reds when
- * production computes the wrong thing, but it also stays green when the *fixture* degenerates,
- * because both sides move together. Measured on the first cut — setting `leafCharge = 0` left
- * three of the four tests below passing unaided. Literals cannot co-vary, so a fixture edit that
- * zeroed a charge reds every one of them.
+ * production computes the wrong thing, but it stays green when the *fixture* degenerates, because
+ * both sides move together. Measured, not reasoned: zeroing either charge on that cut reddened
+ * **1 test of 4**, and the one red came from a hand-written `assertTrue(… > 0)` guard rather than
+ * from any value assertion — so without that guard the file would have been fully vacuous. The
+ * same two mutations against the literals below red **4 of 4**, on 3 / 1 / 4 / 3 assertions
+ * respectively. A literal cannot co-vary with the fixture, which is the whole of the difference.
  *
  * `EntitlementLedgerReconcileTest.bothHalvesOfTheSpendSplitCountTowardTheCoverPreconditionTogether`
  * is the cheap half of this — it pins that the state is *representable*, by feeding
