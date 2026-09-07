@@ -10,6 +10,34 @@ Raft consensus over a `Seam`: leader election + PreVote, log replication, log
 compaction with chunked `InstallSnapshot`, dynamic membership, linearizable reads
 (`readIndex()`), and graceful leadership transfer (`transferLeadership()`).
 
+## Storage
+
+A node has to remember three things between runs — which round of voting it is on, who it
+voted for in that round, and the list of decisions already agreed. Forget them and it can
+vote twice in one round, which is the single thing the algorithm exists to prevent.
+
+`DurableStoreRaftStorage` keeps all of that in a `DurableStore`, so it survives a restart
+on every platform:
+
+```kotlin
+@sample us.tractat.kuilt.raft.sampleDurableRaftStorage
+```
+
+**One store per node.** The three keys are fixed (`raft/meta`, `raft/log`,
+`raft/snapshot`), so two nodes pointed at one store overwrite each other's memory. They
+are public constants precisely so a consumer re-provisioning a node knows what to delete.
+
+Every mutator commits to the medium *before* it updates its own memory, so the engine is
+never told a term or an entry is durable when it is not. An append rewrites the whole
+retained log as one record, which is why this is the reference adapter for a **bounded**
+log — a game, a room, a small cluster that compacts by publishing into `RaftNode.snapshots`
+— rather than a high-throughput log engine. A consumer with a different medium, or a log
+too large to rewrite, implements `RaftStorage` directly and binds
+`RaftStorageConformanceSuite` to check it.
+
+`InMemoryRaftStorage` remains the right choice for tests and for peers that rejoin from
+scratch; it keeps nothing across a process exit.
+
 ## Proposing from any peer
 
 `RaftNode.propose` may be called on **any** role. The leader appends directly; a

@@ -94,4 +94,25 @@ action/committed-stream API, so game code can focus on domain rules.
 
 ## Storage
 
-`InMemoryRaftStorage` is provided for tests. Production deployments need a durable implementation (SQLite, IndexedDB, or similar) to survive restarts.
+A node remembers a few things between runs: which round of voting it is on, who it voted for, and the
+list of agreed decisions. Lose those and it can accidentally vote twice, which is the one thing the
+whole algorithm is built to prevent. So in production that memory has to survive a restart.
+
+`DurableStoreRaftStorage` does that, on every platform, in one line:
+
+```kotlin
+val storage = DurableStoreRaftStorage.open(FileChannelDurableStore(nodeDirectory))
+```
+
+Give it whichever durable store the platform provides — a directory on a phone or a server, a
+database in a browser — and hand the result to `raftNode(...)`. **One store per node**: two nodes
+sharing a directory overwrite each other's memory.
+
+`InMemoryRaftStorage` is the alternative, for tests and for peers that are happy to rejoin from
+scratch — it keeps nothing across a restart.
+
+Under the hood the adapter keeps three records (`raft/meta`, `raft/log`, `raft/snapshot`), commits
+each one before it believes it, and rewrites the whole log on every append. That last part is why it
+suits a bounded log — a game, a room, a small cluster that takes snapshots — rather than a
+high-throughput one. A consumer with a different medium, or a log too big to rewrite, implements
+`RaftStorage` itself and checks it against `RaftStorageConformanceSuite`.
