@@ -151,6 +151,43 @@ public sealed interface RaftMetric {
      */
     public data class SnapshotRejectedSizeCeiling(val attemptedTotal: Long, val ceiling: Int) : RaftMetric
 
+    /**
+     * This leader cannot send [peer] a single snapshot chunk: the `InstallSnapshot` envelope alone
+     * costs [reservedBytes], which leaves no room for state bytes inside the transport's
+     * [budgetBytes] payload budget (#2720). No chunk was sent, and [peer] cannot be caught up until
+     * one of the two numbers moves.
+     *
+     * **Why a refusal rather than a small chunk.** The envelope carries the snapshot's
+     * `ConfigPayload` — a `ClusterConfig` of consumer-supplied [NodeId]s — on *every* chunk, so its
+     * cost is a property of the cluster's membership and does not shrink as the transfer proceeds.
+     * A one-byte chunk minted against a budget the envelope has already exhausted is refused at the
+     * transport, never acked, and re-sent forever: a silent permanent wedge with nothing naming why.
+     * Emitting this and sending nothing turns that into a diagnosis.
+     *
+     * **Emitted on every refusal**, exactly like [SnapshotRejectedSizeCeiling] and for the same
+     * reason: it is a level to sample rather than an edge to count, and "is this still happening?"
+     * is the question that separates a transient budget dip — a mesh peer attaching over a tighter
+     * link lowers `Seam.maxPayloadBytes`, and the transfer resumes on its own when it leaves — from
+     * a standing misconfiguration. (The engine's matching `warn` is latched to once per node.)
+     *
+     * **What to do about a standing one.** Raise the transport's payload budget above
+     * [reservedBytes] with room for a chunk, or shorten the [NodeId]s: the envelope is dominated by
+     * the config's node ids, and five twenty-character ids already cost more than the 256 B the
+     * engine's flat reserve used to assume. A joint configuration carries two `ClusterConfig`s and
+     * so costs roughly twice a simple one — a cluster that only exceeds the budget *during* a
+     * membership change will show this metric appear and then stop of its own accord.
+     *
+     * @property peer the follower that cannot be caught up.
+     * @property reservedBytes what the engine measured the envelope to cost, charged at the widest
+     *   `Long`s it admits so the figure does not drift with log position.
+     * @property budgetBytes the transport's published `maxPayloadBytes` at the moment of the refusal.
+     */
+    public data class SnapshotChunkEnvelopeOverBudget(
+        val peer: NodeId,
+        val reservedBytes: Int,
+        val budgetBytes: Int,
+    ) : RaftMetric
+
     // ── Wedge detection ────────────────────────────────────────────────────────
 
     /**
