@@ -89,8 +89,9 @@ defaults:
 jobs:
   # ── detect ───────────────────────────────────────────────────────────────
   # Always runs (except on draft PRs). Emits docs-only=true when every changed
-  # path is a doc (*.md, docs/**, or Writerside/** — the Writerside guide source,
-  # incl. its non-.md .tree/.cfg/.list files). Cheap: hosted runner, no JDK, no Gradle.
+  # path is a doc (*.md, docs/**, Writerside/** — the Writerside guide source,
+  # incl. its non-.md .tree/.cfg/.list files — or the generated llms.txt index).
+  # Cheap: hosted runner, no JDK, no Gradle.
   detect:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
@@ -106,8 +107,8 @@ jobs:
       - name: Classify change (docs-only? Dokka inputs? spike inputs?)
         id: classify
         # Emits THREE orthogonal flags:
-        #   docs-only    — every changed path is doc-class (*.md / docs/** / Writerside/**);
-        #                  the heavy KMP build is skipped.
+        #   docs-only    — every changed path is doc-class (*.md / docs/** / Writerside/**
+        #                  / llms.txt); the heavy KMP build is skipped.
         #   dokka-inputs — any changed path is a Dokka INPUT (**/module.md, **/*.kt,
         #                  **/commonSamples/**); the fast Dokka module-doc check runs.
         #   spike-inputs — any changed path is `:spike` Gradle-compiled source
@@ -148,8 +149,15 @@ jobs:
           SPIKE_INPUTS=false
           while IFS= read -r file; do
             [ -z "$file" ] && continue
-            # docs-only holds only while every file is doc-class.
-            if ! { [[ "$file" == *.md ]] || [[ "$file" == docs/* ]] || [[ "$file" == Writerside/* ]]; }; then
+            # docs-only holds only while every file is doc-class. `llms.txt` is
+            # doc-class for the same reason every *.md is: it is the generated
+            # documentation index (#2770) and nothing in the build reads it. It has
+            # to be named explicitly because it is neither *.md nor under docs/ —
+            # it sits at the repo root, where the tools that read it look for it.
+            # Its freshness is still gated: the doc-citations job checks it on
+            # every PR, docs-only or not.
+            if ! { [[ "$file" == *.md ]] || [[ "$file" == docs/* ]] || [[ "$file" == Writerside/* ]] \
+              || [[ "$file" == llms.txt ]]; }; then
               DOCS_ONLY=false
             fi
             # dokka-inputs trips on any module.md, any Kotlin source, or a doc sample.
@@ -632,6 +640,12 @@ jobs:
   #     nothing (#2662). Belongs here above all the others: a SKILL.md is `*.md`, so editing one is
   #     docs-only by definition and the heavy build never runs — and appending a trigger phrase to a
   #     skill that "isn't firing" is exactly the docs-only edit this guard exists to catch.
+  #   - llms-txt.py --check — the generated documentation index `llms.txt` still matches what
+  #     its sources say today (#2770). NOT a Gradle task, deliberately: it reads four files and
+  #     needs no toolchain, so it runs as the job's first step, before the JDK setup. Its inputs
+  #     are the cookbook's headings, the guide's TOC, moduleDescription() and settings.gradle.kts
+  #     — three of those four are doc-class, so this is the same asymmetry as the module table:
+  #     the likeliest way to stale the index is a PR the heavy build never sees.
   #   - verifySeamHarnessCoverage — every production `Seam` implementation still has a row in
   #     `docs/seam-harness-coverage.md`, against a conformance harness or a written opt-out
   #     (#1871). Same asymmetry as the module table, and the reason it belongs in this job:
@@ -651,6 +665,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+
+      # First, because it needs no toolchain: a stale llms.txt fails in seconds
+      # rather than after a JDK + Android SDK setup.
+      - name: Verify the generated llms.txt index is up to date
+        run: python3 .github/scripts/llms-txt.py --check
 
       - name: Set up JDK 21
         uses: actions/setup-java@v6
