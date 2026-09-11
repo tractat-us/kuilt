@@ -11,13 +11,14 @@ primitive it names.
 
 ## Where the cookbook is
 
-Read the first path that exists, in order:
+Read the first that works, in order:
 
 1. `docs/agent-cookbook.md` — if you are working inside the kuilt repo.
-2. `../kuilt/docs/agent-cookbook.md` — if kuilt is checked out side-by-side
-   (the `includeBuild("../kuilt")` layout).
-3. Otherwise the source-of-truth blob:
-   `https://github.com/tractat-us/kuilt/blob/main/docs/agent-cookbook.md`.
+2. `git -C ../kuilt fetch -q origin main; git -C ../kuilt show origin/main:docs/agent-cookbook.md`
+   — if kuilt is checked out side-by-side. Read `origin/main`, never that
+   checkout's working tree: it can sit on any branch, weeks behind.
+3. `gh api -H 'Accept: application/vnd.github.raw' repos/tractat-us/kuilt/contents/docs/agent-cookbook.md`
+   — the source of truth. Works on a private repo, where a `github.com/…/blob/` URL does not.
 
 ## The reflex
 
