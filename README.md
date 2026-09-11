@@ -208,6 +208,10 @@ The full documentation suite is published to GitHub Pages on every push to `main
   survive being offline, and deliver to your dashboard with no duplicates.
 - **[Playground → Warp](https://tractat-us.github.io/kuilt/guide/warp.html)**
   — the coordination-free distributed scheduler (`kuilt-warp`) and the research behind it.
+- **[llms.txt](https://tractat-us.github.io/kuilt/llms.txt)** — everything above as one
+  small index, for coding agents and the documentation tools that read `llms.txt`. The
+  same file sits at [`llms.txt`](llms.txt) in the repository root, and both copies are
+  generated from the repository rather than maintained by hand.
 
 The in-repo sources are **[docs/usage.md](docs/usage.md)** (open/join a WebSocket
 session, discover peers over mDNS, write + conformance-test your own fabric) and
