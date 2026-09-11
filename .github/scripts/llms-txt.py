@@ -159,19 +159,24 @@ def headings(markdown: str) -> list[tuple[int, str]]:
     return found
 
 
-def heading_anchors(markdown: str, source: str) -> dict[str, str]:
-    """Map heading text -> anchor, with GitHub's duplicate suffixes applied."""
-    anchors: dict[str, str] = {}
+def heading_anchors(markdown: str, source: str) -> list[tuple[int, str, str]]:
+    """Every heading as (level, text, anchor), GitHub's duplicate suffixes applied.
+
+    A list rather than a text -> anchor map, because two headings may share their
+    text: the map would collapse them onto the second one's suffixed anchor.
+    """
+    anchored: list[tuple[int, str, str]] = []
     seen: dict[str, int] = {}
-    for _, text in headings(markdown):
+    for level, text in headings(markdown):
         base = anchor(text)
         count = seen.get(base, 0)
         seen[base] = count + 1
-        anchors[text] = base if count == 0 else f"{base}-{count}"
+        anchored.append((level, text, base if count == 0 else f"{base}-{count}"))
     # Self-check: the document's own in-page links must all resolve. This is what
     # keeps `anchor()` honest — a wrong slug algorithm shows up here rather than
-    # as a link that silently lands at the top of the page.
-    known = set(anchors.values())
+    # as a link that silently lands at the top of the page. It reaches only the
+    # headings this document links to, so a heading nothing links to is unchecked.
+    known = {slug for _, _, slug in anchored}
     dangling = sorted(
         target
         for target in re.findall(r"\]\(#([^)]+)\)", markdown)
@@ -183,28 +188,23 @@ def heading_anchors(markdown: str, source: str) -> dict[str, str]:
             "Either the links are broken or anchor() no longer matches how the "
             "headings are slugged."
         )
-    return anchors
+    return anchored
 
 
 # ── Cookbook ─────────────────────────────────────────────────────────────────
-def cookbook_families() -> list[tuple[str, str]]:
-    markdown = read(COOKBOOK)
-    anchors = heading_anchors(markdown, COOKBOOK)
-    families = [(text, anchors[text]) for level, text in headings(markdown) if level == 2]
+def cookbook() -> tuple[str, list[tuple[str, str]]]:
+    """The cookbook's own title, and one (title, anchor) per `##` family."""
+    anchored = heading_anchors(read(COOKBOOK), COOKBOOK)
+    titles = [text for level, text, _ in anchored if level == 1]
+    if not titles:
+        fail(f"{COOKBOOK} has no `#` title")
+    families = [(text, slug) for level, text, slug in anchored if level == 2]
     if len(families) < 10:
         fail(
             f"{COOKBOOK} yielded {len(families)} `##` sections, which is too few to be "
             "right — the heading scan is reading the file wrongly."
         )
-    return families
-
-
-def cookbook_title() -> str:
-    for level, text in headings(read(COOKBOOK)):
-        if level == 1:
-            return text
-    fail(f"{COOKBOOK} has no `#` title")
-    raise AssertionError("unreachable")
+    return titles[0], families
 
 
 # ── Guide ────────────────────────────────────────────────────────────────────
@@ -423,13 +423,13 @@ def render() -> str:
                       "The rendered guide, if you would rather read it as a site than as markdown."))
     out.append("")
 
-    title = cookbook_title()
+    title, families = cookbook()
     out += ["## Cookbook for coding agents", ""]
     out.append(bullet(title, RAW + COOKBOOK,
                       "Read this before writing networking, session or shared-state code "
                       "against kuilt: what you are about to build, and the kuilt primitive "
                       "that already does it. The links below are sections of this one file."))
-    for family, slug in cookbook_families():
+    for family, slug in families:
         out.append(bullet(family, f"{RAW}{COOKBOOK}#{slug}"))
     out.append("")
 
