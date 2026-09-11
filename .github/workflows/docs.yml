@@ -2,9 +2,10 @@ name: docs
 
 # Publishes the full documentation suite to GitHub Pages on every push to main:
 #
-#   https://tractat-us.github.io/kuilt/         landing page (links to both)
-#   https://tractat-us.github.io/kuilt/guide/   Writerside conceptual docs
-#   https://tractat-us.github.io/kuilt/api/     Dokka multi-module API reference
+#   https://tractat-us.github.io/kuilt/          landing page (links to both)
+#   https://tractat-us.github.io/kuilt/guide/    Writerside conceptual docs
+#   https://tractat-us.github.io/kuilt/api/      Dokka multi-module API reference
+#   https://tractat-us.github.io/kuilt/llms.txt  the documentation index for agents
 #
 # GitHub Pages allows only ONE deployment per repository, so the two doc surfaces
 # are built independently and then ASSEMBLED into a single site/ artifact that is
@@ -108,6 +109,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # FIRST: actions/checkout cleans the workspace it checks out into, so it has
+      # to run before the artifacts land beside it. The tree is here only for the
+      # llms.txt generator and the sources it reads.
+      - uses: actions/checkout@v7
+
       - name: Download guide artifact
         uses: actions/download-artifact@v8
         with:
@@ -148,6 +154,20 @@ jobs:
           <a href="./guide/"><strong>Guide →</strong><br>Concepts, usage, the CRDT zoo</a>
           <a href="./api/"><strong>API reference →</strong><br>Dokka multi-module API docs</a>
           HTML
+
+      # The documentation index for coding agents, regenerated here rather than
+      # copied from the checkout: this copy is then derived from main's sources
+      # directly, and cannot inherit a stale committed llms.txt. (The committed
+      # one — which is what the repository route serves — is gated separately, by
+      # `--check` in ci.yml's doc-citations job.)
+      #
+      # --verify-site is the gate on the one thing the generator cannot check
+      # offline: that the assembled site really does hold a page per module at
+      # api/<module>/index.html. It runs BEFORE the upload, so a layout change
+      # under Dokka stops the deploy — loudly, via notify-failure below — instead
+      # of publishing an index of dead links that nothing would ever report.
+      - name: Generate llms.txt and verify its site links
+        run: python3 .github/scripts/llms-txt.py --out site/llms.txt --verify-site site
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
