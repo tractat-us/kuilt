@@ -15,9 +15,11 @@ except staleness, and staleness is what the `--check` mode exists to stop: CI
 runs `--check` on every pull request (the `doc-citations` job in ci.yml) and
 fails when the committed file is not what this script would write today.
 
-A hand-maintained link list goes stale the day a module is added, so nothing
-here is hand-maintained except the prose at the top. Every list is derived from
-a source of truth that something else already forces to be correct:
+A hand-maintained link list goes stale the day a module is added, so the only
+hand-written parts are the prose at the top and the two short fixed lists of
+entry points (`START_HERE`, `OPTIONAL`) — and every path in those is checked to
+exist, so a rename fails here instead of publishing a dead link. Every *list* is
+derived from a source of truth that something else already forces to be correct:
 
   * `docs/agent-cookbook.md` — its own `##` headings become the family links.
   * `Writerside/kuilt.tree` — the guide's table of contents, in its own order;
