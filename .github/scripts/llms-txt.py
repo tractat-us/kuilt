@@ -338,12 +338,13 @@ def module_groups() -> list[tuple[str, list[tuple[str, str]]]]:
 
 def literals(line: str, module: str) -> list[str]:
     """The Kotlin string literals on one line of a moduleDescription() branch."""
-    if "$" in line or "\\" in line:
+    code = line.split("//")[0]
+    if "$" in code or "\\" in code:
         fail(
             f"{PUBLISH_PLUGIN}: the description of {module} uses a template or an escape "
             "(`$` or `\\`), which this parser does not render. Keep POM descriptions plain."
         )
-    return re.findall(r'"([^"]*)"', line.split("//")[0])
+    return re.findall(r'"([^"]*)"', code)
 
 
 def check_modules_exist(described: list[str]) -> None:
