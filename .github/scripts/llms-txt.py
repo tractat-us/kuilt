@@ -39,10 +39,12 @@ Usage:
 
 `--verify-site DIR` additionally asserts that every published-site URL this file
 emits exists as a file under DIR. It is what the docs deploy runs against the
-assembled `site/` directory, and it is the only check on the one assumption this
-script cannot make locally: that the API reference still renders a page per
-module at `api/<module>/index.html`. Without it a change to the Dokka output
-layout would silently publish 40-odd dead links.
+assembled `site/` directory, and it is the only check on the assumptions this
+script cannot settle from the source tree: that the guide and the API reference
+are still served where it says they are, and that the API reference still
+renders a page per module at `api/<module>/index.html` for the modules routed
+there (see `module_url`). Without it, a change in either layout would publish
+dead links that nothing would report.
 """
 
 from __future__ import annotations
@@ -368,22 +370,33 @@ def check_modules_exist(described: list[str]) -> None:
         )
 
 
-def has_api_page(module: str) -> bool:
-    """True when the module's own API reference page is generated for the site.
+def module_url(module: str) -> str:
+    """Where a reader is sent for one module, best documentation first.
 
-    The aggregated API site holds a page per module that applies Dokka, which in
-    this build means the `kuilt.kmp-library` convention plugin. A module that
-    does not (the BOM platform, the KSP processor) gets its source directory
-    instead. `--verify-site` is what proves this predicate still matches what the
-    site actually contains.
+    1. `<module>/module.md` — the module's own overview, in markdown, written for
+       a reader rather than generated. 28 of the 44 published modules have one.
+    2. The module's page in the API reference — for a module with no module.md.
+       Gated on the module having a `src/commonMain`, because the convention
+       plugin documents `common*` source sets and suppresses the rest, so a
+       module whose whole surface lives in `jvmAndAndroidMain` gets NO page on
+       the site (measured against the deployed site: every one of the 38 modules
+       with a `src/commonMain` has a page; `:kuilt-otel-logback`,
+       `:kuilt-otel-log4j2`, `:kuilt-otel-sdk` and `:kuilt-warp-compiler`, which
+       have none, have no page — all four are caught by rule 1 anyway).
+       `:kuilt-warp-runtime` is the one false negative — a page without a
+       `commonMain` — and it lands on rule 1 too. The predicate is a proxy, so
+       `--verify-site` is what stops a wrong one shipping as a dead link.
+    3. The module's source directory — for what is left: the BOM platform and
+       the KSP processor, neither of which has code a reader browses.
     """
     script = f"{module}/build.gradle.kts"
     if not exists(script):
         fail(f"{script} does not exist, but {module} has a POM description")
-    for line in read(script).splitlines():
-        if 'id("kuilt.kmp-library")' in line.split("//")[0]:
-            return True
-    return False
+    if exists(f"{module}/module.md"):
+        return RAW + f"{module}/module.md"
+    if exists(f"{module}/src/commonMain"):
+        return SITE + f"api/{module}/index.html"
+    return TREE_URL + module
 
 
 # ── Rendering ────────────────────────────────────────────────────────────────
@@ -430,8 +443,7 @@ def render() -> str:
     for group, modules in module_groups():
         out += [f"## Modules: {group}", ""]
         for module, description in modules:
-            url = SITE + f"api/{module}/index.html" if has_api_page(module) else TREE_URL + module
-            out.append(bullet(module, url, description))
+            out.append(bullet(module, module_url(module), description))
         out.append("")
 
     out += ["## Optional", ""]
