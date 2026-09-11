@@ -457,12 +457,21 @@ def render() -> str:
 
 def verify_site(content: str, site_dir: str) -> None:
     missing = []
+    checked = 0
     for url in re.findall(r"\]\((" + re.escape(SITE) + r"[^)#]*)", content):
         relative = url[len(SITE):]
         if relative.endswith("/") or relative == "":
             relative += "index.html"
+        checked += 1
         if not os.path.isfile(os.path.join(site_dir, relative)):
             missing.append(relative)
+    # A gate that checks nothing passes silently, so say so instead: if the file
+    # stops linking the site at all, this mode is vacuous and its green is a lie.
+    if checked == 0:
+        fail(
+            "llms.txt contains no published-site links, so --verify-site verified "
+            "nothing. Either the generator stopped emitting them or SITE is wrong."
+        )
     if missing:
         fail(
             "llms.txt links pages the assembled site does not contain: "
@@ -470,7 +479,7 @@ def verify_site(content: str, site_dir: str) -> None:
             + f". Either the site layout changed or {SITE} is no longer how it is served; "
             "fix .github/scripts/llms-txt.py rather than publishing dead links."
         )
-    print(f"llms-txt: every published-site link resolves inside {site_dir}")
+    print(f"llms-txt: all {checked} published-site links resolve inside {site_dir}")
 
 
 def main() -> None:
