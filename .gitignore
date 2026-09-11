@@ -31,3 +31,7 @@ spike-logs/
 
 # Local build/gate logs (`./gradlew … > foo.log`) — evidence from a verification run, not source
 *.log
+
+# Python bytecode from .github/scripts/
+__pycache__/
+*.pyc
