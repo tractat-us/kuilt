@@ -28,6 +28,8 @@ rules for changing the code here.
 
 ## Rules
 
+| Task | Command |
+|------|---------|
 | mDNS multicast integration (off by default — needs a real network) | `./gradlew :kuilt-mdns:jvmTest -Pmdns.multicast.tests=true` |
 
 The mDNS multicast suite is opt-in because it sends real multicast packets. The `-P` flag is
