@@ -66,7 +66,7 @@ import kotlin.time.Instant
  * peer ([anAbsentEnrolledPeerBlocksTheFenceAndTheStrandStaysStanding]) and the boot gate that makes
  * enrollment a structural precondition for authoring ([theBootGateRefusesWritesUntilSelfEnrollApplies]).
  *
- * **Test discipline (repo CLAUDE.md).** Consensus tests run through the canonical `MultiNodeRaftSim`
+ * **Test discipline (`.claude/rules/consensus.md`).** Consensus tests run through the canonical `MultiNodeRaftSim`
  * from `:kuilt-raft-test` — never a hand-rolled cluster network: `StandardTestDispatcher`, a generous
  * `TEST_WEDGE_BACKSTOP` wedge ceiling (never a tight real-time cap, #1739), node coroutines on
  * `backgroundScope`, per-node seeded election RNG, bounded `await*`

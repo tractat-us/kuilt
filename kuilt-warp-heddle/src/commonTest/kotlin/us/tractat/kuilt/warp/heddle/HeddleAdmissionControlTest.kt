@@ -65,7 +65,7 @@ import kotlin.time.Instant
  * opaque [Lane] tags to `:kuilt-heddle` fair-share leaves and gates warp's **free** execution
  * path on entitlement — without warp core learning a single fair-share type.
  *
- * Discipline (repo CLAUDE.md): [StandardTestDispatcher], node coroutines on
+ * Discipline (`.claude/rules/consensus.md`): [StandardTestDispatcher], node coroutines on
  * [TestScope.backgroundScope], seeded RNG, bounded time advance via [drainAntiEntropy] — never
  * `advanceUntilIdle` (the Quilter anti-entropy loops re-arm forever). The wall-clock ceiling is
  * [TEST_WEDGE_BACKSTOP], a wedge detector rather than a tight budget: these trajectories are purely

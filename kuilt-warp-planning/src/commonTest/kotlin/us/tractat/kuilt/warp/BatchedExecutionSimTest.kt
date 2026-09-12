@@ -19,7 +19,7 @@
  * 1. `plannedRounds < unplannedRounds` at real Raft execution.
  * 2. `roundsAtExecution == coordinationCost(planned, stats).rounds` — execution matches the model.
  *
- * Multi-node Raft discipline (per CLAUDE.md):
+ * Multi-node Raft discipline (per `.claude/rules/consensus.md`):
  * - [raftSimTest] provides [StandardTestDispatcher] + the wall-clock wedge backstop.
  * - [MultiNodeRaftSim] handles per-node seeded [Random], backgroundScope child scopes,
  *   bounded [MultiNodeRaftSim.awaitLeader] and [MultiNodeRaftSim.proposeOnLeader] helpers.
