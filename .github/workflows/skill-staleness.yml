@@ -1,6 +1,8 @@
 name: skill-staleness
 
-# Producer-side freshness check for `.claude/skills/kuilt-primitives/SKILL.md`.
+# Producer-side freshness check for the agent-facing docs: the always-loaded
+# `.claude/skills/kuilt-primitives/SKILL.md`, and each family's pair of
+# `docs/agent-cookbook/<family>.md` + `.claude/rules/<family>.md` (#2769).
 #
 # WHY THIS EXISTS
 #   The skill is how a coding agent in a CONSUMER repo discovers what kuilt already
@@ -40,6 +42,39 @@ name: skill-staleness
 #   Scoped to `src/commonMain` of those modules: that is what consumers import.
 #   NOT `src/*Test`, NOT `src/commonSamples`, NOT `docs/`. A test-only or sample
 #   change is not a missing route, and a check that cries wolf gets ignored.
+#
+# TWO ARMS, AND WHY THE SECOND IS NOT A FINER SIEVE OF THE FIRST
+#   The skill arm asks "does the always-loaded routing surface describe what we
+#   ship today?" and measures ONE file against EVERY published `commonMain`,
+#   because the skill is loaded for every session in every consumer repo.
+#
+#   That comparison cannot see a FAMILY go stale, and not by a small margin. A
+#   single touch of `SKILL.md` clears it for all seven families at once, so a
+#   cookbook page nobody has opened in a year sits behind a green check — while
+#   the busiest module in the repo keeps the shared `src` timestamp young enough
+#   that a quiet family's own drift never shows up as days at all.
+#
+#   So the family arm re-asks the same question one scope down: each family's
+#   docs against THAT family's modules, reported under its OWN issue title. The
+#   two titles must stay distinct — each is the idempotency key its arm looks
+#   itself up by, so a shared title would have one arm closing the other's issue
+#   and re-opening it on the next run, forever.
+#
+#   The newer of the family's two files counts. `docs/agent-cookbook/<family>.md`
+#   is where a route's compiled snippet lands and `.claude/rules/<family>.md` is
+#   where its convention does, and touching either is an honest record that
+#   somebody looked at what moved.
+#
+# WHY THE FAMILY → MODULES MAP IS READ, NOT LISTED
+#   Same reason the module list above is derived: it is already written down, in
+#   each rule file's `paths:` frontmatter, and `verifyFamilyRules` in the root
+#   build fails when a `:kuilt-*` module is claimed by other than exactly one of
+#   them. A second copy here could only ever be the stale one — and the family it
+#   forgot would be the family this job never checks.
+#
+#   The parse below is the same line-by-line walk that guard does, deliberately:
+#   if the two ever disagree about what a `paths:` block says, the family arm
+#   errors instead of quietly watching nothing.
 
 on:
   schedule:
@@ -157,7 +192,7 @@ jobs:
           **This is a proxy, not a verdict.** The job cannot tell a new *primitive* from an internal refactor, so the answer may legitimately be \"nothing to route\" — in which case a one-line touch of the skill is the honest way to record that someone looked.
 
           What to check:
-          1. Did any of those modules gain a **public** primitive a consumer would otherwise hand-roll? If so it needs a STOP-list route, the \`description\` trigger phrases that reach it, and a \`docs/agent-cookbook.md\` entry.
+          1. Did any of those modules gain a **public** primitive a consumer would otherwise hand-roll? If so it needs a STOP-list route, the \`description\` trigger phrases that reach it, and a section in that module's family page, \`docs/agent-cookbook/<family>.md\`, with a row pointing at it from the \`docs/agent-cookbook.md\` index.
           2. Did any **routed** symbol get renamed, made \`internal\`, or removed? A route naming the wrong symbol is worse than no route — it is confident, and the agent trusts it over its own reading.
           3. Does the frontmatter still parse? The \`description\` is one long unquoted YAML scalar, so a bare \`: \` inside it breaks the block and the skill stops loading (#2541).
 
@@ -206,4 +241,173 @@ jobs:
           if [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" \
               --comment "The skill has been updated since published \`src/commonMain\` last moved — closing. Reopened automatically if it falls behind again. Run: ${RUN_URL}"
+          fi
+
+      # ── the per-family arm ────────────────────────────────────────────────
+      # Compute and act in ONE step, unlike the arm above: the verdict is per
+      # family, so splitting it would mean encoding seven verdicts (each with a
+      # multi-line module list) through step outputs to gate three `if:`s that
+      # would then each re-loop anyway.
+      - name: Compare each family's docs against that family's own modules
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Deliberately the same budget as the arm above. A family whose docs may
+          # lag longer than the skill's would be a decision worth arguing for, and
+          # a second literal here is the wrong place to make it silently.
+          MAX_DAYS: '7'
+          LABEL: skill-stale
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          RULES=(.claude/rules/*.md)
+          if [ "${#RULES[@]}" -eq 0 ]; then
+            echo "::error::no .claude/rules/*.md family files — the families moved or were deleted, and this arm would report a clean bill of health for docs it never read."
+            exit 1
+          fi
+          echo "Checking ${#RULES[@]} families."
+
+          # One REST listing, reused by every family below — NOT the
+          # `--search "… in:title"` the arm above uses. `--search` goes through the
+          # search index, which lags a just-created issue by long enough to matter,
+          # and a miss here is not a no-op: it opens a SECOND issue under a title
+          # that is supposed to be an idempotency key. The arm above pays that risk
+          # once per run; this one would pay it seven times.
+          OPEN_LIMIT=500
+          gh issue list --state open --limit "$OPEN_LIMIT" --json number,title \
+            > "$RUNNER_TEMP/open-issues.json"
+          OPEN_COUNT=$(jq 'length' "$RUNNER_TEMP/open-issues.json")
+          if [ "$OPEN_COUNT" -ge "$OPEN_LIMIT" ]; then
+            echo "::error::listed $OPEN_COUNT open issues at the $OPEN_LIMIT cap, so a tracking issue beyond the cap is invisible to the lookup below and this arm would duplicate it rather than refresh it. Raise the cap."
+            exit 1
+          fi
+
+          FAILED=0
+          for RULE in "${RULES[@]}"; do
+            FAMILY=$(basename "$RULE" .md)
+            COOK="docs/agent-cookbook/$FAMILY.md"
+
+            # The `paths:` walk `verifyFamilyRules` does, in awk: frontmatter opens
+            # on line 1 and ends at the next `---`; the list is the `- "<dir>/**"`
+            # lines after a bare `paths:` key, and a new top-level key ends it.
+            mapfile -t DIRS < <(
+              awk -v sq="'" '
+                NR == 1                     { if ($0 !~ /^---[ \t]*$/) exit; next }
+                /^---[ \t]*$/               { exit }
+                !seen                       { if ($0 ~ /^[ \t]*paths:[ \t]*$/) seen = 1; next }
+                /^[ \t]*$/ || /^[ \t]*#/    { next }
+                /^[A-Za-z_][A-Za-z0-9_-]*:/ { exit }
+                {
+                  item = $0
+                  sub(/^[ \t]*-[ \t]*/, "", item)
+                  sub(/[ \t]*$/, "", item)
+                  gsub(/^"|"$/, "", item)
+                  gsub("^" sq "|" sq "$", "", item)
+                  if (item ~ /\/\*\*$/) { sub(/\/\*\*$/, "", item); print item }
+                }
+              ' "$RULE"
+            )
+            if [ "${#DIRS[@]}" -eq 0 ]; then
+              echo "::error::$RULE: read zero \"<dir>/**\" globs out of its paths: frontmatter. verifyFamilyRules guarantees at least one, so this walk and that guard now disagree — and a family with no globs is a family this job silently stops watching."
+              exit 1
+            fi
+
+            PATHS=()
+            for d in "${DIRS[@]}"; do
+              [ -d "$d/src/commonMain" ] && PATHS+=("$d/src/commonMain")
+            done
+            if [ "${#PATHS[@]}" -eq 0 ]; then
+              # Not an error: a family of JVM-only modules has nothing a consumer
+              # imports from `commonMain`, so it has nothing to be behind. Said out
+              # loud, because a silently-skipped family is what this job is for.
+              echo "$FAMILY: none of its ${#DIRS[@]} module(s) has a src/commonMain — nothing to watch, skipping."
+              continue
+            fi
+
+            # An empty path list would make `git log` report the whole repo, so the
+            # guard above is load-bearing, not defensive.
+            SRC_TS=$(git log -1 --format=%ct -- "${PATHS[@]}")
+            DOC_TS=$(git log -1 --format=%ct -- "$RULE")
+            if [ -f "$COOK" ]; then
+              COOK_TS=$(git log -1 --format=%ct -- "$COOK")
+              [ "$COOK_TS" -gt "$DOC_TS" ] && DOC_TS=$COOK_TS
+            else
+              echo "::warning::$COOK does not exist, so this family has no cookbook page for a route to land in; falling back to $RULE's own date."
+            fi
+
+            DAYS=0
+            STALE=no
+            if [ "$SRC_TS" -gt "$DOC_TS" ]; then
+              DAYS=$(( (SRC_TS - DOC_TS) / 86400 ))
+              [ "$DAYS" -gt "$MAX_DAYS" ] && STALE=yes
+            fi
+            echo "$FAMILY: ${#PATHS[@]} commonMain tree(s) of ${#DIRS[@]} module(s); docs=$DOC_TS src=$SRC_TS days=$DAYS stale=$STALE"
+
+            # Distinct from the skill arm's title, which is ITS idempotency key.
+            TITLE="$FAMILY agent docs are behind the library"
+            EXISTING=$(
+              jq -r --arg t "$TITLE" 'map(select(.title == $t)) | .[0].number // empty' \
+                "$RUNNER_TEMP/open-issues.json"
+            )
+
+            if [ "$STALE" = no ]; then
+              echo "$FAMILY is current (its source is ${DAYS}d ahead of its docs; budget is ${MAX_DAYS}d)."
+              if [ -n "$EXISTING" ]; then
+                gh issue close "$EXISTING" \
+                  --comment "\`$COOK\` or \`$RULE\` has been updated since this family's published \`src/commonMain\` last moved — closing. Reopened automatically if it falls behind again. Run: ${RUN_URL}" \
+                  || { echo "::error::could not close #$EXISTING for $FAMILY"; FAILED=$((FAILED + 1)); }
+              fi
+              continue
+            fi
+
+            echo "::warning::$FAMILY: published source moved ${DAYS}d ahead of its docs"
+            MOVED=$(
+              git log --since="@$DOC_TS" --name-only --format= -- "${PATHS[@]}" \
+                | grep -v '^$' | cut -d/ -f1 | sort -u | sed 's/^/- `:/;s/$/`/'
+            )
+
+            BODY="\`$FAMILY\`'s published \`src/commonMain\` last moved **${DAYS} days** after the newer of \`$COOK\` and \`$RULE\`. The budget is ${MAX_DAYS} days (see CLAUDE.md, \"The \`kuilt-primitives\` skill is part of the public surface\").
+
+            Modules in this family whose published source moved since its docs did:
+
+            ${MOVED}
+
+            **This is a proxy, not a verdict.** The job cannot tell a new *primitive* from an internal refactor, so the answer may legitimately be \"nothing to route\" — in which case a one-line touch of \`$COOK\` is the honest way to record that someone looked.
+
+            What to check:
+            1. Did any of those modules gain a **public** primitive a consumer would otherwise hand-roll? If so it needs a section in \`$COOK\` quoting a compiled snippet, and a row pointing at it from the \`docs/agent-cookbook.md\` index. If an agent should be routed to it before it opens any file, it also needs a STOP-list route in \`.claude/skills/kuilt-primitives/SKILL.md\` — whose \`description\` is a FIXED budget, so adding a trigger there means removing one (#2662).
+            2. Did any **routed** symbol get renamed, made \`internal\`, or removed? A route naming the wrong symbol is worse than no route — it is confident, and the agent trusts it over its own reading.
+            3. Did a convention move? \`$RULE\` is loaded only for a session editing the paths it claims, so a rule about a module that has since changed family is loaded for nobody, and nothing says so.
+
+            - Run: ${RUN_URL}"
+
+            # The body is written inside a YAML block scalar, so every continuation
+            # line carries this step's indentation. Four or more leading spaces is a
+            # markdown CODE BLOCK, which would render the whole issue as unstyled
+            # preformatted text.
+            BODY=$(printf '%s\n' "$BODY" | sed 's/^ \{1,12\}//')
+
+            if [ -n "$EXISTING" ]; then
+              echo "Refreshing existing issue #$EXISTING for $FAMILY"
+              gh issue comment "$EXISTING" --body "$BODY" \
+                || { echo "::error::could not comment on #$EXISTING for $FAMILY"; FAILED=$((FAILED + 1)); }
+            else
+              echo "Opening new tracking issue for $FAMILY"
+              # Best-effort label create (idempotent); the lookup above does not
+              # depend on it, so a failure here is tolerated.
+              gh label create "$LABEL" --color FBCA04 \
+                --description "agent-facing docs are behind the library" 2>/dev/null || true
+              gh issue create --title "$TITLE" --label "$LABEL" --body "$BODY" \
+                || gh issue create --title "$TITLE" --body "$BODY" \
+                || { echo "::error::could not open a tracking issue for $FAMILY"; FAILED=$((FAILED + 1)); }
+            fi
+          done
+
+          # One family's GitHub hiccup must not leave the other six unchecked, so
+          # the loop records failures rather than aborting — but the job still has
+          # to go red, or the hiccup is indistinguishable from a clean run.
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::$FAILED family issue update(s) failed"
+            exit 1
           fi

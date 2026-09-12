@@ -689,7 +689,12 @@ the rules below as the reference version rather than a local convention.
   neither announced itself.
 - **It must never be more than 7 days behind the library.** `.github/workflows/skill-staleness.yml`
   opens a tracking issue when published `commonMain` moves and the skill doesn't; it deliberately
-  does not fail a build, because a stale skill is not a reason to block someone else's merge.
+  does not fail a build, because a stale skill is not a reason to block someone else's merge. The
+  same job makes the same comparison **per family** — each family's modules, read out of
+  `.claude/rules/<family>.md`'s `paths:`, against the newer of that file and
+  `docs/agent-cookbook/<family>.md`, under its own issue title. That arm exists because one touch of
+  `SKILL.md` clears the whole-library comparison for all seven families at once, so a cookbook page
+  nobody has opened in a year sits behind a green check.
 - **Renaming or removing a primitive means fixing the route, not leaving it dangling.** A route
   naming the wrong symbol is worse than no route — it is confident, and the agent trusts it over
   its own reading. Verify against the declaration in source, never against a doc page.
