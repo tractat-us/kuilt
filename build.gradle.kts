@@ -4238,12 +4238,12 @@ val forbidCancellationSwallowingCatch by tasks.registering {
 // harness's own (`RAFT_SIM_WEDGE_BACKSTOP`, `WARP_SIM_WEDGE_BACKSTOP`). A `runTest(…)` with NO
 // `timeout` argument is also fine — the 60 s library default is a perfectly good backstop.
 //
-// WHY THE RULE IS "ANY LITERAL" AND NOT "5.seconds". #1918 corrected the prose
-// (`.claude/rules/consensus.md` used to instruct "a tight timeout, never the 60 s default"); a new
-// 5 s ceiling was written HOURS later, in a module that correction had just red-lit, by a worker
-// branching off a commit that contained it. Local convention beat the document. A rule keyed to the
-// number 5 is satisfied by 4; a rule requiring a NAME is not, and a name is also the correct thing
-// for the next contributor to copy.
+// WHY THE RULE IS "ANY LITERAL" AND NOT "5.seconds". #1918 corrected the prose (the root
+// `CLAUDE.md` used to instruct "a tight timeout, never the 60 s default"; the rule now lives in
+// `.claude/rules/consensus.md`); a new 5 s ceiling was written HOURS later, in a module that
+// correction had just red-lit, by a worker branching off a commit that contained it. Local
+// convention beat the document. A rule keyed to the number 5 is satisfied by 4; a rule requiring a
+// NAME is not, and a name is also the correct thing for the next contributor to copy.
 //
 // WHY A PER-FILE COUNT RATCHET AND NOT A FILE ALLOWLIST. This is the load-bearing design decision.
 // The instance that escalated #1739 was an 11th ceiling written into `HeddleFenceTest.kt`, which
