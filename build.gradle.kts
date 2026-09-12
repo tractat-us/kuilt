@@ -7310,12 +7310,24 @@ val verifyFamilyRules by tasks.registering {
                 return@forEach
             }
             val close = closeOffset + 1
-            val pathsAt = (1 until close).firstOrNull { lines[it].trimEnd() == "paths:" }
+            val pathsAt = (1 until close).firstOrNull { lines[it].trimStart().startsWith("paths:") }
             if (pathsAt == null) {
                 failures += "$rel: frontmatter has no `paths:` key, so the file is scoped to " +
                     "nothing and is never loaded — and its family's modules are unclaimed, which " +
                     "is reported separately below.\n  THE FIX is a `paths:` list of " +
                     "`\"<module-dir>/**\"` entries."
+                return@forEach
+            }
+            // A FLOW sequence (`paths: ["a/**", "b/**"]`) is valid YAML the harness would read and
+            // this line-by-line walk would not — it would see an empty list and report the whole
+            // family unclaimed, a red that describes the wrong thing entirely. Say what is actually
+            // wrong instead, and keep the walk simple rather than growing half a YAML parser.
+            if (lines[pathsAt].trimEnd().removePrefix("paths:").isNotBlank()) {
+                failures += "$rel:${pathsAt + 1}: `paths:` carries its value on the key's own line. " +
+                    "This guard reads the list line-by-line, so it would see no entries at all and " +
+                    "report every module in the family as unclaimed — a red about the wrong thing.\n" +
+                    "  THE FIX is a block list, one `  - \"<module-dir>/**\"` per line, as its " +
+                    "siblings in `.claude/rules/` are written."
                 return@forEach
             }
             var claimed = 0
@@ -7368,11 +7380,21 @@ val verifyFamilyRules by tasks.registering {
         val duplicated = claims.filterValues { it.size > 1 }
         if (duplicated.isNotEmpty()) {
             failures += duplicated.entries.sortedBy { it.key }.map { (dir, files) ->
-                "`$dir` is claimed by ${files.size} rule files — ${files.sorted().joinToString(", ")}. " +
-                    "A session editing that module gets whichever the harness resolves, and the " +
-                    "other file's rules are simply absent with nothing reporting it.\n" +
-                    "  THE FIX is to delete the glob from all but the one family that owns the " +
-                    "module, and if that is genuinely ambiguous, to say so in both files' prose."
+                // One file listing the same glob twice is a different fault from two families
+                // claiming the same module, and "claimed by 2 rule files — session.md, session.md"
+                // reads as a bug in this guard rather than in the file. Same red, honest shape.
+                val distinct = files.distinct().sorted()
+                if (distinct.size == 1) {
+                    "${distinct.single()} lists `$dir` ${files.size} times in one `paths:` block. " +
+                        "The duplicate claims nothing extra and hides whether a second family was " +
+                        "meant to own the module.\n  THE FIX is to delete the repeated line."
+                } else {
+                    "`$dir` is claimed by ${distinct.size} rule files — ${distinct.joinToString(", ")}. " +
+                        "A session editing that module gets whichever the harness resolves, and the " +
+                        "other file's rules are simply absent with nothing reporting it.\n" +
+                        "  THE FIX is to delete the glob from all but the one family that owns the " +
+                        "module, and if that is genuinely ambiguous, to say so in both files' prose."
+                }
             }
         }
         val unclaimed = requiredModules.filterKeys { it !in claims }
