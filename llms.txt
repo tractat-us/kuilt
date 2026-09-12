@@ -22,8 +22,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 
 - [kuilt cookbook — for coding agents](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md): Read this before writing networking, session or shared-state code against kuilt: what you are about to build, and the kuilt primitive that already does it. The links below are sections of the agent cookbook index and its family files.
 - [Don't build this yourself](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#dont-build-this-yourself)
-- [Discovery](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#discovery)
-- [Your own transport](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#your-own-transport)
+- [Families](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#families)
 - [Rejoin & reconnect](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#rejoin--reconnect)
 - [Replicated data](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#replicated-data)
 - [Scaling to many peers](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#scaling-to-many-peers)
@@ -34,15 +33,18 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Dealing cards nobody can peek at](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#dealing-cards-nobody-can-peek-at)
 - [Fair share & placement](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#fair-share--placement)
 - [Code mobility](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#code-mobility)
-- [Sending to yourself](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#sending-to-yourself)
-- [Payload limits](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#payload-limits)
-- [Long-lived pumps](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#long-lived-pumps)
-- [A seam's terminal state](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#a-seams-terminal-state)
 - [Dedup](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#dedup)
-- [Durable storage](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#durable-storage)
 - [Durable consensus state](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#durable-consensus-state)
 - [Telemetry & log capture](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#telemetry--log-capture)
 - [Reporting a failure that will be retried](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#reporting-a-failure-that-will-be-retried)
+- [Fabrics](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md)
+- [Discovery](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#discovery)
+- [Your own transport](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#your-own-transport)
+- [Sending to yourself](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#sending-to-yourself)
+- [Payload limits](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#payload-limits)
+- [Long-lived pumps](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#long-lived-pumps)
+- [A seam's terminal state](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#a-seams-terminal-state)
+- [Durable storage](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#durable-storage)
 
 ## Guide: Getting Started
 
