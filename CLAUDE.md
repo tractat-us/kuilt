@@ -514,7 +514,8 @@ coding agent in a *consumer* repo reads to find these surfaces, and it exists tw
 because the tools that read it resolve it two different ways: from the repository's default branch
 (hence the committed file) and from the published site (hence `site/llms.txt`, written by the docs
 deploy). Both are written by `python3 .github/scripts/llms-txt.py`, whose own inputs are the
-cookbook's `##` headings, `Writerside/kuilt.tree`, and the POM descriptions in
+`##` headings of the cookbook index and of each `docs/agent-cookbook/<family>.md`,
+`Writerside/kuilt.tree`, and the POM descriptions in
 `moduleDescription()` — so adding a module, a guide topic or a cookbook family changes it, and the
 edit is *running the script*. `--check` runs in the `doc-citations` CI job on every PR and fails
 with the command to run, so a stale index cannot merge. It is deliberately **not** a Gradle task:
@@ -641,22 +642,26 @@ So when a block stops being a literal quote — you dropped the source's own com
 `.claude/skills/kuilt-primitives/SKILL.md` is how a coding agent working in a *consumer* repo
 discovers what this library already provides. It is **source of truth**: consumers vendor a
 byte-identical copy and refresh it on a daily sync job, so whatever is here propagates outward
-unreviewed. `docs/agent-cookbook.md` is its long form — the skill intercepts, the cookbook explains.
+unreviewed. The cookbook is its long form — the skill intercepts, the cookbook explains — and the
+cookbook is now an index (`docs/agent-cookbook.md`) over seven family files
+(`docs/agent-cookbook/<family>.md`), so a route names one family file, not the whole thing.
 
 kuilt is where this pattern started and two sibling libraries (`fgn`, `hanab-kt`) copy it, so treat
 the rules below as the reference version rather than a local convention.
 
-- **Adding a public primitive means updating the skill in the SAME PR** — a route in the STOP list,
-  the trigger phrases in `description` that should reach it, and a symptom→primitive entry in
-  `docs/agent-cookbook.md` quoting a compiled snippet (`<!-- verbatim from … -->`). A primitive
-  nobody is routed to gets reinvented downstream. Same obligation for a fabric, a `Room`/reconnect
-  entry point, a CRDT, a liveness detector, a consensus/`GameSession` entry point, a dealing/gossip
-  primitive — anything a consumer would otherwise hand-roll.
-- **But the `description` is a fixed budget, so adding a trigger means removing one.** The STOP list
-  in the body is free — a skill body is lazy. The `description:` is **eager**, loaded on every turn
-  of every session and every subagent in every repo that vendors this file, and Claude Code truncates
-  it at `skillListingMaxDescChars`, **default 1,536 characters**. Past that a phrase is not weak, it
-  is **absent**: it never reaches the deciding model, so it routes nothing, and nothing reports it.
+- **Adding a public primitive means updating the skill in the SAME PR** — a route in the skill's
+  index table, the trigger phrases in `description` that should reach it, and a symptom→primitive
+  entry in the family file the route names, `docs/agent-cookbook/<family>.md`, quoting a compiled
+  snippet (`<!-- verbatim from … -->`), with its row in the `docs/agent-cookbook.md` index
+  alongside. A primitive nobody is routed to gets reinvented downstream. Same obligation for a
+  fabric, a `Room`/reconnect entry point, a CRDT, a liveness detector, a consensus/`GameSession`
+  entry point, a dealing/gossip primitive — anything a consumer would otherwise hand-roll.
+- **But the `description` is a fixed budget, so adding a trigger means removing one.** The index
+  table in the body is free — a skill body is lazy. The `description:` is **eager**, loaded on
+  every turn of every session and every subagent in every repo that vendors this file, and Claude
+  Code truncates it at `skillListingMaxDescChars`, **default 1,536 characters**. Past that a phrase
+  is not weak, it is **absent**: it never reaches the deciding model, so it routes nothing, and
+  nothing reports it.
   This file's own advice caused the failure — the bullet above says "add the trigger phrases", so a
   skill that wasn't firing kept getting phrases appended, and `kuilt-primitives` reached 8,155
   characters of which **81% had never been seen by any model** (#2662). The receipt is #2572, and it
