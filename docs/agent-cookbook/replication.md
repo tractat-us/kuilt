@@ -275,12 +275,12 @@ check(free.state == FedAvg.ZERO.piece(fromAlice).piece(fromBob))
 ```
 
 The training step can travel too: `FedAvgKernelCodec` marshals the same step as a
-content-addressed WebAssembly kernel shipped through [Code mobility](../agent-cookbook.md#code-mobility), and
+content-addressed WebAssembly kernel shipped through [Code mobility](warp.md#code-mobility), and
 `ReferenceTrainer` is the Kotlin oracle it is held bit-for-bit equal to. See
 [`kuilt-warp-ml/module.md`](../../kuilt-warp-ml/module.md) — including the honest seam on lane
 costing if you gate the workload with `HeddleAdmissionControl`.
 
-The primitive lives in the warp family; see `warp.md` for where a task may run and how code travels.
+The primitive lives in the warp family; see [warp](warp.md#code-mobility) for where a task may run and how code travels.
 
 **Intent:** check that two peers hold the same state when you *can't* compare the objects — a cross-process or real-socket test where shipping a whole state back to assert on is impractical, or a divergence alarm between live peers in a harness.
 **Primitive:** `canonicalDigest(serializer, value)` (`:kuilt-conformance`, `us.tractat.kuilt.conformance`). A 64-bit FNV-1a hash over the value's canonical CBOR encoding — converged replicas share a digest, diverged ones almost certainly don't, and one `Long` crosses the boundary instead of a whole state. Test- and harness-side only: `:kuilt-conformance` `api`-exposes `kotlin-test`, so it does not belong on a production classpath.
