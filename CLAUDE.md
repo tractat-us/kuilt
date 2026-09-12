@@ -137,6 +137,22 @@ degenerate `peers.size == 2` case. `Swatch` is the opaque, binary-only frame.
 fan out with `shareIn`, never collect twice. This is the cohered contract of
 ADR-034 / ADR-002; the full rationale is in `docs/architecture.md`.
 
+## Families
+
+kuilt's agent-facing docs are split per family: a path-scoped rule file loads
+automatically when an agent reads a file under one of that family's modules, and
+the matching cookbook file is where the symptom→primitive snippets live.
+
+| Family | Rule file | Cookbook file |
+|---|---|---|
+| Fabrics | `.claude/rules/fabrics.md` | `docs/agent-cookbook/fabrics.md` |
+| Session | `.claude/rules/session.md` | `docs/agent-cookbook/session.md` |
+| Replication | `.claude/rules/replication.md` | `docs/agent-cookbook/replication.md` |
+| Consensus | `.claude/rules/consensus.md` | `docs/agent-cookbook/consensus.md` |
+| Heddle | `.claude/rules/heddle.md` | `docs/agent-cookbook/heddle.md` |
+| Warp | `.claude/rules/warp.md` | `docs/agent-cookbook/warp.md` |
+| Otel | `.claude/rules/otel.md` | `docs/agent-cookbook/otel.md` |
+
 ## Build & test commands
 
 Non-interactive shells don't load `~/.zshrc`, so source SDKMAN and select JDK 21
