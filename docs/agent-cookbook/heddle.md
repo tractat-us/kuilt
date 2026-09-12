@@ -1,6 +1,12 @@
 # Heddle
 
-Several groups can draw on one shared pool — computing time, task slots, a rate budget — and each is owed a fair slice, say three parts to one, with no referee watching over the split. This page is about keeping that fair even when a group goes idle and its spare share gets lent to a busy one, even while the network is split into pieces that cannot currently talk to each other, and — when the sharing has to happen across a network rather than on one machine — with every use of the shared resource still charged exactly once, never twice.
+Several groups can draw on one shared pool — computing time, task slots, a rate budget —
+and each is owed a fair slice, say three parts to one, with no referee watching over the
+split. This page is about keeping that fair even when a group goes idle and its spare
+share gets lent to a busy one, and even while the network is split into pieces that cannot
+currently talk to each other. And when the sharing has to happen across a network rather
+than on one machine, every use of the shared resource still has to be charged exactly
+once, never twice.
 
 ## Fair share & placement
 

@@ -1,10 +1,14 @@
 # Fabrics
 
-A fabric is the part of kuilt that actually moves bytes between two devices — over the
-internet, over a local network, over Bluetooth or a direct cable — so everything built on
-top of it (rooms, shared data, turns) works the same no matter which connection two devices
-happen to share. This is where to look for finding other devices in the first place, and for
-building a fabric of your own when kuilt doesn't already ship the one you need.
+A fabric is the part of kuilt that actually moves bytes — over the internet, over a local
+network, or directly between two devices over the local radio — so everything built on top
+of it (rooms, shared data, turns) works the same no matter which connection two devices
+happen to share. Look here for finding other devices in the first place, for building a
+transport of your own when kuilt doesn't already ship the one you need, and for the things
+every transport has to get right: sending a message to yourself, how big a single message
+may be, reading from a connection for as long as a session lasts, and telling a connection
+that has ended for good from one that has merely gone quiet. It is also where to keep
+bytes safely on disk so they survive the app being closed.
 
 ## Discovery
 
@@ -334,4 +338,3 @@ check(store.read(StoreKey("never-written")) == null)
 store.delete(key)
 check(store.read(key) == null)
 ```
-

@@ -19,4 +19,4 @@ rules for changing the code here.
 
 ## Rules
 
-(none yet — the family's conventions move here from the root `CLAUDE.md` in a later change)
+This family has no conventions scoped to it alone today; the cross-cutting rules in the root `CLAUDE.md` apply.
