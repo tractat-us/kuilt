@@ -298,7 +298,8 @@ passing by never having executed.
   fine only where eager-inline ordering doesn't matter. See
   `docs/testing-coroutine-determinism.md`.
   - **A seeded generator must impose its own total order on any collection it walks.** The sibling
-    of the seeded-RNG rule above, and the half that is invisible when it breaks: `Random(seed)` is
+    of the per-node seeded election RNG rule in `.claude/rules/consensus.md`, and the half that is
+    invisible when it breaks: `Random(seed)` is
     portable across targets, `HashSet`/`HashMap` iteration order is **not** — bucket layout differs
     between the JVM and Kotlin/Native, so the *same seed* walks a *different trajectory* on each
     target. Sort at the point the generator walks it (`state.store.entries.keys.sorted()` in
