@@ -336,12 +336,6 @@ jobs:
               echo "::warning::$COOK does not exist, so this family has no cookbook page for a route to land in; falling back to $RULE's own date."
             fi
 
-            # ⚠ TEMPORARY PROBE — reverted before this PR opens. Pretends every
-            # family's docs are 30 days behind its source so the open-an-issue
-            # path, the `--since` module list and the titles are exercised for
-            # real. Nothing below this line is changed by the probe.
-            DOC_TS=$(( SRC_TS - 30 * 86400 ))
-
             DAYS=0
             STALE=no
             if [ "$SRC_TS" -gt "$DOC_TS" ]; then
