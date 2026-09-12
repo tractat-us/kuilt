@@ -88,7 +88,7 @@ import kotlin.test.assertTrue
  * guard fires or not, so a refusal and a no-op left the identical ledger and only the wording
  * differed. That is what the constant is for.
  *
- * **Test discipline (repo CLAUDE.md).** One [FakeRaftNode] with several [HeddleControlPlane]s over
+ * **Test discipline (`.claude/rules/consensus.md`).** One [FakeRaftNode] with several [HeddleControlPlane]s over
  * it — the `HeddleFenceTest.Fixture.peerPlane` pattern for a peer returning on the same committed
  * log — never a hand-rolled cluster network. `StandardTestDispatcher`, a generous
  * [TEST_WEDGE_BACKSTOP] rather than a tight real-time cap, bounded `runCurrent()` pumping and never

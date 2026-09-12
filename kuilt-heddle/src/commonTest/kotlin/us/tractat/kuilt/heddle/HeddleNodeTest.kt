@@ -43,7 +43,7 @@ import kotlin.time.Instant
  * stale-demand safety (§6), the §8.2 bound metrics, stranded crashed-peer earmarks,
  * the full §10.1 conservation identity **with** earmarks, and the §13 end-to-end scenario.
  *
- * Discipline (repo CLAUDE.md): a generous `TEST_WEDGE_BACKSTOP` wedge ceiling (never a tight
+ * Discipline (`.claude/rules/consensus.md`): a generous `TEST_WEDGE_BACKSTOP` wedge ceiling (never a tight
  * real-time cap, #1739), `StandardTestDispatcher`, node coroutines
  * on `backgroundScope`, seeded RNG, bounded `advanceTimeBy` only — never `advanceUntilIdle`
  * (the replicator/liveness timers re-arm forever).

@@ -13,7 +13,7 @@
  * log and only the current Raft leader fires [coordinatedExecutor]; the [coordinatedApplied]
  * set prevents a second committed entry for the same task from re-executing it.
  *
- * Multi-node Raft discipline (per CLAUDE.md):
+ * Multi-node Raft discipline (per `.claude/rules/consensus.md`):
  * - [raftSimTest] → [StandardTestDispatcher], wall-clock wedge backstop.
  * - [MultiNodeRaftSim] seeded per-node [Random], backgroundScope child scopes.
  * - Bounded [MultiNodeRaftSim.awaitTrue] — never [advanceUntilIdle].
