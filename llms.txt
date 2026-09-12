@@ -23,8 +23,6 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [kuilt cookbook — for coding agents](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md): Read this before writing networking, session or shared-state code against kuilt: what you are about to build, and the kuilt primitive that already does it. The links below are sections of the agent cookbook index and its family files.
 - [Don't build this yourself](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#dont-build-this-yourself)
 - [Families](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#families)
-- [Where a task may run (location eligibility)](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#where-a-task-may-run-location-eligibility)
-- [Code mobility](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#code-mobility)
 - [Telemetry & log capture](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#telemetry--log-capture)
 - [Reporting a failure that will be retried](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook.md#reporting-a-failure-that-will-be-retried)
 - [Consensus](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/consensus.md)
@@ -51,6 +49,9 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Rejoin & reconnect](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#rejoin--reconnect)
 - [Liveness & presence](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#liveness--presence)
 - [Host election & the lobby](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#host-election--the-lobby)
+- [Warp](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/warp.md)
+- [Where a task may run (location eligibility)](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/warp.md#where-a-task-may-run-location-eligibility)
+- [Code mobility](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/warp.md#code-mobility)
 
 ## Guide: Getting Started
 
