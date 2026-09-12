@@ -646,6 +646,11 @@ jobs:
   #     are the cookbook's headings, the guide's TOC, moduleDescription() and settings.gradle.kts
   #     — three of those four are doc-class, so this is the same asymmetry as the module table:
   #     the likeliest way to stale the index is a PR the heavy build never sees.
+  #   - verifyFamilyRules — every `:kuilt-*` module is still claimed by exactly one
+  #     `.claude/rules/<family>.md` `paths:` list, and no rule file has grown a citation marker or a
+  #     code fence nothing checks (#2769). A rule file is `*.md`, so BOTH directions of the coverage
+  #     drift — deleting a glob, and editing one to name a module that moved — are docs-only edits
+  #     the heavy build never sees; only adding a module reaches it.
   #   - verifySeamHarnessCoverage — every production `Seam` implementation still has a row in
   #     `docs/seam-harness-coverage.md`, against a conformance harness or a written opt-out
   #     (#1871). Same asymmetry as the module table, and the reason it belongs in this job:
@@ -655,8 +660,8 @@ jobs:
   #
   # ORTHOGONAL to docs-only, for exactly the reason the Dokka gate is: the likeliest way to
   # drift a citation — or to break the `@sample` in a module.md, or to drop a module table row —
-  # is a docs-only PR, and that path skips build-jvm/build-native entirely. All six tasks are
-  # wired into `check` (so `./gradlew build` covers them on any code change), but `check`-wiring
+  # is a docs-only PR, and that path skips build-jvm/build-native entirely. Every Gradle task below
+  # is wired into `check` (so `./gradlew build` covers them on any code change), but `check`-wiring
   # ALONE would never fire on the very class of change most likely to break them. Cheap enough to
   # always run: no compilation and no Kotlin/Native toolchain, just file-reading verification tasks.
   doc-citations:
@@ -692,7 +697,7 @@ jobs:
       - name: Verify doc citations, @sample links, the module table, seam harness coverage and skill budgets
         run: >
           ./gradlew verifyDocCitations forbidUncitedDocCodeBlock verifyModuleDocLinks
-          verifySampleLinks verifyModuleTable verifySeamHarnessCoverage
+          verifySampleLinks verifyModuleTable verifyFamilyRules verifySeamHarnessCoverage
           verifySkillDescriptionBudget
 
   # ── capability-probes ───────────────────────────────────────────────────────
