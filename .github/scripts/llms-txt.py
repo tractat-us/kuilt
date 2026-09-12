@@ -223,23 +223,40 @@ def cookbook_doc(path: str) -> CookbookDoc:
     return CookbookDoc(path, markdown, titles[0], families, {slug for _, _, slug in anchored})
 
 
-def check_cross_file_anchors(markdown: str, source: str, anchors_by_file: dict[str, set[str]]) -> None:
-    """Every `](agent-cookbook/<f>.md#<anchor>)` link in `markdown` must resolve against
-    `<f>.md`'s own headings — the cross-file counterpart of `heading_anchors`' in-page
-    `](#anchor)` check. `anchors_by_file` maps a family file's bare name (e.g. "fabrics.md")
-    to the anchor set `cookbook_doc` computed for it; a name missing from that map means the
-    family file does not exist at all, which is dangling too.
+def check_cross_file_anchors(source: str, markdown: str, anchors_by_path: dict[str, set[str]]) -> None:
+    """Every relative `](<path>.md#<anchor>)` link in `markdown` that targets a cookbook-family
+    file — the index or a `docs/agent-cookbook/<family>.md` — must resolve against that file's
+    own headings, the cross-file counterpart of `heading_anchors`' in-page `](#anchor)` check.
+
+    A link is resolved relative to `source`'s own directory, exactly as GitHub resolves it, so
+    `agent-cookbook/<f>.md#<a>` written from the index, `<f>.md#<a>` written from inside a
+    sibling family file, and `../agent-cookbook.md#<a>` written from inside a family file back
+    to the index all land on the same verdict — including the broken shape that results from
+    copying the index's own `agent-cookbook/<f>.md#<a>` form into a family file by mistake,
+    which resolves one directory too deep and must fail exactly like a genuinely missing file.
+    A link that resolves OUTSIDE the cookbook family (e.g. to another docs/ page) is left
+    unchecked, matching how such a link is treated today — this check's scope is cookbook
+    cross-references, not every relative link in the repository.
+
+    `anchors_by_path` maps a cookbook-family doc's repo-relative path (as `cookbook()`
+    constructs it) to the anchor set `cookbook_doc` computed for it.
     """
-    dangling = sorted(
-        f"agent-cookbook/{filename}#{target}"
-        for filename, target in re.findall(r"\]\(agent-cookbook/([^)#\s]+\.md)#([^)]+)\)", markdown)
-        if target not in anchors_by_file.get(filename, set())
-    )
+    dangling = []
+    for link, target in re.findall(r"\]\(([^()#\s]+\.md)#([^)]+)\)", markdown):
+        resolved = os.path.normpath(os.path.join(os.path.dirname(source), link))
+        in_family = resolved == COOKBOOK or resolved.startswith(f"{AGENT_COOKBOOK_DIR}/")
+        if not in_family:
+            continue
+        anchors = anchors_by_path.get(resolved)
+        if anchors is None:
+            dangling.append(f"{link}#{target} (resolves to {resolved}, which does not exist)")
+        elif target not in anchors:
+            dangling.append(f"{link}#{target} (resolves to {resolved}, which has no such heading)")
     if dangling:
         fail(
-            f"{source} links to agent-cookbook/<file>.md anchors that match no heading: "
-            f"{dangling}. Either the links are broken, the family file does not exist, or "
-            "anchor() no longer matches how that file's headings are slugged."
+            f"{source} links to cookbook-family anchors that match no heading: "
+            f"{sorted(dangling)}. Either the links are broken, the target file does not "
+            "exist, or anchor() no longer matches how that file's headings are slugged."
         )
 
 
@@ -270,9 +287,9 @@ def cookbook() -> list[CookbookDoc]:
             "be right — the heading scan is reading the file wrongly."
         )
 
-    anchors_by_file = {os.path.basename(doc.path): doc.anchors for doc in docs[1:]}
+    anchors_by_path = {doc.path: doc.anchors for doc in docs}
     for doc in docs:
-        check_cross_file_anchors(doc.markdown, doc.path, anchors_by_file)
+        check_cross_file_anchors(doc.path, doc.markdown, anchors_by_path)
 
     return docs
 
