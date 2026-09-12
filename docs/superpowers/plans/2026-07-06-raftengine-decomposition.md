@@ -25,7 +25,7 @@ rules:
    duplicate-fix collision of #1165/#1074 is the failure mode).
 4. **Verification through the canonical sim harness only** — `RaftSimulation` +
    `InMemoryRaftNetwork` + `raftRunTest` in `kuilt-raft/src/commonTest/`. Never a hand-rolled
-   cluster, never `advanceUntilIdle()`, never a widened timeout (repo CLAUDE.md, "Multi-node /
+   cluster, never `advanceUntilIdle()`, never a widened timeout (`.claude/rules/consensus.md`, "Multi-node /
    consensus tests run through the canonical simulation harness").
 5. **Merge gate per PR:** `timeout 600 ./gradlew :kuilt-raft:build detektAll --rerun-tasks`
    locally (full module build — `jvmTest` alone misses Android/Native variant compiles), then
@@ -373,7 +373,7 @@ worker is dispatched. After the sequence, run one whole-branch opus review of th
   do not touch `MAX_ELECTION_THRASH`. A hang or `AssertionError` from an `await*` helper
   arrives with `RaftSimulation.dumpState()` output (per-node role/term/commitIndex/log-range +
   event histogram + worst-off node's last 12 trace events) — capture it verbatim and hand the
-  failing test + dump back to the dispatcher for a strong-model diagnosis. Repo CLAUDE.md:
+  failing test + dump back to the dispatcher for a strong-model diagnosis. `.claude/rules/consensus.md`:
   "A hang/timeout is a STOP-and-re-plan signal."
 - **`UncompletedCoroutinesError` with no dump** = an ungated hot loop froze virtual time —
   a real bug introduced by the move (most likely a machine that re-sends without awaiting an
