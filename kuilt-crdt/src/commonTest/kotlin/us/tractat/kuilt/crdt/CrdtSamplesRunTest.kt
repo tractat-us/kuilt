@@ -13,7 +13,8 @@ import kotlin.test.Test
  * That is not hypothetical: writing #2044's Task 7 I produced an `ORSet` sample asserting that a
  * concurrent add survives a remove, built from a re-add that reused a dot the remover had already
  * witnessed — so the element was in fact dropped. It compiled, it was quoted verbatim in
- * `docs/agent-cookbook.md` and `Writerside/topics/crdt-orset.md`, and nothing anywhere disagreed.
+ * `docs/agent-cookbook/replication.md` and `Writerside/topics/crdt-orset.md`, and nothing anywhere
+ * disagreed.
  *
  * New samples go in the list below. A sample that cannot run un-parameterised does not belong in
  * `CrdtSamples.kt`.

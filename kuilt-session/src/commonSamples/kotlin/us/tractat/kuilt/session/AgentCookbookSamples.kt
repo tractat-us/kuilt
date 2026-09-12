@@ -18,7 +18,8 @@ import us.tractat.kuilt.session.partition.RoomId
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.seconds
 
-// Minimal, compile-checked snippets quoted verbatim by docs/agent-cookbook.md.
+// Minimal, compile-checked snippets quoted verbatim by docs/agent-cookbook/session.md (most) and
+// docs/agent-cookbook/fabrics.md (chunkToTheRoomsBudgetSample).
 // Keep each function tiny and self-contained; the cookbook copies the body.
 
 /**

@@ -1,6 +1,6 @@
 package us.tractat.kuilt.core
 
-// Minimal, compile-checked snippets quoted verbatim by docs/agent-cookbook.md.
+// Minimal, compile-checked snippets quoted verbatim by docs/agent-cookbook/fabrics.md.
 // Keep each function tiny and self-contained; the cookbook copies the body.
 
 /**
