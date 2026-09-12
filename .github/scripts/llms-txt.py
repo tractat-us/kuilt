@@ -21,7 +21,9 @@ entry points (`START_HERE`, `OPTIONAL`) — and every path in those is checked t
 exist, so a rename fails here instead of publishing a dead link. Every *list* is
 derived from a source of truth that something else already forces to be correct:
 
-  * `docs/agent-cookbook.md` — its own `##` headings become the family links.
+  * `docs/agent-cookbook.md` — its own `##` headings become the family links, plus one
+    entry per `docs/agent-cookbook/<family>.md` file once the cookbook is split that way
+    (both layouts are supported; see `cookbook()`).
   * `Writerside/kuilt.tree` — the guide's table of contents, in its own order;
     each topic's title is the `#` heading of its own file.
   * `moduleDescription()` in build-logic/src/main/kotlin/kuilt.publish.gradle.kts
@@ -66,6 +68,7 @@ SITE = "https://tractat-us.github.io/kuilt/"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 COOKBOOK = "docs/agent-cookbook.md"
+AGENT_COOKBOOK_DIR = "docs/agent-cookbook"
 TOC = "Writerside/kuilt.tree"
 TOPICS = "Writerside/topics"
 PUBLISH_PLUGIN = "build-logic/src/main/kotlin/kuilt.publish.gradle.kts"
@@ -194,19 +197,101 @@ def heading_anchors(markdown: str, source: str) -> list[tuple[int, str, str]]:
 
 
 # ── Cookbook ─────────────────────────────────────────────────────────────────
-def cookbook() -> tuple[str, list[tuple[str, str]]]:
-    """The cookbook's own title, and one (title, anchor) per `##` family."""
-    anchored = heading_anchors(read(COOKBOOK), COOKBOOK)
+class CookbookDoc:
+    """One cookbook markdown file: its own `#` title, its `##` sections as (title, anchor),
+    and the full set of anchors any heading in it resolves to (used for cross-file checks)."""
+
+    def __init__(self, path: str, markdown: str, title: str,
+                 families: list[tuple[str, str]], anchors: set[str]):
+        self.path = path
+        self.markdown = markdown
+        self.title = title
+        self.families = families
+        self.anchors = anchors
+
+
+def cookbook_doc(path: str) -> CookbookDoc:
+    """One `#`-titled markdown file's title, `##` sections and full anchor set. Used for both
+    the cookbook index and, once it exists, each `docs/agent-cookbook/<family>.md` file —
+    they have the same shape: a `#` title and `##` sections."""
+    markdown = read(path)
+    anchored = heading_anchors(markdown, path)
     titles = [text for level, text, _ in anchored if level == 1]
     if not titles:
-        fail(f"{COOKBOOK} has no `#` title")
+        fail(f"{path} has no `#` title")
     families = [(text, slug) for level, text, slug in anchored if level == 2]
-    if len(families) < 10:
+    return CookbookDoc(path, markdown, titles[0], families, {slug for _, _, slug in anchored})
+
+
+def check_cross_file_anchors(source: str, markdown: str, anchors_by_path: dict[str, set[str]]) -> None:
+    """Every relative `](<path>.md#<anchor>)` link in `markdown` that targets a cookbook-family
+    file — the index or a `docs/agent-cookbook/<family>.md` — must resolve against that file's
+    own headings, the cross-file counterpart of `heading_anchors`' in-page `](#anchor)` check.
+
+    A link is resolved relative to `source`'s own directory, exactly as GitHub resolves it, so
+    `agent-cookbook/<f>.md#<a>` written from the index, `<f>.md#<a>` written from inside a
+    sibling family file, and `../agent-cookbook.md#<a>` written from inside a family file back
+    to the index all land on the same verdict — including the broken shape that results from
+    copying the index's own `agent-cookbook/<f>.md#<a>` form into a family file by mistake,
+    which resolves one directory too deep and must fail exactly like a genuinely missing file.
+    A link that resolves OUTSIDE the cookbook family (e.g. to another docs/ page) is left
+    unchecked, matching how such a link is treated today — this check's scope is cookbook
+    cross-references, not every relative link in the repository.
+
+    `anchors_by_path` maps a cookbook-family doc's repo-relative path (as `cookbook()`
+    constructs it) to the anchor set `cookbook_doc` computed for it.
+    """
+    dangling = []
+    for link, target in re.findall(r"\]\(([^()#\s]+\.md)#([^)]+)\)", markdown):
+        resolved = os.path.normpath(os.path.join(os.path.dirname(source), link))
+        in_family = resolved == COOKBOOK or resolved.startswith(f"{AGENT_COOKBOOK_DIR}/")
+        if not in_family:
+            continue
+        anchors = anchors_by_path.get(resolved)
+        if anchors is None:
+            dangling.append(f"{link}#{target} (resolves to {resolved}, which does not exist)")
+        elif target not in anchors:
+            dangling.append(f"{link}#{target} (resolves to {resolved}, which has no such heading)")
+    if dangling:
         fail(
-            f"{COOKBOOK} yielded {len(families)} `##` sections, which is too few to be "
-            "right — the heading scan is reading the file wrongly."
+            f"{source} links to cookbook-family anchors that match no heading: "
+            f"{sorted(dangling)}. Either the links are broken, the target file does not "
+            "exist, or anchor() no longer matches how that file's headings are slugged."
         )
-    return titles[0], families
+
+
+def cookbook() -> list[CookbookDoc]:
+    """The cookbook index's doc, plus one per `docs/agent-cookbook/<family>.md` file (sorted
+    by filename) once the split has started — both layouts render correctly, since `render()`
+    treats the index's own `##` sections and each family file's the same way.
+
+    The `>= 10 ## sections` floor guards against a heading scan that silently reads the wrong
+    file; it is only meaningful while every section still lives in the index, so it applies
+    only when no family file exists yet. Once at least one does, the family arm itself proves
+    the scan found real content, so the floor would otherwise misfire the moment a split PR
+    moves the index below 10 sections.
+    """
+    docs = [cookbook_doc(COOKBOOK)]
+    family_dir = os.path.join(ROOT, AGENT_COOKBOOK_DIR)
+    if os.path.isdir(family_dir):
+        names = sorted(
+            name for name in os.listdir(family_dir)
+            if name.endswith(".md") and os.path.isfile(os.path.join(family_dir, name))
+        )
+        for name in names:
+            docs.append(cookbook_doc(f"{AGENT_COOKBOOK_DIR}/{name}"))
+
+    if len(docs) == 1 and len(docs[0].families) < 10:
+        fail(
+            f"{COOKBOOK} yielded {len(docs[0].families)} `##` sections, which is too few to "
+            "be right — the heading scan is reading the file wrongly."
+        )
+
+    anchors_by_path = {doc.path: doc.anchors for doc in docs}
+    for doc in docs:
+        check_cross_file_anchors(doc.path, doc.markdown, anchors_by_path)
+
+    return docs
 
 
 # ── Guide ────────────────────────────────────────────────────────────────────
@@ -426,14 +511,20 @@ def render() -> str:
                       "The rendered guide, if you would rather read it as a site than as markdown."))
     out.append("")
 
-    title, families = cookbook()
+    docs = cookbook()
+    index_doc, family_docs = docs[0], docs[1:]
     out += ["## Cookbook for coding agents", ""]
-    out.append(bullet(title, RAW + COOKBOOK,
+    out.append(bullet(index_doc.title, RAW + COOKBOOK,
                       "Read this before writing networking, session or shared-state code "
                       "against kuilt: what you are about to build, and the kuilt primitive "
-                      "that already does it. The links below are sections of this one file."))
-    for family, slug in families:
+                      "that already does it. The links below are sections of the agent "
+                      "cookbook index and its family files."))
+    for family, slug in index_doc.families:
         out.append(bullet(family, f"{RAW}{COOKBOOK}#{slug}"))
+    for doc in family_docs:
+        out.append(bullet(doc.title, RAW + doc.path))
+        for family, slug in doc.families:
+            out.append(bullet(family, f"{RAW}{doc.path}#{slug}"))
     out.append("")
 
     for section, topics in sections:
