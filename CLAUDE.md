@@ -255,6 +255,9 @@ passing by never having executed.
   one assertion of six and a reader scanning for "did it red" would have ticked it off. Where a suite
   already pairs subclasses over complementary configurations, **thread the budget through a new hook
   the way the existing hooks do** — hardcoding it collapses every subclass onto one configuration.
+- **A documented fixed width is enforced in the wire type's `init { require(...) }`, not in the
+  decoder** — see `.claude/rules/fabrics.md` (its exemplars `LogRecord`/`SpanRecord`/`MetricKey` live
+  in `:kuilt-otel`).
 - **After fixing anything, ask what the fix itself is now unpinned on.** The same defect recurs one
   level up, and on the `:kuilt-bolt` epic it landed *inside* the fix for the previous instance twice.
   Make it the explicit closing step of every fix and every review: name the property the fix now rests
@@ -297,6 +300,8 @@ passing by never having executed.
   loops, which switched to it in #383; `UnconfinedTestDispatcher(testScheduler)` is
   fine only where eager-inline ordering doesn't matter. See
   `docs/testing-coroutine-determinism.md`.
+  - **Multi-node / consensus tests run through the canonical simulation harness — never hand-roll
+    one** — see `.claude/rules/consensus.md` (cited from heddle and warp tests too).
   - **A seeded generator must impose its own total order on any collection it walks.** The sibling
     of the per-node seeded election RNG rule in `.claude/rules/consensus.md`, and the half that is
     invisible when it breaks: `Random(seed)` is
@@ -657,8 +662,11 @@ the rules below as the reference version rather than a local convention.
   fabric, a `Room`/reconnect entry point, a CRDT, a liveness detector, a consensus/`GameSession`
   entry point, a dealing/gossip primitive — anything a consumer would otherwise hand-roll.
 - **But the `description` is a fixed budget, so adding a trigger means removing one.** The index
-  table in the body is free — a skill body is lazy. The `description:` is **eager**, loaded on
-  every turn of every session and every subagent in every repo that vendors this file, and Claude
+  table in the body is free of *that* cap — a skill body is lazy — but it is not unbounded: it is
+  held to 8 KB (`awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' SKILL.md | wc -c`) on the same
+  evidence that motivated the split — a compact index routes, prose does not — and nothing in
+  `check` enforces that yet. The `description:` is **eager**, loaded on every turn of every
+  session and every subagent in every repo that vendors this file, and Claude
   Code truncates it at `skillListingMaxDescChars`, **default 1,536 characters**. Past that a phrase
   is not weak, it is **absent**: it never reaches the deciding model, so it routes nothing, and
   nothing reports it.
@@ -680,8 +688,9 @@ the rules below as the reference version rather than a local convention.
   this a guard rather than a note: every party was doing as instructed, and the instruction was
   wrong.
 
-  Explanatory prose is not a trigger and belongs in the body or the cookbook, both unbounded, and a
-  trigger only earns its place by displacing another. `verifySkillDescriptionBudget` (root build,
+  Explanatory prose is not a trigger and belongs in the body or the cookbook, both outside the eager
+  cap — the cookbook unbounded, the body under the 8 KB ceiling above — and a trigger only earns
+  its place by displacing another. `verifySkillDescriptionBudget` (root build,
   in `check` and in the `doc-citations` CI job, since a SKILL.md edit is docs-only) enforces the cap,
   and also rejects the `: ` and ` #` that silently break the unquoted plain scalar and stop the skill
   loading altogether. **That half has already happened too, and it is not a near-miss:** before

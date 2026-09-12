@@ -4,7 +4,7 @@ A session is what keeps a group of people together in one virtual room even when
 phone drops its signal, a laptop is closed mid-game, or a connection just goes quiet for a
 few seconds. This is where to look for getting a dropped player back into their seat, telling
 who is still actually around versus who is really gone, and deciding — without any server
-picking favourites — which device is in charge when a room full of peers first come together.
+picking favourites — which device is in charge when a room full of devices first come together.
 
 ## Rejoin & reconnect
 

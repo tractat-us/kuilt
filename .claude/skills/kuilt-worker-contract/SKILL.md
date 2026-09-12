@@ -9,7 +9,9 @@ description: The contract for a background worker dispatched into an isolated gi
 `isolation: "worktree"` subagent's starting context contains `~/.claude/CLAUDE.md`,
 `~/tractatus/CLAUDE.md` and the worktree's own `CLAUDE.md`, verbatim. A probe agent asked to answer
 *without reading any file* quoted back the `pkill` ban, JDK 21 and the SDKMAN rule. So **do not restate them in a brief** — a forty-line preamble of rules the worker already holds
-buries the handful that are genuinely new.
+buries the handful that are genuinely new. Family rules under `.claude/rules/` are NOT in that
+starting context — they arrive on the first read of a file under a family's modules — so read one
+file from your module before planning.
 
 Re-probe after a Claude Code upgrade, or for an agent type with a restricted `tools:` list. It costs
 one haiku agent and about thirty seconds.

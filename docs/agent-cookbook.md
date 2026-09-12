@@ -59,6 +59,8 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 
 ## Families
 
+The detail lives in seven family pages; each holds the sections named beside it.
+
 - [Fabrics](agent-cookbook/fabrics.md) — discovery, transports, the seam, payload limits, pumps, durable storage.
 - [Session](agent-cookbook/session.md) — rejoin & reconnect, liveness & presence, host election & the lobby.
 - [Replication](agent-cookbook/replication.md) — replicated data, scaling to many peers, dealing cards, dedup, archiving what the live replica forgets.

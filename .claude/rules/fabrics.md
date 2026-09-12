@@ -15,12 +15,12 @@ paths:
 ---
 # Fabrics
 
-Two devices that want to talk to each other need something to carry bytes between
-them — over the internet, a local network, or directly between two devices over
-the local radio — and a way to find each other before they can start. These
-modules are the several ways to move those bytes, the shared contract every one
-of them honors, the tests that keep a new one honest, and a place to keep bytes
-safely on disk between runs.
+Two devices that want to talk to each other need something to carry bytes
+between them — over the internet, a local network, or directly over the local
+radio — and a way to find each other before they can start. These modules are
+the several ways to move those bytes, the shared contract every one of them
+honors, the tests that keep a new one honest, and a place to keep bytes safely
+on disk between runs.
 
 What a consumer is about to hand-roll, and the primitive that already exists, with
 compiled snippets: `docs/agent-cookbook/fabrics.md`. This file holds only the

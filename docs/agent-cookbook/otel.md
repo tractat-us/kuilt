@@ -1,9 +1,9 @@
 # Otel
 
-Keeping a record of what an app did — its log lines, its traces, its counts — lives on
-the device itself first, so that record survives being offline and can be pulled off
-later, or sent on once the network returns. This page also covers telling a caller that
-will simply try again that something failed, without that failure being counted twice.
+A record of what an app did — its log lines, its traces, its counts — lives on the
+device itself first, so that record survives being offline and can be pulled off later,
+or sent on once the network returns. This page also covers reporting a failure on a path
+that is going to retry, without the same failure being logged once per attempt.
 
 ## Telemetry & log capture
 
