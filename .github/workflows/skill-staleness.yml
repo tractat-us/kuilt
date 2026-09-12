@@ -43,6 +43,23 @@ name: skill-staleness
 #   NOT `src/*Test`, NOT `src/commonSamples`, NOT `docs/`. A test-only or sample
 #   change is not a missing route, and a check that cries wolf gets ignored.
 #
+# WHAT THAT SCOPE DOES NOT WATCH
+#   Said out loud because it is invisible in a green run: a published module with
+#   NO `src/commonMain` contributes no watched path to EITHER arm, and is dropped
+#   with no message. For most such modules the omission is honest —
+#   `:kuilt-otel-log4j2`, `:kuilt-otel-logback`, `:kuilt-otel-sdk`,
+#   `:kuilt-warp-compiler` and `:kuilt-warp-ksp` are JVM/Android-only, so there is
+#   no common tree a consumer imports, and `:kuilt-bom` is a `java-platform` with
+#   no source at all.
+#
+#   `:kuilt-warp-runtime` is the exception, and the one worth knowing: published,
+#   `kuilt.kmp-library` so every target, and its entire public surface sits in
+#   `appleMain`, `jvmMain` and `wasmJsMain` rather than a common one — so not a
+#   line of it is watched by either arm. Pre-existing scope, recorded rather than
+#   changed here (#2794). Widening to every `src/*Main` is a separate decision,
+#   because it would also start watching the five modules above, where dropping
+#   them is correct.
+#
 # TWO ARMS, AND WHY THE SECOND IS NOT A FINER SIEVE OF THE FIRST
 #   The skill arm asks "does the always-loaded routing surface describe what we
 #   ship today?" and measures ONE file against EVERY published `commonMain`,
@@ -72,9 +89,20 @@ name: skill-staleness
 #   them. A second copy here could only ever be the stale one — and the family it
 #   forgot would be the family this job never checks.
 #
-#   The parse below is the same line-by-line walk that guard does, deliberately:
-#   if the two ever disagree about what a `paths:` block says, the family arm
-#   errors instead of quietly watching nothing.
+#   The parse below mirrors that guard's line-by-line walk — but it is NOT a
+#   parity check, and exactly one disagreement is caught: if this walk reads ZERO
+#   `"<dir>/**"` globs out of a file the guard guarantees has at least one, the
+#   family arm errors instead of quietly watching nothing.
+#
+#   A PARTIAL disagreement is silent, and that is a deliberate limit rather than
+#   an oversight. A glob this walk cannot read — one not ending `/**`, or a CRLF
+#   line whose trailing quote survives the strip — is dropped, and as long as one
+#   other glob survives, the family is still checked, just over fewer modules,
+#   with nothing saying so. That is tolerable because the broader guarantee comes
+#   from `verifyFamilyRules` upstream, not from here: it is wired into `check` →
+#   `build` → `ci-required`, it FAILS outright on a glob that does not end `/**`,
+#   and Kotlin's `readLines()` strips CRLF before it ever looks. Both shapes are
+#   blocked at merge time, so this job cannot be the first thing to meet one.
 
 on:
   schedule:
@@ -98,6 +126,7 @@ jobs:
       # Full history: both timestamps come from `git log`, and a shallow clone
       # would report the checkout's own commit for every path.
       - uses: actions/checkout@v7
+        id: checkout
         with:
           fetch-depth: 0
 
@@ -192,7 +221,7 @@ jobs:
           **This is a proxy, not a verdict.** The job cannot tell a new *primitive* from an internal refactor, so the answer may legitimately be \"nothing to route\" — in which case a one-line touch of the skill is the honest way to record that someone looked.
 
           What to check:
-          1. Did any of those modules gain a **public** primitive a consumer would otherwise hand-roll? If so it needs a STOP-list route, the \`description\` trigger phrases that reach it, and a section in that module's family page, \`docs/agent-cookbook/<family>.md\`, with a row pointing at it from the \`docs/agent-cookbook.md\` index.
+          1. Did any of those modules gain a **public** primitive a consumer would otherwise hand-roll? If so it needs a STOP-list route and the \`description\` trigger phrases that reach it — and that \`description\` is a FIXED budget, so adding a trigger there means removing one (#2662) — plus a section in that module's family page, \`docs/agent-cookbook/<family>.md\`, with a row pointing at it from the \`docs/agent-cookbook.md\` index.
           2. Did any **routed** symbol get renamed, made \`internal\`, or removed? A route naming the wrong symbol is worse than no route — it is confident, and the agent trusts it over its own reading.
           3. Does the frontmatter still parse? The \`description\` is one long unquoted YAML scalar, so a bare \`: \` inside it breaks the block and the skill stops loading (#2541).
 
@@ -227,6 +256,11 @@ jobs:
       # human fixes the break and closes by hand — the condition here is fully
       # decided by two git timestamps, so leaving the issue open after it clears
       # would be pure noise. Deterministic, so it cannot churn open/closed.
+      #
+      # Closing is one-way: the lookup above reads `--state open` only, so a later
+      # regression finds no match and opens a FRESH issue rather than reopening
+      # this one. That is what the close comment has to say (#2794) — a promise to
+      # reopen would send a reader watching a closed issue that will never move.
       - name: Close the tracking issue once the skill has caught up
         if: steps.check.outputs.stale == 'no'
         env:
@@ -240,7 +274,7 @@ jobs:
             --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
           if [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" \
-              --comment "The skill has been updated since published \`src/commonMain\` last moved — closing. Reopened automatically if it falls behind again. Run: ${RUN_URL}"
+              --comment "The skill has been updated since published \`src/commonMain\` last moved — closing. If it falls behind again this job opens a NEW issue under the same title rather than reopening this one, so there is nothing to watch here. Run: ${RUN_URL}"
           fi
 
       # ── the per-family arm ────────────────────────────────────────────────
@@ -248,7 +282,28 @@ jobs:
       # family, so splitting it would mean encoding seven verdicts (each with a
       # multi-line module list) through step outputs to gate three `if:`s that
       # would then each re-loop anyway.
+      #
+      # WHY THIS STEP IS GUARDED AND THE TWO ABOVE ARE NOT
+      #   This arm shares nothing with the skill arm but the checkout — it derives
+      #   its own module set, its own timestamps and its own verdicts, and reads no
+      #   `steps.check` output. So a `gh` hiccup in either unguarded issue step
+      #   above would abort the job and leave all seven families unchecked, which is
+      #   precisely the outcome this arm's own per-family failure accounting exists
+      #   to prevent (#2794). `!cancelled()` lets it run anyway; the job still reds,
+      #   because the failed step's own status stands.
+      #
+      #   The two skill-arm steps must NOT get the same treatment. Both are gated on
+      #   `steps.check.outputs.stale`, which only exists if `check` succeeded — so
+      #   on a `check` failure there is no verdict, and opening or closing a
+      #   tracking issue would be acting on one this job never reached. Skipping is
+      #   the correct behaviour there, not a gap.
+      #
+      #   Gated on the checkout too, rather than a bare `!cancelled()`: with no
+      #   working tree the `RULES` glob finds nothing and this step reports "the
+      #   families moved or were deleted" — a confident, specific, wrong diagnosis
+      #   of a broken runner.
       - name: Compare each family's docs against that family's own modules
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -308,19 +363,33 @@ jobs:
                 }
               ' "$RULE"
             )
+            # The ONLY disagreement with verifyFamilyRules this walk can detect. A
+            # PARTIAL one — a glob dropped here but read there — leaves at least one
+            # entry standing and passes silently; see the header for why that is left
+            # to the Gradle guard.
             if [ "${#DIRS[@]}" -eq 0 ]; then
-              echo "::error::$RULE: read zero \"<dir>/**\" globs out of its paths: frontmatter. verifyFamilyRules guarantees at least one, so this walk and that guard now disagree — and a family with no globs is a family this job silently stops watching."
+              echo "::error::$RULE: read zero \"<dir>/**\" globs out of its paths: frontmatter, and a family with no globs is a family this job silently stops watching. verifyFamilyRules guarantees at least one, so either this walk and that guard disagree about this file, or the file is broken in a way both would catch and this job — which runs on a schedule, outside ci-required — simply reached first. Run ./gradlew verifyFamilyRules to tell the two apart."
               exit 1
             fi
 
+            # The silent half of this arm's scope: a module with no `src/commonMain`
+            # is dropped HERE, per module, with no message — and for
+            # `:kuilt-warp-runtime` that drops a published, all-targets module whose
+            # whole public surface is per-target. See "WHAT THAT SCOPE DOES NOT
+            # WATCH" in the header; the skill arm's identical filter is just as blind.
             PATHS=()
             for d in "${DIRS[@]}"; do
               [ -d "$d/src/commonMain" ] && PATHS+=("$d/src/commonMain")
             done
             if [ "${#PATHS[@]}" -eq 0 ]; then
-              # Not an error: a family of JVM-only modules has nothing a consumer
-              # imports from `commonMain`, so it has nothing to be behind. Said out
-              # loud, because a silently-skipped family is what this job is for.
+              # Not an error, but note this fires only when EVERY module in the family
+              # was dropped above, and the reason differs per module — so it is not
+              # "a family of JVM-only modules" as such. It is honest for a family of
+              # genuinely JVM/Android-only modules, which have nothing a consumer
+              # imports from `commonMain`; it would NOT be for one holding a module
+              # like `:kuilt-warp-runtime`, per the note above. No family reaches it
+              # today. Said out loud either way, because a silently-skipped family is
+              # what this job is for.
               echo "$FAMILY: none of its ${#DIRS[@]} module(s) has a src/commonMain — nothing to watch, skipping."
               continue
             fi
@@ -355,7 +424,7 @@ jobs:
               echo "$FAMILY is current (its source is ${DAYS}d ahead of its docs; budget is ${MAX_DAYS}d)."
               if [ -n "$EXISTING" ]; then
                 gh issue close "$EXISTING" \
-                  --comment "\`$COOK\` or \`$RULE\` has been updated since this family's published \`src/commonMain\` last moved — closing. Reopened automatically if it falls behind again. Run: ${RUN_URL}" \
+                  --comment "\`$COOK\` or \`$RULE\` has been updated since this family's published \`src/commonMain\` last moved — closing. If it falls behind again this job opens a NEW issue under the same title rather than reopening this one, so there is nothing to watch here. Run: ${RUN_URL}" \
                   || { echo "::error::could not close #$EXISTING for $FAMILY"; FAILED=$((FAILED + 1)); }
               fi
               continue
