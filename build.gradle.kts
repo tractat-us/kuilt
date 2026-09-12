@@ -7137,6 +7137,298 @@ val verifyModuleTable by tasks.registering {
     }
 }
 
+// Guard: every `:kuilt-*` module is claimed by EXACTLY ONE `.claude/rules/<family>.md`, every glob
+// in a rule file names a real module directory, and no rule file carries a code block or a citation
+// marker that nothing checks (#2769).
+//
+// WHAT A RULE FILE IS. `.claude/rules/<family>.md` is path-scoped agent guidance: Claude Code reads
+// the frontmatter `paths:` globs and loads the file only for a session touching a matching file. The
+// families partition the library, so a module's conventions arrive with the module instead of being
+// read out of one root `CLAUDE.md` that has outgrown a useful prompt. That makes the `paths:` lists
+// a SECOND inventory of the module set, maintained by hand beside `settings.gradle.kts` — the exact
+// shape `verifyModuleTable` exists for, one directory over.
+//
+// WHY IT NEEDS A GUARD RATHER THAN A NOTE — both halves fail SILENTLY, in opposite ways.
+//
+// COVERAGE. A module claimed by no family gets no family rules at all, and a module claimed by two
+// gets whichever the harness resolves, with the loser's rules simply absent. Neither fails anything,
+// and neither is visible from inside either file: the verdict is a set difference between an
+// `include` list and several `paths:` lists in a different directory, and nobody diffs those by
+// hand. Adding a module and editing a rule file are two different PRs, so the drift opens at exactly
+// the review that could have closed it. The failure mode is also the worst kind for this surface —
+// the session that needed the rule never learns one existed, so nothing reports it.
+//
+// CONTENT. A rule file is markdown that neither doc guard handles properly. A citation marker
+// written here reaches `verifyDocCitations`' unscanned-citation check and reds the build — correctly,
+// but with a message about doc roots that sends the author at the wrong fix. A Kotlin/Java/Swift
+// FENCE is worse: `forbidUncitedDocCodeBlock` scans `docs/`, `Writerside/` and every `module.md`, so
+// it cannot see this directory at all, and a block here is uncited, unchecked, and read by an agent
+// as current API. Both are rejected outright rather than wired into those guards, because a rule file
+// has somewhere better to put a snippet: every one of them points at `docs/agent-cookbook/<family>.md`,
+// which both guards do reach. The language set is `forbidUncitedDocCodeBlock`'s, for its reason —
+// those are the languages whose content can drift against a compiled source here, where a `bash`
+// incantation has no declaration to cite. The fence walk carries that guard's parity assertion too,
+// and for the same reason: an odd number of delimiters makes the walk read later OPENING fences as
+// closing ones, which is a way for this check to go quiet rather than red.
+//
+// WHY A GLOB MUST NAME A MODULE DIRECTORY, which is stricter than "an existing directory" and is
+// what keeps a cached green honest. A guard's verdict may only be a function of its declared inputs
+// (see "Guard plumbing" above), and here those are the rule files plus the module set — the latter
+// declared as a property exactly the way `verifyModuleTable` declares `modulePaths`. A module's
+// directory cannot go away without its `include` going away too, since Gradle refuses to configure a
+// project whose directory does not exist, so "the directory this glob names still exists" is fully
+// determined by that property. Admit a glob over some OTHER directory and it stops being: deleting
+// `docs/agent-cookbook/` would change neither declared input, and this guard would hold a stale green
+// over a glob pointing at nothing. If a family ever needs to scope a non-module path, widen this
+// deliberately and declare the new directories as inputs in the SAME change — do not relax the check
+// and leave the input declaration behind.
+//
+// The `isDirectory` probe below feeds only the WORDING of a failure the module-set check has already
+// decided — "no such directory" versus "a directory, but not a module" — never the verdict. Tracing
+// a scanner's value to its use before writing down what its being wrong would cost is the discipline
+// the "Guard plumbing" note states; the cost here is a less precise message, not a wrong answer.
+val verifyFamilyRules by tasks.registering {
+    group = "verification"
+    description = "Fails if a :kuilt-* module is claimed by other than exactly one .claude/rules/ " +
+        "family file, or a rule file carries an unchecked citation marker or code fence (#2769)."
+    // Lazily resolved rather than a configuration-time `listFiles()`, for `moduleDocFiles()`'
+    // reason: the eager form records a filesystem probe as a configuration-cache input, so adding a
+    // rule file costs a full task-graph recalculation instead of an ordinary input change. A
+    // RELATIVE fingerprint over the tree covers both halves of what this task reads — which files
+    // exist, and what is in them — so a new rule file that double-claims a module cannot land on a
+    // cached green.
+    val ruleFiles = fileTree(rootDir) { include(".claude/rules/*.md") }
+    inputs.files(ruleFiles).withPropertyName("ruleFiles")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // The mutation-receipt probe (#2272) is excluded from the same property
+    // `kuilt-bom/build.gradle.kts` reads, never from a `:kuilt-zzz-probe` literal — one source for
+    // "is this the probe" means the two exemptions cannot drift, and the receipt stays a flag with
+    // no tracked edit to revert. It could not be claimed by a family even in principle:
+    // `settings.gradle.kts` repoints it at `build/guard-probe`, which is gitignored, so no
+    // `<module-dir>/**` glob names it and requiring one would make the documented receipt shape red
+    // this guard for a reason that says nothing about it.
+    val guardProbeModule = providers.gradleProperty("guardProbeModule").orNull
+    // Keyed by DIRECTORY, because that is what a glob names, and derived from `projectDir` rather
+    // than from the module path, because the two are not the same string for every module in this
+    // build (`:demo-web` lives at `demo/web`).
+    val requiredModules = subprojects
+        .filter { it.path.startsWith(":kuilt-") }
+        // `:kuilt-bom` is packaging — a `java-platform` with no source for a rule to govern.
+        .filterNot { it.path == ":kuilt-bom" || it.path == guardProbeModule }
+        .associate { it.projectDir.relativeTo(rootDir).invariantSeparatorsPath to it.path }
+        .toSortedMap()
+    // The other half of the verdict, per "Guard plumbing" above: without these, adding a module —
+    // or deleting the directory a glob names — would land on a cached green. `declarableDirs` is
+    // every subproject, not just the required set, so a family may legitimately scope `:examples`
+    // or a demo module without this guard demanding a rule file for it.
+    inputs.property("requiredModules", requiredModules)
+    val declarableDirs = subprojects
+        .map { it.projectDir.relativeTo(rootDir).invariantSeparatorsPath }
+        .sorted()
+    inputs.property("declarableDirs", declarableDirs)
+    val stamp = layout.buildDirectory.file("verification/verify-family-rules.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    val rootPath = rootDir
+    doLast {
+        val rules = ruleFiles.files.sortedBy { it.name }
+        if (rules.isEmpty()) {
+            error(
+                "No `.claude/rules/*.md` family rule files were found, so this guard cannot tell a " +
+                    "claimed module from an unclaimed one and every verdict it could give would be " +
+                    "meaningless (#2769). If the rules moved, point this task at their new home; if " +
+                    "they were deleted, delete this guard in the same change rather than leaving a " +
+                    "green that proves nothing.",
+            )
+        }
+        val failures = mutableListOf<String>()
+        // Directory → the rule file(s) whose globs claim it, in scan order.
+        val claims = linkedMapOf<String, MutableList<String>>()
+        val declarable = declarableDirs.toSet()
+        val citation = Regex("""<!--\s*(?:verbatim|condensed) from""")
+        val listItem = Regex("""^\s*-\s*(.+?)\s*$""")
+        val nextKey = Regex("""^[A-Za-z_][\w-]*:""")
+        // `forbidUncitedDocCodeBlock`'s set: the languages whose content can drift against a
+        // compiled source in this repo. A `bash` or `text` block has no declaration to cite and is
+        // not what this half of the guard is about.
+        val checkedLanguages = setOf("kotlin", "java", "swift")
+
+        rules.forEach { file ->
+            val rel = file.relativeTo(rootPath).invariantSeparatorsPath
+            val lines = file.readLines()
+
+            // ── content: nothing here may carry a citation or a code block ──
+            var open = false
+            lines.forEachIndexed { n, line ->
+                if (citation.containsMatchIn(line)) {
+                    failures += "$rel:${n + 1}: carries a `<!-- verbatim/condensed from … -->` " +
+                        "citation marker. `verifyDocCitations` does not scan this directory, so the " +
+                        "marker reaches its unscanned-citation check and reds the build with a " +
+                        "message about doc roots — a red whose shape misdescribes the cause.\n" +
+                        "  THE FIX is to move the quoted code and its marker to " +
+                        "`docs/agent-cookbook/<family>.md`, which both doc guards do scan, and " +
+                        "leave the rule file the prose."
+                }
+                val trimmed = line.trim()
+                if (!trimmed.startsWith("```")) return@forEachIndexed
+                if (open) {
+                    open = false
+                    return@forEachIndexed
+                }
+                open = true
+                val language = trimmed.removePrefix("```").trim().substringBefore(' ').lowercase()
+                if (language !in checkedLanguages) return@forEachIndexed
+                failures += "$rel:${n + 1}: opens a `$language` code fence. " +
+                    "`forbidUncitedDocCodeBlock` scans `docs/`, `Writerside/` and every " +
+                    "`module.md` — not this directory — so a block here is uncited, checked by " +
+                    "nobody, and read by an agent as current API.\n" +
+                    "  THE FIX is the same one: the compiled snippet belongs in " +
+                    "`docs/agent-cookbook/<family>.md` under a `verbatim from` marker, which every " +
+                    "rule file already points the reader at."
+            }
+            if (open) {
+                failures += "$rel: has an odd number of ``` fence delimiters, so the walk above " +
+                    "reads later OPENING fences as closing ones and stops seeing them. This check " +
+                    "would go quiet rather than red, which is the failure it exists to prevent.\n" +
+                    "  THE FIX is to close the block or delete the stray delimiter; the file is " +
+                    "mis-rendering either way."
+            }
+
+            // ── frontmatter: the `paths:` list is this file's half of the inventory ──
+            if (lines.firstOrNull()?.trimEnd() != "---") {
+                failures += "$rel: has no YAML frontmatter block, so it declares no `paths:` and " +
+                    "Claude Code loads it for no session at all — the file is inert.\n" +
+                    "  THE FIX is a `---`-delimited block with a `paths:` list naming this " +
+                    "family's module directories, following its siblings in `.claude/rules/`."
+                return@forEach
+            }
+            val closeOffset = lines.drop(1).indexOfFirst { it.trimEnd() == "---" }
+            if (closeOffset < 0) {
+                failures += "$rel: opens a `---` frontmatter block that is never closed, so the " +
+                    "whole file parses as frontmatter and neither its `paths:` nor its prose does " +
+                    "anything.\n  THE FIX is a closing `---` line."
+                return@forEach
+            }
+            val close = closeOffset + 1
+            val pathsAt = (1 until close).firstOrNull { lines[it].trimStart().startsWith("paths:") }
+            if (pathsAt == null) {
+                failures += "$rel: frontmatter has no `paths:` key, so the file is scoped to " +
+                    "nothing and is never loaded — and its family's modules are unclaimed, which " +
+                    "is reported separately below.\n  THE FIX is a `paths:` list of " +
+                    "`\"<module-dir>/**\"` entries."
+                return@forEach
+            }
+            // A FLOW sequence (`paths: ["a/**", "b/**"]`) is valid YAML the harness would read and
+            // this line-by-line walk would not — it would see an empty list and report the whole
+            // family unclaimed, a red that describes the wrong thing entirely. Say what is actually
+            // wrong instead, and keep the walk simple rather than growing half a YAML parser.
+            if (lines[pathsAt].trimEnd().removePrefix("paths:").isNotBlank()) {
+                failures += "$rel:${pathsAt + 1}: `paths:` carries its value on the key's own line. " +
+                    "This guard reads the list line-by-line, so it would see no entries at all and " +
+                    "report every module in the family as unclaimed — a red about the wrong thing.\n" +
+                    "  THE FIX is a block list, one `  - \"<module-dir>/**\"` per line, as its " +
+                    "siblings in `.claude/rules/` are written."
+                return@forEach
+            }
+            var claimed = 0
+            for (n in (pathsAt + 1) until close) {
+                val raw = lines[n]
+                val trimmed = raw.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
+                if (nextKey.containsMatchIn(raw)) break // a new top-level key ends the list
+                val item = listItem.find(raw)?.groupValues?.get(1)
+                if (item == null) {
+                    failures += "$rel:${n + 1}: is inside the `paths:` list but is not a `- \"…\"` " +
+                        "entry, so this guard cannot read it and neither, reliably, can the " +
+                        "harness.\n  THE FIX is one glob per line, as `  - \"<module-dir>/**\"`."
+                    continue
+                }
+                val glob = item.removeSurrounding("\"").removeSurrounding("'")
+                if (!glob.endsWith("/**")) {
+                    failures += "$rel:${n + 1}: glob `$glob` is not of the form " +
+                        "`\"<module-dir>/**\"`. This guard reads these globs as the family's module " +
+                        "inventory, and a shape it cannot read is a module it cannot see claimed.\n" +
+                        "  THE FIX is to spell the whole module directory, `\"<module-dir>/**\"`."
+                    continue
+                }
+                val dir = glob.removeSuffix("/**")
+                if (dir !in declarable) {
+                    // This probe refines the MESSAGE only; the verdict was decided by `declarable`.
+                    val detail = if (rootPath.resolve(dir).isDirectory) {
+                        "names `$dir`, which exists but is not a module in this build"
+                    } else {
+                        "names `$dir`, which is not a directory in this repo"
+                    }
+                    failures += "$rel:${n + 1}: glob $detail. A glob over a path this build does " +
+                        "not know is scoped to nothing once the path moves, and nothing would red " +
+                        "when it does — the module set is a declared input of this task, an " +
+                        "arbitrary directory is not.\n" +
+                        "  THE FIX is to name a module directory. If a family genuinely needs to " +
+                        "scope a non-module path, widen this guard and declare that directory as " +
+                        "an input in the same change."
+                    continue
+                }
+                claims.getOrPut(dir) { mutableListOf() } += rel
+                claimed++
+            }
+            if (claimed == 0) {
+                failures += "$rel: `paths:` declares no usable glob, so the file is loaded for no " +
+                    "session.\n  THE FIX is at least one `\"<module-dir>/**\"` entry."
+            }
+        }
+
+        val duplicated = claims.filterValues { it.size > 1 }
+        if (duplicated.isNotEmpty()) {
+            failures += duplicated.entries.sortedBy { it.key }.map { (dir, files) ->
+                // One file listing the same glob twice is a different fault from two families
+                // claiming the same module, and "claimed by 2 rule files — session.md, session.md"
+                // reads as a bug in this guard rather than in the file. Same red, honest shape.
+                val distinct = files.distinct().sorted()
+                if (distinct.size == 1) {
+                    "${distinct.single()} lists `$dir` ${files.size} times in one `paths:` block. " +
+                        "The duplicate claims nothing extra and hides whether a second family was " +
+                        "meant to own the module.\n  THE FIX is to delete the repeated line."
+                } else {
+                    "`$dir` is claimed by ${distinct.size} rule files — ${distinct.joinToString(", ")}. " +
+                        "A session editing that module gets whichever the harness resolves, and the " +
+                        "other file's rules are simply absent with nothing reporting it.\n" +
+                        "  THE FIX is to delete the glob from all but the one family that owns the " +
+                        "module, and if that is genuinely ambiguous, to say so in both files' prose."
+                }
+            }
+        }
+        val unclaimed = requiredModules.filterKeys { it !in claims }
+        if (unclaimed.isNotEmpty()) {
+            // The family names are READ from the files, never listed here, for the reason
+            // `verifyModuleTable` reads its subsection names out of the table: a hand-kept
+            // inventory inside the guard is the same defect the guard exists to end.
+            val families = rules.map { it.name.removeSuffix(".md") }.sorted()
+            failures += unclaimed.entries.sortedBy { it.key }.map { (dir, path) ->
+                "$path (`$dir/`) is in `settings.gradle.kts` but no `.claude/rules/*.md` `paths:` " +
+                    "list claims it, so a session editing it is handed no family rules at all — " +
+                    "and never learns there were any.\n" +
+                    "  THE FIX is one `  - \"$dir/**\"` line in whichever family owns it (" +
+                    families.joinToString(" / ") + "), added in the same PR as the module. There " +
+                    "is no allowlist here, deliberately — the families were complete when this " +
+                    "guard landed."
+            }
+        }
+
+        if (failures.isNotEmpty()) {
+            error(
+                "Agent-facing family rule files are inconsistent with this build (#2769):\n\n" +
+                    failures.joinToString("\n\n") + "\n",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "ok — ${requiredModules.size} module(s) each claimed by exactly one of " +
+                "${rules.size} family rule file(s)\n",
+        )
+    }
+}
+
 // Walks Kotlin type declarations and their SUPERTYPE LISTS, for `verifySeamHarnessCoverage` below.
 // Same `object` rationale as `KotlinCodeScanner`, whose output it consumes: the caller invokes it
 // from inside `doLast`, where a script-level function reference would capture the unserializable
@@ -8228,6 +8520,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("verifySampleLinks"))
         dependsOn(rootProject.tasks.named("verifySamplesAreRun"))
         dependsOn(rootProject.tasks.named("verifyModuleTable"))
+        dependsOn(rootProject.tasks.named("verifyFamilyRules"))
         dependsOn(rootProject.tasks.named("verifySkillDescriptionBudget"))
         dependsOn(rootProject.tasks.named("verifySeamHarnessCoverage"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
