@@ -11,7 +11,7 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
 /**
- * Samples for the liveness API used by the agent cookbook (`docs/agent-cookbook.md`).
+ * Samples for the liveness API used by the agent cookbook (`docs/agent-cookbook/session.md`).
  *
  * Every function here is compiled as part of commonTest so a typo or API change
  * breaks the build, not silently produces stale documentation.
