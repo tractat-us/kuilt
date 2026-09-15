@@ -352,6 +352,31 @@ public class SeamRoomFactory(
 private const val MEMBERSHIP_EVENT_REPLAY = 64
 
 /**
+ * One admitted member's held frames, behind [SeamRoom.incomingFrom] (#2802).
+ *
+ * Every field is read and written under the owning room's lock. [frames] is a [Channel], so the
+ * consumer's receive needs no lock; only the room's offer and claim do.
+ */
+private class MemberInbox {
+    var frames: Channel<RoomFrame> = Channel(MEMBER_INBOX_CAPACITY)
+
+    /** Set by the first [SeamRoom.incomingFrom] for this admission. */
+    var claimed: Boolean = false
+
+    /** The inbox overflowed before anyone claimed it; nothing is held until a claim. */
+    var released: Boolean = false
+
+    /** Frames from this member that were routed but are not in [frames]. */
+    var dropped: Long = 0
+
+    /** A claimed overflow logs once per admission, not once per dropped frame. */
+    var overflowLogged: Boolean = false
+}
+
+/** Why [SeamRoom]'s offer to a member inbox did not hold a frame — each case logs differently. */
+private enum class InboxOverflow { ClaimedCollectorFellBehind, ReleasedUnclaimed }
+
+/**
  * Capacity of **one recipient's** relay lane (#1994; per-recipient since #2048). Deep enough to hold
  * several `Quilter` deltas in flight for that recipient, shallow enough that a wedged link cannot
  * accumulate unboundedly — past which [kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST] sheds
