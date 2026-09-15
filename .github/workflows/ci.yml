@@ -236,6 +236,12 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # Explicit, because the action's default is `tools platform-tools` and
+          # Google has removed the obsolete `tools` package — superseded by
+          # cmdline-tools — from the SDK repository. sdkmanager exits 1 on it, and
+          # this step failing skips every step after it.
+          packages: platform-tools
 
       - name: Start jstack heartbeat
         # Background watchdog: dump thread stacks for every live GradleWorkerMain /
@@ -554,6 +560,12 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # Explicit, because the action's default is `tools platform-tools` and
+          # Google has removed the obsolete `tools` package — superseded by
+          # cmdline-tools — from the SDK repository. sdkmanager exits 1 on it, and
+          # this step failing skips every step after it.
+          packages: platform-tools
 
       - name: Dokka module-doc build (parses every module.md + KDoc)
         # Aggregate per-module task: runs :<module>:dokkaGenerateModuleHtml for every
@@ -600,6 +612,12 @@ jobs:
       # Configuring the Android library modules needs an SDK even though nothing is built.
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # Explicit, because the action's default is `tools platform-tools` and
+          # Google has removed the obsolete `tools` package — superseded by
+          # cmdline-tools — from the SDK repository. sdkmanager exits 1 on it, and
+          # this step failing skips every step after it.
+          packages: platform-tools
 
       # Into the checkout root: the artifacts carry `<module>/build/test-results/<task>/…`, and the
       # two jobs' task directories are disjoint, so they merge rather than collide.
@@ -693,6 +711,12 @@ jobs:
       # Configuring the Android library modules needs an SDK even though nothing is built.
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # Explicit, because the action's default is `tools platform-tools` and
+          # Google has removed the obsolete `tools` package — superseded by
+          # cmdline-tools — from the SDK repository. sdkmanager exits 1 on it, and
+          # this step failing skips every step after it.
+          packages: platform-tools
 
       - name: Verify doc citations, @sample links, the module table, seam harness coverage and skill budgets
         run: >
@@ -1064,6 +1088,12 @@ jobs:
       # Configuring :kuilt-nw's Android library variant needs an SDK.
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # Explicit, because the action's default is `tools platform-tools` and
+          # Google has removed the obsolete `tools` package — superseded by
+          # cmdline-tools — from the SDK repository. sdkmanager exits 1 on it, and
+          # this step failing skips every step after it.
+          packages: platform-tools
 
       - name: Run :kuilt-nw concurrency probes (isolated runner, NON-BLOCKING)
         # -Pconcurrency.stress.tests=true drops the build-defined `*ConcurrencyTest`
