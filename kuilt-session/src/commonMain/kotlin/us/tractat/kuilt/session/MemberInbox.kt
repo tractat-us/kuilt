@@ -4,10 +4,11 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.receiveAsFlow
 import us.tractat.kuilt.core.PeerId
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.session.MemberInbox")
@@ -15,57 +16,99 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.session.MemberInbox"
 /**
  * One member admission's frames, held for [Room.incomingFrom] (#2802).
  *
- * **Invariant: every frame [offer]ed is either delivered to the claimant, in order, or the claimant's
- * flow ends saying why** — completion when the admission ends ([close]), a [MemberInboxException] when
- * frames were lost. Nothing here loses a frame without the reader being told.
+ * **Invariant: every frame [offer]ed is handed to a collection of this inbox exactly once, in arrival
+ * order, or the stream ends saying why** — completion when the admission ends ([close]), a
+ * [MemberInboxException] when frames were lost. A frame leaves this inbox only at the instant it is
+ * handed to a collector.
  *
- * The owning room creates an inbox in the critical section that admits the member and [close]s it in
- * the one that evicts it; that pairing — not anything in this class — is what makes a frame's inbox
- * exist before the frame can be routed. Everything else is here, under this inbox's own [lock], which
- * is taken either on its own or inside the room's lock, never the other way round.
+ * ## Why a deque and a wakeup, not a Channel
+ *
+ * A `Channel` receive can take a frame and then be cancelled before anyone sees it, and a `flow {}`
+ * builder checks for cancellation after the receive and before the downstream sees the value — two windows
+ * in which a frame silently left the inbox, so a re-collection skipped it. Here a frame stays in [held]
+ * until a collection removes it under [lock] and hands it to the collector with no suspension point in
+ * between, and the flow implements [Flow] directly, so no check of this class's own sits between the two.
+ * Cancellation is observed before a frame is taken, never after.
+ *
+ * What the consumer's own pipeline does with a frame once it has it is the consumer's: at-most-once, as
+ * for any Flow. That boundary is also why a frame is not put back when `emit` throws — `take(n)` aborts by
+ * throwing from `emit` *after* the frame was delivered, so a put-back would deliver it twice.
+ *
+ * ## Locking
+ *
+ * Every decision is made under [lock]; every wakeup is sent, and every frame handed over, after releasing
+ * it. A collector resumed in place — on `Dispatchers.Unconfined`, say, going straight on to call back into
+ * the room — therefore never runs while the waking thread holds this lock. The owning room keeps the same
+ * rule for its own lock: it removes an inbox under that lock and [close]s it after releasing it.
  */
 internal class MemberInbox(
     private val member: PeerId,
     private val capacity: Int,
 ) {
-    private enum class State { Holding, Released, Claimed, Closed }
+    private enum class State { Holding, Released, Claimed, Ended }
+
+    private enum class Offered { Held, Discarded, Released }
+
+    private sealed interface Step {
+        class Deliver(val frame: RoomFrame) : Step
+
+        data object Wait : Step
+
+        class End(val failure: MemberInboxException?) : Step
+    }
 
     private val lock = reentrantLock()
-    private val frames = Channel<RoomFrame>(capacity)
 
     // All guarded by [lock].
+    private val held = ArrayDeque<RoomFrame>()
     private var state = State.Holding
     private var dropped = 0L
     private var collecting = false
+    private var endFailure: MemberInboxException? = null
     private var releasedFailure: MemberInboxException.ReleasedBeforeClaim? = null
 
     /**
-     * Hold [frame] for the claimant. Never suspends — the room routes from its main loop — so a full
-     * inbox is resolved here rather than waited out: an unclaimed one releases, a claimed one fails.
+     * Wakes a parked collection. Conflated, so a wakeup sent while nobody waits is kept for the next wait
+     * — none is lost — and many collapse into one. Only ever touched outside [lock].
+     */
+    private val wakeup = Channel<Unit>(Channel.CONFLATED)
+
+    /**
+     * Hold [frame] for the claimant. Never suspends — the room routes from its main loop — so a full inbox
+     * is resolved here rather than waited out: an unclaimed one releases, a claimed one ends in failure.
      */
     fun offer(frame: RoomFrame) {
-        val released = lock.withLock {
-            if (state == State.Released || state == State.Closed) {
-                dropped++
-                return
+        val offered = lock.withLock {
+            when {
+                state == State.Released || state == State.Ended -> {
+                    dropped++
+                    Offered.Discarded
+                }
+                held.size < capacity -> {
+                    held.addLast(frame)
+                    Offered.Held
+                }
+                state == State.Claimed -> {
+                    // A full inbox behind: end the stream after what is held rather than make routing wait.
+                    dropped++
+                    state = State.Ended
+                    endFailure = MemberInboxException.CollectorFellBehind(member, capacity)
+                    Offered.Held
+                }
+                else -> {
+                    // Nobody claimed this admission within a full inbox, so its consumer reads `incoming`
+                    // only. Release the memory; a late claim is told exactly how much it missed.
+                    dropped += held.size + 1L
+                    held.clear()
+                    state = State.Released
+                    Offered.Released
+                }
             }
-            if (frames.trySend(frame).isSuccess) return
-            dropped++
-            if (state == State.Claimed) {
-                // A cause, not a cancel: the collector drains what is held, then sees why it stopped.
-                frames.close(MemberInboxException.CollectorFellBehind(member, capacity))
-                state = State.Closed
-                return
-            }
-            // Nobody claimed this admission within a full inbox, so its consumer reads `incoming`
-            // only. Release the memory; a late claim is told exactly how much it missed.
-            state = State.Released
-            dropped += capacity
-            frames.cancel()
-            true
         }
-        if (released) {
-            logger.debug { "room.inbox.released member=${member.value} — not claimed within $capacity frames" }
+        when (offered) {
+            Offered.Held -> wakeup.trySend(Unit)
+            Offered.Released -> logger.debug { "room.inbox.released member=${member.value} — not claimed within $capacity frames" }
+            Offered.Discarded -> Unit
         }
     }
 
@@ -78,40 +121,62 @@ internal class MemberInbox(
             when (state) {
                 State.Holding -> state = State.Claimed
                 State.Released -> releasedFailure = releasedFailure ?: releasedBeforeClaim()
-                State.Claimed, State.Closed -> Unit
+                State.Claimed, State.Ended -> Unit
             }
             releasedFailure
         }
-        return if (failure != null) failingInboxFlow(failure) else collectOnce()
+        return if (failure != null) failingInboxFlow(failure) else frames
     }
 
-    /** End this admission: a collector drains what is held and completes. Idempotent. */
+    /** End this admission: a collection delivers what is held and then completes. Idempotent. */
     fun close() {
         lock.withLock {
-            // A released inbox's channel is cancelled, not closed; keep its failure for any claim so a
-            // reader is told what it missed rather than handed a cancellation.
             if (state == State.Released) releasedFailure = releasedFailure ?: releasedBeforeClaim()
-            state = State.Closed
-            // A no-op on a channel already closed with a CollectorFellBehind cause, which is kept.
-            frames.close()
+            // An overflow that already ended the stream keeps its CollectorFellBehind.
+            state = State.Ended
         }
+        wakeup.trySend(Unit)
     }
 
     private fun releasedBeforeClaim() = MemberInboxException.ReleasedBeforeClaim(member, dropped)
 
-    private fun collectOnce(): Flow<RoomFrame> =
-        flow {
-            lock.withLock {
-                check(!collecting) {
-                    "incomingFrom(${member.value}) is already being collected — it is single-collection; " +
-                        "collect it from one coroutine at a time"
-                }
-                collecting = true
+    private fun nextStep(): Step =
+        lock.withLock {
+            val frame = held.removeFirstOrNull()
+            when {
+                frame != null -> Step.Deliver(frame)
+                state == State.Ended -> Step.End(endFailure)
+                else -> Step.Wait
             }
-            try {
-                emitAll(frames.receiveAsFlow())
-            } finally {
-                lock.withLock { collecting = false }
+        }
+
+    private val frames: Flow<RoomFrame> =
+        object : Flow<RoomFrame> {
+            override suspend fun collect(collector: FlowCollector<RoomFrame>) {
+                lock.withLock {
+                    check(!collecting) {
+                        "incomingFrom(${member.value}) is already being collected — it is single-collection; " +
+                            "collect it from one coroutine at a time"
+                    }
+                    collecting = true
+                }
+                try {
+                    while (true) {
+                        // Before taking a frame, never between taking and handing it over: a cancelled
+                        // collection stops here with the frame still held for the next one.
+                        currentCoroutineContext().ensureActive()
+                        when (val step = nextStep()) {
+                            is Step.Deliver -> collector.emit(step.frame)
+                            Step.Wait -> wakeup.receive()
+                            is Step.End -> {
+                                step.failure?.let { throw it }
+                                return
+                            }
+                        }
+                    }
+                } finally {
+                    lock.withLock { collecting = false }
+                }
             }
         }
 }
