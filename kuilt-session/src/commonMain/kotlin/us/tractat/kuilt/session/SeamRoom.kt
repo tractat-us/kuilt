@@ -794,10 +794,11 @@ internal class SeamRoom(
     /**
      * Each admitted member's held frames, behind [incomingFrom] (#2802).
      *
-     * An entry is created in [addToRoster] and removed in [removeFromRoster], each in the critical
-     * section that changes [admittedById], so `memberInboxes.keys == admittedById.keys` whenever
-     * [lock] is free. That is the whole guarantee: routing is gated on [isAdmittedPeer], so no frame
-     * from a member can be routed before its inbox exists. Guarded by [lock].
+     * An entry is created in [addToRoster] and removed — and its [MemberInbox] closed — in
+     * [removeFromRoster], each in the critical section that changes [admittedById]. Routing is gated on
+     * [isAdmittedPeer], so no frame from a member can be routed before its inbox exists; that pairing is
+     * the whole "held from admission" guarantee. [leave] closes and clears every entry once the room is
+     * terminal. Guarded by [lock].
      */
     private val memberInboxes = HashMap<PeerId, MemberInbox>()
 
@@ -3722,6 +3723,9 @@ internal class SeamRoom(
                 .also { admitLanes.clear(); relayLanes.clear() }
         }
         lanesToDrain.forEach { it.close() }
+        // A terminal room has ended every admission: complete each member's incomingFrom reader.
+        // `closed` is already set, so addToRoster cannot open another inbox behind this.
+        lock.withLock { memberInboxes.values.toList().also { memberInboxes.clear() } }.forEach { it.close() }
         jobsToCancel.forEach { it.cancel() }
         detectorJobsToCancel.forEach { it.cancel() }
         seam.close(
