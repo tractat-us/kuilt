@@ -75,9 +75,37 @@ public interface Room {
      * Stream of [RoomFrame]s received from admitted members.
      *
      * Frames from unadmitted peers are silently dropped.
-     * Hot; backed by a shared flow. Late collectors miss historical frames.
+     * Hot; backed by a shared flow. Late collectors miss historical frames — including an admitted
+     * member's first frames on a host room handed to a `host { onRoom }` consumer, which is started
+     * and admitting before that consumer runs. A consumer that must not lose them reads
+     * [incomingFrom] instead.
      */
     public val incoming: Flow<RoomFrame>
+
+    /**
+     * The frames of one admitted [member], **held from the instant it is admitted** — a collector
+     * that starts after admission, even after the member's first frames arrived, still receives
+     * them, in arrival order.
+     *
+     * This is the per-member reader [incoming] cannot be: a room admits and routes before a
+     * `host { onRoom }` consumer runs, and a consumer that collects each member in its own coroutine
+     * subscribes after that member's first frame by construction.
+     *
+     * - **Bounded.** Up to [MEMBER_INBOX_CAPACITY] unread frames are held. While nothing has called
+     *   [incomingFrom] for the member, the first overflow releases what is held and stops holding —
+     *   a consumer that reads only [incoming] pays for at most one inbox's worth per member. Once
+     *   claimed, an overflow drops the newest frame, as [incoming] does for a subscriber that falls
+     *   behind; both cases are logged.
+     * - **Single-collection.** The flow is a competing receiver: collect it from one coroutine at a
+     *   time. Sequential re-collection resumes where the last one stopped.
+     * - **Bound to one admission.** A re-admit of a still-admitted member keeps its inbox; a member
+     *   that leaves and is admitted again gets a fresh one. For a peer that is not admitted when
+     *   this is called, the flow never emits.
+     * - The flow never completes on its own, matching [incoming].
+     *
+     * A frame is delivered both here and on [incoming]; a consumer reads one or the other.
+     */
+    public fun incomingFrom(member: PeerId): Flow<RoomFrame>
 
     /**
      * Host-verified principals of currently-linked peers, keyed by the [PeerId] each was verified
