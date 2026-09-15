@@ -3337,6 +3337,10 @@ internal class SeamRoom(
         if (closed) return
         val isReadmit = admittedById.containsKey(member.id)
         admittedById[member.id] = member
+        // Same critical section as the admission itself, so the inbox exists before any frame from
+        // this member can pass the isAdmittedPeer gate — incomingFrom holds from admission (#2802).
+        // A re-admit keeps the inbox it already has.
+        memberInboxes.getOrPut(member.id) { MemberInbox() }
         _roster.update { current -> current.filterNot { it.id == member.id }.toSet() + member }
         _rosterPeers.update { current -> current + member.id }
         if (!isReadmit) {

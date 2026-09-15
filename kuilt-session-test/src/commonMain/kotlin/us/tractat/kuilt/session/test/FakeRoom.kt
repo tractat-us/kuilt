@@ -373,7 +373,9 @@ public class FakeRoom(
      * ```
      */
     public suspend fun deliver(from: PeerId, payload: ByteArray) {
-        incomingChannel.send(RoomFrame(sender = from, payload = payload))
+        val frame = RoomFrame(sender = from, payload = payload)
+        incomingChannel.send(frame)
+        inboxFor(from).trySend(frame)
     }
 
     /**

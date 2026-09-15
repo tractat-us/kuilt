@@ -478,6 +478,49 @@ public abstract class RoomConformanceSuite {
             hostRoom.leave()
         }
 
+    // ── (4a) incomingFrom holds an admitted member's frames from admission (#2802) ──
+
+    /**
+     * Frames an admitted member sends before anything collects [Room.incomingFrom] still reach the
+     * collector that starts afterwards, in arrival order.
+     *
+     * The ordering is **forced**, not raced. A probe on [Room.incoming] counts both frames being
+     * routed on the host and is cancelled before [Room.incomingFrom] is collected, so by collection
+     * time the frames have already passed through `incoming`. That is the `host { onRoom }` shape: a
+     * room admits and routes before its consumer runs. The probe count is asserted, because a probe
+     * that saw nothing would make the held-frames assertion pass for a room that simply had not
+     * routed yet.
+     */
+    @Test
+    public fun incomingFromHoldsFramesAMemberSentBeforeCollection(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            var routed = 0
+            val probe = launch(start = CoroutineStart.UNDISPATCHED) {
+                hostRoom.incoming.collect { if (it.sender == joinerId) routed++ }
+            }
+            joinerRoom.broadcast("first".encodeToByteArray())
+            joinerRoom.broadcast("second".encodeToByteArray())
+            advanceTimeBy(100L)
+            probe.cancel()
+
+            val held = hostRoom.awaitHeld(joinerId, count = 2, expected = "the joiner's two frames")
+            assertAll(
+                { assertEquals(2, routed, "rig: both frames must have been routed on the host before incomingFrom was collected") },
+                { assertEquals(listOf("first", "second"), held.map { it.payload.decodeToString() }, "held frames, in arrival order") },
+                { assertTrue(held.all { it.sender == joinerId }, "every held frame is from the member whose inbox was read") },
+            )
+
+            joinerRoom.leave()
+            hostRoom.leave()
+        }
+
     // ── (5) leave(Normal) → Left event; roster shrinks ──────────────────────
 
     @Test
