@@ -513,10 +513,12 @@ public abstract class RoomConformanceSuite {
             joinerRoom.broadcast("second".encodeToByteArray())
             advanceTimeBy(100L)
             probe.cancel()
+            // Asserted before the held-frames wait, which throws on its own budget: a rig that never
+            // fired and a frame that was never held must not share one red.
+            assertEquals(2, routed, "rig: both frames must have been routed on the host before incomingFrom was collected")
 
             val held = hostRoom.awaitHeld(joinerId, count = 2, expected = "the joiner's two frames")
             assertAll(
-                { assertEquals(2, routed, "rig: both frames must have been routed on the host before incomingFrom was collected") },
                 { assertEquals(listOf("first", "second"), held.map { it.payload.decodeToString() }, "held frames, in arrival order") },
                 { assertTrue(held.all { it.sender == joinerId }, "every held frame is from the member whose inbox was read") },
             )
