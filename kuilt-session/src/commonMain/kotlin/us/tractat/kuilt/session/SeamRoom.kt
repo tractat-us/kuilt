@@ -779,8 +779,18 @@ internal class SeamRoom(
      */
     private val heartbeatSendersSeen = mutableSetOf<PeerId>()
 
-    private val _incoming = MutableSharedFlow<RoomFrame>(extraBufferCapacity = 64)
+    private val _incoming = MutableSharedFlow<RoomFrame>(extraBufferCapacity = MEMBER_INBOX_CAPACITY)
     override val incoming: Flow<RoomFrame> = _incoming.asSharedFlow()
+
+    /**
+     * Each admitted member's held frames, behind [incomingFrom] (#2802).
+     *
+     * An entry is created in [addToRoster] and removed in [removeFromRoster], each in the critical
+     * section that changes [admittedById], so `memberInboxes.keys == admittedById.keys` whenever
+     * [lock] is free. That is the whole guarantee: routing is gated on [isAdmittedPeer], so no frame
+     * from a member can be routed before its inbox exists. Guarded by [lock].
+     */
+    private val memberInboxes = HashMap<PeerId, MemberInbox>()
 
     /**
      * Broadcast bus for raw incoming [Swatch]es. The main loop fans every received

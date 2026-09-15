@@ -154,6 +154,19 @@ public class FakeRoom(
     )
     override val incoming: Flow<RoomFrame> = incomingChannel.receiveAsFlow()
 
+    /**
+     * Per-member inboxes behind [incomingFrom], fed by [deliver]. A fake has no admission step, so an
+     * inbox is created on first use from either side, which holds every frame a test delivers — the
+     * same buffering divergence [incoming] already makes. Bounded like the real room: an overflow
+     * drops the newest frame rather than suspending [deliver] for a test that reads only [incoming].
+     */
+    private val memberInboxes = mutableMapOf<PeerId, Channel<RoomFrame>>()
+
+    private fun inboxFor(member: PeerId): Channel<RoomFrame> =
+        memberInboxes.getOrPut(member) { Channel(MEMBER_INBOX_CAPACITY) }
+
+    override fun incomingFrom(member: PeerId): Flow<RoomFrame> = inboxFor(member).receiveAsFlow()
+
     private val _roomId = MutableStateFlow(initialRoomId)
     override val roomId: StateFlow<RoomId?> = _roomId.asStateFlow()
 
