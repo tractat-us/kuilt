@@ -30,6 +30,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
+import us.tractat.kuilt.session.MemberInboxException
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.Room
@@ -619,7 +620,7 @@ public abstract class RoomConformanceSuite {
             assertAll(
                 { assertIs<MemberInboxException.ReleasedBeforeClaim>(failure, "a late claim must fail, not hand back a healthy-looking stream") },
                 { assertEquals(memberInboxCapacity + 1L, (failure as? MemberInboxException.ReleasedBeforeClaim)?.dropped, "dropped counts every frame routed before the claim") },
-                { assertEquals(emptyList(), got.map { it.payload.decodeToString() }, "a failed claim delivers nothing, not even a frame sent after it") },
+                { assertEquals(emptyList<String>(), got.map { it.payload.decodeToString() }, "a failed claim delivers nothing, not even a frame sent after it") },
             )
 
             joinerRoom.leave()
