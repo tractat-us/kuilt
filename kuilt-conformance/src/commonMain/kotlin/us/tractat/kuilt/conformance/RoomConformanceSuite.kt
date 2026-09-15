@@ -1,8 +1,12 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.Runnable
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
@@ -829,6 +833,81 @@ public abstract class RoomConformanceSuite {
             )
 
             joinerRoom.leave()
+        }
+
+    // ── (4k) a collection cancelled between taking a frame and handing it over loses nothing (#2802) ──
+
+    /**
+     * Runs dispatched tasks only when told to, one at a time — so a property can place a cancellation
+     * between two steps of a reader, a window the test scheduler cannot open because it runs everything that
+     * is ready before returning.
+     */
+    private class StepDispatcher : CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            tasks.addLast(block)
+        }
+
+        val pending: Int get() = tasks.size
+
+        fun step(): Boolean {
+            val task = tasks.removeFirstOrNull() ?: return false
+            task.run()
+            return true
+        }
+
+        fun drain() {
+            while (step()) Unit
+        }
+    }
+
+    /**
+     * (4i) cancels the reader before it resumes, so it cannot see a room that suspends *between* taking a
+     * frame and handing it over — the second window in which a frame can leave an inbox unseen. Here the
+     * reader runs on a [StepDispatcher]. The frame is routed on the test scheduler, which queues exactly one
+     * task for the parked reader; the reader runs exactly that task and is cancelled wherever it left off.
+     * Across that collection and the next, both frames must arrive exactly once, in order: delivered by the
+     * cancelled collection, or left for the next one — never lost.
+     */
+    @Test
+    public fun incomingFromCollectionCancelledBetweenTakeAndHandOverLosesNothing(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val steps = StepDispatcher()
+            val delivered = mutableListOf<String>()
+            val reader = CoroutineScope(steps + Job()).launch {
+                hostRoom.incomingFrom(joinerId).collect { delivered += it.payload.decodeToString() }
+            }
+            steps.drain() // parked, waiting for a frame
+
+            joinerRoom.broadcast("f-0".encodeToByteArray())
+            advanceTimeBy(100L) // routed on the test scheduler; the parked reader's resumption queues on `steps`
+            val wakeTasks = steps.pending
+            steps.step() // the reader runs exactly the step that takes the frame...
+            reader.cancel() // ...and is cancelled wherever that step left it
+            steps.drain()
+            joinerRoom.broadcast("f-1".encodeToByteArray())
+            advanceTimeBy(100L)
+
+            assertAll(
+                { assertEquals(1, wakeTasks, "rig: routing the frame queued exactly one task for the parked reader") },
+                { assertTrue(reader.isCompleted, "rig: the cancelled collection has ended") },
+            )
+            val rest = hostRoom.awaitHeld(joinerId, count = 2 - delivered.size, expected = "the frames the cancelled collection did not deliver")
+            assertEquals(
+                listOf("f-0", "f-1"),
+                delivered + rest.map { it.payload.decodeToString() },
+                "each frame arrives exactly once, in order — delivered by the cancelled collection or left for the next",
+            )
+
+            joinerRoom.leave()
+            hostRoom.leave()
         }
 
     // ── (5) leave(Normal) → Left event; roster shrinks ──────────────────────
