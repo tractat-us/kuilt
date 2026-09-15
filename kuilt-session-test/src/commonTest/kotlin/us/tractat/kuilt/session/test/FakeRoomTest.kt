@@ -710,6 +710,63 @@ class FakeRoomTest {
         )
     }
 
+    /** Runs dispatched tasks only when told to, one at a time — see the same helper in `MemberInboxTest`. */
+    private class StepDispatcher : CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+
+        override fun dispatch(
+            context: CoroutineContext,
+            block: Runnable,
+        ) {
+            tasks.addLast(block)
+        }
+
+        val pending: Int get() = tasks.size
+
+        fun step(): Boolean {
+            val task = tasks.removeFirstOrNull() ?: return false
+            task.run()
+            return true
+        }
+
+        fun drain() {
+            while (step()) Unit
+        }
+    }
+
+    @Test
+    fun `a collection cancelled right after the step that took a frame still delivers every frame exactly once`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+        val frames = room.incomingFrom(alice)
+        val steps = StepDispatcher()
+        val delivered = mutableListOf<String>()
+        val first = CoroutineScope(steps + Job()).launch { frames.collect { delivered += it.payload.decodeToString() } }
+        steps.drain() // started, parked waiting for a frame
+
+        room.deliver(alice, "a".encodeToByteArray()) // wakes the parked collection: one task
+        val wakeTasks = steps.pending
+        steps.step() // the collection runs exactly the step that takes the frame...
+        first.cancel() // ...and is cancelled at whatever suspension that step ended on
+        steps.drain()
+        room.deliver(alice, "b".encodeToByteArray())
+        room.removeMember(alice)
+
+        val rest = frames.toList().texts()
+        assertAll(
+            { assertEquals(1, wakeTasks, "rig: the delivery woke the parked collection with exactly one task") },
+            { assertTrue(first.isCompleted, "rig: the first collection has ended") },
+            {
+                assertEquals(
+                    listOf("a", "b"),
+                    delivered + rest,
+                    "a frame taken by the cancelled collection is either delivered by it or left for the next — never lost",
+                )
+            },
+        )
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private fun member(
