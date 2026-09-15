@@ -679,9 +679,10 @@ class FakeRoomTest {
         room.leave()
         room.addMember(member(alice))
 
+        val refused = assertFailsWith<MemberInboxException.NotAdmitted> { room.incomingFrom(alice).first() }
         assertAll(
             { assertTrue(room.roster.value.isEmpty(), "a room that has left admits nobody") },
-            { assertFailsWith<MemberInboxException.NotAdmitted> { room.incomingFrom(alice).first() } },
+            { assertEquals(alice, refused.member, "and has no inbox for the member it refused") },
         )
     }
 
