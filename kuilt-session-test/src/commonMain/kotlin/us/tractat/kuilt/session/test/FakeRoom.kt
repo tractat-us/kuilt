@@ -306,7 +306,7 @@ public class FakeRoom(
         if (!left.compareAndSet(expect = false, update = true)) return
         eventsChannel.close()
         incomingChannel.close()
-        memberInboxes.values.forEach { it.close() }
+        inboxLock.withLock { memberInboxes.values.toList().also { memberInboxes.clear() } }.forEach { it.close() }
     }
 
     // ── Test-driver helpers ───────────────────────────────────────────────────
@@ -320,6 +320,7 @@ public class FakeRoom(
      */
     public suspend fun addMember(member: Member) {
         require(member.id != selfId) { "roster must not include selfId ($selfId); see Room.roster" }
+        inboxLock.withLock { memberInboxes.getOrPut(member.id) { FakeMemberInbox(member.id) } }
         _roster.update { it + member }
         _rosterPeers.update { it + member.id }
         eventsChannel.send(MembershipEvent.Joined(member))
