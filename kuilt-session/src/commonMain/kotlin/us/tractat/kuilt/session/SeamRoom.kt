@@ -337,6 +337,15 @@ public class SeamRoomFactory(
          * constructor parameter.
          */
         internal val DEFAULT_ADMIT_TIMEOUT: Duration = 30.seconds
+
+        /**
+         * How many unread frames a room this factory builds holds per member for [Room.incomingFrom]
+         * (#2802) — the same depth its [Room.incoming] buffers for a subscriber that falls behind.
+         *
+         * A `val`, not a `const`: a `const` is inlined into the consumer at its compile time, so a
+         * consumer built against one kuilt would keep reading that number after upgrading to another.
+         */
+        public val MEMBER_INBOX_CAPACITY: Int = 64
     }
 }
 

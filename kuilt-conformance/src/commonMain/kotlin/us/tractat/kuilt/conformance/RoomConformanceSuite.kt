@@ -1602,6 +1602,40 @@ public abstract class RoomConformanceSuite {
     }
 
     /**
+     * Collect [flow] to its end, recording frames into [into], and return the [MemberInboxException] it
+     * failed with, or `null` if it completed. On expiry of [awaitBudget] fail naming how many frames
+     * arrived: a per-member stream must end by completing or failing, and one that does neither is the
+     * silent loss these obligations exist to rule out.
+     */
+    private suspend fun Room.awaitEnd(flow: Flow<RoomFrame>, into: MutableList<RoomFrame>, expected: String): MemberInboxException? {
+        var failure: MemberInboxException? = null
+        val budget = awaitBudget ?: Duration.INFINITE
+        val ended = withTimeoutOrNull(budget) {
+            try {
+                flow.toList(into)
+            } catch (e: MemberInboxException) {
+                failure = e
+            }
+            true
+        }
+        return if (ended == true) {
+            failure
+        } else {
+            fail(
+                "the incomingFrom flow neither completed nor failed: $expected (${into.size} frame(s) arrived)",
+                budget,
+                "A per-member stream ends by completing (the admission ended) or failing with a " +
+                    "MemberInboxException (frames were lost). Hanging is the silent loss it must not have.",
+            )
+        }
+    }
+
+    /** Broadcast [count] frames `"<prefix>0"`, `"<prefix>1"`, … in order. */
+    private suspend fun Room.broadcastNumbered(prefix: String, count: Int) {
+        repeat(count) { broadcast("$prefix$it".encodeToByteArray()) }
+    }
+
+    /**
      * The one failure renderer the three helpers share — the actual deliverable of #2284.
      *
      * Names the room (role / selfId / roomId), prints the roster it observed member by member with
