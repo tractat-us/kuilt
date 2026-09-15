@@ -376,10 +376,12 @@ public class FakeRoom(
      * No-op if the peer is not in the roster.
      */
     public suspend fun removeMember(peerId: PeerId, reason: LeaveReason = LeaveReason.Normal) {
-        inboxLock.withLock { memberInboxes.remove(peerId) }?.close()
+        val endedInbox = inboxLock.withLock { memberInboxes.remove(peerId) }
         _roster.update { roster -> roster.filterNot { it.id == peerId }.toSet() }
         _rosterPeers.update { it - peerId }
         eventsChannel.send(MembershipEvent.Left(peerId, reason))
+        // Last, as the real room does: a reader that sees its flow complete already sees the member gone.
+        endedInbox?.close()
     }
 
     /**

@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestResult
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
@@ -669,7 +670,14 @@ public abstract class RoomConformanceSuite {
             joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
 
             val got = mutableListOf<RoomFrame>()
-            val reader = async { hostRoom.awaitEnd(hostRoom.incomingFrom(joinerId), got, "the reader of a member that left") }
+            var rosterAtCompletion: Set<PeerId>? = null
+            // Unconfined, so the reader resumes in place the instant the room ends the inbox and reads the
+            // roster exactly as the room had published it then — not after the room's own next step, which
+            // on the ordinary test scheduler would hide an inbox completed before the member left the roster.
+            val reader = async(UnconfinedTestDispatcher(testScheduler)) {
+                hostRoom.awaitEnd(hostRoom.incomingFrom(joinerId), got, "the reader of a member that left")
+                    .also { rosterAtCompletion = hostRoom.roster.value.mapTo(mutableSetOf()) { it.id } }
+            }
             joinerRoom.broadcast("before-leave".encodeToByteArray())
             advanceTimeBy(100L)
             joinerRoom.leave(LeaveReason.Normal)
@@ -679,6 +687,13 @@ public abstract class RoomConformanceSuite {
             assertAll(
                 { assertEquals(null, failure, "an ended admission completes the flow; it must neither fail nor hang") },
                 { assertEquals(listOf("before-leave"), got.map { it.payload.decodeToString() }, "frames held before the leave are delivered first") },
+                {
+                    assertEquals(
+                        false,
+                        rosterAtCompletion?.contains(joinerId),
+                        "when the member's flow completes, the published roster no longer holds that member",
+                    )
+                },
             )
 
             hostRoom.leave()

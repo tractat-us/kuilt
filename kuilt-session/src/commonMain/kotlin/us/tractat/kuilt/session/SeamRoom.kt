@@ -797,9 +797,10 @@ internal class SeamRoom(
      * An entry is created in [addToRoster] and removed in [removeFromRoster], each in the critical section
      * that changes [admittedById]. Routing is gated on [isAdmittedPeer], so no frame from a member can be
      * routed before its inbox exists; that pairing is the whole "held from admission" guarantee. A removed
-     * inbox is [MemberInbox.close]d only after [lock] is released, because closing can resume its
-     * collector in place; [leave] clears every entry the same way once the room is terminal. Guarded by
-     * [lock].
+     * inbox is [MemberInbox.close]d last: after [lock] is released, because closing can resume its
+     * collector in place, and after the member has left the published [roster] and `Left` was emitted, so
+     * a reader that sees its flow complete never still sees the member. [leave] clears every entry the same
+     * way once the room is terminal. Guarded by [lock].
      */
     private val memberInboxes = HashMap<PeerId, MemberInbox>()
 
@@ -3382,13 +3383,15 @@ internal class SeamRoom(
             }
         }
         removed ?: return // already removed, avoid duplicate Left events
-        // Closed after releasing the lock, never under it: closing wakes the member's collector, which can
-        // run in place and call straight back into this room. It delivers what was held and completes, so
-        // the consumer learns the admission ended rather than waiting on an inbox nothing will feed.
-        endedInbox?.close()
         _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
         _rosterPeers.update { current -> current - peerId }
         emitEvent(MembershipEvent.Left(peerId, reason))
+        // Closed last, and outside the lock. Last, so a reader that sees its flow complete already sees the
+        // member gone from `roster` and `Left` emitted — none of the three steps above suspends, so the order
+        // needs no lock to hold. Outside the lock, because closing can resume the member's collector in place,
+        // and it may call straight back into this room. The collector delivers what was held and completes,
+        // so the consumer learns the admission ended rather than waiting on an inbox nothing will feed.
+        endedInbox?.close()
     }
 
     private fun isAdmittedPeer(peerId: PeerId): Boolean = lock.withLock { admittedById.containsKey(peerId) }
