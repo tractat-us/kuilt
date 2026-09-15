@@ -737,6 +737,81 @@ public abstract class RoomConformanceSuite {
             hostRoom.leave()
         }
 
+    // ── (4i) a collection cancelled as its frame arrives leaves that frame for the next (#2802) ──
+
+    /**
+     * The first collection is cancelled at the instant a frame reaches the member's inbox, and the next
+     * collection still receives that frame.
+     *
+     * The rig: a probe on [Room.incoming] cancels the reader when it sees the frame. The reference room
+     * routes a frame onto `incoming` before offering it to the member's inbox, and the test scheduler runs
+     * resumed coroutines in order, so the probe's cancel lands after the inbox was offered the frame and
+     * before the reader runs — the window in which a `Channel`-backed inbox lost it. The rig's own
+     * preconditions are asserted, so a harness that orders delivery differently fails here loudly rather
+     * than passing without having reached the window.
+     */
+    @Test
+    public fun incomingFromCollectionCancelledAsAFrameArrivesLeavesItForTheNext(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val delivered = mutableListOf<RoomFrame>()
+            val reader = launch(start = CoroutineStart.UNDISPATCHED) { hostRoom.incomingFrom(joinerId).toList(delivered) }
+            var probeCancels = 0
+            val probe = launch(start = CoroutineStart.UNDISPATCHED) {
+                hostRoom.incoming.collect {
+                    if (it.sender == joinerId) {
+                        probeCancels++
+                        reader.cancel()
+                    }
+                }
+            }
+            joinerRoom.broadcast("raced".encodeToByteArray())
+            advanceTimeBy(100L)
+            probe.cancel()
+
+            assertAll(
+                { assertEquals(1, probeCancels, "rig: the probe must have cancelled the reader as the frame was routed") },
+                { assertTrue(reader.isCancelled, "rig: the first collection was cancelled") },
+                { assertEquals(emptyList<String>(), delivered.map { it.payload.decodeToString() }, "rig: the cancelled collection delivered nothing") },
+            )
+            val held = hostRoom.awaitHeld(joinerId, count = 1, expected = "the frame the cancelled collection never delivered")
+            assertEquals(listOf("raced"), held.map { it.payload.decodeToString() }, "the next collection receives the frame the cancelled one never delivered")
+
+            joinerRoom.leave()
+            hostRoom.leave()
+        }
+
+    // ── (4j) the room going terminal completes every member's flow (#2802) ──────
+
+    @Test
+    public fun incomingFromCompletesWhenTheRoomItselfLeaves(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val got = mutableListOf<RoomFrame>()
+            val reader = async { hostRoom.awaitEnd(hostRoom.incomingFrom(joinerId), got, "the reader of a member when the room itself left") }
+            joinerRoom.broadcast("before-room-leave".encodeToByteArray())
+            advanceTimeBy(100L)
+            hostRoom.leave()
+
+            val failure = reader.await()
+            assertAll(
+                { assertEquals(null, failure, "a terminal room ends every admission: the flow completes, and neither fails nor hangs") },
+                { assertEquals(listOf("before-room-leave"), got.map { it.payload.decodeToString() }, "frames held before the room left are delivered first") },
+            )
+
+            joinerRoom.leave()
+        }
+
     // ── (5) leave(Normal) → Left event; roster shrinks ──────────────────────
 
     @Test

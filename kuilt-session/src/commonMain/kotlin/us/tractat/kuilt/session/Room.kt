@@ -106,8 +106,13 @@ public interface Room {
      *   fails with [MemberInboxException.ReleasedBeforeClaim], naming how many frames were lost. Once
      *   claimed, an overflow fails the flow with [MemberInboxException.CollectorFellBehind] after the
      *   held frames are delivered: routing never waits for a slow collector.
-     * - **Single-collection.** Collecting while another collection of the same member is active
-     *   throws [IllegalStateException]. Sequential re-collection resumes where the last one stopped.
+     * - **A failure is terminal for the admission.** Every later collection or claim fails the same way;
+     *   nothing restarts the stream. Treat the member as lost — evict it, or let its session drop and
+     *   re-join, which is a new admission — rather than reading on.
+     * - **Single-collection, lossless across re-collection.** Collecting while another collection of the
+     *   same member is active throws [IllegalStateException]. A collection that is cancelled leaves
+     *   every frame it had not yet received for the next one, which resumes exactly where it stopped. A
+     *   frame the consumer's own pipeline did receive is the consumer's: at-most-once, as for any Flow.
      *
      * A frame is delivered both here and on [incoming]; a consumer reads one or the other.
      */

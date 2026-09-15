@@ -3368,6 +3368,7 @@ internal class SeamRoom(
         // two together give the invariant `lanes.keys ⊆ admittedById.keys` at every point the lock is
         // not held. Tied to `removed != null` so a duplicate eviction cannot discard a lane a re-admit
         // has since installed. See [discardLanes].
+        var endedInbox: MemberInbox? = null
         val removed = lock.withLock {
             admittedById.remove(peerId)?.also {
                 discardLanes(peerId)
@@ -3375,13 +3376,15 @@ internal class SeamRoom(
                 // that ever left. Correctness does not depend on it — refineWindow's Partitioned
                 // gate already rejects an announcement for a member that is gone.
                 episodeDetectedAtMs.remove(peerId)
-                // Closed with the admission: its collector drains what was held and completes, so a
-                // consumer reading this member learns the admission ended rather than waiting on an
-                // inbox nothing will feed. A member admitted again later gets a fresh inbox.
-                memberInboxes.remove(peerId)?.close()
+                // Removed with the admission, so a member admitted again later gets a fresh inbox.
+                endedInbox = memberInboxes.remove(peerId)
             }
         }
         removed ?: return // already removed, avoid duplicate Left events
+        // Closed after releasing the lock, never under it: closing wakes the member's collector, which can
+        // run in place and call straight back into this room. It delivers what was held and completes, so
+        // the consumer learns the admission ended rather than waiting on an inbox nothing will feed.
+        endedInbox?.close()
         _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
         _rosterPeers.update { current -> current - peerId }
         emitEvent(MembershipEvent.Left(peerId, reason))

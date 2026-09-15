@@ -7,8 +7,12 @@ import us.tractat.kuilt.core.PeerId
  *
  * A per-member stream never loses a frame silently. It delivers every frame it held, in arrival order,
  * and then either **completes** — the member's admission ended — or **fails** with one of these, saying
- * why and how much. A consumer that sees one has lost frames it cannot get back from this room, so the
- * recovery is the consumer's own resync (a snapshot, a replay from a sequence), not a retry of the flow.
+ * why and how much.
+ *
+ * **A failure is terminal for the admission.** Every later collection or claim of that member's frames
+ * fails the same way, and nothing restarts the stream from now: the frames are gone and so is the
+ * guarantee. Treat the member as lost — evict it, or let its session drop and re-join, which is a new
+ * admission with a fresh inbox — rather than reading on.
  *
  * A [RuntimeException] rather than an [IllegalStateException] so that it stays distinguishable from the
  * [IllegalStateException] a second concurrent collection throws, which is a bug in the collector rather

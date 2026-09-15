@@ -35,7 +35,7 @@ public suspend fun perMemberFramesSample(room: Room, member: PeerId, onFrame: su
         room.incomingFrom(member).collect { onFrame(it.payload) }
         true // the admission ended; a member admitted again gets a fresh inbox, so call this again
     } catch (_: MemberInboxException) {
-        false // never silent: the exception says what was lost — resync this member
+        false // never silent, and terminal for this admission: treat the member as lost
     }
 
 /**
