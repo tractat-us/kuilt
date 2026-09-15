@@ -3365,6 +3365,10 @@ internal class SeamRoom(
                 // that ever left. Correctness does not depend on it — refineWindow's Partitioned
                 // gate already rejects an announcement for a member that is gone.
                 episodeDetectedAtMs.remove(peerId)
+                // Removed with the admission, so a member admitted again later gets a fresh inbox
+                // rather than this admission's unread tail. Not closed: a collector still reading it
+                // stays suspended until cancelled, exactly as one reading `incoming` does.
+                memberInboxes.remove(peerId)
             }
         }
         removed ?: return // already removed, avoid duplicate Left events

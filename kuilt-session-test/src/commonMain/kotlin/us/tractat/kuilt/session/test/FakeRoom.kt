@@ -237,6 +237,7 @@ public class FakeRoom(
         if (!left.compareAndSet(expect = false, update = true)) return
         eventsChannel.close()
         incomingChannel.close()
+        memberInboxes.values.forEach { it.close() }
     }
 
     // ── Test-driver helpers ───────────────────────────────────────────────────
