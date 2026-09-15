@@ -1374,6 +1374,23 @@ public abstract class RoomConformanceSuite {
     }
 
     /**
+     * Collect [count] frames from [member]'s [Room.incomingFrom] inbox; on expiry of [awaitBudget]
+     * fail naming how many of them did arrive, since "some were held" and "none were" point at
+     * different defects.
+     */
+    private suspend fun Room.awaitHeld(member: PeerId, count: Int, expected: String): List<RoomFrame> {
+        val held = mutableListOf<RoomFrame>()
+        val budget = awaitBudget ?: return incomingFrom(member).take(count).toList(held)
+        return withTimeoutOrNull(budget) { incomingFrom(member).take(count).toList(held) }
+            ?: fail(
+                "only ${held.size} of $count held frames arrived: $expected",
+                budget,
+                "`Room.incomingFrom` holds a member's frames from its admission, so a frame missing here " +
+                    "was routed before the collector started and was not held for it.",
+            )
+    }
+
+    /**
      * The one failure renderer the three helpers share — the actual deliverable of #2284.
      *
      * Names the room (role / selfId / roomId), prints the roster it observed member by member with
