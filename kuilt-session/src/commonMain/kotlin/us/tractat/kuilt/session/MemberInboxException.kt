@@ -32,7 +32,8 @@ public sealed class MemberInboxException(message: String) : RuntimeException(mes
     /**
      * Nothing called [Room.incomingFrom] for this admission before the inbox overflowed, so the room
      * released what it held and stopped holding. [dropped] frames from [member] were routed and are gone,
-     * including the member's first frames.
+     * including the member's first frames. Every claim of this admission fails with this, and [dropped]
+     * is fixed at the first.
      */
     public class ReleasedBeforeClaim(
         override val member: PeerId,

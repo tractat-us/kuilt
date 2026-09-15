@@ -564,12 +564,16 @@ public abstract class RoomConformanceSuite {
             first.broadcast("first-0".encodeToByteArray())
             first.broadcast("first-1".encodeToByteArray())
             advanceTimeBy(100L)
+            second.broadcast("second-1".encodeToByteArray())
+            advanceTimeBy(100L)
 
+            // Both readers take two, so a room that put every frame in every inbox is caught from either
+            // side: each member's own frames are split by the other's.
             val firstHeld = hostRoom.awaitHeld(firstId, count = 2, expected = "the first joiner's two frames")
-            val secondHeld = hostRoom.awaitHeld(secondId, count = 1, expected = "the second joiner's frame")
+            val secondHeld = hostRoom.awaitHeld(secondId, count = 2, expected = "the second joiner's two frames")
             assertAll(
                 { assertEquals(listOf("first-0", "first-1"), firstHeld.map { it.payload.decodeToString() }, "the first member's inbox holds its own frames only") },
-                { assertEquals(listOf("second-0"), secondHeld.map { it.payload.decodeToString() }, "the second member's inbox holds its own frame only") },
+                { assertEquals(listOf("second-0", "second-1"), secondHeld.map { it.payload.decodeToString() }, "the second member's inbox holds its own frames only") },
             )
 
             first.leave()

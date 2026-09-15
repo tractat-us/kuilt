@@ -794,11 +794,12 @@ internal class SeamRoom(
     /**
      * Each admitted member's held frames, behind [incomingFrom] (#2802).
      *
-     * An entry is created in [addToRoster] and removed — and its [MemberInbox] closed — in
-     * [removeFromRoster], each in the critical section that changes [admittedById]. Routing is gated on
-     * [isAdmittedPeer], so no frame from a member can be routed before its inbox exists; that pairing is
-     * the whole "held from admission" guarantee. [leave] closes and clears every entry once the room is
-     * terminal. Guarded by [lock].
+     * An entry is created in [addToRoster] and removed in [removeFromRoster], each in the critical section
+     * that changes [admittedById]. Routing is gated on [isAdmittedPeer], so no frame from a member can be
+     * routed before its inbox exists; that pairing is the whole "held from admission" guarantee. A removed
+     * inbox is [MemberInbox.close]d only after [lock] is released, because closing can resume its
+     * collector in place; [leave] clears every entry the same way once the room is terminal. Guarded by
+     * [lock].
      */
     private val memberInboxes = HashMap<PeerId, MemberInbox>()
 

@@ -377,7 +377,7 @@ Five things to know before you bind this to a UI:
 ## Per-member frames
 
 **Intent:** read one member's frames in its own coroutine — a per-peer channel, a host that attaches each member as the roster shows it, a `room.incoming.filter { it.sender == peer }` — without losing what that member sent before you started reading, such as its first hello.
-**Primitive:** `Room.incomingFrom(member)` (`us.tractat.kuilt.session`). A room admits and routes before a `host { onRoom }` consumer runs, so a per-member collector of `incoming` subscribes after that member's first frame by construction, and the frame is gone (#2802). `incomingFrom` holds the member's frames from the instant it is admitted and is per admission: the flow completes when the member leaves, and a member admitted again gets a fresh inbox. It is never silently lossy — when frames cannot be held (the inbox overflowed before anyone claimed it, or the collector fell behind) the flow fails with a `MemberInboxException` saying what was lost, and the recovery is to resync that member. Collect it from one coroutine at a time; a second concurrent collection throws.
+**Primitive:** `Room.incomingFrom(member)` (`us.tractat.kuilt.session`). A room admits and routes before a `host { onRoom }` consumer runs, so a per-member collector of `incoming` subscribes after that member's first frame by construction, and the frame is gone (#2802). `incomingFrom` holds the member's frames from the instant it is admitted and is per admission: the flow completes when the member leaves, and a member admitted again gets a fresh inbox. It is never silently lossy — when frames cannot be held (the inbox overflowed before anyone claimed it, or the collector fell behind) the flow fails with a `MemberInboxException` saying what was lost. **That failure is terminal for the admission**: every later read of it fails the same way and nothing restarts the stream, so treat the member as lost — evict it, or let its session drop and re-join, which is a new admission. Collect it from one coroutine at a time; a second concurrent collection throws. A collection that is cancelled leaves every frame it had not received for the next one; a frame your own pipeline did receive is yours, at-most-once as for any Flow.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#perMemberFramesSample -->
 ```kotlin
@@ -388,7 +388,7 @@ public suspend fun perMemberFramesSample(room: Room, member: PeerId, onFrame: su
         room.incomingFrom(member).collect { onFrame(it.payload) }
         true // the admission ended; a member admitted again gets a fresh inbox, so call this again
     } catch (_: MemberInboxException) {
-        false // never silent: the exception says what was lost — resync this member
+        false // never silent, and terminal for this admission: treat the member as lost
     }
 ```
 

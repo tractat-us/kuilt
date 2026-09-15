@@ -185,64 +185,94 @@ public class FakeRoom(
             ?: flow { throw MemberInboxException.NotAdmitted(member) }
 
     private class FakeMemberInbox(private val member: PeerId) {
+        private enum class State { Holding, Released, Claimed, Ended }
+
         private val capacity = SeamRoomFactory.MEMBER_INBOX_CAPACITY
         private val lock = reentrantLock()
-        private val frames = Channel<RoomFrame>(capacity)
-        private var claimed = false
-        private var released = false
-        private var closed = false
+
+        // All guarded by [lock]; [wakeup] is only ever touched outside it.
+        private val held = ArrayDeque<RoomFrame>()
+        private var state = State.Holding
         private var dropped = 0L
         private var collecting = false
+        private var endFailure: MemberInboxException? = null
         private var releasedFailure: MemberInboxException.ReleasedBeforeClaim? = null
+        private val wakeup = Channel<Unit>(Channel.CONFLATED)
 
         fun offer(frame: RoomFrame) {
-            lock.withLock {
-                if (released || closed) {
-                    dropped++
-                    return
-                }
-                if (frames.trySend(frame).isSuccess) return
-                dropped++
-                if (claimed) {
-                    frames.close(MemberInboxException.CollectorFellBehind(member, capacity))
-                    closed = true
-                } else {
-                    released = true
-                    dropped += capacity
-                    frames.cancel()
+            val wake = lock.withLock {
+                when {
+                    state == State.Released || state == State.Ended -> {
+                        dropped++
+                        false
+                    }
+                    held.size < capacity -> {
+                        held.addLast(frame)
+                        true
+                    }
+                    state == State.Claimed -> {
+                        dropped++
+                        state = State.Ended
+                        endFailure = MemberInboxException.CollectorFellBehind(member, capacity)
+                        true
+                    }
+                    else -> {
+                        dropped += held.size + 1L
+                        held.clear()
+                        state = State.Released
+                        false
+                    }
                 }
             }
+            if (wake) wakeup.trySend(Unit)
         }
 
         fun claim(): Flow<RoomFrame> {
             val failure = lock.withLock {
-                if (released) {
-                    releasedFailure = releasedFailure ?: MemberInboxException.ReleasedBeforeClaim(member, dropped)
-                } else {
-                    claimed = true
+                when (state) {
+                    State.Holding -> state = State.Claimed
+                    State.Released ->
+                        releasedFailure = releasedFailure ?: MemberInboxException.ReleasedBeforeClaim(member, dropped)
+                    State.Claimed, State.Ended -> Unit
                 }
                 releasedFailure
             }
             if (failure != null) return flow { throw failure }
-            return flow {
-                lock.withLock {
-                    check(!collecting) { "incomingFrom(${member.value}) is already being collected — it is single-collection" }
-                    collecting = true
-                }
-                try {
-                    emitAll(frames.receiveAsFlow())
-                } finally {
-                    lock.withLock { collecting = false }
+            return object : Flow<RoomFrame> {
+                override suspend fun collect(collector: FlowCollector<RoomFrame>) {
+                    lock.withLock {
+                        check(!collecting) { "incomingFrom(${member.value}) is already being collected — it is single-collection" }
+                        collecting = true
+                    }
+                    try {
+                        while (true) {
+                            // Before taking a frame, never between taking and handing it over.
+                            currentCoroutineContext().ensureActive()
+                            val frame = lock.withLock { held.removeFirstOrNull() }
+                            when {
+                                frame != null -> collector.emit(frame)
+                                lock.withLock { state == State.Ended } -> {
+                                    lock.withLock { endFailure }?.let { throw it }
+                                    return
+                                }
+                                else -> wakeup.receive()
+                            }
+                        }
+                    } finally {
+                        lock.withLock { collecting = false }
+                    }
                 }
             }
         }
 
         fun close() {
             lock.withLock {
-                if (released) releasedFailure = releasedFailure ?: MemberInboxException.ReleasedBeforeClaim(member, dropped)
-                closed = true
-                frames.close()
+                if (state == State.Released) {
+                    releasedFailure = releasedFailure ?: MemberInboxException.ReleasedBeforeClaim(member, dropped)
+                }
+                state = State.Ended
             }
+            wakeup.trySend(Unit)
         }
     }
 
