@@ -774,7 +774,7 @@ public abstract class RoomConformanceSuite {
                     }
                 }
             }
-            joinerRoom.broadcast("raced".encodeToByteArray())
+            joinerRoom.broadcast("f-raced".encodeToByteArray())
             advanceTimeBy(100L)
             probe.cancel()
 
@@ -784,7 +784,7 @@ public abstract class RoomConformanceSuite {
                 { assertEquals(emptyList<String>(), delivered.map { it.payload.decodeToString() }, "rig: the cancelled collection delivered nothing") },
             )
             val held = hostRoom.awaitHeld(joinerId, count = 1, expected = "the frame the cancelled collection never delivered")
-            assertEquals(listOf("raced"), held.map { it.payload.decodeToString() }, "the next collection receives the frame the cancelled one never delivered")
+            assertEquals(listOf("f-raced"), held.map { it.payload.decodeToString() }, "the next collection receives the frame the cancelled one never delivered")
 
             joinerRoom.leave()
             hostRoom.leave()
