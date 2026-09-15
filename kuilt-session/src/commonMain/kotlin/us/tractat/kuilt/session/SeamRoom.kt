@@ -337,6 +337,15 @@ public class SeamRoomFactory(
          * constructor parameter.
          */
         internal val DEFAULT_ADMIT_TIMEOUT: Duration = 30.seconds
+
+        /**
+         * How many unread frames a room this factory builds holds per member for [Room.incomingFrom]
+         * (#2802) — the same depth its [Room.incoming] buffers for a subscriber that falls behind.
+         *
+         * A `val`, not a `const`: a `const` is inlined into the consumer at its compile time, so a
+         * consumer built against one kuilt would keep reading that number after upgrading to another.
+         */
+        public val MEMBER_INBOX_CAPACITY: Int = 64
     }
 }
 
@@ -779,8 +788,22 @@ internal class SeamRoom(
      */
     private val heartbeatSendersSeen = mutableSetOf<PeerId>()
 
-    private val _incoming = MutableSharedFlow<RoomFrame>(extraBufferCapacity = 64)
+    private val _incoming = MutableSharedFlow<RoomFrame>(extraBufferCapacity = SeamRoomFactory.MEMBER_INBOX_CAPACITY)
     override val incoming: Flow<RoomFrame> = _incoming.asSharedFlow()
+
+    /**
+     * Each admitted member's held frames, behind [incomingFrom] (#2802).
+     *
+     * An entry is created in [addToRoster] and removed in [removeFromRoster], each in the critical section
+     * that changes [admittedById]. Routing is gated on [isAdmittedPeer], so no frame from a member can be
+     * routed before its inbox exists; that pairing is the whole "held from admission" guarantee. A removed
+     * inbox is [MemberInbox.close]d last: after [lock] is released, because closing can resume its
+     * collector in place, and after the member has left the published [roster] and `Left` was emitted, so
+     * a reader that sees its flow complete never still sees the member. [leave] closes and clears every entry
+     * once the room is terminal, after releasing [lock] — but it emits no `Left` and leaves [roster] as it
+     * was, so a reader completed by [leave] can still see its member on the roster. Guarded by [lock].
+     */
+    private val memberInboxes = HashMap<PeerId, MemberInbox>()
 
     /**
      * Broadcast bus for raw incoming [Swatch]es. The main loop fans every received
@@ -3327,6 +3350,10 @@ internal class SeamRoom(
         if (closed) return
         val isReadmit = admittedById.containsKey(member.id)
         admittedById[member.id] = member
+        // Same critical section as the admission itself, so the inbox exists before any frame from
+        // this member can pass the isAdmittedPeer gate — incomingFrom holds from admission (#2802).
+        // A re-admit keeps the inbox it already has.
+        memberInboxes.getOrPut(member.id) { MemberInbox(member.id, SeamRoomFactory.MEMBER_INBOX_CAPACITY) }
         _roster.update { current -> current.filterNot { it.id == member.id }.toSet() + member }
         _rosterPeers.update { current -> current + member.id }
         if (!isReadmit) {
@@ -3344,6 +3371,7 @@ internal class SeamRoom(
         // two together give the invariant `lanes.keys ⊆ admittedById.keys` at every point the lock is
         // not held. Tied to `removed != null` so a duplicate eviction cannot discard a lane a re-admit
         // has since installed. See [discardLanes].
+        var endedInbox: MemberInbox? = null
         val removed = lock.withLock {
             admittedById.remove(peerId)?.also {
                 discardLanes(peerId)
@@ -3351,12 +3379,20 @@ internal class SeamRoom(
                 // that ever left. Correctness does not depend on it — refineWindow's Partitioned
                 // gate already rejects an announcement for a member that is gone.
                 episodeDetectedAtMs.remove(peerId)
+                // Removed with the admission, so a member admitted again later gets a fresh inbox.
+                endedInbox = memberInboxes.remove(peerId)
             }
         }
         removed ?: return // already removed, avoid duplicate Left events
         _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
         _rosterPeers.update { current -> current - peerId }
         emitEvent(MembershipEvent.Left(peerId, reason))
+        // Closed last, and outside the lock. Last, so a reader that sees its flow complete already sees the
+        // member gone from `roster` and `Left` emitted — none of the three steps above suspends, so the order
+        // needs no lock to hold. Outside the lock, because closing can resume the member's collector in place,
+        // and it may call straight back into this room. The collector delivers what was held and completes,
+        // so the consumer learns the admission ended rather than waiting on an inbox nothing will feed.
+        endedInbox?.close()
     }
 
     private fun isAdmittedPeer(peerId: PeerId): Boolean = lock.withLock { admittedById.containsKey(peerId) }
@@ -3384,8 +3420,23 @@ internal class SeamRoom(
     // ── Application frame routing ─────────────────────────────────────────────
 
     private fun routeApplicationFrame(sender: PeerId, bytes: ByteArray) {
-        _incoming.tryEmit(RoomFrame(sender = sender, payload = bytes))
+        val frame = RoomFrame(sender = sender, payload = bytes)
+        _incoming.tryEmit(frame)
+        holdForMember(frame)
     }
+
+    /**
+     * Offer [frame] to its sender's inbox ([incomingFrom]). Taken off the map under [lock], offered
+     * outside it: the inbox resolves a full buffer itself without suspending, and the main loop routes
+     * one frame at a time, so a sender's frames reach its inbox in arrival order.
+     */
+    private fun holdForMember(frame: RoomFrame) {
+        lock.withLock { memberInboxes[frame.sender] }?.offer(frame)
+    }
+
+    override fun incomingFrom(member: PeerId): Flow<RoomFrame> =
+        lock.withLock { memberInboxes[member] }?.claim()
+            ?: failingInboxFlow(MemberInboxException.NotAdmitted(member))
 
     // ── Room interface ────────────────────────────────────────────────────────
 
@@ -3680,6 +3731,9 @@ internal class SeamRoom(
                 .also { admitLanes.clear(); relayLanes.clear() }
         }
         lanesToDrain.forEach { it.close() }
+        // A terminal room has ended every admission: complete each member's incomingFrom reader.
+        // `closed` is already set, so addToRoster cannot open another inbox behind this.
+        lock.withLock { memberInboxes.values.toList().also { memberInboxes.clear() } }.forEach { it.close() }
         jobsToCancel.forEach { it.cancel() }
         detectorJobsToCancel.forEach { it.cancel() }
         seam.close(

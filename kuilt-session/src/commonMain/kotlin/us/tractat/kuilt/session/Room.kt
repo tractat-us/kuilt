@@ -75,9 +75,55 @@ public interface Room {
      * Stream of [RoomFrame]s received from admitted members.
      *
      * Frames from unadmitted peers are silently dropped.
-     * Hot; backed by a shared flow. Late collectors miss historical frames.
+     * Hot; backed by a shared flow. Late collectors miss historical frames — including an admitted
+     * member's first frames on a host room handed to a `host { onRoom }` consumer, which is started
+     * and admitting before that consumer runs. A consumer that must not lose them reads
+     * [incomingFrom] instead.
      */
     public val incoming: Flow<RoomFrame>
+
+    /**
+     * The frames of one admitted [member], **held from the instant it is admitted** — a collector
+     * that starts after admission, even after the member's first frames arrived, still receives
+     * them, in arrival order.
+     *
+     * This is the per-member reader [incoming] cannot be: a room admits and routes before a
+     * `host { onRoom }` consumer runs, and a consumer that collects each member in its own coroutine
+     * subscribes after that member's first frame by construction.
+     *
+     * **Never silently lossy.** The flow delivers every frame it held, in order, and then either
+     * completes or fails with a [MemberInboxException] saying what was lost:
+     *
+     * - **Per admission.** It completes, after delivering what it held, when the member's admission
+     *   ends — eviction, a clean leave, or this room going terminal. A re-admit of a still-admitted
+     *   member keeps its inbox; a member admitted again after leaving gets a fresh one, so call
+     *   [incomingFrom] again. For a peer with no current admission the flow fails with
+     *   [MemberInboxException.NotAdmitted].
+     * - **Bounded.** An implementation holds a bounded number of unread frames per member
+     *   ([SeamRoomFactory.MEMBER_INBOX_CAPACITY] for the rooms that factory builds). Until
+     *   [incomingFrom] is first called for the admission, an overflow releases what is held — a
+     *   consumer that reads only [incoming] pays for at most one inbox per member — and a later claim
+     *   fails with [MemberInboxException.ReleasedBeforeClaim], naming how many frames were lost. Once
+     *   claimed, an overflow fails the flow with [MemberInboxException.CollectorFellBehind] after the
+     *   held frames are delivered: routing never waits for a slow collector.
+     * - **A failure is terminal for the admission.** Every later collection or claim fails the same way;
+     *   nothing restarts the stream. Treat the member as lost — evict it, or let its session drop and
+     *   re-join, which is a new admission — rather than reading on.
+     * - **Single-collection, lossless across re-collection.** Collecting while another collection of the
+     *   same member is active throws [IllegalStateException] — including straight after `cancel()`, until
+     *   the cancelled collection has finished, so `cancelAndJoin` the previous collection first. A
+     *   collection that is cancelled leaves every frame its collector had not yet received for the next
+     *   one, which resumes exactly where it stopped. A frame the consumer's own pipeline did receive is the
+     *   consumer's, at-most-once as for any Flow — and that includes an operator that takes frames ahead of
+     *   the consumer (`buffer`, `flowOn`, `conflate`, `produceIn`, `shareIn` / `stateIn`), which loses what
+     *   it holds when cancelled. The guarantee reaches only as far as the first such operator.
+     * - **A frame racing its member's eviction** is part of the admission only if it was routed before the
+     *   eviction; routed after, it may still surface on [incoming] but is not held, because the admission
+     *   it would belong to has ended and its flow completed.
+     *
+     * A frame is delivered both here and on [incoming]; a consumer reads one or the other.
+     */
+    public fun incomingFrom(member: PeerId): Flow<RoomFrame>
 
     /**
      * Host-verified principals of currently-linked peers, keyed by the [PeerId] each was verified

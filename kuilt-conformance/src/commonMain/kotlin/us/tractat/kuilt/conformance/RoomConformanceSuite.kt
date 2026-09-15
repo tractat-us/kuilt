@@ -1,16 +1,25 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.Runnable
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestResult
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
@@ -22,9 +31,11 @@ import us.tractat.kuilt.test.TeardownFault
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
+import us.tractat.kuilt.session.MemberInboxException
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.Room
@@ -253,6 +264,16 @@ public abstract class RoomConformanceSuite {
     public open val awaitBudget: Duration? = 5.seconds
 
     /**
+     * How many unread frames the rooms under test hold per member for [Room.incomingFrom] — the depth
+     * the boundary and overflow obligations (4c)–(4e) measure against.
+     *
+     * Defaulted to the reference's own value because the reference is what this suite builds. A harness
+     * over a room with a different depth overrides it; leaving it at the default would put those
+     * obligations one boundary away from the room's real one, where they measure nothing.
+     */
+    public open val memberInboxCapacity: Int = SeamRoomFactory.MEMBER_INBOX_CAPACITY
+
+    /**
      * Whether this harness can break and heal the links under the rooms it builds — and, when it
      * cannot, **where that is written down**.
      *
@@ -473,6 +494,417 @@ public abstract class RoomConformanceSuite {
             val frame = frameDeferred.await()
             assertEquals(hostRoom.selfId, frame.sender, "frame sender must be the host's selfId")
             assertTrue(payload.contentEquals(frame.payload), "frame payload must match")
+
+            joinerRoom.leave()
+            hostRoom.leave()
+        }
+
+    // ── (4a) incomingFrom holds an admitted member's frames from admission (#2802) ──
+
+    /**
+     * Frames an admitted member sends before anything collects [Room.incomingFrom] still reach the
+     * collector that starts afterwards, in arrival order.
+     *
+     * The ordering is **forced**, not raced. A probe on [Room.incoming] counts both frames being
+     * routed on the host and is cancelled before [Room.incomingFrom] is collected, so by collection
+     * time the frames have already passed through `incoming`. That is the `host { onRoom }` shape: a
+     * room admits and routes before its consumer runs. The probe count is asserted, because a probe
+     * that saw nothing would make the held-frames assertion pass for a room that simply had not
+     * routed yet.
+     */
+    @Test
+    public fun incomingFromHoldsFramesAMemberSentBeforeCollection(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            var routed = 0
+            val probe = launch(start = CoroutineStart.UNDISPATCHED) {
+                hostRoom.incoming.collect { if (it.sender == joinerId) routed++ }
+            }
+            joinerRoom.broadcast("first".encodeToByteArray())
+            joinerRoom.broadcast("second".encodeToByteArray())
+            advanceTimeBy(100L)
+            probe.cancel()
+            // Asserted before the held-frames wait, which throws on its own budget: a rig that never
+            // fired and a frame that was never held must not share one red.
+            assertEquals(2, routed, "rig: both frames must have been routed on the host before incomingFrom was collected")
+
+            val held = hostRoom.awaitHeld(joinerId, count = 2, expected = "the joiner's two frames")
+            assertAll(
+                { assertEquals(listOf("first", "second"), held.map { it.payload.decodeToString() }, "held frames, in arrival order") },
+                { assertTrue(held.all { it.sender == joinerId }, "every held frame is from the member whose inbox was read") },
+            )
+
+            joinerRoom.leave()
+            hostRoom.leave()
+        }
+
+    // ── (4b) each member's inbox holds that member's frames and no other's (#2802) ──
+
+    /**
+     * Two members, and each [Room.incomingFrom] holds only its own member's frames. The second member
+     * speaks first, so a room that put every frame in every inbox would hand the first member's reader
+     * the second member's frame at the head of its stream.
+     */
+    @Test
+    public fun incomingFromHoldsEachMembersFramesApart(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val first = h.joinerFactory.join(InMemoryTag("Bob"), memberName = "Bob")
+            val firstId = hostRoom.awaitRoster("roster.size == 1 — the first joiner is admitted") { it.size == 1 }.single().id
+            val second = h.joinerFactory.join(InMemoryTag("Bob"), memberName = "Carol")
+            val secondId = hostRoom.awaitRoster("roster.size == 2 — both joiners are admitted") { it.size == 2 }
+                .single { it.id != firstId }.id
+            first.awaitRoster("roster.isNotEmpty() — the first joiner sees the host") { it.isNotEmpty() }
+            second.awaitRoster("roster.isNotEmpty() — the second joiner sees the host") { it.isNotEmpty() }
+
+            second.broadcast("second-0".encodeToByteArray())
+            advanceTimeBy(100L)
+            first.broadcast("first-0".encodeToByteArray())
+            first.broadcast("first-1".encodeToByteArray())
+            advanceTimeBy(100L)
+            second.broadcast("second-1".encodeToByteArray())
+            advanceTimeBy(100L)
+
+            // Both readers take two, so a room that put every frame in every inbox is caught from either
+            // side: each member's own frames are split by the other's.
+            val firstHeld = hostRoom.awaitHeld(firstId, count = 2, expected = "the first joiner's two frames")
+            val secondHeld = hostRoom.awaitHeld(secondId, count = 2, expected = "the second joiner's two frames")
+            assertAll(
+                { assertEquals(listOf("first-0", "first-1"), firstHeld.map { it.payload.decodeToString() }, "the first member's inbox holds its own frames only") },
+                { assertEquals(listOf("second-0", "second-1"), secondHeld.map { it.payload.decodeToString() }, "the second member's inbox holds its own frames only") },
+            )
+
+            first.leave()
+            second.leave()
+            hostRoom.leave()
+        }
+
+    // ── (4c) an unclaimed inbox holds exactly memberInboxCapacity frames (#2802) ──
+
+    @Test
+    public fun incomingFromHoldsAFullInboxUnclaimed(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            joinerRoom.broadcastNumbered("f", memberInboxCapacity)
+            advanceTimeBy(200L)
+
+            val held = hostRoom.awaitHeld(joinerId, count = memberInboxCapacity, expected = "exactly a full inbox of frames")
+            assertEquals((0 until memberInboxCapacity).map { "f$it" }, held.map { it.payload.decodeToString() }, "a full inbox is held whole, in order")
+
+            joinerRoom.leave()
+            hostRoom.leave()
+        }
+
+    // ── (4d) a claim after an unclaimed overflow fails, naming the loss (#2802) ──
+
+    @Test
+    public fun incomingFromClaimedAfterAnUnclaimedOverflowFailsNamingTheLoss(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            joinerRoom.broadcastNumbered("f", memberInboxCapacity + 1)
+            advanceTimeBy(200L)
+            val late = hostRoom.incomingFrom(joinerId)
+            joinerRoom.broadcast("after-claim".encodeToByteArray())
+            advanceTimeBy(100L)
+
+            val got = mutableListOf<RoomFrame>()
+            val failure = hostRoom.awaitEnd(late, got, "a claim made after the unclaimed inbox overflowed")
+            assertAll(
+                { assertIs<MemberInboxException.ReleasedBeforeClaim>(failure, "a late claim must fail, not hand back a healthy-looking stream") },
+                { assertEquals(memberInboxCapacity + 1L, (failure as? MemberInboxException.ReleasedBeforeClaim)?.dropped, "dropped counts every frame routed before the claim") },
+                { assertEquals(emptyList<String>(), got.map { it.payload.decodeToString() }, "a failed claim delivers nothing, not even a frame sent after it") },
+            )
+
+            joinerRoom.leave()
+            hostRoom.leave()
+        }
+
+    // ── (4e) a claimed inbox that falls behind delivers what it held, then fails (#2802) ──
+
+    @Test
+    public fun incomingFromClaimedOverflowDeliversTheHeldFramesThenFails(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val claimed = hostRoom.incomingFrom(joinerId)
+            joinerRoom.broadcastNumbered("f", memberInboxCapacity + 1)
+            advanceTimeBy(200L)
+
+            val got = mutableListOf<RoomFrame>()
+            val failure = hostRoom.awaitEnd(claimed, got, "a claimed inbox that fell a full inbox behind")
+            assertAll(
+                { assertIs<MemberInboxException.CollectorFellBehind>(failure, "a claimed overflow must fail the flow, not drop frames silently") },
+                { assertEquals((0 until memberInboxCapacity).map { "f$it" }, got.map { it.payload.decodeToString() }, "every held frame is delivered before the failure") },
+            )
+
+            joinerRoom.leave()
+            hostRoom.leave()
+        }
+
+    // ── (4f) the flow completes when the member's admission ends (#2802) ──────
+
+    @Test
+    public fun incomingFromCompletesWhenTheMemberLeaves(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val got = mutableListOf<RoomFrame>()
+            var rosterAtCompletion: Set<PeerId>? = null
+            // Unconfined, so the reader resumes in place the instant the room ends the inbox and reads the
+            // roster exactly as the room had published it then — not after the room's own next step, which
+            // on the ordinary test scheduler would hide an inbox completed before the member left the roster.
+            val reader = async(UnconfinedTestDispatcher(testScheduler)) {
+                hostRoom.awaitEnd(hostRoom.incomingFrom(joinerId), got, "the reader of a member that left")
+                    .also { rosterAtCompletion = hostRoom.roster.value.mapTo(mutableSetOf()) { it.id } }
+            }
+            joinerRoom.broadcast("before-leave".encodeToByteArray())
+            advanceTimeBy(100L)
+            joinerRoom.leave(LeaveReason.Normal)
+            hostRoom.awaitRoster("roster.isEmpty() — the joiner's leave is observed") { it.isEmpty() }
+
+            val failure = reader.await()
+            assertAll(
+                { assertEquals(null, failure, "an ended admission completes the flow; it must neither fail nor hang") },
+                { assertEquals(listOf("before-leave"), got.map { it.payload.decodeToString() }, "frames held before the leave are delivered first") },
+                {
+                    assertEquals(
+                        false,
+                        rosterAtCompletion?.contains(joinerId),
+                        "when the member's flow completes, the published roster no longer holds that member",
+                    )
+                },
+            )
+
+            hostRoom.leave()
+        }
+
+    // ── (4g) incomingFrom for a peer with no admission fails (#2802) ──────────
+
+    @Test
+    public fun incomingFromForAPeerWithNoAdmissionFails(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+
+            val failure = hostRoom.awaitEnd(hostRoom.incomingFrom(PeerId("never-admitted")), mutableListOf(), "a peer that was never admitted")
+            assertIs<MemberInboxException.NotAdmitted>(failure, "a peer with no admission has no inbox; the flow must say so")
+
+            hostRoom.leave()
+        }
+
+    // ── (4h) single collection: a concurrent collector throws, a sequential one resumes (#2802) ──
+
+    @Test
+    public fun incomingFromRefusesAConcurrentCollectorAndResumesASequentialOne(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            joinerRoom.broadcastNumbered("f", 3)
+            advanceTimeBy(100L)
+            val frames = hostRoom.incomingFrom(joinerId)
+            val firstRead = frames.take(1).toList().map { it.payload.decodeToString() }
+            val secondRead = frames.take(1).toList().map { it.payload.decodeToString() }
+
+            val holder = launch(start = CoroutineStart.UNDISPATCHED) { frames.take(1).toList() }
+            // holder took f2 and completed; park a collector that has nothing left to read.
+            val parked = launch(start = CoroutineStart.UNDISPATCHED) { frames.collect { } }
+            var concurrent: IllegalStateException? = null
+            withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) {
+                try {
+                    frames.first()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: IllegalStateException) {
+                    concurrent = e
+                }
+            }
+            parked.cancel()
+            holder.cancel()
+
+            assertAll(
+                { assertEquals(listOf("f0"), firstRead, "the first collection reads the first frame") },
+                { assertEquals(listOf("f1"), secondRead, "a sequential re-collection resumes where the last stopped") },
+                { assertTrue(concurrent != null, "a second collection while one is active must throw IllegalStateException") },
+            )
+
+            joinerRoom.leave()
+            hostRoom.leave()
+        }
+
+    // ── (4i) a collection cancelled as its frame arrives leaves that frame for the next (#2802) ──
+
+    /**
+     * The first collection is cancelled at the instant a frame reaches the member's inbox, and the next
+     * collection still receives that frame.
+     *
+     * The rig: a probe on [Room.incoming] cancels the reader when it sees the frame. The reference room
+     * routes a frame onto `incoming` before offering it to the member's inbox, and the test scheduler runs
+     * resumed coroutines in order, so the probe's cancel lands after the inbox was offered the frame and
+     * before the reader runs — the window in which a `Channel`-backed inbox lost it. The rig's own
+     * preconditions are asserted, so a harness that orders delivery differently fails here loudly rather
+     * than passing without having reached the window.
+     */
+    @Test
+    public fun incomingFromCollectionCancelledAsAFrameArrivesLeavesItForTheNext(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val delivered = mutableListOf<RoomFrame>()
+            val reader = launch(start = CoroutineStart.UNDISPATCHED) { hostRoom.incomingFrom(joinerId).toList(delivered) }
+            var probeCancels = 0
+            val probe = launch(start = CoroutineStart.UNDISPATCHED) {
+                hostRoom.incoming.collect {
+                    if (it.sender == joinerId) {
+                        probeCancels++
+                        reader.cancel()
+                    }
+                }
+            }
+            joinerRoom.broadcast("f-raced".encodeToByteArray())
+            advanceTimeBy(100L)
+            probe.cancel()
+
+            assertAll(
+                { assertEquals(1, probeCancels, "rig: the probe must have cancelled the reader as the frame was routed") },
+                { assertTrue(reader.isCancelled, "rig: the first collection was cancelled") },
+                { assertEquals(emptyList<String>(), delivered.map { it.payload.decodeToString() }, "rig: the cancelled collection delivered nothing") },
+            )
+            val held = hostRoom.awaitHeld(joinerId, count = 1, expected = "the frame the cancelled collection never delivered")
+            assertEquals(listOf("f-raced"), held.map { it.payload.decodeToString() }, "the next collection receives the frame the cancelled one never delivered")
+
+            joinerRoom.leave()
+            hostRoom.leave()
+        }
+
+    // ── (4j) the room going terminal completes every member's flow (#2802) ──────
+
+    @Test
+    public fun incomingFromCompletesWhenTheRoomItselfLeaves(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val got = mutableListOf<RoomFrame>()
+            val reader = async { hostRoom.awaitEnd(hostRoom.incomingFrom(joinerId), got, "the reader of a member when the room itself left") }
+            joinerRoom.broadcast("before-room-leave".encodeToByteArray())
+            advanceTimeBy(100L)
+            hostRoom.leave()
+
+            val failure = reader.await()
+            assertAll(
+                { assertEquals(null, failure, "a terminal room ends every admission: the flow completes, and neither fails nor hangs") },
+                { assertEquals(listOf("before-room-leave"), got.map { it.payload.decodeToString() }, "frames held before the room left are delivered first") },
+            )
+
+            joinerRoom.leave()
+        }
+
+    // ── (4k) a collection cancelled between taking a frame and handing it over loses nothing (#2802) ──
+
+    /**
+     * Runs dispatched tasks only when told to, one at a time — so a property can place a cancellation
+     * between two steps of a reader, a window the test scheduler cannot open because it runs everything that
+     * is ready before returning.
+     */
+    private class StepDispatcher : CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            tasks.addLast(block)
+        }
+
+        val pending: Int get() = tasks.size
+
+        fun step(): Boolean {
+            val task = tasks.removeFirstOrNull() ?: return false
+            task.run()
+            return true
+        }
+
+        fun drain() {
+            while (step()) Unit
+        }
+    }
+
+    /**
+     * (4i) cancels the reader before it resumes, so it cannot see a room that suspends *between* taking a
+     * frame and handing it over — the second window in which a frame can leave an inbox unseen. Here the
+     * reader runs on a [StepDispatcher]. The frame is routed on the test scheduler, which queues exactly one
+     * task for the parked reader; the reader runs exactly that task and is cancelled wherever it left off.
+     * Across that collection and the next, both frames must arrive exactly once, in order: delivered by the
+     * cancelled collection, or left for the next one — never lost.
+     */
+    @Test
+    public fun incomingFromCollectionCancelledBetweenTakeAndHandOverLosesNothing(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val steps = StepDispatcher()
+            val delivered = mutableListOf<String>()
+            val reader = CoroutineScope(steps + Job()).launch {
+                hostRoom.incomingFrom(joinerId).collect { delivered += it.payload.decodeToString() }
+            }
+            steps.drain() // parked, waiting for a frame
+
+            joinerRoom.broadcast("f-0".encodeToByteArray())
+            advanceTimeBy(100L) // routed on the test scheduler; the parked reader's resumption queues on `steps`
+            val wakeTasks = steps.pending
+            steps.step() // the reader runs exactly the step that takes the frame...
+            reader.cancel() // ...and is cancelled wherever that step left it
+            steps.drain()
+            joinerRoom.broadcast("f-1".encodeToByteArray())
+            advanceTimeBy(100L)
+
+            assertAll(
+                { assertEquals(1, wakeTasks, "rig: routing the frame queued exactly one task for the parked reader") },
+                { assertTrue(reader.isCompleted, "rig: the cancelled collection has ended") },
+            )
+            val rest = hostRoom.awaitHeld(joinerId, count = 2 - delivered.size, expected = "the frames the cancelled collection did not deliver")
+            assertEquals(
+                listOf("f-0", "f-1"),
+                delivered + rest.map { it.payload.decodeToString() },
+                "each frame arrives exactly once, in order — delivered by the cancelled collection or left for the next",
+            )
 
             joinerRoom.leave()
             hostRoom.leave()
@@ -1325,6 +1757,57 @@ public abstract class RoomConformanceSuite {
                 "`Room.incoming` drops frames from peers that are not admitted, so an unexpected " +
                     "roster above explains a missing frame before the transport does.",
             )
+    }
+
+    /**
+     * Collect [count] frames from [member]'s [Room.incomingFrom] inbox; on expiry of [awaitBudget]
+     * fail naming how many of them did arrive, since "some were held" and "none were" point at
+     * different defects.
+     */
+    private suspend fun Room.awaitHeld(member: PeerId, count: Int, expected: String): List<RoomFrame> {
+        val held = mutableListOf<RoomFrame>()
+        val budget = awaitBudget ?: return incomingFrom(member).take(count).toList(held)
+        return withTimeoutOrNull(budget) { incomingFrom(member).take(count).toList(held) }
+            ?: fail(
+                "only ${held.size} of $count held frames arrived: $expected",
+                budget,
+                "`Room.incomingFrom` holds a member's frames from its admission, so a frame missing here " +
+                    "was routed before the collector started and was not held for it.",
+            )
+    }
+
+    /**
+     * Collect [flow] to its end, recording frames into [into], and return the [MemberInboxException] it
+     * failed with, or `null` if it completed. On expiry of [awaitBudget] fail naming how many frames
+     * arrived: a per-member stream must end by completing or failing, and one that does neither is the
+     * silent loss these obligations exist to rule out.
+     */
+    private suspend fun Room.awaitEnd(flow: Flow<RoomFrame>, into: MutableList<RoomFrame>, expected: String): MemberInboxException? {
+        var failure: MemberInboxException? = null
+        val budget = awaitBudget ?: Duration.INFINITE
+        val ended = withTimeoutOrNull(budget) {
+            try {
+                flow.toList(into)
+            } catch (e: MemberInboxException) {
+                failure = e
+            }
+            true
+        }
+        return if (ended == true) {
+            failure
+        } else {
+            fail(
+                "the incomingFrom flow neither completed nor failed: $expected (${into.size} frame(s) arrived)",
+                budget,
+                "A per-member stream ends by completing (the admission ended) or failing with a " +
+                    "MemberInboxException (frames were lost). Hanging is the silent loss it must not have.",
+            )
+        }
+    }
+
+    /** Broadcast [count] frames `"<prefix>0"`, `"<prefix>1"`, … in order. */
+    private suspend fun Room.broadcastNumbered(prefix: String, count: Int) {
+        repeat(count) { broadcast("$prefix$it".encodeToByteArray()) }
     }
 
     /**
