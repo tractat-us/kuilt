@@ -119,7 +119,7 @@ class MemberInboxTest {
         }
 
     @Test
-    fun `a frame take(n) received is not delivered again to the next collection`() =
+    fun `a frame that take received is not delivered again to the next collection`() =
         runTest {
             val inbox = MemberInbox(PeerId("member"), capacity = 4)
             listOf("f0", "f1", "f2").forEach { inbox.offer(frame(it)) }

@@ -250,11 +250,22 @@ public class FakeRoom(
                         while (true) {
                             // Before taking a frame, never between taking and handing it over.
                             currentCoroutineContext().ensureActive()
-                            val frame = lock.withLock { held.removeFirstOrNull() }
+                            // One step under one lock, as MemberInbox.nextStep: taking the frame and deciding the
+                            // stream has ended must see the same state, or a frame held between the two is lost.
+                            var ended = false
+                            var failure: MemberInboxException? = null
+                            val frame = lock.withLock {
+                                held.removeFirstOrNull().also {
+                                    if (it == null && state == State.Ended) {
+                                        ended = true
+                                        failure = endFailure
+                                    }
+                                }
+                            }
                             when {
                                 frame != null -> collector.emit(frame)
-                                lock.withLock { state == State.Ended } -> {
-                                    lock.withLock { endFailure }?.let { throw it }
+                                ended -> {
+                                    failure?.let { throw it }
                                     return
                                 }
                                 else -> wakeup.receive()
@@ -379,9 +390,12 @@ public class FakeRoom(
         val endedInbox = inboxLock.withLock { memberInboxes.remove(peerId) }
         _roster.update { roster -> roster.filterNot { it.id == peerId }.toSet() }
         _rosterPeers.update { it - peerId }
-        eventsChannel.send(MembershipEvent.Left(peerId, reason))
-        // Last, as the real room does: a reader that sees its flow complete already sees the member gone.
+        // After the roster, as the real room does, so a reader that sees its flow complete already sees
+        // the member gone. Before the Left send, unlike the real room: that send suspends once a test has
+        // left `events` undrained past its capacity, and closing after it would leave the reader waiting on
+        // that test. So a reader of this fake can complete before its Left is received on `events`.
         endedInbox?.close()
+        eventsChannel.send(MembershipEvent.Left(peerId, reason))
     }
 
     /**

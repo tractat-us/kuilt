@@ -30,9 +30,20 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.session.MemberInbox"
  * between, and the flow implements [Flow] directly, so no check of this class's own sits between the two.
  * Cancellation is observed before a frame is taken, never after.
  *
+ * The flow is a direct [Flow] implementation, which kotlinx.coroutines documents as not stable for
+ * inheritance. It is required anyway: the `flow {}` builder's `SafeCollector.emit` calls `ensureActive()`
+ * *before* delivering, so a frame taken and then emitted through it can be lost to a cancellation that lands
+ * in between.
+ *
  * What the consumer's own pipeline does with a frame once it has it is the consumer's: at-most-once, as
- * for any Flow. That boundary is also why a frame is not put back when `emit` throws — `take(n)` aborts by
- * throwing from `emit` *after* the frame was delivered, so a put-back would deliver it twice.
+ * for any Flow. That includes every operator that takes frames ahead of the consumer — `buffer`, `flowOn`,
+ * `conflate`, `produceIn`, `shareIn` / `stateIn` — each of which loses what it holds when cancelled, so the
+ * "nothing is lost across re-collection" guarantee reaches only as far as the first such operator. That
+ * boundary is also why a frame is not put back when `emit` throws — `take(n)` aborts by throwing from `emit`
+ * *after* the frame was delivered, so a put-back would deliver it twice.
+ *
+ * A new collection straight after cancelling the previous one throws [IllegalStateException] until the
+ * cancelled one has finished — its `finally` clears the single-collection flag — so `cancelAndJoin` it first.
  *
  * ## Locking
  *

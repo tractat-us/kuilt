@@ -110,9 +110,16 @@ public interface Room {
      *   nothing restarts the stream. Treat the member as lost — evict it, or let its session drop and
      *   re-join, which is a new admission — rather than reading on.
      * - **Single-collection, lossless across re-collection.** Collecting while another collection of the
-     *   same member is active throws [IllegalStateException]. A collection that is cancelled leaves
-     *   every frame it had not yet received for the next one, which resumes exactly where it stopped. A
-     *   frame the consumer's own pipeline did receive is the consumer's: at-most-once, as for any Flow.
+     *   same member is active throws [IllegalStateException] — including straight after `cancel()`, until
+     *   the cancelled collection has finished, so `cancelAndJoin` the previous collection first. A
+     *   collection that is cancelled leaves every frame its collector had not yet received for the next
+     *   one, which resumes exactly where it stopped. A frame the consumer's own pipeline did receive is the
+     *   consumer's, at-most-once as for any Flow — and that includes an operator that takes frames ahead of
+     *   the consumer (`buffer`, `flowOn`, `conflate`, `produceIn`, `shareIn` / `stateIn`), which loses what
+     *   it holds when cancelled. The guarantee reaches only as far as the first such operator.
+     * - **A frame racing its member's eviction** is part of the admission only if it was routed before the
+     *   eviction; routed after, it may still surface on [incoming] but is not held, because the admission
+     *   it would belong to has ended and its flow completed.
      *
      * A frame is delivered both here and on [incoming]; a consumer reads one or the other.
      */

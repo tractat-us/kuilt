@@ -799,8 +799,9 @@ internal class SeamRoom(
      * routed before its inbox exists; that pairing is the whole "held from admission" guarantee. A removed
      * inbox is [MemberInbox.close]d last: after [lock] is released, because closing can resume its
      * collector in place, and after the member has left the published [roster] and `Left` was emitted, so
-     * a reader that sees its flow complete never still sees the member. [leave] clears every entry the same
-     * way once the room is terminal. Guarded by [lock].
+     * a reader that sees its flow complete never still sees the member. [leave] closes and clears every entry
+     * once the room is terminal, after releasing [lock] — but it emits no `Left` and leaves [roster] as it
+     * was, so a reader completed by [leave] can still see its member on the roster. Guarded by [lock].
      */
     private val memberInboxes = HashMap<PeerId, MemberInbox>()
 
