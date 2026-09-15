@@ -1,12 +1,16 @@
 package us.tractat.kuilt.session.test
 
 import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
@@ -20,7 +24,8 @@ import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
-import us.tractat.kuilt.session.MEMBER_INBOX_CAPACITY
+import us.tractat.kuilt.session.MemberInboxException
+import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity

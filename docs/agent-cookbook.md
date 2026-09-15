@@ -22,6 +22,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a "paused / reconnecting…" presence flag, a `lastSeen` map for greying out a player | `Room.roster` + `Member.liveness` — the level; `Room.events` is the notification | [Liveness & presence](agent-cookbook/session.md#liveness--presence) |
 | that same "paused / reconnecting…" surface for a **game** (not a bare room), a `room.events` → game-presence adapter | `RoomGameSession.presence` via `gameOverRoom` | [Liveness & presence](agent-cookbook/session.md#liveness--presence) |
 | a "you are offline" / "your connection dropped" indicator, distinguishing *your* outage from *their* outage | `Room.localFabric` + `MembershipEvent.LocalFabricLost` | [Liveness & presence](agent-cookbook/session.md#liveness--presence) |
+| a per-member reader built as `room.incoming.filter { it.sender == peer }` — or a fix for "the host never saw that member's first frame", a hello lost before its collector subscribed | `Room.incomingFrom(member)` — held from admission, and failing with a `MemberInboxException` rather than losing frames silently | [Per-member frames](agent-cookbook/session.md#per-member-frames) |
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](agent-cookbook/replication.md#replicated-data) |
 | replicating a CRDT over a connection by hand | `Quilter` | [Replicated data](agent-cookbook/replication.md#replicated-data) |
 | a conditional write to shared state — "claim it only if it's free", "publish only if nobody already did" — or an identity/no-op patch meaning "I decided not to write" | `Quilter.mutateOrSkip { … }` (return `null` to decline) | [Replicated data](agent-cookbook/replication.md#replicated-data) |
@@ -62,7 +63,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 The detail lives in seven family pages; each holds the sections named beside it.
 
 - [Fabrics](agent-cookbook/fabrics.md) — discovery, transports, the seam, payload limits, pumps, durable storage.
-- [Session](agent-cookbook/session.md) — rejoin & reconnect, liveness & presence, host election & the lobby.
+- [Session](agent-cookbook/session.md) — rejoin & reconnect, liveness & presence, per-member frames, host election & the lobby.
 - [Replication](agent-cookbook/replication.md) — replicated data, scaling to many peers, dealing cards, dedup, archiving what the live replica forgets.
 - [Consensus](agent-cookbook/consensus.md) — consensus & turns, when one of the peers is a server, durable consensus state.
 - [Heddle](agent-cookbook/heddle.md) — weighted fair share, reserving and charging over a network, minting quota and reshaping with agreement, weighted lanes over warp.

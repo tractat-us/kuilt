@@ -374,6 +374,24 @@ Five things to know before you bind this to a UI:
   bonded `CompositeSeam` the **tag** is best-effort when every transport drops inside one dispatch
   window (#1778): re-read `Room.localFabric` at handling time if a decision must be certain.
 
+## Per-member frames
+
+**Intent:** read one member's frames in its own coroutine — a per-peer channel, a host that attaches each member as the roster shows it, a `room.incoming.filter { it.sender == peer }` — without losing what that member sent before you started reading, such as its first hello.
+**Primitive:** `Room.incomingFrom(member)` (`us.tractat.kuilt.session`). A room admits and routes before a `host { onRoom }` consumer runs, so a per-member collector of `incoming` subscribes after that member's first frame by construction, and the frame is gone (#2802). `incomingFrom` holds the member's frames from the instant it is admitted and is per admission: the flow completes when the member leaves, and a member admitted again gets a fresh inbox. It is never silently lossy — when frames cannot be held (the inbox overflowed before anyone claimed it, or the collector fell behind) the flow fails with a `MemberInboxException` saying what was lost, and the recovery is to resync that member. Collect it from one coroutine at a time; a second concurrent collection throws.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#perMemberFramesSample -->
+```kotlin
+public suspend fun perMemberFramesSample(room: Room, member: PeerId, onFrame: suspend (ByteArray) -> Unit): Boolean =
+    try {
+        // Held from admission: frames the member sent before this line are still delivered, in order.
+        // Not `room.incoming.filter { it.sender == member }`, which loses whatever was routed first.
+        room.incomingFrom(member).collect { onFrame(it.payload) }
+        true // the admission ended; a member admitted again gets a fresh inbox, so call this again
+    } catch (_: MemberInboxException) {
+        false // never silent: the exception says what was lost — resync this member
+    }
+```
+
 ## Host election & the lobby
 
 **Intent:** several peers are connected and one of them has to host — and then that one walks out before the session starts.
