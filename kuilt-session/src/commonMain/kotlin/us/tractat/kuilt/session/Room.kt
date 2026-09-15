@@ -23,6 +23,13 @@ import us.tractat.kuilt.session.partition.RoomId
  * All flows are coroutine-scope-bound (the [us.tractat.kuilt.core.Loom] backing this
  * room's [us.tractat.kuilt.core.Seam] drives the lifecycle). Call [leave] to clean up.
  */
+/**
+ * How many unread frames [Room.incomingFrom] holds for one member — the same depth [Room.incoming]
+ * buffers for a subscriber that falls behind, so a claimed inbox drops no earlier than `incoming`
+ * would.
+ */
+public const val MEMBER_INBOX_CAPACITY: Int = 64
+
 public interface Room {
     /** This peer's own identifier (mirrors [us.tractat.kuilt.core.Seam.selfId]). */
     public val selfId: PeerId
