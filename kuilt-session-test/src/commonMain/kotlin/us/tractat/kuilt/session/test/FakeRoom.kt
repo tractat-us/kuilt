@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
+import us.tractat.kuilt.session.MEMBER_INBOX_CAPACITY
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity

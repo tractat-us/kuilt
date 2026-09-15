@@ -3402,7 +3402,74 @@ internal class SeamRoom(
     // ── Application frame routing ─────────────────────────────────────────────
 
     private fun routeApplicationFrame(sender: PeerId, bytes: ByteArray) {
-        _incoming.tryEmit(RoomFrame(sender = sender, payload = bytes))
+        val frame = RoomFrame(sender = sender, payload = bytes)
+        _incoming.tryEmit(frame)
+        holdForMember(frame)
+    }
+
+    /**
+     * Offer [frame] to its sender's inbox ([incomingFrom]). Non-suspending, like the `tryEmit` beside
+     * it, so an overflow is decided here rather than waited out — see [Room.incomingFrom] for the
+     * claimed/unclaimed split.
+     */
+    private fun holdForMember(frame: RoomFrame) {
+        val overflow = lock.withLock {
+            val inbox = memberInboxes[frame.sender] ?: return
+            when {
+                inbox.released -> {
+                    inbox.dropped++
+                    return
+                }
+                inbox.frames.trySend(frame).isSuccess -> return
+                inbox.claimed -> {
+                    inbox.dropped++
+                    if (inbox.overflowLogged) return
+                    inbox.overflowLogged = true
+                    InboxOverflow.ClaimedCollectorFellBehind
+                }
+                else -> {
+                    // Nobody has claimed this member's frames within a full inbox, so this consumer
+                    // reads `incoming` only: stop holding and release what is held.
+                    inbox.released = true
+                    inbox.frames.cancel()
+                    inbox.dropped += MEMBER_INBOX_CAPACITY + 1
+                    InboxOverflow.ReleasedUnclaimed
+                }
+            }
+        }
+        when (overflow) {
+            InboxOverflow.ClaimedCollectorFellBehind -> logger.warn {
+                "room.inbox.overflow self=${selfId.value} member=${frame.sender.value} — the incomingFrom " +
+                    "collector is $MEMBER_INBOX_CAPACITY frames behind; newer frames are dropped until it catches up"
+            }
+            InboxOverflow.ReleasedUnclaimed -> logger.debug {
+                "room.inbox.released self=${selfId.value} member=${frame.sender.value} — incomingFrom was not " +
+                    "claimed within $MEMBER_INBOX_CAPACITY frames; no longer holding"
+            }
+        }
+    }
+
+    override fun incomingFrom(member: PeerId): Flow<RoomFrame> {
+        var notHeld = 0L
+        val frames = lock.withLock {
+            // Not admitted: nothing is or will be held for this call, and the flow never completes,
+            // matching what `incoming.filter { it.sender == member }` would give.
+            val inbox = memberInboxes[member] ?: return flow { awaitCancellation() }
+            if (inbox.released) {
+                notHeld = inbox.dropped
+                inbox.frames = Channel(MEMBER_INBOX_CAPACITY)
+                inbox.released = false
+            }
+            inbox.claimed = true
+            inbox.frames
+        }
+        if (notHeld > 0) {
+            logger.warn {
+                "room.inbox.late-claim self=${selfId.value} member=${member.value} — $notHeld frames were not " +
+                    "held: incomingFrom was claimed after the unclaimed inbox overflowed"
+            }
+        }
+        return frames.receiveAsFlow()
     }
 
     // ── Room interface ────────────────────────────────────────────────────────
