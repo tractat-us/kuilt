@@ -1,9 +1,12 @@
 package us.tractat.kuilt.session.test
 
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
@@ -12,8 +15,11 @@ import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity
+import us.tractat.kuilt.session.MemberInboxException
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.ReconnectReason
+import us.tractat.kuilt.session.RoomFrame
+import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
@@ -552,6 +558,155 @@ class FakeRoomTest {
         val eventDeferred = async { room.events.first() }
         room.emit(MembershipEvent.Joined(alice))
         assertEquals(MembershipEvent.Joined(alice), eventDeferred.await())
+    }
+
+    // ── incomingFrom: the real room's per-admission contract (#2802) ─────────
+
+    private fun Iterable<RoomFrame>.texts() = map { it.payload.decodeToString() }
+
+    @Test
+    fun `incomingFrom holds frames delivered before the claim`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+        room.deliver(alice, "a0".encodeToByteArray())
+        room.deliver(alice, "a1".encodeToByteArray())
+
+        assertEquals(listOf("a0", "a1"), room.incomingFrom(alice).take(2).toList().texts())
+    }
+
+    @Test
+    fun `incomingFrom completes when the member is removed`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+        room.deliver(alice, "a0".encodeToByteArray())
+        val frames = room.incomingFrom(alice)
+        room.removeMember(alice)
+
+        assertEquals(listOf("a0"), frames.toList().texts(), "the held frame is delivered, then the flow completes")
+    }
+
+    @Test
+    fun `incomingFrom for a peer that was never added fails NotAdmitted`() = runTest {
+        val room = FakeRoom()
+        assertFailsWith<MemberInboxException.NotAdmitted> { room.incomingFrom(PeerId("ghost")).first() }
+    }
+
+    @Test
+    fun `a claim after an unclaimed overflow fails with ReleasedBeforeClaim naming the loss`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+        repeat(SeamRoomFactory.MEMBER_INBOX_CAPACITY + 1) { room.deliver(alice, "a$it".encodeToByteArray()) }
+
+        val failure = assertFailsWith<MemberInboxException.ReleasedBeforeClaim> { room.incomingFrom(alice).first() }
+        assertEquals(SeamRoomFactory.MEMBER_INBOX_CAPACITY + 1L, failure.dropped)
+    }
+
+    @Test
+    fun `a claimed overflow delivers the held frames then fails with CollectorFellBehind`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+        val frames = room.incomingFrom(alice)
+        repeat(SeamRoomFactory.MEMBER_INBOX_CAPACITY + 1) { room.deliver(alice, "a$it".encodeToByteArray()) }
+
+        val got = mutableListOf<RoomFrame>()
+        assertFailsWith<MemberInboxException.CollectorFellBehind> { frames.toList(got) }
+        assertEquals((0 until SeamRoomFactory.MEMBER_INBOX_CAPACITY).map { "a$it" }, got.texts())
+    }
+
+    @Test
+    fun `a second concurrent collection of one member throws IllegalStateException`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+        val frames = room.incomingFrom(alice)
+        val holder = launch(start = CoroutineStart.UNDISPATCHED) { frames.collect { } }
+
+        assertFailsWith<IllegalStateException> { frames.first() }
+        holder.cancel()
+    }
+
+    @Test
+    fun `leave completes every member's flow`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+        room.deliver(alice, "a0".encodeToByteArray())
+        val frames = room.incomingFrom(alice)
+        room.leave()
+
+        assertEquals(listOf("a0"), frames.toList().texts())
+    }
+
+    @Test
+    fun `re-adding a present member keeps its inbox and re-adding after removal starts a fresh one`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+        room.deliver(alice, "kept".encodeToByteArray())
+        room.addMember(member(alice))
+        val kept = room.incomingFrom(alice).take(1).toList().texts()
+
+        room.removeMember(alice)
+        room.addMember(member(alice))
+        room.deliver(alice, "fresh".encodeToByteArray())
+        val fresh = room.incomingFrom(alice).take(1).toList().texts()
+
+        assertAll(
+            { assertEquals(listOf("kept"), kept, "a re-add of a present member keeps what its inbox holds") },
+            { assertEquals(listOf("fresh"), fresh, "a member added again after removal reads a fresh inbox") },
+        )
+    }
+
+    @Test
+    fun `a frame delivered before addMember is not held for the member`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.deliver(alice, "early".encodeToByteArray())
+        room.addMember(member(alice))
+        room.deliver(alice, "late".encodeToByteArray())
+
+        assertEquals(listOf("late"), room.incomingFrom(alice).take(1).toList().texts())
+    }
+
+    @Test
+    fun `addMember after leave admits nobody`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.leave()
+        room.addMember(member(alice))
+
+        assertAll(
+            { assertTrue(room.roster.value.isEmpty(), "a room that has left admits nobody") },
+            { assertFailsWith<MemberInboxException.NotAdmitted> { room.incomingFrom(alice).first() } },
+        )
+    }
+
+    @Test
+    fun `a collection cancelled as a frame is delivered leaves that frame for the next collection`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+        val frames = room.incomingFrom(alice)
+        val delivered = mutableListOf<String>()
+        val first = launch { frames.collect { delivered += it.payload.decodeToString() } }
+        runCurrent() // parked, waiting for a frame
+
+        room.deliver(alice, "a".encodeToByteArray()) // wakes the parked collection...
+        first.cancel() // ...which is cancelled before it runs
+        runCurrent()
+        room.deliver(alice, "b".encodeToByteArray())
+        room.removeMember(alice)
+
+        val next = frames.toList().texts()
+        assertAll(
+            { assertTrue(first.isCancelled, "rig: the first collection was cancelled") },
+            { assertEquals(emptyList<String>(), delivered, "rig: the cancelled collection delivered nothing") },
+            { assertEquals(listOf("a", "b"), next, "the next collection receives the undelivered frame, then the rest") },
+        )
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
