@@ -88,6 +88,12 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # Explicit, because the action's default is `tools platform-tools` and
+          # Google has removed the obsolete `tools` package — superseded by
+          # cmdline-tools — from the SDK repository. sdkmanager exits 1 on it, and
+          # this step failing skips every step after it.
+          packages: platform-tools
 
       - name: Generate API reference
         # Root dokkaGenerate aggregates every subproject into ONE multi-module
