@@ -156,17 +156,85 @@ public class FakeRoom(
     override val incoming: Flow<RoomFrame> = incomingChannel.receiveAsFlow()
 
     /**
-     * Per-member inboxes behind [incomingFrom], fed by [deliver]. A fake has no admission step, so an
-     * inbox is created on first use from either side, which holds every frame a test delivers — the
-     * same buffering divergence [incoming] already makes. Bounded like the real room: an overflow
-     * drops the newest frame rather than suspending [deliver] for a test that reads only [incoming].
+     * Per-member inboxes behind [incomingFrom], with the real room's contract rather than a buffered
+     * stand-in (#2802): an inbox is opened when [addMember] admits a member, fed by [deliver] only for a
+     * member on the roster, and closed — its collector completes — by [removeMember] and [leave]. A claim
+     * after an unclaimed overflow and a claimed overflow both fail the flow with a
+     * [MemberInboxException]; a second concurrent collection throws; a peer with no inbox fails with
+     * [MemberInboxException.NotAdmitted].
+     *
+     * [FakeMemberInbox] is a copy of `:kuilt-session`'s internal `MemberInbox`, which this module cannot
+     * see. Keep the two in step: a fake that is more forgiving than the room is how a consumer's test
+     * goes green on a stream production would have failed.
      */
-    private val memberInboxes = mutableMapOf<PeerId, Channel<RoomFrame>>()
+    private val memberInboxes = mutableMapOf<PeerId, FakeMemberInbox>()
+    private val inboxLock = reentrantLock()
 
-    private fun inboxFor(member: PeerId): Channel<RoomFrame> =
-        memberInboxes.getOrPut(member) { Channel(MEMBER_INBOX_CAPACITY) }
+    override fun incomingFrom(member: PeerId): Flow<RoomFrame> =
+        inboxLock.withLock { memberInboxes[member] }?.claim()
+            ?: flow { throw MemberInboxException.NotAdmitted(member) }
 
-    override fun incomingFrom(member: PeerId): Flow<RoomFrame> = inboxFor(member).receiveAsFlow()
+    private class FakeMemberInbox(private val member: PeerId) {
+        private val capacity = SeamRoomFactory.MEMBER_INBOX_CAPACITY
+        private val lock = reentrantLock()
+        private val frames = Channel<RoomFrame>(capacity)
+        private var claimed = false
+        private var released = false
+        private var closed = false
+        private var dropped = 0L
+        private var collecting = false
+        private var releasedFailure: MemberInboxException.ReleasedBeforeClaim? = null
+
+        fun offer(frame: RoomFrame) {
+            lock.withLock {
+                if (released || closed) {
+                    dropped++
+                    return
+                }
+                if (frames.trySend(frame).isSuccess) return
+                dropped++
+                if (claimed) {
+                    frames.close(MemberInboxException.CollectorFellBehind(member, capacity))
+                    closed = true
+                } else {
+                    released = true
+                    dropped += capacity
+                    frames.cancel()
+                }
+            }
+        }
+
+        fun claim(): Flow<RoomFrame> {
+            val failure = lock.withLock {
+                if (released) {
+                    releasedFailure = releasedFailure ?: MemberInboxException.ReleasedBeforeClaim(member, dropped)
+                } else {
+                    claimed = true
+                }
+                releasedFailure
+            }
+            if (failure != null) return flow { throw failure }
+            return flow {
+                lock.withLock {
+                    check(!collecting) { "incomingFrom(${member.value}) is already being collected — it is single-collection" }
+                    collecting = true
+                }
+                try {
+                    emitAll(frames.receiveAsFlow())
+                } finally {
+                    lock.withLock { collecting = false }
+                }
+            }
+        }
+
+        fun close() {
+            lock.withLock {
+                if (released) releasedFailure = releasedFailure ?: MemberInboxException.ReleasedBeforeClaim(member, dropped)
+                closed = true
+                frames.close()
+            }
+        }
+    }
 
     private val _roomId = MutableStateFlow(initialRoomId)
     override val roomId: StateFlow<RoomId?> = _roomId.asStateFlow()
@@ -377,7 +445,7 @@ public class FakeRoom(
     public suspend fun deliver(from: PeerId, payload: ByteArray) {
         val frame = RoomFrame(sender = from, payload = payload)
         incomingChannel.send(frame)
-        inboxFor(from).trySend(frame)
+        inboxLock.withLock { memberInboxes[from] }?.offer(frame)
     }
 
     /**

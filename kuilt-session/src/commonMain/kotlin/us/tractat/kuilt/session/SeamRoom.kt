@@ -352,31 +352,6 @@ public class SeamRoomFactory(
 private const val MEMBERSHIP_EVENT_REPLAY = 64
 
 /**
- * One admitted member's held frames, behind [SeamRoom.incomingFrom] (#2802).
- *
- * Every field is read and written under the owning room's lock. [frames] is a [Channel], so the
- * consumer's receive needs no lock; only the room's offer and claim do.
- */
-private class MemberInbox {
-    var frames: Channel<RoomFrame> = Channel(MEMBER_INBOX_CAPACITY)
-
-    /** Set by the first [SeamRoom.incomingFrom] for this admission. */
-    var claimed: Boolean = false
-
-    /** The inbox overflowed before anyone claimed it; nothing is held until a claim. */
-    var released: Boolean = false
-
-    /** Frames from this member that were routed but are not in [frames]. */
-    var dropped: Long = 0
-
-    /** A claimed overflow logs once per admission, not once per dropped frame. */
-    var overflowLogged: Boolean = false
-}
-
-/** Why [SeamRoom]'s offer to a member inbox did not hold a frame — each case logs differently. */
-private enum class InboxOverflow { ClaimedCollectorFellBehind, ReleasedUnclaimed }
-
-/**
  * Capacity of **one recipient's** relay lane (#1994; per-recipient since #2048). Deep enough to hold
  * several `Quilter` deltas in flight for that recipient, shallow enough that a wedged link cannot
  * accumulate unboundedly — past which [kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST] sheds
@@ -3436,69 +3411,17 @@ internal class SeamRoom(
     }
 
     /**
-     * Offer [frame] to its sender's inbox ([incomingFrom]). Non-suspending, like the `tryEmit` beside
-     * it, so an overflow is decided here rather than waited out — see [Room.incomingFrom] for the
-     * claimed/unclaimed split.
+     * Offer [frame] to its sender's inbox ([incomingFrom]). Taken off the map under [lock], offered
+     * outside it: the inbox resolves a full buffer itself without suspending, and the main loop routes
+     * one frame at a time, so a sender's frames reach its inbox in arrival order.
      */
     private fun holdForMember(frame: RoomFrame) {
-        val overflow = lock.withLock {
-            val inbox = memberInboxes[frame.sender] ?: return
-            when {
-                inbox.released -> {
-                    inbox.dropped++
-                    return
-                }
-                inbox.frames.trySend(frame).isSuccess -> return
-                inbox.claimed -> {
-                    inbox.dropped++
-                    if (inbox.overflowLogged) return
-                    inbox.overflowLogged = true
-                    InboxOverflow.ClaimedCollectorFellBehind
-                }
-                else -> {
-                    // Nobody has claimed this member's frames within a full inbox, so this consumer
-                    // reads `incoming` only: stop holding and release what is held.
-                    inbox.released = true
-                    inbox.frames.cancel()
-                    inbox.dropped += MEMBER_INBOX_CAPACITY + 1
-                    InboxOverflow.ReleasedUnclaimed
-                }
-            }
-        }
-        when (overflow) {
-            InboxOverflow.ClaimedCollectorFellBehind -> logger.warn {
-                "room.inbox.overflow self=${selfId.value} member=${frame.sender.value} — the incomingFrom " +
-                    "collector is $MEMBER_INBOX_CAPACITY frames behind; newer frames are dropped until it catches up"
-            }
-            InboxOverflow.ReleasedUnclaimed -> logger.debug {
-                "room.inbox.released self=${selfId.value} member=${frame.sender.value} — incomingFrom was not " +
-                    "claimed within $MEMBER_INBOX_CAPACITY frames; no longer holding"
-            }
-        }
+        lock.withLock { memberInboxes[frame.sender] }?.offer(frame)
     }
 
-    override fun incomingFrom(member: PeerId): Flow<RoomFrame> {
-        var notHeld = 0L
-        val frames = lock.withLock {
-            // Not admitted: nothing is or will be held for this call, and the flow never completes,
-            // matching what `incoming.filter { it.sender == member }` would give.
-            val inbox = memberInboxes[member] ?: return flow { awaitCancellation() }
-            if (inbox.released) {
-                notHeld = inbox.dropped
-                inbox.frames = Channel(MEMBER_INBOX_CAPACITY)
-                inbox.released = false
-            }
-            inbox.claimed = true
-            inbox.frames
-        }
-        if (notHeld > 0) {
-            logger.warn {
-                "room.inbox.late-claim self=${selfId.value} member=${member.value} — $notHeld frames were not " +
-                    "held: incomingFrom was claimed after the unclaimed inbox overflowed"
-            }
-        }
-        return frames.receiveAsFlow()
-    }
+    override fun incomingFrom(member: PeerId): Flow<RoomFrame> =
+        lock.withLock { memberInboxes[member] }?.claim()
+            ?: failingInboxFlow(MemberInboxException.NotAdmitted(member))
 
     // ── Room interface ────────────────────────────────────────────────────────
 

@@ -23,13 +23,6 @@ import us.tractat.kuilt.session.partition.RoomId
  * All flows are coroutine-scope-bound (the [us.tractat.kuilt.core.Loom] backing this
  * room's [us.tractat.kuilt.core.Seam] drives the lifecycle). Call [leave] to clean up.
  */
-/**
- * How many unread frames [Room.incomingFrom] holds for one member — the same depth [Room.incoming]
- * buffers for a subscriber that falls behind, so a claimed inbox drops no earlier than `incoming`
- * would.
- */
-public const val MEMBER_INBOX_CAPACITY: Int = 64
-
 public interface Room {
     /** This peer's own identifier (mirrors [us.tractat.kuilt.core.Seam.selfId]). */
     public val selfId: PeerId
@@ -98,17 +91,23 @@ public interface Room {
      * `host { onRoom }` consumer runs, and a consumer that collects each member in its own coroutine
      * subscribes after that member's first frame by construction.
      *
-     * - **Bounded.** Up to [MEMBER_INBOX_CAPACITY] unread frames are held. While nothing has called
-     *   [incomingFrom] for the member, the first overflow releases what is held and stops holding —
-     *   a consumer that reads only [incoming] pays for at most one inbox's worth per member. Once
-     *   claimed, an overflow drops the newest frame, as [incoming] does for a subscriber that falls
-     *   behind; both cases are logged.
-     * - **Single-collection.** The flow is a competing receiver: collect it from one coroutine at a
-     *   time. Sequential re-collection resumes where the last one stopped.
-     * - **Bound to one admission.** A re-admit of a still-admitted member keeps its inbox; a member
-     *   that leaves and is admitted again gets a fresh one. For a peer that is not admitted when
-     *   this is called, the flow never emits.
-     * - The flow never completes on its own, matching [incoming].
+     * **Never silently lossy.** The flow delivers every frame it held, in order, and then either
+     * completes or fails with a [MemberInboxException] saying what was lost:
+     *
+     * - **Per admission.** It completes, after delivering what it held, when the member's admission
+     *   ends — eviction, a clean leave, or this room going terminal. A re-admit of a still-admitted
+     *   member keeps its inbox; a member admitted again after leaving gets a fresh one, so call
+     *   [incomingFrom] again. For a peer with no current admission the flow fails with
+     *   [MemberInboxException.NotAdmitted].
+     * - **Bounded.** An implementation holds a bounded number of unread frames per member
+     *   ([SeamRoomFactory.MEMBER_INBOX_CAPACITY] for the rooms that factory builds). Until
+     *   [incomingFrom] is first called for the admission, an overflow releases what is held — a
+     *   consumer that reads only [incoming] pays for at most one inbox per member — and a later claim
+     *   fails with [MemberInboxException.ReleasedBeforeClaim], naming how many frames were lost. Once
+     *   claimed, an overflow fails the flow with [MemberInboxException.CollectorFellBehind] after the
+     *   held frames are delivered: routing never waits for a slow collector.
+     * - **Single-collection.** Collecting while another collection of the same member is active
+     *   throws [IllegalStateException]. Sequential re-collection resumes where the last one stopped.
      *
      * A frame is delivered both here and on [incoming]; a consumer reads one or the other.
      */
