@@ -87,6 +87,11 @@ internal fun mintFakeRoomId(selfId: PeerId): RoomId = RoomId("${selfId.value}-ro
  *   whereas the real [Room] would drop them;
  * - [leave] **completes** [events]/[incoming] (channel close), whereas the real
  *   [Room] cancels its backing scope without completing the flows.
+ *
+ * [incomingFrom] is **not** a divergence: it follows the real room's per-admission contract. An inbox
+ * opens when [addMember] admits a member and is fed by [deliver] only while that member is on the
+ * roster; [removeMember] and [leave] complete its flow; an unclaimed overflow followed by a claim, and
+ * a claimed overflow, fail it with a [MemberInboxException]; a concurrent second collection throws.
  */
 public class FakeRoom(
     override val selfId: PeerId = PeerId("self"),

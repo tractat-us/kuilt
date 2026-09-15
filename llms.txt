@@ -49,6 +49,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Session](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md)
 - [Rejoin & reconnect](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#rejoin--reconnect)
 - [Liveness & presence](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#liveness--presence)
+- [Per-member frames](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#per-member-frames)
 - [Host election & the lobby](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#host-election--the-lobby)
 - [Warp](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/warp.md)
 - [Where a task may run (location eligibility)](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/warp.md#where-a-task-may-run-location-eligibility)
