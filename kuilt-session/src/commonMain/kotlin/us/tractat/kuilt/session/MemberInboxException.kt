@@ -44,7 +44,8 @@ public sealed class MemberInboxException(message: String) : RuntimeException(mes
 
     /**
      * The claimed collector fell [capacity] frames behind. The flow delivered every frame it held and
-     * then failed here rather than make the room's routing wait: every later frame from [member] is lost.
+     * then failed here rather than make the room's routing wait: every later frame from [member] is lost,
+     * and every re-collection of this admission fails with this.
      */
     public class CollectorFellBehind(
         override val member: PeerId,

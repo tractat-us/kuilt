@@ -5,11 +5,13 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -360,6 +362,9 @@ public class FakeRoom(
      */
     public suspend fun addMember(member: Member) {
         require(member.id != selfId) { "roster must not include selfId ($selfId); see Room.roster" }
+        // A room that has left admits nobody — the real room's addToRoster refuses once it is terminal —
+        // so a late addMember changes nothing: no roster entry, no inbox, no Joined.
+        if (left.value) return
         inboxLock.withLock { memberInboxes.getOrPut(member.id) { FakeMemberInbox(member.id) } }
         _roster.update { it + member }
         _rosterPeers.update { it + member.id }
