@@ -1800,7 +1800,7 @@ public abstract class RoomConformanceSuite {
         val ended = withTimeoutOrNull(budget) {
             try {
                 flow.toList(into)
-            } catch (e: MemberInboxException) {
+            } catch (e: FramesLost) {
                 failure = e
             }
             true
@@ -1812,7 +1812,7 @@ public abstract class RoomConformanceSuite {
                 "the incomingFrom flow neither completed nor failed: $expected (${into.size} frame(s) arrived)",
                 budget,
                 "A per-member stream ends by completing (the admission ended) or failing with a " +
-                    "MemberInboxException (frames were lost). Hanging is the silent loss it must not have.",
+                    "FramesLost (frames were lost). Hanging is the silent loss it must not have.",
             )
         }
     }

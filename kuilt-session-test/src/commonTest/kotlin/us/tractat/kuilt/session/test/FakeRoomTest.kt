@@ -602,7 +602,7 @@ class FakeRoomTest {
     }
 
     @Test
-    fun `a claim after an unclaimed overflow fails with ReleasedBeforeClaim naming the loss`() = runTest {
+    fun `a claim after an unclaimed overflow fails, naming the loss and which side of the claim it was`() = runTest {
         val room = FakeRoom()
         val alice = PeerId("alice")
         room.addMember(member(alice))
@@ -616,7 +616,7 @@ class FakeRoomTest {
     }
 
     @Test
-    fun `a claimed overflow delivers the held frames then fails with CollectorFellBehind`() = runTest {
+    fun `a claimed overflow delivers the held frames then fails`() = runTest {
         val room = FakeRoom()
         val alice = PeerId("alice")
         room.addMember(member(alice))

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -187,8 +188,8 @@ public class FakeRoom(
      * stand-in (#2802): an inbox is opened when [addMember] admits a member, fed by [deliver] only for a
      * member on the roster, and closed — its collector completes — by [removeMember] and [leave]. A claim
      * after an unclaimed overflow and a claimed overflow both fail the flow with a
-     * [MemberInboxException]; a second concurrent collection throws; a peer with no inbox fails with
-     * [MemberInboxException.NotAdmitted].
+     * [FramesLost]; a second concurrent collection throws; a peer with no inbox reads as an empty,
+     * completed stream.
      *
      * [FakeMemberInbox] is a copy of `:kuilt-session`'s internal `MemberInbox`, which this module cannot
      * see. Keep the two in step: a fake that is more forgiving than the room is how a consumer's test
