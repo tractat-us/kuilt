@@ -19,7 +19,7 @@ import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity
-import us.tractat.kuilt.session.MemberInboxException
+import us.tractat.kuilt.session.FramesLost
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.RoomFrame
@@ -45,6 +45,9 @@ import kotlin.time.Instant
 
 /** A fixed instant for the driver helpers that stamp one: these tests assert edges, not time. */
 private val AT = Instant.fromEpochMilliseconds(1_000L)
+
+/** [FakeRoom]'s own default per-member inbox depth — what an overflow test has to exceed. */
+private const val FAKE_INBOX_CAPACITY = 64
 
 class FakeRoomTest {
     // ── Defaults ─────────────────────────────────────────────────────────────
@@ -593,9 +596,9 @@ class FakeRoomTest {
     }
 
     @Test
-    fun `incomingFrom for a peer that was never added fails NotAdmitted`() = runTest {
+    fun `incomingFrom for a peer that was never added completes at once`() = runTest {
         val room = FakeRoom()
-        assertFailsWith<MemberInboxException.NotAdmitted> { room.incomingFrom(PeerId("ghost")).first() }
+        assertEquals(emptyList(), room.incomingFrom(PeerId("ghost")).toList(), "no admission reads as an ended stream")
     }
 
     @Test
@@ -603,10 +606,13 @@ class FakeRoomTest {
         val room = FakeRoom()
         val alice = PeerId("alice")
         room.addMember(member(alice))
-        repeat(SeamRoomFactory.MEMBER_INBOX_CAPACITY + 1) { room.deliver(alice, "a$it".encodeToByteArray()) }
+        repeat(FAKE_INBOX_CAPACITY + 1) { room.deliver(alice, "a$it".encodeToByteArray()) }
 
-        val failure = assertFailsWith<MemberInboxException.ReleasedBeforeClaim> { room.incomingFrom(alice).first() }
-        assertEquals(SeamRoomFactory.MEMBER_INBOX_CAPACITY + 1L, failure.dropped)
+        val failure = assertFailsWith<FramesLost> { room.incomingFrom(alice).first() }
+        assertAll(
+            { assertEquals(FAKE_INBOX_CAPACITY + 1L, failure.dropped) },
+            { assertEquals(false, failure.claimed, "the loss happened before anything claimed the inbox") },
+        )
     }
 
     @Test
@@ -615,11 +621,14 @@ class FakeRoomTest {
         val alice = PeerId("alice")
         room.addMember(member(alice))
         val frames = room.incomingFrom(alice)
-        repeat(SeamRoomFactory.MEMBER_INBOX_CAPACITY + 1) { room.deliver(alice, "a$it".encodeToByteArray()) }
+        repeat(FAKE_INBOX_CAPACITY + 1) { room.deliver(alice, "a$it".encodeToByteArray()) }
 
         val got = mutableListOf<RoomFrame>()
-        assertFailsWith<MemberInboxException.CollectorFellBehind> { frames.toList(got) }
-        assertEquals((0 until SeamRoomFactory.MEMBER_INBOX_CAPACITY).map { "a$it" }, got.texts())
+        val failure = assertFailsWith<FramesLost> { frames.toList(got) }
+        assertAll(
+            { assertEquals((0 until FAKE_INBOX_CAPACITY).map { "a$it" }, got.texts(), "every held frame is delivered before the failure") },
+            { assertEquals(true, failure.claimed, "the loss happened to a claimed inbox") },
+        )
     }
 
     @Test
@@ -684,10 +693,10 @@ class FakeRoomTest {
         room.leave()
         room.addMember(member(alice))
 
-        val refused = assertFailsWith<MemberInboxException.NotAdmitted> { room.incomingFrom(alice).first() }
+        val read = room.incomingFrom(alice).toList()
         assertAll(
             { assertTrue(room.roster.value.isEmpty(), "a room that has left admits nobody") },
-            { assertEquals(alice, refused.member, "and has no inbox for the member it refused") },
+            { assertEquals(emptyList(), read, "and reads as an ended stream for the member it never admitted") },
         )
     }
 

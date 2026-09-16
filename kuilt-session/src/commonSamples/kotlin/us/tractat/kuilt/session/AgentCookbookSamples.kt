@@ -34,7 +34,7 @@ public suspend fun perMemberFramesSample(room: Room, member: PeerId, onFrame: su
         // Not `room.incoming.filter { it.sender == member }`, which loses whatever was routed first.
         room.incomingFrom(member).collect { onFrame(it.payload) }
         true // the admission ended; a member admitted again gets a fresh inbox, so call this again
-    } catch (_: MemberInboxException) {
+    } catch (_: FramesLost) {
         false // never silent, and terminal for this admission: treat the member as lost
     }
 

@@ -26,8 +26,7 @@ import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
-import us.tractat.kuilt.session.MemberInboxException
-import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.FramesLost
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity
@@ -49,6 +48,15 @@ import kotlin.time.Instant
  * per-instance) because the collision this prevents is precisely *between* instances.
  */
 private val fakeRoomSequence = atomic(0L)
+
+/**
+ * [FakeRoom]'s default per-member inbox depth, mirroring the value `SeamRoomFactory` defaults to.
+ *
+ * Its own constant because that one is internal to `:kuilt-session`: this module cannot read it, and a
+ * fake that silently tracked it would drift the day it moved. A test that drives an overflow states the
+ * depth it means via `FakeRoom(memberInboxCapacity = …)`.
+ */
+private const val FAKE_MEMBER_INBOX_CAPACITY = 64
 
 /**
  * Mint a distinct [RoomId] for a host-shaped fake room — readable (it leads with [selfId]) but never
@@ -92,8 +100,9 @@ internal fun mintFakeRoomId(selfId: PeerId): RoomId = RoomId("${selfId.value}-ro
  *
  * [incomingFrom] is **not** a divergence: it follows the real room's per-admission contract. An inbox
  * opens when [addMember] admits a member and is fed by [deliver] only while that member is on the
- * roster; [removeMember] and [leave] complete its flow; an unclaimed overflow followed by a claim, and
- * a claimed overflow, fail it with a [MemberInboxException]; a concurrent second collection throws.
+ * roster; [removeMember] and [leave] complete its flow; a member with no current admission reads as an
+ * empty, completed stream; an unclaimed overflow followed by a claim, and a claimed overflow, fail it
+ * with [FramesLost]; a concurrent second collection throws.
  */
 public class FakeRoom(
     override val selfId: PeerId = PeerId("self"),
@@ -118,6 +127,12 @@ public class FakeRoom(
      * the double built to test around it.
      */
     initialRoomId: RoomId? = if (initialRole == SessionRole.Host) mintFakeRoomId(selfId) else null,
+    /**
+     * How many unread frames this fake holds per member for [incomingFrom], mirroring
+     * `SeamRoomFactory(memberInboxCapacity = …)`. Its own default rather than the factory's, which is
+     * internal to `:kuilt-session`; a test that drives an overflow should state the depth it means.
+     */
+    private val memberInboxCapacity: Int = FAKE_MEMBER_INBOX_CAPACITY,
 ) : Room {
     private val _role = MutableStateFlow(initialRole)
     override val role: StateFlow<SessionRole> = _role.asStateFlow()
@@ -184,12 +199,15 @@ public class FakeRoom(
 
     override fun incomingFrom(member: PeerId): Flow<RoomFrame> =
         inboxLock.withLock { memberInboxes[member] }?.claim()
-            ?: flow { throw MemberInboxException.NotAdmitted(member) }
+            // No current admission reads the same as one that has just ended: an empty, completed stream.
+            ?: emptyFlow()
 
-    private class FakeMemberInbox(private val member: PeerId) {
+    private class FakeMemberInbox(
+        private val member: PeerId,
+        private val capacity: Int,
+    ) {
         private enum class State { Holding, Released, Claimed, Ended }
 
-        private val capacity = SeamRoomFactory.MEMBER_INBOX_CAPACITY
         private val lock = reentrantLock()
 
         // All guarded by [lock]; [wakeup] is only ever touched outside it.
@@ -197,8 +215,10 @@ public class FakeRoom(
         private var state = State.Holding
         private var dropped = 0L
         private var collecting = false
-        private var endFailure: MemberInboxException? = null
-        private var releasedFailure: MemberInboxException.ReleasedBeforeClaim? = null
+        // Whether the stream ends in loss rather than completion, and on which side of the claim — the
+        // two fields FramesLost carries besides `dropped`, which is read when the reader reaches the end.
+        private var endInLoss = false
+        private var lostWhileClaimed = false
         private val wakeup = Channel<Unit>(Channel.CONFLATED)
 
         fun offer(frame: RoomFrame) {
@@ -215,13 +235,16 @@ public class FakeRoom(
                     state == State.Claimed -> {
                         dropped++
                         state = State.Ended
-                        endFailure = MemberInboxException.CollectorFellBehind(member, capacity)
+                        endInLoss = true
+                        lostWhileClaimed = true
                         true
                     }
                     else -> {
                         dropped += held.size + 1L
                         held.clear()
                         state = State.Released
+                        endInLoss = true
+                        lostWhileClaimed = false
                         false
                     }
                 }
@@ -230,16 +253,15 @@ public class FakeRoom(
         }
 
         fun claim(): Flow<RoomFrame> {
-            val failure = lock.withLock {
+            lock.withLock {
                 when (state) {
                     State.Holding -> state = State.Claimed
-                    State.Released ->
-                        releasedFailure = releasedFailure ?: MemberInboxException.ReleasedBeforeClaim(member, dropped)
+                    // Released: nothing is held and nothing will be, so the claimant reads the ended
+                    // stream every other claim of this admission reads.
+                    State.Released -> state = State.Ended
                     State.Claimed, State.Ended -> Unit
                 }
-                releasedFailure
             }
-            if (failure != null) return flow { throw failure }
             return object : Flow<RoomFrame> {
                 override suspend fun collect(collector: FlowCollector<RoomFrame>) {
                     lock.withLock {
@@ -253,12 +275,14 @@ public class FakeRoom(
                             // One step under one lock, as MemberInbox.nextStep: taking the frame and deciding the
                             // stream has ended must see the same state, or a frame held between the two is lost.
                             var ended = false
-                            var failure: MemberInboxException? = null
+                            var failure: FramesLost? = null
                             val frame = lock.withLock {
                                 held.removeFirstOrNull().also {
                                     if (it == null && state == State.Ended) {
                                         ended = true
-                                        failure = endFailure
+                                        // Built here, so `dropped` counts every frame lost by the time
+                                        // the reader arrives — as MemberInbox.nextStep does.
+                                        failure = if (endInLoss) FramesLost(member, dropped, lostWhileClaimed) else null
                                     }
                                 }
                             }
@@ -279,12 +303,9 @@ public class FakeRoom(
         }
 
         fun close() {
-            lock.withLock {
-                if (state == State.Released) {
-                    releasedFailure = releasedFailure ?: MemberInboxException.ReleasedBeforeClaim(member, dropped)
-                }
-                state = State.Ended
-            }
+            // An admission that already lost frames keeps that verdict: ending it here does not turn a
+            // loss into a clean completion, because `endInLoss` is what the collect loop reads.
+            lock.withLock { state = State.Ended }
             wakeup.trySend(Unit)
         }
     }
@@ -376,7 +397,7 @@ public class FakeRoom(
         // A room that has left admits nobody — the real room's addToRoster refuses once it is terminal —
         // so a late addMember changes nothing: no roster entry, no inbox, no Joined.
         if (left.value) return
-        inboxLock.withLock { memberInboxes.getOrPut(member.id) { FakeMemberInbox(member.id) } }
+        inboxLock.withLock { memberInboxes.getOrPut(member.id) { FakeMemberInbox(member.id, memberInboxCapacity) } }
         _roster.update { it + member }
         _rosterPeers.update { it + member.id }
         eventsChannel.send(MembershipEvent.Joined(member))

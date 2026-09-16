@@ -35,7 +35,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
-import us.tractat.kuilt.session.MemberInboxException
+import us.tractat.kuilt.session.FramesLost
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.Room
@@ -271,7 +271,7 @@ public abstract class RoomConformanceSuite {
      * over a room with a different depth overrides it; leaving it at the default would put those
      * obligations one boundary away from the room's real one, where they measure nothing.
      */
-    public open val memberInboxCapacity: Int = SeamRoomFactory.MEMBER_INBOX_CAPACITY
+    public open val memberInboxCapacity: Int = 64
 
     /**
      * Whether this harness can break and heal the links under the rooms it builds — and, when it
@@ -627,8 +627,9 @@ public abstract class RoomConformanceSuite {
             val got = mutableListOf<RoomFrame>()
             val failure = hostRoom.awaitEnd(late, got, "a claim made after the unclaimed inbox overflowed")
             assertAll(
-                { assertIs<MemberInboxException.ReleasedBeforeClaim>(failure, "a late claim must fail, not hand back a healthy-looking stream") },
-                { assertEquals(memberInboxCapacity + 1L, (failure as? MemberInboxException.ReleasedBeforeClaim)?.dropped, "dropped counts every frame routed before the claim") },
+                { assertIs<FramesLost>(failure, "a late claim must fail, not hand back a healthy-looking stream") },
+                { assertEquals(false, (failure as? FramesLost)?.claimed, "the loss happened before anything claimed the inbox") },
+                { assertEquals(memberInboxCapacity + 1L, (failure as? FramesLost)?.dropped, "dropped counts every frame routed before the claim") },
                 { assertEquals(emptyList<String>(), got.map { it.payload.decodeToString() }, "a failed claim delivers nothing, not even a frame sent after it") },
             )
 
@@ -654,7 +655,8 @@ public abstract class RoomConformanceSuite {
             val got = mutableListOf<RoomFrame>()
             val failure = hostRoom.awaitEnd(claimed, got, "a claimed inbox that fell a full inbox behind")
             assertAll(
-                { assertIs<MemberInboxException.CollectorFellBehind>(failure, "a claimed overflow must fail the flow, not drop frames silently") },
+                { assertIs<FramesLost>(failure, "a claimed overflow must fail the flow, not drop frames silently") },
+                { assertEquals(true, (failure as? FramesLost)?.claimed, "the loss happened to a claimed inbox") },
                 { assertEquals((0 until memberInboxCapacity).map { "f$it" }, got.map { it.payload.decodeToString() }, "every held frame is delivered before the failure") },
             )
 
@@ -703,16 +705,26 @@ public abstract class RoomConformanceSuite {
             hostRoom.leave()
         }
 
-    // ── (4g) incomingFrom for a peer with no admission fails (#2802) ──────────
+    // ── (4g) incomingFrom for a peer with no admission completes (#2802) ──────
 
+    /**
+     * A peer with no current admission reads as an empty, completed stream — never a failure. From a
+     * consumer's side "there is no admission" and "the admission just ended" are the same fact, and a
+     * consumer claiming from a roster snapshot legitimately races both (a snapshot read just before an
+     * eviction; its own [Room.leave], which closes inboxes while the roster still holds the member).
+     */
     @Test
-    public fun incomingFromForAPeerWithNoAdmissionFails(): TestResult =
+    public fun incomingFromForAPeerWithNoAdmissionCompletes(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val h = newHarness(backgroundScope)
             val hostRoom = h.hostFactory.host(Pattern("Alice"))
 
-            val failure = hostRoom.awaitEnd(hostRoom.incomingFrom(PeerId("never-admitted")), mutableListOf(), "a peer that was never admitted")
-            assertIs<MemberInboxException.NotAdmitted>(failure, "a peer with no admission has no inbox; the flow must say so")
+            val got = mutableListOf<RoomFrame>()
+            val failure = hostRoom.awaitEnd(hostRoom.incomingFrom(PeerId("never-admitted")), got, "a peer that was never admitted")
+            assertAll(
+                { assertEquals(null, failure, "no admission is an ended stream, not a failure") },
+                { assertEquals(emptyList<String>(), got.map { it.payload.decodeToString() }, "and it delivers nothing") },
+            )
 
             hostRoom.leave()
         }
@@ -1777,13 +1789,13 @@ public abstract class RoomConformanceSuite {
     }
 
     /**
-     * Collect [flow] to its end, recording frames into [into], and return the [MemberInboxException] it
+     * Collect [flow] to its end, recording frames into [into], and return the [FramesLost] it
      * failed with, or `null` if it completed. On expiry of [awaitBudget] fail naming how many frames
      * arrived: a per-member stream must end by completing or failing, and one that does neither is the
      * silent loss these obligations exist to rule out.
      */
-    private suspend fun Room.awaitEnd(flow: Flow<RoomFrame>, into: MutableList<RoomFrame>, expected: String): MemberInboxException? {
-        var failure: MemberInboxException? = null
+    private suspend fun Room.awaitEnd(flow: Flow<RoomFrame>, into: MutableList<RoomFrame>, expected: String): FramesLost? {
+        var failure: FramesLost? = null
         val budget = awaitBudget ?: Duration.INFINITE
         val ended = withTimeoutOrNull(budget) {
             try {

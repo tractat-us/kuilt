@@ -17,9 +17,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.session.MemberInbox"
  * One member admission's frames, held for [Room.incomingFrom] (#2802).
  *
  * **Invariant: every frame [offer]ed is handed to a collection of this inbox exactly once, in arrival
- * order, or the stream ends saying why** — completion when the admission ends ([close]), a
- * [MemberInboxException] when frames were lost. A frame leaves this inbox only at the instant it is
- * handed to a collector.
+ * order, or the stream ends saying why** — completion when the admission ends ([close]), [FramesLost]
+ * when frames were lost. A frame leaves this inbox only at the instant it is handed to a collector.
  *
  * ## Why a deque and a wakeup, not a Channel
  *
@@ -65,7 +64,7 @@ internal class MemberInbox(
 
         data object Wait : Step
 
-        class End(val failure: MemberInboxException?) : Step
+        class End(val failure: FramesLost?) : Step
     }
 
     private val lock = reentrantLock()
@@ -75,8 +74,14 @@ internal class MemberInbox(
     private var state = State.Holding
     private var dropped = 0L
     private var collecting = false
-    private var endFailure: MemberInboxException? = null
-    private var releasedFailure: MemberInboxException.ReleasedBeforeClaim? = null
+
+    /**
+     * Whether the stream ends in loss rather than completion, and on which side of the claim — the two
+     * fields [FramesLost] carries besides [dropped], which is read when the reader reaches the end so it
+     * counts every frame lost by then, not only those lost when the loss began.
+     */
+    private var endInLoss = false
+    private var lostWhileClaimed = false
 
     /**
      * Wakes a parked collection. Conflated, so a wakeup sent while nobody waits is kept for the next wait
@@ -103,7 +108,8 @@ internal class MemberInbox(
                     // A full inbox behind: end the stream after what is held rather than make routing wait.
                     dropped++
                     state = State.Ended
-                    endFailure = MemberInboxException.CollectorFellBehind(member, capacity)
+                    endInLoss = true
+                    lostWhileClaimed = true
                     Offered.Held
                 }
                 else -> {
@@ -112,6 +118,8 @@ internal class MemberInbox(
                     dropped += held.size + 1L
                     held.clear()
                     state = State.Released
+                    endInLoss = true
+                    lostWhileClaimed = false
                     Offered.Released
                 }
             }
@@ -124,39 +132,42 @@ internal class MemberInbox(
     }
 
     /**
-     * The claimant's flow. Claiming a released inbox yields a flow that fails with
-     * [MemberInboxException.ReleasedBeforeClaim]; every claim of one admission reads the same frames.
+     * The claimant's flow. Every claim of one admission reads the same stream: a released inbox is
+     * already ended, so its claimant reads the [FramesLost] [nextStep] builds rather than any frames.
      */
     fun claim(): Flow<RoomFrame> {
-        val failure = lock.withLock {
+        lock.withLock {
             when (state) {
                 State.Holding -> state = State.Claimed
-                State.Released -> releasedFailure = releasedFailure ?: releasedBeforeClaim()
+                // Released: nothing is held and nothing will be. The claimant reads the same ended
+                // stream every other claim of this admission reads, and [nextStep] fails it with the
+                // count as it stands when the reader arrives.
+                State.Released -> state = State.Ended
                 State.Claimed, State.Ended -> Unit
             }
-            releasedFailure
         }
-        return if (failure != null) failingInboxFlow(failure) else frames
+        return frames
     }
 
     /** End this admission: a collection delivers what is held and then completes. Idempotent. */
     fun close() {
         lock.withLock {
-            if (state == State.Released) releasedFailure = releasedFailure ?: releasedBeforeClaim()
-            // An overflow that already ended the stream keeps its CollectorFellBehind.
+            // An admission that already lost frames keeps that verdict: ending it here does not turn a
+            // loss into a clean completion, and [endInLoss] is what [nextStep] reads.
             state = State.Ended
         }
         wakeup.trySend(Unit)
     }
-
-    private fun releasedBeforeClaim() = MemberInboxException.ReleasedBeforeClaim(member, dropped)
 
     private fun nextStep(): Step =
         lock.withLock {
             val frame = held.removeFirstOrNull()
             when {
                 frame != null -> Step.Deliver(frame)
-                state == State.Ended -> Step.End(endFailure)
+                // Built here rather than when the loss began, so `dropped` counts every frame lost by
+                // the time the reader arrives — including those routed while it was draining what was
+                // held, or after a released inbox stopped holding.
+                state == State.Ended -> Step.End(if (endInLoss) FramesLost(member, dropped, lostWhileClaimed) else null)
                 else -> Step.Wait
             }
         }
@@ -191,6 +202,3 @@ internal class MemberInbox(
             }
         }
 }
-
-/** A flow that fails with [failure] when collected — for a claim that has nothing to deliver. */
-internal fun failingInboxFlow(failure: MemberInboxException): Flow<RoomFrame> = flow { throw failure }

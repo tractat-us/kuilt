@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
@@ -132,6 +133,22 @@ public class SeamRoomFactory(
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
     private val admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
     /**
+     * How many unread frames each room this factory builds holds per member for [Room.incomingFrom]
+     * (#2802). Default [DEFAULT_MEMBER_INBOX_CAPACITY].
+     *
+     * **`0` holds nothing**, and is how a consumer that never reads [Room.incomingFrom] opts out of
+     * paying for it. That cost is real on the *joiner* side: a room opens an inbox for every member it
+     * admits, and a joiner admits the host — and, on a mesh, every other member it is told about — so a
+     * client that only ever reads [Room.incoming] would otherwise hold that many of the host's frames
+     * per member until the depth is exceeded. Attach snapshots are exactly the large frames this holds.
+     *
+     * With `0`, [Room.incomingFrom] throws [IllegalStateException] rather than handing back an
+     * immediately-completing flow: a consumer that disabled holding and then reads per-member frames has
+     * a configuration error, and completion is a signal ("this admission ended") that such a consumer
+     * would act on in a loop.
+     */
+    private val memberInboxCapacity: Int = DEFAULT_MEMBER_INBOX_CAPACITY,
+    /**
      * Optional override for the **host-side** reconnect-window controller (#1614). When supplied,
      * every host room this factory creates drives the [JoinerReconnectController] this lambda builds
      * instead of the default fixed-window [DefaultJoinerReconnectController] — letting a host
@@ -161,6 +178,7 @@ public class SeamRoomFactory(
             // match (or leave null) to be admitted. Null (the Pattern default) means
             // this host declared no room and admits permissively.
             roomKey = pattern.roomKey,
+            memberInboxCapacity = memberInboxCapacity,
             reconnectControllerFactory = reconnectControllerFactory,
         ).also { room -> room.start() }
     }
@@ -183,6 +201,7 @@ public class SeamRoomFactory(
             // can reject cross-room admission on a flat fabric. Null (the common case)
             // means the transport already bound the room; the host admits permissively.
             roomKey = tag.roomKey,
+            memberInboxCapacity = memberInboxCapacity,
             // Re-weave the same tag on tear. For a resumable [Loom] (e.g. [MuxClientLoom])
             // this heals the same [seam] handle onto a fresh base; for a non-resumable Loom
             // it is a no-op with respect to auto-resume (see the `reweave` KDoc contract).
@@ -251,6 +270,7 @@ public class SeamRoomFactory(
             admitTimeout = admitTimeout,
             roomId = resolvedRoomId,
             roomKey = roomKey,
+            memberInboxCapacity = memberInboxCapacity,
             reweave = reweave,
             reconnectControllerFactory = reconnectControllerFactory,
         ).also { room -> room.start() }
@@ -320,6 +340,7 @@ public class SeamRoomFactory(
             scope: CoroutineScope,
             heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
             admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
+            memberInboxCapacity: Int = DEFAULT_MEMBER_INBOX_CAPACITY,
             reconnectControllerFactory: JoinerReconnectControllerFactory? = null,
         ): SeamRoomFactory = SeamRoomFactory(
             loom = loom,
@@ -327,6 +348,7 @@ public class SeamRoomFactory(
             clock = { Clock.System.now() },
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
+            memberInboxCapacity = memberInboxCapacity,
             reconnectControllerFactory = reconnectControllerFactory,
         )
 
@@ -339,13 +361,14 @@ public class SeamRoomFactory(
         internal val DEFAULT_ADMIT_TIMEOUT: Duration = 30.seconds
 
         /**
-         * How many unread frames a room this factory builds holds per member for [Room.incomingFrom]
-         * (#2802) — the same depth its [Room.incoming] buffers for a subscriber that falls behind.
+         * Default per-member inbox depth (#2802) — how many unread frames a room this factory builds
+         * holds for each member's [Room.incomingFrom]. Override per deployment via the
+         * [memberInboxCapacity] constructor parameter, which `0` turns off entirely.
          *
-         * A `val`, not a `const`: a `const` is inlined into the consumer at its compile time, so a
-         * consumer built against one kuilt would keep reading that number after upgrading to another.
+         * Deliberately not a public constant: the depth a room was built with is a property of that
+         * room, not a number a consumer should read off the factory type and reason about.
          */
-        public val MEMBER_INBOX_CAPACITY: Int = 64
+        internal val DEFAULT_MEMBER_INBOX_CAPACITY: Int = 64
     }
 }
 
@@ -356,6 +379,16 @@ public class SeamRoomFactory(
  * yet bounded so a long-lived room never accumulates unbounded history.
  */
 private const val MEMBERSHIP_EVENT_REPLAY = 64
+
+/**
+ * Buffer depth of [Room.incoming] — how far behind a subscriber of that one shared stream may fall
+ * before [SeamRoom] drops what it cannot hand over.
+ *
+ * Its own number, deliberately: the per-member hold has its own depth
+ * ([SeamRoomFactory.memberInboxCapacity]) that a consumer sets, and for a while both read off one
+ * public constant — which made turning the per-member hold off look as though it would shrink this too.
+ */
+private const val INCOMING_BUFFER = 64
 
 /**
  * Capacity of **one recipient's** relay lane (#1994; per-recipient since #2048). Deep enough to hold
@@ -585,6 +618,14 @@ internal class SeamRoom(
      */
     private val roomKey: String? = null,
     /**
+     * How many unread frames this room holds per member for [incomingFrom] (#2802), and `0` to hold
+     * nothing — see [SeamRoomFactory.memberInboxCapacity], which is where a consumer sets it.
+     *
+     * Defaulted so tests that construct [SeamRoom] directly still compile; [SeamRoomFactory] always
+     * passes its configured value.
+     */
+    private val memberInboxCapacity: Int = SeamRoomFactory.DEFAULT_MEMBER_INBOX_CAPACITY,
+    /**
      * **Joiner only.** Re-weaves the underlying fabric after a transport tear, so the joiner
      * can attempt an in-window resume instead of going straight to terminal
      * [MembershipEvent.HostLost] (#1037).
@@ -788,11 +829,18 @@ internal class SeamRoom(
      */
     private val heartbeatSendersSeen = mutableSetOf<PeerId>()
 
-    private val _incoming = MutableSharedFlow<RoomFrame>(extraBufferCapacity = SeamRoomFactory.MEMBER_INBOX_CAPACITY)
+    // Deliberately its own number, not [memberInboxCapacity]: this buffers one shared stream for
+    // whatever subscribers `incoming` has, while that one bounds a per-member hold. They were briefly
+    // sized by a single public constant, which read as if turning the per-member hold off would also
+    // shrink this — it does not, and `incoming` keeps its depth at `memberInboxCapacity = 0`.
+    private val _incoming = MutableSharedFlow<RoomFrame>(extraBufferCapacity = INCOMING_BUFFER)
     override val incoming: Flow<RoomFrame> = _incoming.asSharedFlow()
 
     /**
      * Each admitted member's held frames, behind [incomingFrom] (#2802).
+     *
+     * Empty throughout on a room built with `memberInboxCapacity = 0`, which holds nothing and whose
+     * [incomingFrom] refuses rather than hands back an empty stream.
      *
      * An entry is created in [addToRoster] and removed in [removeFromRoster], each in the critical section
      * that changes [admittedById]. Routing is gated on [isAdmittedPeer], so no frame from a member can be
@@ -3353,7 +3401,11 @@ internal class SeamRoom(
         // Same critical section as the admission itself, so the inbox exists before any frame from
         // this member can pass the isAdmittedPeer gate — incomingFrom holds from admission (#2802).
         // A re-admit keeps the inbox it already has.
-        memberInboxes.getOrPut(member.id) { MemberInbox(member.id, SeamRoomFactory.MEMBER_INBOX_CAPACITY) }
+        // No inbox at all when this room holds nothing: a consumer that never reads incomingFrom — a
+        // joiner admitting its host, say — pays for none of it.
+        if (memberInboxCapacity > 0) {
+            memberInboxes.getOrPut(member.id) { MemberInbox(member.id, memberInboxCapacity) }
+        }
         _roster.update { current -> current.filterNot { it.id == member.id }.toSet() + member }
         _rosterPeers.update { current -> current + member.id }
         if (!isReadmit) {
@@ -3434,9 +3486,18 @@ internal class SeamRoom(
         lock.withLock { memberInboxes[frame.sender] }?.offer(frame)
     }
 
-    override fun incomingFrom(member: PeerId): Flow<RoomFrame> =
-        lock.withLock { memberInboxes[member] }?.claim()
-            ?: failingInboxFlow(MemberInboxException.NotAdmitted(member))
+    override fun incomingFrom(member: PeerId): Flow<RoomFrame> {
+        // A configuration error, not a race: this room was built to hold nothing, so there is no stream
+        // to hand back. Completion would be the wrong answer — it reads as "that admission ended", which
+        // a consumer acts on, and it would say so again on every call.
+        check(memberInboxCapacity > 0) {
+            "incomingFrom(${member.value}) on a room built with memberInboxCapacity = 0, which holds no " +
+                "per-member frames; read `incoming`, or build the room with a capacity"
+        }
+        // No inbox means no current admission — never admitted, already evicted, or `leave` closed them.
+        // That is indistinguishable from an admission that just ended, so it reads the same: completion.
+        return lock.withLock { memberInboxes[member] }?.claim() ?: emptyFlow()
+    }
 
     // ── Room interface ────────────────────────────────────────────────────────
 

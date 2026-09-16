@@ -92,23 +92,25 @@ public interface Room {
      * subscribes after that member's first frame by construction.
      *
      * **Never silently lossy.** The flow delivers every frame it held, in order, and then either
-     * completes or fails with a [MemberInboxException] saying what was lost:
+     * completes or fails with [FramesLost] saying what was lost:
      *
      * - **Per admission.** It completes, after delivering what it held, when the member's admission
      *   ends — eviction, a clean leave, or this room going terminal. A re-admit of a still-admitted
      *   member keeps its inbox; a member admitted again after leaving gets a fresh one, so call
-     *   [incomingFrom] again. For a peer with no current admission the flow fails with
-     *   [MemberInboxException.NotAdmitted].
-     * - **Bounded.** An implementation holds a bounded number of unread frames per member
-     *   ([SeamRoomFactory.MEMBER_INBOX_CAPACITY] for the rooms that factory builds). Until
-     *   [incomingFrom] is first called for the admission, an overflow releases what is held — a
-     *   consumer that reads only [incoming] pays for at most one inbox per member — and a later claim
-     *   fails with [MemberInboxException.ReleasedBeforeClaim], naming how many frames were lost. Once
-     *   claimed, an overflow fails the flow with [MemberInboxException.CollectorFellBehind] after the
-     *   held frames are delivered: routing never waits for a slow collector.
+     *   [incomingFrom] again. A peer with **no current admission** — never admitted, already evicted,
+     *   or a room whose inboxes [leave] closed — reads as an empty, completed stream, because from here
+     *   that is indistinguishable from an admission that has just ended.
+     * - **Bounded.** An implementation holds a bounded number of unread frames per member — the depth
+     *   its factory was built with (`SeamRoomFactory(memberInboxCapacity = …)`, 64 by default). Until
+     *   [incomingFrom] is first called for the admission, an overflow releases what is held, so a
+     *   consumer that reads only [incoming] pays for at most one inbox per member; once claimed, an
+     *   overflow ends the stream after the held frames are delivered, because routing never waits for a
+     *   slow collector. Either way the flow fails with [FramesLost], saying how many frames went and
+     *   which of the two it was. **A consumer that never reads per-member frames builds its rooms with
+     *   `memberInboxCapacity = 0`**, which holds nothing and makes this method throw.
      * - **A failure is terminal for the admission.** Every later collection or claim fails the same way;
-     *   nothing restarts the stream. Treat the member as lost — evict it, or let its session drop and
-     *   re-join, which is a new admission — rather than reading on.
+     *   nothing restarts the stream. Treat the member as lost — let its session drop and re-join, which
+     *   is a new admission — rather than reading on.
      * - **Single-collection, lossless across re-collection.** Collecting while another collection of the
      *   same member is active throws [IllegalStateException] — including straight after `cancel()`, until
      *   the cancelled collection has finished, so `cancelAndJoin` the previous collection first. A
