@@ -1248,7 +1248,7 @@ public abstract class RoomConformanceSuite {
             // Nothing is asserted about this frame — the property is that the call itself is a no-op rather
             // than a throw or a wedge — but it goes through [applicationPayload] like every other payload
             // in this suite, so no rig here can be built on a frame a room would swallow.
-            joinerRoom.broadcast(applicationPayload("after-host-lost"))
+            joinerRoom.broadcast(applicationPayload("post-host-lost"))
         }
 
     // ── (10) Left member no longer receives broadcast frames ─────────────────
@@ -1274,7 +1274,7 @@ public abstract class RoomConformanceSuite {
             // classified it as an admit frame and `received` would have stayed false anyway. The property
             // could not fail. A payload the room really routes as application data is what gives the
             // assertion a way to be wrong.
-            hostRoom.broadcast(applicationPayload("after-leave"))
+            hostRoom.broadcast(applicationPayload("post-leave"))
             advanceTimeBy(100L)
             collectJob.cancel()
 
