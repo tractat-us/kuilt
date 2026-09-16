@@ -75,9 +75,59 @@ public interface Room {
      * Stream of [RoomFrame]s received from admitted members.
      *
      * Frames from unadmitted peers are silently dropped.
-     * Hot; backed by a shared flow. Late collectors miss historical frames.
+     * Hot; backed by a shared flow. Late collectors miss historical frames — including an admitted
+     * member's first frames on a host room handed to a `host { onRoom }` consumer, which is started
+     * and admitting before that consumer runs. A consumer that must not lose them reads
+     * [incomingFrom] instead.
      */
     public val incoming: Flow<RoomFrame>
+
+    /**
+     * The frames of one admitted [member], **held from the instant it is admitted** — a collector
+     * that starts after admission, even after the member's first frames arrived, still receives
+     * them, in arrival order.
+     *
+     * This is the per-member reader [incoming] cannot be: a room admits and routes before a
+     * `host { onRoom }` consumer runs, and a consumer that collects each member in its own coroutine
+     * subscribes after that member's first frame by construction.
+     *
+     * **Never silently lossy.** The flow delivers every frame it held, in order, and then either
+     * completes or fails with [FramesLost] saying what was lost:
+     *
+     * - **Per admission.** It completes, after delivering what it held, when the member's admission
+     *   ends — eviction, a clean leave, or this room going terminal. A re-admit of a still-admitted
+     *   member keeps its inbox; a member admitted again after leaving gets a fresh one, so call
+     *   [incomingFrom] again. A peer with **no current admission** — never admitted, already evicted,
+     *   or a room whose inboxes [leave] closed — reads as an empty, completed stream, because from here
+     *   that is indistinguishable from an admission that has just ended.
+     * - **Bounded.** An implementation holds a bounded number of unread frames per member — the depth
+     *   its factory was built with (`SeamRoomFactory(memberInboxCapacity = …)`, 64 by default). Until
+     *   [incomingFrom] is first called for the admission, an overflow releases what is held, so a
+     *   consumer that reads only [incoming] pays for at most one inbox per member; once claimed, an
+     *   overflow ends the stream after the held frames are delivered, because routing never waits for a
+     *   slow collector. Either way the flow fails with [FramesLost], saying how many frames went and
+     *   which of the two it was. **A consumer that never reads per-member frames builds its rooms with
+     *   `memberInboxCapacity = 0`**, which holds nothing and makes this method throw
+     *   [IllegalStateException] — a configuration error, deliberately not the completion that "no current
+     *   admission" reads as, which a consumer acts on and would act on again at every call.
+     * - **A failure is terminal for the admission.** Every later collection or claim fails the same way;
+     *   nothing restarts the stream. Treat the member as lost — let its session drop and re-join, which
+     *   is a new admission — rather than reading on.
+     * - **Single-collection, lossless across re-collection.** Collecting while another collection of the
+     *   same member is active throws [IllegalStateException] — including straight after `cancel()`, until
+     *   the cancelled collection has finished, so `cancelAndJoin` the previous collection first. A
+     *   collection that is cancelled leaves every frame its collector had not yet received for the next
+     *   one, which resumes exactly where it stopped. A frame the consumer's own pipeline did receive is the
+     *   consumer's, at-most-once as for any Flow — and that includes an operator that takes frames ahead of
+     *   the consumer (`buffer`, `flowOn`, `conflate`, `produceIn`, `shareIn` / `stateIn`), which loses what
+     *   it holds when cancelled. The guarantee reaches only as far as the first such operator.
+     * - **A frame racing its member's eviction** is part of the admission only if it was routed before the
+     *   eviction; routed after, it may still surface on [incoming] but is not held, because the admission
+     *   it would belong to has ended and its flow completed.
+     *
+     * A frame is delivered both here and on [incoming]; a consumer reads one or the other.
+     */
+    public fun incomingFrom(member: PeerId): Flow<RoomFrame>
 
     /**
      * Host-verified principals of currently-linked peers, keyed by the [PeerId] each was verified

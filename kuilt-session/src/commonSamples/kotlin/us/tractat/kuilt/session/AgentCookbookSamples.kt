@@ -23,6 +23,22 @@ import kotlin.time.Duration.Companion.seconds
 // Keep each function tiny and self-contained; the cookbook copies the body.
 
 /**
+ * Read one member's frames without losing the ones it sent before you started reading.
+ *
+ * Returns `true` when the member's admission ended with every frame delivered, and `false` when frames
+ * were lost — the caller then resyncs that member from its own state.
+ */
+public suspend fun perMemberFramesSample(room: Room, member: PeerId, onFrame: suspend (ByteArray) -> Unit): Boolean =
+    try {
+        // Held from admission: frames the member sent before this line are still delivered, in order.
+        // Not `room.incoming.filter { it.sender == member }`, which loses whatever was routed first.
+        room.incomingFrom(member).collect { onFrame(it.payload) }
+        true // the admission ended; a member admitted again gets a fresh inbox, so call this again
+    } catch (_: FramesLost) {
+        false // never silent, and terminal for this admission: treat the member as lost
+    }
+
+/**
  * Chunk to the room's published budget instead of to the fabric's frame size.
  *
  * [Room.maxPayloadBytes] already holds back what the relay envelope costs, so a payload that

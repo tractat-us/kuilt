@@ -1,12 +1,19 @@
 package us.tractat.kuilt.session.test
 
 import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
@@ -20,6 +27,7 @@ import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
+import us.tractat.kuilt.session.FramesLost
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity
@@ -41,6 +49,15 @@ import kotlin.time.Instant
  * per-instance) because the collision this prevents is precisely *between* instances.
  */
 private val fakeRoomSequence = atomic(0L)
+
+/**
+ * [FakeRoom]'s default per-member inbox depth, mirroring the value `SeamRoomFactory` defaults to.
+ *
+ * Its own constant because that one is internal to `:kuilt-session`: this module cannot read it, and a
+ * fake that silently tracked it would drift the day it moved. A test that drives an overflow states the
+ * depth it means via `FakeRoom(memberInboxCapacity = …)`.
+ */
+private const val FAKE_MEMBER_INBOX_CAPACITY = 64
 
 /**
  * Mint a distinct [RoomId] for a host-shaped fake room — readable (it leads with [selfId]) but never
@@ -81,6 +98,12 @@ internal fun mintFakeRoomId(selfId: PeerId): RoomId = RoomId("${selfId.value}-ro
  *   whereas the real [Room] would drop them;
  * - [leave] **completes** [events]/[incoming] (channel close), whereas the real
  *   [Room] cancels its backing scope without completing the flows.
+ *
+ * [incomingFrom] is **not** a divergence: it follows the real room's per-admission contract. An inbox
+ * opens when [addMember] admits a member and is fed by [deliver] only while that member is on the
+ * roster; [removeMember] and [leave] complete its flow; a member with no current admission reads as an
+ * empty, completed stream; an unclaimed overflow followed by a claim, and a claimed overflow, fail it
+ * with [FramesLost]; a concurrent second collection throws.
  */
 public class FakeRoom(
     override val selfId: PeerId = PeerId("self"),
@@ -105,7 +128,25 @@ public class FakeRoom(
      * the double built to test around it.
      */
     initialRoomId: RoomId? = if (initialRole == SessionRole.Host) mintFakeRoomId(selfId) else null,
+    /**
+     * How many unread frames this fake holds per member for [incomingFrom], mirroring
+     * `SeamRoomFactory(memberInboxCapacity = …)`. Its own default rather than the factory's, which is
+     * internal to `:kuilt-session`; a test that drives an overflow should state the depth it means.
+     *
+     * **`0` holds nothing**, exactly as the real room: no inbox is opened for an admitted member, and
+     * [incomingFrom] throws [IllegalStateException] instead of returning a stream. A fake that answered
+     * that configuration with frames — or with a completion — is how a consumer's test goes green against
+     * a room that would have refused it.
+     */
+    private val memberInboxCapacity: Int = FAKE_MEMBER_INBOX_CAPACITY,
 ) : Room {
+    init {
+        require(memberInboxCapacity >= 0) {
+            "memberInboxCapacity must be >= 0, was $memberInboxCapacity: 0 holds nothing and any " +
+                "positive depth is how many unread frames this fake holds per member"
+        }
+    }
+
     private val _role = MutableStateFlow(initialRole)
     override val role: StateFlow<SessionRole> = _role.asStateFlow()
 
@@ -153,6 +194,140 @@ public class FakeRoom(
         onBufferOverflow = BufferOverflow.SUSPEND,
     )
     override val incoming: Flow<RoomFrame> = incomingChannel.receiveAsFlow()
+
+    /**
+     * Per-member inboxes behind [incomingFrom], with the real room's contract rather than a buffered
+     * stand-in (#2802): an inbox is opened when [addMember] admits a member, fed by [deliver] only for a
+     * member on the roster, and closed — its collector completes — by [removeMember] and [leave]. A claim
+     * after an unclaimed overflow and a claimed overflow both fail the flow with a
+     * [FramesLost]; a second concurrent collection throws; a peer with no inbox reads as an empty,
+     * completed stream.
+     *
+     * [FakeMemberInbox] is a copy of `:kuilt-session`'s internal `MemberInbox`, which this module cannot
+     * see. Keep the two in step: a fake that is more forgiving than the room is how a consumer's test
+     * goes green on a stream production would have failed.
+     */
+    private val memberInboxes = mutableMapOf<PeerId, FakeMemberInbox>()
+    private val inboxLock = reentrantLock()
+
+    override fun incomingFrom(member: PeerId): Flow<RoomFrame> {
+        // The real room's refusal, not a fake-friendly empty stream: a room built to hold nothing has no
+        // stream to hand back, and completion would read as "that admission ended".
+        check(memberInboxCapacity > 0) {
+            "incomingFrom(${member.value}) on a room built with memberInboxCapacity = 0, which holds no " +
+                "per-member frames; read `incoming`, or build the room with a capacity"
+        }
+        // No current admission reads the same as one that has just ended: an empty, completed stream.
+        return inboxLock.withLock { memberInboxes[member] }?.claim() ?: emptyFlow()
+    }
+
+    private class FakeMemberInbox(
+        private val member: PeerId,
+        private val capacity: Int,
+    ) {
+        private enum class State { Holding, Released, Claimed, Ended }
+
+        private val lock = reentrantLock()
+
+        // All guarded by [lock]; [wakeup] is only ever touched outside it.
+        private val held = ArrayDeque<RoomFrame>()
+        private var state = State.Holding
+        private var dropped = 0L
+        private var collecting = false
+        // Whether the stream ends in loss rather than completion, and on which side of the claim — the
+        // two fields FramesLost carries besides `dropped`, which is read when the reader reaches the end.
+        private var endInLoss = false
+        private var lostWhileClaimed = false
+        private val wakeup = Channel<Unit>(Channel.CONFLATED)
+
+        fun offer(frame: RoomFrame) {
+            val wake = lock.withLock {
+                when {
+                    state == State.Released || state == State.Ended -> {
+                        dropped++
+                        false
+                    }
+                    held.size < capacity -> {
+                        held.addLast(frame)
+                        true
+                    }
+                    state == State.Claimed -> {
+                        dropped++
+                        state = State.Ended
+                        endInLoss = true
+                        lostWhileClaimed = true
+                        true
+                    }
+                    else -> {
+                        dropped += held.size + 1L
+                        held.clear()
+                        state = State.Released
+                        endInLoss = true
+                        lostWhileClaimed = false
+                        false
+                    }
+                }
+            }
+            if (wake) wakeup.trySend(Unit)
+        }
+
+        fun claim(): Flow<RoomFrame> {
+            lock.withLock {
+                when (state) {
+                    State.Holding -> state = State.Claimed
+                    // Released: nothing is held and nothing will be, so the claimant reads the ended
+                    // stream every other claim of this admission reads.
+                    State.Released -> state = State.Ended
+                    State.Claimed, State.Ended -> Unit
+                }
+            }
+            return object : Flow<RoomFrame> {
+                override suspend fun collect(collector: FlowCollector<RoomFrame>) {
+                    lock.withLock {
+                        check(!collecting) { "incomingFrom(${member.value}) is already being collected — it is single-collection" }
+                        collecting = true
+                    }
+                    try {
+                        while (true) {
+                            // Before taking a frame, never between taking and handing it over.
+                            currentCoroutineContext().ensureActive()
+                            // One step under one lock, as MemberInbox.nextStep: taking the frame and deciding the
+                            // stream has ended must see the same state, or a frame held between the two is lost.
+                            var ended = false
+                            var failure: FramesLost? = null
+                            val frame = lock.withLock {
+                                held.removeFirstOrNull().also {
+                                    if (it == null && state == State.Ended) {
+                                        ended = true
+                                        // Built here, so `dropped` counts every frame lost by the time
+                                        // the reader arrives — as MemberInbox.nextStep does.
+                                        failure = if (endInLoss) FramesLost(member, dropped, lostWhileClaimed) else null
+                                    }
+                                }
+                            }
+                            when {
+                                frame != null -> collector.emit(frame)
+                                ended -> {
+                                    failure?.let { throw it }
+                                    return
+                                }
+                                else -> wakeup.receive()
+                            }
+                        }
+                    } finally {
+                        lock.withLock { collecting = false }
+                    }
+                }
+            }
+        }
+
+        fun close() {
+            // An admission that already lost frames keeps that verdict: ending it here does not turn a
+            // loss into a clean completion, because `endInLoss` is what the collect loop reads.
+            lock.withLock { state = State.Ended }
+            wakeup.trySend(Unit)
+        }
+    }
 
     private val _roomId = MutableStateFlow(initialRoomId)
     override val roomId: StateFlow<RoomId?> = _roomId.asStateFlow()
@@ -224,6 +399,7 @@ public class FakeRoom(
         if (!left.compareAndSet(expect = false, update = true)) return
         eventsChannel.close()
         incomingChannel.close()
+        inboxLock.withLock { memberInboxes.values.toList().also { memberInboxes.clear() } }.forEach { it.close() }
     }
 
     // ── Test-driver helpers ───────────────────────────────────────────────────
@@ -237,6 +413,13 @@ public class FakeRoom(
      */
     public suspend fun addMember(member: Member) {
         require(member.id != selfId) { "roster must not include selfId ($selfId); see Room.roster" }
+        // A room that has left admits nobody — the real room's addToRoster refuses once it is terminal —
+        // so a late addMember changes nothing: no roster entry, no inbox, no Joined.
+        if (left.value) return
+        // No inbox at all when this fake holds nothing, as the real room's addToRoster does.
+        if (memberInboxCapacity > 0) {
+            inboxLock.withLock { memberInboxes.getOrPut(member.id) { FakeMemberInbox(member.id, memberInboxCapacity) } }
+        }
         _roster.update { it + member }
         _rosterPeers.update { it + member.id }
         eventsChannel.send(MembershipEvent.Joined(member))
@@ -247,8 +430,14 @@ public class FakeRoom(
      * No-op if the peer is not in the roster.
      */
     public suspend fun removeMember(peerId: PeerId, reason: LeaveReason = LeaveReason.Normal) {
+        val endedInbox = inboxLock.withLock { memberInboxes.remove(peerId) }
         _roster.update { roster -> roster.filterNot { it.id == peerId }.toSet() }
         _rosterPeers.update { it - peerId }
+        // After the roster, as the real room does, so a reader that sees its flow complete already sees
+        // the member gone. Before the Left send, unlike the real room: that send suspends once a test has
+        // left `events` undrained past its capacity, and closing after it would leave the reader waiting on
+        // that test. So a reader of this fake can complete before its Left is received on `events`.
+        endedInbox?.close()
         eventsChannel.send(MembershipEvent.Left(peerId, reason))
     }
 
@@ -360,7 +549,9 @@ public class FakeRoom(
      * ```
      */
     public suspend fun deliver(from: PeerId, payload: ByteArray) {
-        incomingChannel.send(RoomFrame(sender = from, payload = payload))
+        val frame = RoomFrame(sender = from, payload = payload)
+        incomingChannel.send(frame)
+        inboxLock.withLock { memberInboxes[from] }?.offer(frame)
     }
 
     /**
