@@ -602,7 +602,7 @@ class FakeRoomTest {
     }
 
     @Test
-    fun `a claim after an unclaimed overflow fails, naming the loss and which side of the claim it was`() = runTest {
+    fun `a claim after an unclaimed overflow fails naming the loss and which side of the claim it was`() = runTest {
         val room = FakeRoom()
         val alice = PeerId("alice")
         room.addMember(member(alice))
