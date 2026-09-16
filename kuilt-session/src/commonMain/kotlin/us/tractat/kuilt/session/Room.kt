@@ -107,7 +107,9 @@ public interface Room {
      *   overflow ends the stream after the held frames are delivered, because routing never waits for a
      *   slow collector. Either way the flow fails with [FramesLost], saying how many frames went and
      *   which of the two it was. **A consumer that never reads per-member frames builds its rooms with
-     *   `memberInboxCapacity = 0`**, which holds nothing and makes this method throw.
+     *   `memberInboxCapacity = 0`**, which holds nothing and makes this method throw
+     *   [IllegalStateException] — a configuration error, deliberately not the completion that "no current
+     *   admission" reads as, which a consumer acts on and would act on again at every call.
      * - **A failure is terminal for the admission.** Every later collection or claim fails the same way;
      *   nothing restarts the stream. Treat the member as lost — let its session drop and re-join, which
      *   is a new admission — rather than reading on.

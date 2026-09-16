@@ -621,7 +621,7 @@ public abstract class RoomConformanceSuite {
             joinerRoom.broadcastNumbered("f", memberInboxCapacity + 1)
             advanceTimeBy(200L)
             val late = hostRoom.incomingFrom(joinerId)
-            joinerRoom.broadcast("after-claim".encodeToByteArray())
+            joinerRoom.broadcast("z-after-claim".encodeToByteArray())
             advanceTimeBy(100L)
 
             val got = mutableListOf<RoomFrame>()

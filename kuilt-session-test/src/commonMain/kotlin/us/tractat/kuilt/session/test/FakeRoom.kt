@@ -132,9 +132,21 @@ public class FakeRoom(
      * How many unread frames this fake holds per member for [incomingFrom], mirroring
      * `SeamRoomFactory(memberInboxCapacity = …)`. Its own default rather than the factory's, which is
      * internal to `:kuilt-session`; a test that drives an overflow should state the depth it means.
+     *
+     * **`0` holds nothing**, exactly as the real room: no inbox is opened for an admitted member, and
+     * [incomingFrom] throws [IllegalStateException] instead of returning a stream. A fake that answered
+     * that configuration with frames — or with a completion — is how a consumer's test goes green against
+     * a room that would have refused it.
      */
     private val memberInboxCapacity: Int = FAKE_MEMBER_INBOX_CAPACITY,
 ) : Room {
+    init {
+        require(memberInboxCapacity >= 0) {
+            "memberInboxCapacity must be >= 0, was $memberInboxCapacity: 0 holds nothing and any " +
+                "positive depth is how many unread frames this fake holds per member"
+        }
+    }
+
     private val _role = MutableStateFlow(initialRole)
     override val role: StateFlow<SessionRole> = _role.asStateFlow()
 
@@ -198,10 +210,16 @@ public class FakeRoom(
     private val memberInboxes = mutableMapOf<PeerId, FakeMemberInbox>()
     private val inboxLock = reentrantLock()
 
-    override fun incomingFrom(member: PeerId): Flow<RoomFrame> =
-        inboxLock.withLock { memberInboxes[member] }?.claim()
-            // No current admission reads the same as one that has just ended: an empty, completed stream.
-            ?: emptyFlow()
+    override fun incomingFrom(member: PeerId): Flow<RoomFrame> {
+        // The real room's refusal, not a fake-friendly empty stream: a room built to hold nothing has no
+        // stream to hand back, and completion would read as "that admission ended".
+        check(memberInboxCapacity > 0) {
+            "incomingFrom(${member.value}) on a room built with memberInboxCapacity = 0, which holds no " +
+                "per-member frames; read `incoming`, or build the room with a capacity"
+        }
+        // No current admission reads the same as one that has just ended: an empty, completed stream.
+        return inboxLock.withLock { memberInboxes[member] }?.claim() ?: emptyFlow()
+    }
 
     private class FakeMemberInbox(
         private val member: PeerId,
@@ -398,7 +416,10 @@ public class FakeRoom(
         // A room that has left admits nobody — the real room's addToRoster refuses once it is terminal —
         // so a late addMember changes nothing: no roster entry, no inbox, no Joined.
         if (left.value) return
-        inboxLock.withLock { memberInboxes.getOrPut(member.id) { FakeMemberInbox(member.id, memberInboxCapacity) } }
+        // No inbox at all when this fake holds nothing, as the real room's addToRoster does.
+        if (memberInboxCapacity > 0) {
+            inboxLock.withLock { memberInboxes.getOrPut(member.id) { FakeMemberInbox(member.id, memberInboxCapacity) } }
+        }
         _roster.update { it + member }
         _rosterPeers.update { it + member.id }
         eventsChannel.send(MembershipEvent.Joined(member))

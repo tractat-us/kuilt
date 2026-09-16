@@ -159,6 +159,16 @@ public class SeamRoomFactory(
      */
     private val reconnectControllerFactory: JoinerReconnectControllerFactory? = null,
 ) : RoomFactory {
+    init {
+        // A negative depth would otherwise behave exactly as `0` — no inbox is opened, and
+        // [Room.incomingFrom] refuses — while the refusal said `memberInboxCapacity = 0`, which is not
+        // what the caller wrote. Refuse at construction instead, where the wrong value is.
+        require(memberInboxCapacity >= 0) {
+            "memberInboxCapacity must be >= 0, was $memberInboxCapacity: 0 holds nothing and any " +
+                "positive depth is how many unread frames a room holds per member"
+        }
+    }
+
     override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room {
         val seam = loom.host(pattern)
         val resolvedRoomId = roomId ?: mintRoomId(seam)
@@ -3432,6 +3442,13 @@ internal class SeamRoom(
                 // gate already rejects an announcement for a member that is gone.
                 episodeDetectedAtMs.remove(peerId)
                 // Removed with the admission, so a member admitted again later gets a fresh inbox.
+                // Deliberately removed here rather than after the roster update below: this map is the
+                // room's record of which admissions exist, and it is dropped in the same critical section
+                // that drops the admission. The window that opens is harmless and cannot loop — the member
+                // is off this map while `_roster` still lists it, so a claim landing in it reads the
+                // `emptyFlow()` of "no current admission" rather than the ended stream. Nothing between
+                // here and the roster update suspends, and completion is the same answer that claimant
+                // gets a moment later, so a consumer re-attaching on completion wastes at most one attach.
                 endedInbox = memberInboxes.remove(peerId)
             }
         }
