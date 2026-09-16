@@ -527,8 +527,8 @@ public abstract class RoomConformanceSuite {
             val probe = launch(start = CoroutineStart.UNDISPATCHED) {
                 hostRoom.incoming.collect { if (it.sender == joinerId) routed++ }
             }
-            joinerRoom.broadcast("first".encodeToByteArray())
-            joinerRoom.broadcast("second".encodeToByteArray())
+            joinerRoom.broadcast(applicationPayload("first"))
+            joinerRoom.broadcast(applicationPayload("second"))
             advanceTimeBy(100L)
             probe.cancel()
             // Asserted before the held-frames wait, which throws on its own budget: a rig that never
@@ -565,12 +565,12 @@ public abstract class RoomConformanceSuite {
             first.awaitRoster("roster.isNotEmpty() — the first joiner sees the host") { it.isNotEmpty() }
             second.awaitRoster("roster.isNotEmpty() — the second joiner sees the host") { it.isNotEmpty() }
 
-            second.broadcast("second-0".encodeToByteArray())
+            second.broadcast(applicationPayload("second-0"))
             advanceTimeBy(100L)
-            first.broadcast("first-0".encodeToByteArray())
-            first.broadcast("first-1".encodeToByteArray())
+            first.broadcast(applicationPayload("first-0"))
+            first.broadcast(applicationPayload("first-1"))
             advanceTimeBy(100L)
-            second.broadcast("second-1".encodeToByteArray())
+            second.broadcast(applicationPayload("second-1"))
             advanceTimeBy(100L)
 
             // Both readers take two, so a room that put every frame in every inbox is caught from either
@@ -695,7 +695,7 @@ public abstract class RoomConformanceSuite {
                 hostRoom.awaitEnd(hostRoom.incomingFrom(joinerId), got, "the reader of a member that left")
                     .also { rosterAtCompletion = hostRoom.roster.value.mapTo(mutableSetOf()) { it.id } }
             }
-            joinerRoom.broadcast("before-leave".encodeToByteArray())
+            joinerRoom.broadcast(applicationPayload("before-leave"))
             advanceTimeBy(100L)
             joinerRoom.leave(LeaveReason.Normal)
             hostRoom.awaitRoster("roster.isEmpty() — the joiner's leave is observed") { it.isEmpty() }
@@ -816,7 +816,7 @@ public abstract class RoomConformanceSuite {
                     }
                 }
             }
-            joinerRoom.broadcast("f-raced".encodeToByteArray())
+            joinerRoom.broadcast(applicationPayload("f-raced"))
             advanceTimeBy(100L)
             probe.cancel()
 
@@ -845,7 +845,7 @@ public abstract class RoomConformanceSuite {
 
             val got = mutableListOf<RoomFrame>()
             val reader = async { hostRoom.awaitEnd(hostRoom.incomingFrom(joinerId), got, "the reader of a member when the room itself left") }
-            joinerRoom.broadcast("before-room-leave".encodeToByteArray())
+            joinerRoom.broadcast(applicationPayload("before-room-leave"))
             advanceTimeBy(100L)
             hostRoom.leave()
 
@@ -909,13 +909,13 @@ public abstract class RoomConformanceSuite {
             }
             steps.drain() // parked, waiting for a frame
 
-            joinerRoom.broadcast("f-0".encodeToByteArray())
+            joinerRoom.broadcast(applicationPayload("f-0"))
             advanceTimeBy(100L) // routed on the test scheduler; the parked reader's resumption queues on `steps`
             val wakeTasks = steps.pending
             steps.step() // the reader runs exactly the step that takes the frame...
             reader.cancel() // ...and is cancelled wherever that step left it
             steps.drain()
-            joinerRoom.broadcast("f-1".encodeToByteArray())
+            joinerRoom.broadcast(applicationPayload("f-1"))
             advanceTimeBy(100L)
 
             assertAll(
@@ -1245,7 +1245,10 @@ public abstract class RoomConformanceSuite {
 
             assertIs<MembershipEvent.HostLost>(hostLostDeferred.await())
 
-            joinerRoom.broadcast("after-host-lost".encodeToByteArray())
+            // Nothing is asserted about this frame — the property is that the call itself is a no-op rather
+            // than a throw or a wedge — but it goes through [applicationPayload] like every other payload
+            // in this suite, so no rig here can be built on a frame a room would swallow.
+            joinerRoom.broadcast(applicationPayload("after-host-lost"))
         }
 
     // ── (10) Left member no longer receives broadcast frames ─────────────────
@@ -1266,7 +1269,12 @@ public abstract class RoomConformanceSuite {
             var received = false
             val collectJob = launch { joinerRoom.incoming.collect { received = true } }
 
-            hostRoom.broadcast("after-leave".encodeToByteArray())
+            // Through [applicationPayload] because this assertion is an ABSENCE: the previous payload here
+            // led with the admit byte, so a room that had gone on delivering to a left member would have
+            // classified it as an admit frame and `received` would have stayed false anyway. The property
+            // could not fail. A payload the room really routes as application data is what gives the
+            // assertion a way to be wrong.
+            hostRoom.broadcast(applicationPayload("after-leave"))
             advanceTimeBy(100L)
             collectJob.cancel()
 
