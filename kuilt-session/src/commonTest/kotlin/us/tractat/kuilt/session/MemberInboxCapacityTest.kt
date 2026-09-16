@@ -89,4 +89,30 @@ class MemberInboxCapacityTest {
             joiner.leave()
             host.leave()
         }
+
+    /**
+     * The other half of the same knob, and the half that can fail: a room built with a smaller depth
+     * **overflows at that depth**. Holding two frames proves nothing on its own — a room that ignored the
+     * parameter and held the default 64 would hold those two just as well.
+     */
+    @Test
+    fun `a room built with a smaller capacity overflows once it is exceeded`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val host = SeamRoomFactory(loom, backgroundScope, clock, memberInboxCapacity = 2).host(Pattern("Alice"))
+            val joiner = SeamRoomFactory(loom, backgroundScope, clock).join(InMemoryTag("Alice"))
+            val joinerId = host.roster.first { it.size == 1 }.single().id
+
+            repeat(3) { joiner.broadcast("f-$it".encodeToByteArray()) }
+            advanceTimeBy(100L)
+
+            val lost = assertFailsWith<FramesLost> { host.incomingFrom(joinerId).first() }
+            assertAll(
+                { assertEquals(3L, lost.dropped, "the third frame overflowed a depth of two, releasing all three") },
+                { assertEquals(false, lost.claimed, "nothing had claimed the inbox when it overflowed") },
+            )
+
+            joiner.leave()
+            host.leave()
+        }
 }
