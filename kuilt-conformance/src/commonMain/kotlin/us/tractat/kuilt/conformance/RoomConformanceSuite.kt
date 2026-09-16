@@ -41,6 +41,7 @@ import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.RoomFrame
+import us.tractat.kuilt.session.RoomFramePrefix
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.liveness.HeartbeatConfig
@@ -621,7 +622,10 @@ public abstract class RoomConformanceSuite {
             joinerRoom.broadcastNumbered("f", memberInboxCapacity + 1)
             advanceTimeBy(200L)
             val late = hostRoom.incomingFrom(joinerId)
-            joinerRoom.broadcast("z-after-claim".encodeToByteArray())
+            // Routed after the claim, and counted: `dropped` is read when the reader reaches the end, not
+            // when the loss began. Its first byte must be unreserved or the room never routes it at all —
+            // see [applicationPayload], which is why this assertion used to pin the wrong number.
+            joinerRoom.broadcast(applicationPayload("late-after-claim"))
             advanceTimeBy(100L)
 
             val got = mutableListOf<RoomFrame>()
@@ -629,7 +633,14 @@ public abstract class RoomConformanceSuite {
             assertAll(
                 { assertIs<FramesLost>(failure, "a late claim must fail, not hand back a healthy-looking stream") },
                 { assertEquals(false, (failure as? FramesLost)?.claimed, "the loss happened before anything claimed the inbox") },
-                { assertEquals(memberInboxCapacity + 1L, (failure as? FramesLost)?.dropped, "dropped counts every frame routed before the claim") },
+                {
+                    assertEquals(
+                        memberInboxCapacity + 2L,
+                        (failure as? FramesLost)?.dropped,
+                        "dropped counts every frame lost by the time the reader reaches the end — the full " +
+                            "inbox released before the claim, and the one routed after it",
+                    )
+                },
                 { assertEquals(emptyList<String>(), got.map { it.payload.decodeToString() }, "a failed claim delivers nothing, not even a frame sent after it") },
             )
 
@@ -1819,7 +1830,33 @@ public abstract class RoomConformanceSuite {
 
     /** Broadcast [count] frames `"<prefix>0"`, `"<prefix>1"`, … in order. */
     private suspend fun Room.broadcastNumbered(prefix: String, count: Int) {
-        repeat(count) { broadcast("$prefix$it".encodeToByteArray()) }
+        repeat(count) { broadcast(applicationPayload("$prefix$it")) }
+    }
+
+    /**
+     * [text] as an application payload, refusing text a [RoomFramePrefix] family would claim.
+     *
+     * A room dispatches on a frame's **first byte** before any application routing, so a payload leading
+     * with a reserved one never reaches a member's inbox — it is handled as an admit, channel, lobby,
+     * heartbeat or relay frame, silently (#2806). A rig built on such a payload does not fail: it asserts
+     * about a frame that was never routed, and passes by measuring nothing. That is what made (4d) vacuous
+     * — `"after-claim"` leads with `0x61`, the admit byte, and `AdmitMessage.isAdmitFrame` is exactly that
+     * byte test — so its count pinned the *old* contract, and a mutation moving the count back to claim
+     * time stayed green across the whole suite.
+     *
+     * Refusing the byte here makes the next instance a loud failure in the suite that owns the rig, rather
+     * than a number no one can tell from a real one. [RoomFramePrefix.matches] is the right predicate even
+     * though it is weaker than [RoomFramePrefix.classifies]: heartbeat reserves its byte one-directionally,
+     * so a payload can claim a family's byte without being a frame of it and still be routed oddly.
+     */
+    private fun applicationPayload(text: String): ByteArray {
+        val bytes = text.encodeToByteArray()
+        val reserved = RoomFramePrefix.entries.filter { it.matches(bytes) }
+        require(reserved.isEmpty()) {
+            "conformance payload \"$text\" leads with a byte reserved by $reserved, which a room dispatches " +
+                "away from application routing before it can reach a member — choose unreserved text"
+        }
+        return bytes
     }
 
     /**

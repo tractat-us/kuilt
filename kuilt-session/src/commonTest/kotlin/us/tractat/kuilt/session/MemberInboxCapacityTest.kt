@@ -71,6 +71,14 @@ class MemberInboxCapacityTest {
         }
 
     @Test
+    fun `a negative capacity is refused at construction`() =
+        runTest {
+            assertFailsWith<IllegalArgumentException>("-1 would otherwise behave as 0 under a refusal message that says 0") {
+                SeamRoomFactory(InMemoryLoom(), backgroundScope, clock, memberInboxCapacity = -1)
+            }
+        }
+
+    @Test
     fun `a room built with a smaller capacity holds exactly that many frames`() =
         runTest {
             val loom = InMemoryLoom()

@@ -608,11 +608,49 @@ class FakeRoomTest {
         room.addMember(member(alice))
         repeat(FAKE_INBOX_CAPACITY + 1) { room.deliver(alice, "a$it".encodeToByteArray()) }
 
-        val failure = assertFailsWith<FramesLost> { room.incomingFrom(alice).first() }
+        val frames = room.incomingFrom(alice)
+        // Delivered after the claim and still counted, mirroring the conformance suite's (4d): the count
+        // is read when the reader reaches the end, not when the loss began. This fake has no frame-prefix
+        // dispatch, so what it pins is the arithmetic of its copy of MemberInbox — against a real room the
+        // same frame is only routed at all when its first byte is unreserved.
+        room.deliver(alice, "after-claim".encodeToByteArray())
+
+        val failure = assertFailsWith<FramesLost> { frames.first() }
         assertAll(
-            { assertEquals(FAKE_INBOX_CAPACITY + 1L, failure.dropped) },
+            {
+                assertEquals(
+                    FAKE_INBOX_CAPACITY + 2L,
+                    failure.dropped,
+                    "every frame lost by the time the reader arrives — the released inbox, and the one after the claim",
+                )
+            },
             { assertEquals(false, failure.claimed, "the loss happened before anything claimed the inbox") },
         )
+    }
+
+    @Test
+    fun `a fake built with capacity 0 refuses incomingFrom as the real room does`() = runTest {
+        val room = FakeRoom(memberInboxCapacity = 0)
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+
+        val refusal = assertFailsWith<IllegalStateException> { room.incomingFrom(alice) }
+        assertAll(
+            { assertTrue(refusal.message.orEmpty().contains("memberInboxCapacity"), "the refusal names the knob that disabled it") },
+            {
+                assertTrue(
+                    room.roster.value.any { it.id == alice },
+                    "and the member is admitted — a configuration refusal, not a missing admission",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun `a fake built with a negative capacity is refused at construction`() = runTest {
+        assertFailsWith<IllegalArgumentException>("-1 would otherwise behave as 0 under a message that says 0") {
+            FakeRoom(memberInboxCapacity = -1)
+        }
     }
 
     @Test
