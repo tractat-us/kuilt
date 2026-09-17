@@ -21,8 +21,17 @@ class InMemoryRaftNetwork(
      * The per-message payload limit reported to the engine via [RaftTransport.maxPayloadBytes],
      * or `null` (the default) for an effectively unbounded transport. A tiny value forces
      * InstallSnapshot to span many chunks so the chunking path is exercised in tests.
+     *
+     * **Mutable, and read live on every send** — a transport whose budget is fixed for the life of
+     * the node cannot express the case `RaftEngine.checkProposeFitsTransport`'s own KDoc names:
+     * *"`Seam.maxPayloadBytes` is a reading, not a lease: a mesh reports the minimum across its live
+     * links, so a peer attaching over a tighter transport lowers it."* Lowering it mid-test is the
+     * only route to the state where the `InstallSnapshot` envelope alone exhausts the budget and no
+     * chunk can be sent at all (#2720). Every transport handed out by [transport] observes the
+     * change, since both the published value and the enforcement below read this property rather
+     * than a copy taken at construction.
      */
-    private val maxPayloadBytes: Int? = null,
+    var maxPayloadBytes: Int? = null,
     /**
      * Scope hosting delayed deliveries for links given a [setLinkLatency] — pass the test's
      * `backgroundScope` (via [RaftSimulation]'s `nodeScope`) so in-flight messages are dropped at
@@ -75,14 +84,15 @@ class InMemoryRaftNetwork(
         val ch = Channel<RaftEnvelope>(Channel.UNLIMITED)
         channels[id] = ch
         _peers.update { it + id }
-        val limit = maxPayloadBytes
+        val network = this
         return object : RaftTransport {
             override val selfId = id
             override val peers: StateFlow<Set<NodeId>> = _peers.asStateFlow()
             override val incoming: Flow<RaftEnvelope> = ch.receiveAsFlow()
-            override val maxPayloadBytes: Int? = limit
+            override val maxPayloadBytes: Int? get() = network.maxPayloadBytes
             override suspend fun sendTo(peer: NodeId, message: ByteArray) {
                 if (recording) sent += Sent(id, peer, Cbor.decodeFromByteArray(RaftMessage.serializer(), message))
+                val limit = network.maxPayloadBytes
                 if (limit != null && message.size > limit) {
                     // Refused on size, ahead of the partition filter — see [overBudget].
                     overBudget += OverBudget(id, peer, message.size, limit)
