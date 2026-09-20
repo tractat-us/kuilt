@@ -6909,9 +6909,9 @@ val forbidBoltRejoiningTheLattice by tasks.registering {
     }
 }
 
-// Guard: every `:kuilt-*` module has a row in CLAUDE.md's module table (#2257).
+// Guard: every `:kuilt-*` module has a row in AGENTS.md's module table (#2257).
 //
-// CLAUDE.md's "Module structure & dependency direction" section is the first thing an agent reads
+// AGENTS.md's "Module structure & dependency direction" section is the first thing an agent reads
 // in this repo, so a module missing from it is invisible to exactly the reader it exists for — an
 // agent asked to keep a longer history than the live replica will not find the module that does it.
 // That is not hypothetical: `:kuilt-bolt` shipped seven PRs before anyone noticed it had no row,
@@ -6926,7 +6926,7 @@ val forbidBoltRejoiningTheLattice by tasks.registering {
 // landed, so the baseline is empty — and an allowlist over an empty baseline is nothing but a place
 // to put the next omission.
 //
-// ── Why CLAUDE.md and not README.md ─────────────────────────────────────────────────────────────
+// ── Why AGENTS.md and not README.md ─────────────────────────────────────────────────────────────
 // README's module list is a CURATED consumer surface, not an inventory. It omits internal plumbing
 // (`:kuilt-liveness`, `:kuilt-quilter`, `:kuilt-cluster`, `:kuilt-stream`, `:kuilt-tcp`,
 // `:kuilt-bom`), omits every `*-test` module, and presents the otel and warp families as one
@@ -7059,9 +7059,9 @@ val verifySkillDescriptionBudget by tasks.registering {
 
 val verifyModuleTable by tasks.registering {
     group = "verification"
-    description = "Fails if a :kuilt-* module has no row in CLAUDE.md's module table (#2257)."
-    val claudeMd = rootDir.resolve("CLAUDE.md")
-    inputs.file(claudeMd).withPropertyName("claudeMd")
+    description = "Fails if a :kuilt-* module has no row in AGENTS.md's module table (#2257)."
+    val agentsMd = rootDir.resolve("AGENTS.md")
+    inputs.file(agentsMd).withPropertyName("agentsMd")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // The other half of the verdict is the module SET, which lives in `settings.gradle.kts` and is
     // not a file this task reads. Declared as a property because without it, adding a module would
@@ -7080,11 +7080,11 @@ val verifyModuleTable by tasks.registering {
     outputs.cacheIf { true }
     doLast {
         val heading = "## Module structure & dependency direction"
-        val lines = claudeMd.readLines()
+        val lines = agentsMd.readLines()
         val start = lines.indexOfFirst { it.trimEnd() == heading }
         if (start < 0) {
             error(
-                "CLAUDE.md has no \"$heading\" section, so this guard cannot tell a listed module " +
+                "AGENTS.md has no \"$heading\" section, so this guard cannot tell a listed module " +
                     "from an unlisted one and every verdict it could give would be meaningless " +
                     "(#2257). If the section was renamed, rename it here too; if the module map " +
                     "moved elsewhere, point this task at its new home.",
@@ -7108,7 +7108,7 @@ val verifyModuleTable by tasks.registering {
         val phantom = (listed - modulePaths.toSet()).sorted()
         if (phantom.isNotEmpty()) {
             error(
-                "CLAUDE.md's module table has a row for module(s) that are not in this build — a " +
+                "AGENTS.md's module table has a row for module(s) that are not in this build — a " +
                     "row describing a repo that no longer exists is worse than no row, because a " +
                     "reader trusts it (#2257):\n  " + phantom.joinToString("\n  ") +
                     "\n  Delete the row, or fix the name if the module was renamed.",
@@ -7122,7 +7122,7 @@ val verifyModuleTable by tasks.registering {
             // first version of this message had already lost "Contract & core".
             val sections = section.mapNotNull { Regex("""^\*\*(.+?)\*\*""").find(it)?.groupValues?.get(1) }
             error(
-                "Module(s) are in `settings.gradle.kts` but have no row in CLAUDE.md's \"$heading\" " +
+                "Module(s) are in `settings.gradle.kts` but have no row in AGENTS.md's \"$heading\" " +
                     "table. That table is the first thing an agent reads here, so an unlisted " +
                     "module is invisible to exactly the reader it exists for (#2257):\n  " +
                     missing.joinToString("\n  ") +
@@ -7134,7 +7134,7 @@ val verifyModuleTable by tasks.registering {
         }
         val out = stamp.get().asFile
         out.parentFile.mkdirs()
-        out.writeText("ok — ${modulePaths.size} module(s) checked against CLAUDE.md's table\n")
+        out.writeText("ok — ${modulePaths.size} module(s) checked against AGENTS.md's table\n")
     }
 }
 
