@@ -57,8 +57,9 @@ Among children with demand that are not ahead of the weighted average,
 it chooses the earliest virtual finish time for the next grant. This is
 *earliest eligible virtual deadline first* (**EEVDF**).
 
-Exact rational arithmetic gives the same choice from the same inputs.
-Peers may still see different inputs while updates travel. `boundMetrics(parent)`
+Handed the same picture, every peer picks the same winner—no clock, no
+randomness, no floating point. Their pictures can differ while updates travel.
+`boundMetrics(parent)`
 reports the fairness bounds and observed gap. Weights describe service units,
 not completion times. An idle child does not compete or bank credit for
 all the work done while it slept.

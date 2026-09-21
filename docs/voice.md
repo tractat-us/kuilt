@@ -2,7 +2,7 @@
 
 kuilt should sound like someone who knows the machinery and enjoys showing
 how little of it you need. Warm, direct, compact, with a little wit. Give the
-reader something to picture and a reason to keep reading.
+reader something to picture and a reason to keep reading. Brevity serves that voice.
 
 ## Start with something happening
 
@@ -37,6 +37,10 @@ Keep the entrance open to a curious non-engineer. Introduce a technical term
 when it answers a question the story has raised, with a brief explanation.
 Once introduced, use it precisely. Deeper pages can assume more knowledge
 and carry more detail; they should keep the same direct voice.
+
+Keep the warmth at depth: “same picture, same winner” carries more voice
+than “same choice from the same inputs.” Cut repeated explanation before
+you flatten a good phrase.
 
 Keep examples small enough to see the idea. Link to working setup instead
 of repeating it. A good diagram can replace a paragraph.
