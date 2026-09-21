@@ -1,0 +1,6 @@
+extends: metric
+message: 'This opening sentence has %s words; use at most 25.'
+level: error
+scope: 'sentence & doc(section:has(> h1) > p)'
+formula: words
+condition: '> 25.0'

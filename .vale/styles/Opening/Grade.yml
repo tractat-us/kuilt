@@ -1,0 +1,8 @@
+extends: metric
+message: 'Opening paragraph is grade %s; aim for grade 6 or below before the first section.'
+level: error
+# Only paragraphs directly under the page title, before any subheading.
+scope: 'paragraph & doc(section:has(> h1) > p)'
+formula: |
+  (0.39 * (words / sentences)) + (11.8 * (syllables / words)) - 15.59
+condition: '> 6.0'
