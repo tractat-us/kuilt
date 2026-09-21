@@ -7062,7 +7062,7 @@ val verifySkillDescriptionBudget by tasks.registering {
 // Cap the kuilt-primitives body at 8,192 bytes (8 KiB): a compact index routes, prose does not.
 // The body loads lazily, outside the eager description cap, but still needs a bound (#2793).
 // This is a text scan: SKILL.md is an artefact no compiler sees, so neither a type nor a
-// type-resolving linter can enforce it. Positive controls: .github/scripts/test-skill-body-budget.py.
+// type-resolving linter can enforce it.
 // Retire this when the skill index is generated from the cookbook index with its own size
 // --check (#2793; #2769 open decision #5). Binary units preserve the split's stated budget.
 // kuilt-worker-contract is out of scope: it has no stated body target (measured 2026-09-21:

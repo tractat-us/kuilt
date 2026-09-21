@@ -51,10 +51,11 @@ and primitive groups in order. The cookbook index splits them out.
 Inside kuilt, read it directly; consumers take the first working rung:
 
 1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>`
+   Read `origin/main`, never its working tree.
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
 **Editing this skill:** `verifySkillDescriptionBudget` caps the eager `description:` at
 1,536 characters and rejects YAML-breaking `: `/` #`; adding a trigger means removing one.
 `verifySkillBodyBudget` caps this body at 8,192 bytes (8 KiB). Move explanatory prose to
-`docs/agent-cookbook*`, never drop a route. See root `CLAUDE.md` for the rationale.
+`docs/agent-cookbook*`, never drop a route. See kuilt's root `CLAUDE.md` for the rationale.
