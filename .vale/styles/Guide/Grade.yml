@@ -1,6 +1,6 @@
 extends: metric
-message: "Reading grade is %s; keep guide prose at grade 10 or below."
+message: "Reading grade is %s; keep guide prose at grade 11 or below."
 level: error
 formula: |
   (0.39 * (words / sentences)) + (11.8 * (syllables / words)) - 15.59
-condition: '> 10.0'
+condition: '> 11.0'

@@ -12,17 +12,20 @@ baseline and removes that flag to make violations block merges.
 
 | Level | Pages | Maximum grade | Words per sentence |
 | --- | --- | ---: | ---: |
-| Entry | Overview, Warp, Heddle | 6 | 25 |
-| Practical | Install, getting started, quick start, connections, fabrics, shared data, consensus, observability, testing | 10 | 40 |
-| Technical | Other guide topics, new topics by default, README body | 12 | 60 |
+| Entry | Overview, Warp, Heddle | 7 | 25 |
+| Practical | Install, getting started, quick start, connections, fabrics, shared data, consensus, observability, testing | 11 | 40 |
+| Technical | Other guide topics, new topics by default, README body | 13 | 60 |
 
-README and practical-guide **opening body paragraphs** also have grade-6 and
+README and practical-guide **opening body paragraphs** also have grade-7 and
 25-word limits. This covers paragraphs before the first subheading, excluding
 lists, tables, and callouts. Entry pages flag a short list of specialist terms.
 
 Edit tiers in [`.vale.ini`](../.vale.ini) and rules in
 [`.vale/styles`](../.vale/styles). Add new entry pages to the Entry section.
 Design archives, internal plans, and generated API docs are outside this gate.
+
+The grade limits leave room for natural rhythm and compact prose. Sentence
+limits and the entry jargon checks still apply.
 
 ## Reading the scores
 

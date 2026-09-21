@@ -54,6 +54,32 @@ class ReadabilityGateTest(unittest.TestCase):
         self.assertEqual(self.lint("Writerside/topics/warp-jobs.md", TECHNICAL)[0], 0)
         self.assertEqual(self.lint("Writerside/topics/getting-started.md", MODERATE)[0], 0)
 
+    def test_each_tier_allows_one_grade_of_headroom(self):
+        # Measured with Vale 3.22.0: grades 6.34, 10.82, and 12.45.
+        entry = (
+            "The group chooses a leader to order decisions; each device keeps a copy. "
+            "If the leader goes away, the group can choose another."
+        )
+        guide = (
+            "The node records each update and sends it to other peers, which merge "
+            "the changes into a shared view when their connections return."
+        )
+        technical = (
+            "The system records each update and sends it to other devices, which merge "
+            "the changes into a shared view when their network connections return."
+        )
+        opening = f"# Title\n\n{entry}\n\n## Details\n\n{PLAIN}\n"
+        cases = (
+            ("Writerside/topics/overview.md", entry),
+            ("Writerside/topics/getting-started.md", guide),
+            ("Writerside/topics/warp-jobs.md", technical),
+            ("README.md", opening),
+            ("Writerside/topics/contract.md", opening),
+        )
+        for path, prose in cases:
+            with self.subTest(path=path):
+                self.assertEqual(self.lint(path, prose), (0, set()))
+
     def test_long_simple_sentence_is_rejected_at_entry(self):
         prose = "We " + "can share this work and " * 8 + "then go home."
         code, checks = self.lint("Writerside/topics/warp.md", prose)
