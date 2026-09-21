@@ -59,8 +59,8 @@ it chooses the earliest virtual finish time for the next grant. This is
 
 Handed the same picture, every peer picks the same winner—no clock, no
 randomness, no floating point. Their pictures can differ while updates travel.
-`boundMetrics(parent)`
-reports the fairness bounds and observed gap. Weights describe service units,
+
+`boundMetrics(parent)` reports the fairness bounds and observed gap. Weights describe service units,
 not completion times. An idle child does not compete or bank credit for
 all the work done while it slept.
 

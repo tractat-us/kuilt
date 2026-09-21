@@ -68,7 +68,7 @@ implementation("us.tractat.kuilt:kuilt-crdt")
 ```
 { src="../../kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" include-symbol="sampleRgaChatReplicator" }
 
-→ [Replication](crdt-overview.md)
+→ [Replicated Data](crdt-overview.md)
 
 ---
 
@@ -88,7 +88,7 @@ implementation("us.tractat.kuilt:kuilt-game")
 ```
 { src="../../kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt" include-symbol="sampleTurnSequencer" }
 
-→ [Consensus and leader election](raft.md)
+→ [Consensus](raft.md)
 
 ---
 

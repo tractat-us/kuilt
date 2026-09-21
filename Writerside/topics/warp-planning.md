@@ -16,7 +16,6 @@ val draft: Draft<ByteArray> = Warp.shuttle(OpId("docs"))
     .map(OpId("score"))
     .filter(OpId("above-threshold"))
     .embroider(OpId("rank"))
-
 ```
 
 `isMonotone` means the plan needs no agreement step: incoming contributions
@@ -57,8 +56,8 @@ without a network round-trip.
 
 A draft can branch. `combine` joins independent drafts; `plan(stats)` can
 batch their agreements into one round. A later agreement that needs an
-earlier result must still wait. Thus dependency depth, rather than the
-number of agreements, sets the minimum round count.
+earlier result must still wait. The deepest chain of dependent agreements
+sets the minimum round count.
 
 The catch: a failed batch takes every agreement in it back to the start.
 Inspect `coupling` and split the draft if that is too much to retry.
@@ -78,7 +77,6 @@ identify the two peers:
 val result = IncrementalResult(GCounter.ZERO)
 result.contribute(GCounter.of(alice to 3L))
 result.contribute(GCounter.of(bob to 2L))
-
 ```
 
 `ConvergentExecution` stores a draft and merges submitted deltas asynchronously.
