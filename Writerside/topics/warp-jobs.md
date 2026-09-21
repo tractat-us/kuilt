@@ -1,7 +1,7 @@
 # Following a job
 
-One photo is waiting to be resized. Two devices can do the work. Who starts,
-and what happens if that device vanishes before it sends back an answer?
+One photo, two willing devices. Who starts—and who takes over if the
+answer never comes back?
 
 ## From the list to an answer
 
@@ -22,7 +22,7 @@ The owner runs the job and writes its answer. Underneath, the queue is an
 `ORSet` and the answer board an `ORMap` with `LWWRegister` values.
 [`Quilter`](crdt-quilter.md) exchanges their changes and repairs missed updates.
 The [two-device test](https://github.com/tractat-us/kuilt/blob/main/kuilt-warp/src/commonTest/kotlin/us/tractat/kuilt/warp/WarpNodeTest.kt)
-shows the test wiring. In an app, persist and advance `epoch` on each restart;
+shows the wiring. In an app, persist and advance `epoch` on each restart;
 the test's zero is only a fixture.
 
 ## A lost connection can mean a repeated job
@@ -71,8 +71,8 @@ which of those devices are eligible:
 val where = Affinity.has("GPU") and Affinity.attr("region", "us-east")
 ```
 
-This condition can travel with the task and compose with its lane.
-Placement trusts peer announcements; it does not prove hardware or location.
+The condition travels with the task and works alongside its lane.
+Warp takes peers at their word; it does not prove hardware or location.
 
 Jobs can also carry WebAssembly code. Warp fetches and caches it;
 `kuilt-warp-runtime` runs it with memory and time limits and no host file or

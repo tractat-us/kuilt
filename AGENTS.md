@@ -530,6 +530,10 @@ before the upload.
 
 ### Readability checks
 
+Follow [kuilt's voice](docs/voice.md) across the repo: concrete stories, compact
+prose, a little wit, and depth as the reader needs it. Keep the character when
+simplifying; extra explanation must earn its space.
+
 The README and Writerside guide use Vale 3.22.0. Run
 `vale --no-global README.md Writerside/topics` after editing prose; the same gate
 runs in the required `doc-citations` CI job. Entry pages target reading grade 6,

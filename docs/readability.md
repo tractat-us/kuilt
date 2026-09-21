@@ -1,7 +1,7 @@
 # Keeping the guide easy to enter
 
-Start with a person, a task, and a problem. Introduce technical names when
-the story needs them. Keep examples short; link to setup rather than repeat it.
+Follow [kuilt's voice](voice.md): a concrete story, compact prose, a little wit.
+These checks catch density; the voice guide sets the editorial target.
 
 Vale gates the README and all `Writerside/topics/*.md` in the required
 `doc-citations` CI job, including docs-only changes.
@@ -59,10 +59,10 @@ whole-page scores, so the README row includes setup and reference material.
 
 | Page | Before: reading grade | Before: reading ease | After this pass: reading grade |
 | --- | ---: | ---: | ---: |
-| Guide overview | 8.77 | 58.83 | 3.83 |
-| Warp | 8.90 | 60.14 | 4.27 |
-| Heddle | 9.74 | 61.03 | 4.74 |
-| README | 10.07 | 48.99 | 9.33 |
+| Guide overview | 8.77 | 58.83 | 4.34 |
+| Warp | 8.90 | 60.14 | 3.88 |
+| Heddle | 9.74 | 61.03 | 4.83 |
+| README | 10.07 | 48.99 | 9.70 |
 
 The lower entry scores come partly from moving detail into companion pages.
 Those pages keep short examples and explain the limits in more depth.

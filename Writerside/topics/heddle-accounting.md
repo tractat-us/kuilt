@@ -1,7 +1,7 @@
 # Inside Heddle
 
-A photo reserves ten units, spends seven, and frees three. Heddle keeps that
-accounting sound when devices work apart or teams change.
+A job reserves ten units, spends seven, and frees three. Follow the books
+as devices lose touch and teams change.
 
 ## Where the allowance lives
 
@@ -49,8 +49,8 @@ shows the wiring.
 
 ## Who gets the next turn
 
-The policy accounts for service when allowance is **issued**, so hoarding
-unused grants does not make a team look underserved. It divides issued
+Service counts when allowance is **issued**. Sitting on unused grants
+cannot make a team look underserved. The policy divides issued
 service by weight to track each child's **virtual time**.
 
 Among children with demand that are not ahead of the weighted average,

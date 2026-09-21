@@ -1,35 +1,29 @@
 # Warp
 
-You have a thousand photos to resize and a roomful of devices that could help.
-Instead of making one laptop do it all, you want each device to take some
-photos and send back the results. That is what Warp is for.
+A thousand photos to resize, and a roomful of devices that could help.
+Warp shares the pile: each device takes work and puts answers back.
 
-> **Playground.** Warp works today, but its API can change. Try it out before
-> you build something that depends on it staying the same.
+> **Playground.** Warp works today; its API can change.
 
 ## Share the pile
 
-Each photo becomes a job on a shared list. Every device sees that list and
-works out which jobs belong to it. There is no central server handing out
-each job.
+Each photo becomes a job on a shared list. Devices work out which jobs
+belong to them, with no central boss handing out work.
 
-When a device finishes a photo, it puts the answer on a shared board. The
-other devices pick up the result as their copies catch up. Your app can
-read the answers from its own copy.
+Each device puts its answers on a shared board. Other devices pick them up
+as their copies catch up; your app reads its own copy.
 
 ![A shared photo list feeds two devices, which send their results to one shared board.](warp-work.svg)
 
-The parts may sound familiar. kuilt already has ways to connect devices,
-share a list, and merge answers. Warp puts those parts together so your app
-can add jobs and read results.
+The parts are familiar: connect devices, share a list, merge answers.
+Warp puts them together. Your app adds jobs and reads results.
 
 ## When a device goes quiet
 
-Suppose a phone loses its connection halfway through a photo. Another
-device can pick up its work. But the phone may still be running: losing
-contact does not mean it stopped.
+A phone drops off the network halfway through a photo. Another device can
+pick up its work—but silence does not mean the phone stopped.
 
-That means **a job can run more than once**. The answer board keeps one
+So **a job can run more than once**. The answer board keeps one
 result per job, but it cannot undo work outside Warp. Resizing the same
 photo twice can be harmless. Sending the same email twice is not.
 
@@ -39,9 +33,9 @@ Warp also has a path where the group agrees before a device acts.
 
 ## When another team joins
 
-Now a second team adds its photos. The devices can share the work, but who
-should get how much time? If one team has twice the share, it should get
-roughly twice the service while both have work waiting.
+Now a second team adds photos. Who gets how much of the room?
+A team with twice the share should get roughly twice the service while
+both have work waiting.
 
 That is [Heddle's part of the story](heddle.md). Warp chooses where a job
 runs. Heddle controls how much work each team may start.
@@ -58,4 +52,4 @@ runs. Heddle controls how much work each team may start.
 All three have working code. The wider
 [vision](https://github.com/tractat-us/kuilt/blob/main/docs/warp-vision.md)
 asks how close this could feel to running code on one computer.
-That larger promise remains an idea to explore.
+That remains an idea to explore.

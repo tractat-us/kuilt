@@ -1,11 +1,10 @@
 # Consensus
 
-Two players try to take the next turn at once. The game needs one agreed
-move, then the next, so both players see the same game. Consensus gives
-the group that shared order.
+Two players, one next turn. The game needs everyone to agree on who goes
+first. Consensus gives the group one shared order of moves.
 
-The group chooses a leader to put decisions in order. Each device keeps a
-copy of that record. If the leader goes away, the group can choose another.
+The group chooses a leader to order decisions; each device keeps a copy.
+If the leader goes away, the group can choose another.
 
 ## When to use it
 

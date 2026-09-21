@@ -1,16 +1,14 @@
 # Device to dashboard
 
-An app goes wrong on a phone with no signal. You need to know what happened.
-Did the screen load? How long did it take? Apps record notes as they run so
-you can answer those questions later.
+Did the screen load? Did the payment go through? Apps leave notes as they
+run. Those notes tell you what went wrong—even on a phone with no signal.
 
 The hard part is collecting those notes from real users. Phones go through tunnels.
 Browsers get closed. Laptops sleep. When a device is offline, the usual approach
 just *loses* whatever it couldn't send.
 
-kuilt **saves the note on the device first**. It sends the note when the
-network comes back, even hours later. If a poor connection makes it send
-the same note again, that note is counted once.
+kuilt **saves the note on the device first** and sends it when the network
+returns, even hours later. A flaky link may send it twice; it is counted once.
 
 The rest of this page walks the whole path, in the order you'll build it:
 
@@ -169,7 +167,7 @@ a long run.
 When a cap is hit, dropped items are accounted for. Rare drops get a note
 per item. Frequent drops, such as ordinary log lines in a full store, are
 counted exactly, with an occasional note saying how many. Writing a note for
-every dropped line would merely replace one stream of log traffic with another.
+every dropped line would just replace one stream of log traffic with another.
 
 ## Going deeper
 

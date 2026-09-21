@@ -1,8 +1,8 @@
 # Quick start
 
-Try a chat between two peers on one computer. A peer is one participant in
-the chat. With `InMemoryLoom`, both can send and receive without a network.
-You can build and test the app first, then choose how real devices will connect.
+Try both sides of a chat on one computer. `InMemoryLoom` connects the two
+peers with no sockets, no radios, and almost no setup. Build and test the
+app, then choose how real devices will connect.
 
 ## Host a session and broadcast a frame
 

@@ -1,11 +1,10 @@
 # Replicated Data
 
-Two people add to a shared list while one is offline. Each sees their own
-edit at once. When they connect again, both should see the same list.
-kuilt gives each device a copy and a way to merge the changes.
+Two people edit a shared list; one is offline. Neither should have to wait.
+kuilt gives each device a copy and merges their changes when they reconnect.
 
-The copies can receive updates in a different order and still agree.
-You choose a type whose merge rules fit the data you want to share.
+Updates can arrive out of order and still sew into the same final pattern.
+Choose the merge rules that fit your data.
 
 ## How the copies agree
 

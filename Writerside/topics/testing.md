@@ -1,13 +1,11 @@
 # Testing
 
-kuilt connects devices that come and go. You need to know what happens
-when one drops off the network or comes back. Many of those tests can run
-on one computer, with no real phones or Wi-Fi. The test controls time,
-so a five-second wait need not take five real seconds.
+kuilt's peers come and go, lose the network, and reconnect. Testing that
+sounds like a job for a roomful of phones. Much of it fits in one process,
+with time under your control: a five-second wait costs no real seconds.
 
-When a test fails, you need more than a red light. Which device got stuck?
-What was it waiting for? The second half of this page shows how to record
-each device's activity, so you can follow the story of a failure.
+When a test fails, which peer got stuck? Waiting on whom? The second half
+turns on the instruments, so a red test hands you the story instead of a shrug.
 
 You'll build up in three steps:
 

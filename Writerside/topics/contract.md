@@ -1,8 +1,7 @@
 # How connections work
 
-Your app needs to send a message from one device to another. kuilt gives it
-one way to do that. You can change how the devices connect without changing
-the code that sends the message.
+kuilt gives your app one way to send and receive. Learn it once; swap how
+devices connect without rewriting the code that uses the link.
 
 At a high level, it is three things:
 

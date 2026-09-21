@@ -1,8 +1,7 @@
 # Getting started
 
-Start with two devices that can send a message. Then give them a shared chat
-and a game where players take turns. Each step adds one part of kuilt and
-shows why you need it.
+Connect two devices. Give them a shared chat, then a game with turns.
+Four steps, one new piece of kuilt at a time.
 
 ## Step 1: Two peers over WebSocket
 

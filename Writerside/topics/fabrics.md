@@ -1,10 +1,10 @@
 # Connections
 
-Two phones might talk through a server or send data straight to each other.
-kuilt calls each way of connecting a **fabric**.
+Through a server or straight to a nearby phone: peers need a path to each
+other. kuilt calls each way of connecting a **fabric**.
 
-Each fabric gives your app the same way to send and receive. Pick one that
-fits where your devices run. The code that uses the link stays the same.
+Pick the fabric that fits your devices. Each gives your app the same way
+to send and receive, so the code that uses the link stays put.
 
 ## Pick a connection path by deployment shape
 

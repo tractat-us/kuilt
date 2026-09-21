@@ -1,8 +1,8 @@
 # Planning the work
 
 A photo search scores images, drops weak matches, then picks a final list.
-Doing less work before the devices must agree can make that search cheaper.
-Warp lets you inspect and rewrite the plan before it runs.
+Filter before the devices must agree, and they have less to agree on.
+Warp lets you inspect and rewrite that plan.
 
 ## Describe the steps
 
@@ -60,10 +60,9 @@ batch their agreements into one round. A later agreement that needs an
 earlier result must still wait. Thus dependency depth, rather than the
 number of agreements, sets the minimum round count.
 
-
-The tradeoff is retry size. If a batch proposal fails, every agreement in
-it retries together. Inspect `coupling` and split the draft if that unit
-is too large. These are plan costs, not promised workload timings.
+The catch: a failed batch takes every agreement in it back to the start.
+Inspect `coupling` and split the draft if that is too much to retry.
+These are plan costs, not promised workload timings.
 
 ## Read a growing result
 
