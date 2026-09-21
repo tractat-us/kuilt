@@ -1,0 +1,6 @@
+extends: metric
+message: "Reading grade is %s; keep entry prose at grade 6 or below."
+level: error
+formula: |
+  (0.39 * (words / sentences)) + (11.8 * (syllables / words)) - 15.59
+condition: '> 6.0'

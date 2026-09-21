@@ -1,0 +1,12 @@
+extends: existence
+message: "Explain the idea in everyday words here; introduce '%s' on a deeper page."
+level: error
+ignorecase: true
+tokens:
+  - anti-entropy
+  - CRDTs?
+  - quorum
+  - idempotent
+  - monotone
+  - lattice
+  - EEVDF

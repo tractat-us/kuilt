@@ -1,0 +1,6 @@
+extends: metric
+message: "This sentence has %s words; use at most 40."
+level: error
+scope: sentence
+formula: words
+condition: '> 40.0'
