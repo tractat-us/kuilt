@@ -1,6 +1,6 @@
 # Warp
 
-A thousand photos to resize, and a roomful of devices that could help.
+Imagine a roomful of devices with a thousand photos to resize.
 Warp shares the pile: each device takes work and puts answers back.
 
 > **Playground.** Warp works today; its API can change.

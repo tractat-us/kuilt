@@ -63,7 +63,7 @@ whole-page scores, so the README row includes setup and reference material.
 | Page | Before: reading grade | Before: reading ease | After this pass: reading grade |
 | --- | ---: | ---: | ---: |
 | Guide overview | 8.77 | 58.83 | 4.34 |
-| Warp | 8.90 | 60.14 | 3.88 |
+| Warp | 8.90 | 60.14 | 3.95 |
 | Heddle | 9.74 | 61.03 | 4.83 |
 | README | 10.07 | 48.99 | 9.70 |
 
