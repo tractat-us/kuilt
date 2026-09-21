@@ -1,5 +1,7 @@
 @AGENTS.md
 
+**Do this first, before answering or acting on anything:** if no text from `AGENTS.md` appears above this line, your session started below the repository root and the `@AGENTS.md` import was skipped. Use the Read tool on `AGENTS.md` at the repository root now (and on any `AGENTS.md` in the directory you are working in), then follow it — it holds this repo's rules.
+
 ## Claude Code
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
