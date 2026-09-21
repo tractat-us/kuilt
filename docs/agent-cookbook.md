@@ -5,6 +5,17 @@ It is a lookup table: find the thing you're trying to do on the left, use the ku
 primitive on the right, instead of building your own. Each entry links a runnable,
 compile-checked snippet.
 
+The `kuilt-primitives` skill is the compact entry point: kuilt almost certainly already
+ships the networking, session, shared-state, telemetry or scheduling thing you are about
+to write. Symptoms sharing a section share a skill row; this index splits them out.
+
+The skill's fetch ladder reads only the file a route names, never the whole cookbook.
+Its first rung reads `origin/main` from a side-by-side kuilt checkout because that
+checkout's working tree can sit weeks behind. The second needs no checkout: `gh api`
+works on a private repo, unlike a `blob` URL; keep its URL quoted because zsh globs `?`.
+The final `curl` rung needs no `gh` either. The commands stay in the skill so a consumer
+can reach this explanation.
+
 ## Don't build this yourself
 
 If you catch yourself writing any of these, stop — kuilt already ships it:

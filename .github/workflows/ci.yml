@@ -658,6 +658,8 @@ jobs:
   #     nothing (#2662). Belongs here above all the others: a SKILL.md is `*.md`, so editing one is
   #     docs-only by definition and the heavy build never runs — and appending a trigger phrase to a
   #     skill that "isn't firing" is exactly the docs-only edit this guard exists to catch.
+  #   - verifySkillBodyBudget — the kuilt-primitives body stays within 8,192 bytes (8 KiB).
+  #     Its SKILL.md-only edits skip the heavy build, so this job must enforce the cap too (#2793).
   #   - llms-txt.py --check — the generated documentation index `llms.txt` still matches what
   #     its sources say today (#2770). NOT a Gradle task, deliberately: it reads four files and
   #     needs no toolchain, so it runs as the job's first step, before the JDK setup. Its inputs
@@ -740,7 +742,7 @@ jobs:
         run: >
           ./gradlew verifyDocCitations forbidUncitedDocCodeBlock verifyModuleDocLinks
           verifySampleLinks verifyModuleTable verifyFamilyRules verifySeamHarnessCoverage
-          verifySkillDescriptionBudget
+          verifySkillDescriptionBudget verifySkillBodyBudget
 
   # ── capability-probes ───────────────────────────────────────────────────────
   # The GATING half of the probe split (#1768's option 2). Runs only the

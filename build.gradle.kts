@@ -230,7 +230,7 @@ class TimeoutShapedFailureReporter(private val resultsDir: Provider<String>) : T
 // ─── Guard plumbing ─────────────────────────────────────────────────────────────────────────
 //
 // Every guard below is a `check`-wired verification task, and every one of them carries a stamp
-// file as its single output. The stamp's contents are meaningless; its EXISTENCE is what lets
+// file as its single output. A stamp may record measurements; its EXISTENCE is what lets
 // Gradle do up-to-date checking at all — a task with inputs but no outputs has no basis for it
 // and re-runs on every single build (#1827). Do not delete a stamp as dead weight: without it the
 // guard silently becomes the reason someone deletes the guard.
@@ -7033,7 +7033,8 @@ val verifySkillDescriptionBudget by tasks.registering {
                     "${body.length - cap} characters are TRUNCATED before any model sees them, so " +
                     "every trigger phrase in them routes nothing. THE FIX is to remove a trigger, " +
                     "not to add one — the budget is zero-sum. Explanatory prose belongs in the " +
-                    "body (lazy, unbounded) or in the cookbook; the description holds triggers only."
+                    "cookbook; the kuilt-primitives body is lazy but capped by verifySkillBodyBudget. " +
+                    "The description holds triggers only."
             }
             if (body.contains(": ")) {
                 failures += "${file.parentFile.name}: `description:` contains a colon-space, which " +
@@ -7055,6 +7056,51 @@ val verifySkillDescriptionBudget by tasks.registering {
         val out = stamp.get().asFile
         out.parentFile.mkdirs()
         out.writeText("ok — ${skillFiles.size} skill description(s) within the $cap-char cap\n")
+    }
+}
+
+// Cap the kuilt-primitives body at 8,192 bytes (8 KiB): a compact index routes, prose does not.
+// The body loads lazily, outside the eager description cap, but still needs a bound (#2793).
+// This is a text scan: SKILL.md is an artefact no compiler sees, so neither a type nor a
+// type-resolving linter can enforce it. Positive controls: .github/scripts/test-skill-body-budget.py.
+// Retire this when the skill index is generated from the cookbook index with its own size
+// --check (#2793; #2769 open decision #5). Binary units preserve the split's stated budget.
+// kuilt-worker-contract is out of scope: it has no stated body target (measured 2026-09-21:
+// 14,975 file bytes, 14,547 body bytes). Check only the fixed kuilt-primitives path.
+val verifySkillBodyBudget by tasks.registering {
+    group = "verification"
+    description = "Caps the kuilt-primitives SKILL.md body at 8,192 UTF-8 bytes (8 KiB)."
+    val skillPath = ".claude/skills/kuilt-primitives/SKILL.md"
+    val skillFile = rootDir.resolve(skillPath)
+    // Plural files keeps a missing path as an input without pre-empting our doLast diagnostic.
+    inputs.files(skillFile).withPropertyName("skillFile")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val stamp = layout.buildDirectory.file("verification/verify-skill-body-budget.ok")
+    outputs.file(stamp)
+    outputs.cacheIf { true }
+    doLast {
+        val cap = 8192
+        if (!skillFile.isFile) error("$skillPath: missing skill file.")
+        val text = skillFile.readText(Charsets.UTF_8)
+        val opening = Regex("""\A---\r?\n""").find(text)
+            ?: error("$skillPath: no opening YAML frontmatter delimiter (---).")
+        val closing = Regex("""^---(?:\r?\n|\z)""", RegexOption.MULTILINE)
+            .find(text, opening.range.last + 1)
+            ?: error("$skillPath: opening YAML frontmatter has no closing delimiter (---).")
+        // Exclude the delimiter line; preserve all body whitespace and original line endings.
+        val body = text.substring(closing.range.last + 1)
+        if (body.isBlank()) error("$skillPath: empty body after YAML frontmatter.")
+        val bytes = body.toByteArray(Charsets.UTF_8).size
+        if (bytes > cap) {
+            error(
+                "$skillPath: body is $bytes UTF-8 bytes, ${bytes - cap} over the " +
+                    "8,192 bytes (8 KiB) limit. Move explanatory prose to docs/agent-cookbook*, " +
+                    "never drop a route.",
+            )
+        }
+        val out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("ok — $skillPath body: $bytes UTF-8 bytes; limit: $cap bytes (8 KiB)\n")
     }
 }
 
@@ -8524,6 +8570,7 @@ allprojects {
         dependsOn(rootProject.tasks.named("verifyModuleTable"))
         dependsOn(rootProject.tasks.named("verifyFamilyRules"))
         dependsOn(rootProject.tasks.named("verifySkillDescriptionBudget"))
+        dependsOn(rootProject.tasks.named("verifySkillBodyBudget"))
         dependsOn(rootProject.tasks.named("verifySeamHarnessCoverage"))
         dependsOn(rootProject.tasks.named("forbidRunCatchingCancellableUnderNonCancellable"))
         dependsOn(rootProject.tasks.named("forbidCancellationRethrowAroundBound"))

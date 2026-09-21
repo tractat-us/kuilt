@@ -5,14 +5,12 @@ description: Use BEFORE writing any networking, session, shared-state, telemetry
 
 # kuilt primitives — check before you build
 
-kuilt almost certainly already ships the networking, session, shared-state, telemetry or
-scheduling thing you are about to write. Read the **one** file your symptom's route names.
+Read the **one** cookbook file your symptom names before building a primitive.
 
 ## Don't build this yourself
 
-Each `Jump to` is a file under `docs/agent-cookbook/` — prepend that directory for the repo path.
-Symptoms sharing a section share a row, and within one the Nth `;`-separated symptom group pairs
-with the Nth `;`-separated primitive group; `docs/agent-cookbook.md` splits them out.
+Prefix `Jump to` with `docs/agent-cookbook/`. Within a row, pair `;`-separated symptom
+and primitive groups in order. The cookbook index splits them out.
 
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
@@ -49,17 +47,14 @@ with the Nth `;`-separated primitive group; `docs/agent-cookbook.md` splits them
 
 ## Fetching a route
 
-Fetch the **one** file a route names, never the whole cookbook. `<path>` is
-`docs/agent-cookbook/<jump-to file>`, or `docs/agent-cookbook.md` for the index. Inside kuilt,
-read `<path>` directly; from a consumer repo take the first rung that works:
+`<path>` is `docs/agent-cookbook/<jump-to file>` or the index, `docs/agent-cookbook.md`.
+Inside kuilt, read it directly; consumers take the first working rung:
 
-1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>` — kuilt
-   side-by-side. Read `origin/main`, never its working tree: that can sit weeks behind.
+1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>`
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
-   — no checkout; quote it, zsh globs the `?`. Works on a private repo; `blob` does not.
-3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>` — no `gh` either.
+3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
-**Editing this skill:** the `description:` is **eager** and truncated at 1,536 characters, so a
-phrase past that routes nothing — **adding a trigger means removing one**, never append.
-`verifySkillDescriptionBudget` enforces that cap and the `: `/` #` that break the frontmatter's
-YAML; the argument is in kuilt's root `CLAUDE.md`.
+**Editing this skill:** `verifySkillDescriptionBudget` caps the eager `description:` at
+1,536 characters and rejects YAML-breaking `: `/` #`; adding a trigger means removing one.
+`verifySkillBodyBudget` caps this body at 8,192 bytes (8 KiB). Move explanatory prose to
+`docs/agent-cookbook*`, never drop a route. See root `CLAUDE.md` for the rationale.
