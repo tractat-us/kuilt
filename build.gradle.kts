@@ -6968,9 +6968,10 @@ val forbidBoltRejoiningTheLattice by tasks.registering {
 // That failure is invisible from inside the repo, which is why it needs a guard rather than a note.
 // Nothing reds, no build fails, the file still reads as if it covers the concept — and the natural
 // response to "the skill didn't fire" is to APPEND another phrase, which lands in the dead zone too
-// and makes the file longer without making it more capable. `kuilt-primitives` reached 7,903
-// characters that way: 81% of it had never been seen by any model, including the routes added by
-// #2541 and #2572 specifically to fix a skill that was failing to route.
+// and makes the file longer without making it more capable. `kuilt-primitives` reached 8,155
+// characters before #2698 (after 2903e32b added the discovery trigger): 81% of it had never been
+// seen by any model, including the routes added by #2541 and #2572 specifically to fix a skill
+// that was failing to route.
 //
 // So the budget is zero-sum by construction, and that is the point. Adding a trigger means choosing
 // one to drop. `.claude/skills/kuilt-primitives/SKILL.md` is also SOURCE OF TRUTH — consumer repos
