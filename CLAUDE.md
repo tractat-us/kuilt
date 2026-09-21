@@ -67,10 +67,11 @@ the rules below as the reference version rather than a local convention.
   fabric, a `Room`/reconnect entry point, a CRDT, a liveness detector, a consensus/`GameSession`
   entry point, a dealing/gossip primitive — anything a consumer would otherwise hand-roll.
 - **But the `description` is a fixed budget, so adding a trigger means removing one.** The index
-  table in the body is free of *that* cap — a skill body is lazy. The body measures 8,395 bytes
+  table in the body is free of *that* cap — a skill body is lazy. The body is meant to stay under
+  8 KB as a compact index, on the evidence that motivated the split — a compact index routes,
+  prose does not. It measured 8,395 bytes on 2026-09-21, over that target
   (`awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' .claude/skills/kuilt-primitives/SKILL.md | wc -c`,
-  run from the repository root). Nothing in `check` enforces a body-size ceiling. Keep it a compact
-  routing index, following the evidence that motivated the split. The `description:` is **eager**,
+  run from the repository root). Nothing in `check` enforces that target. The `description:` is **eager**,
   loaded on every turn of every session and every subagent in every repo that vendors this file,
   and Claude Code truncates it at `skillListingMaxDescChars`, **default 1,536 characters**. Past that a phrase
   is not weak, it is **absent**: it never reaches the deciding model, so it routes nothing, and
@@ -94,8 +95,8 @@ the rules below as the reference version rather than a local convention.
   wrong.
 
   Explanatory prose is not a trigger and belongs in the body or the cookbook, both outside the eager
-  cap — keep the body a compact index and put longer explanations in the cookbook. A trigger only
-  earns its place by displacing another. `verifySkillDescriptionBudget` (root build,
+  cap — the cookbook unbounded, the body meant to stay under its 8 KB target, which nothing
+  enforces — and a trigger only earns its place by displacing another. `verifySkillDescriptionBudget` (root build,
   in `check` and in the `doc-citations` CI job, since a SKILL.md edit is docs-only) enforces the cap,
   and also rejects the `: ` and ` #` that silently break the unquoted plain scalar and stop the skill
   loading altogether. **That half has already happened too, and it is not a near-miss:** before
