@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 230" role="img" aria-labelledby="title desc">
+  <title id="title">Share the photo work</title>
+  <desc id="desc">A shared list feeds jobs to a laptop and a phone. Both send results to a shared answer board.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0 0 8 4 0 8" fill="#8ec5ff"/>
+    </marker>
+  </defs>
+  <rect width="800" height="230" rx="16" fill="#111827"/>
+  <g fill="none" stroke="#8ec5ff" stroke-width="2" marker-end="url(#arrow)">
+    <path d="M228 115 H272 V63 H311"/>
+    <path d="M272 115 V167 H311"/>
+    <path d="M489 63 H530 V115 H572"/>
+    <path d="M489 167 H530 V115" marker-end="none"/>
+  </g>
+  <g fill="#1e293b" stroke="#475569">
+    <rect x="28" y="74" width="200" height="82" rx="10"/>
+    <rect x="312" y="28" width="176" height="70" rx="10"/>
+    <rect x="312" y="132" width="176" height="70" rx="10"/>
+    <rect x="574" y="74" width="198" height="82" rx="10"/>
+  </g>
+  <g font-family="system-ui, sans-serif" text-anchor="middle" fill="#f1f5f9">
+    <text x="128" y="108" font-size="19">Shared job list</text>
+    <text x="128" y="133" font-size="15" fill="#cbd5e1">Photos to resize</text>
+    <text x="400" y="59" font-size="18">Laptop</text>
+    <text x="400" y="81" font-size="14" fill="#cbd5e1">Runs its jobs</text>
+    <text x="400" y="163" font-size="18">Phone</text>
+    <text x="400" y="185" font-size="14" fill="#cbd5e1">Runs its jobs</text>
+    <text x="673" y="108" font-size="19">Shared answers</text>
+    <text x="673" y="133" font-size="15" fill="#cbd5e1">Results catch up</text>
+  </g>
+</svg>

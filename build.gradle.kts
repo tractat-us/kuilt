@@ -2007,7 +2007,6 @@ val forbidUncitedDocCodeBlock by tasks.registering {
         "Writerside/topics/quick-start.md" to 3,
         "Writerside/topics/raft.md" to 3,
         "Writerside/topics/warp-compiler.md" to 1,
-        "Writerside/topics/warp.md" to 1,
         // `module.md` — Dokka `includes`, the most-published doc surface in the repo (#2615 review).
         "kuilt-cluster/module.md" to 2,
         "kuilt-core/module.md" to 2,

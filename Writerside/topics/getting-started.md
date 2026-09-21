@@ -1,6 +1,8 @@
 # Getting started
 
-Connect peers, share data, then add strict ordering only where needed. This page walks through that in four steps, adding one kuilt module at a time without changing your app code.
+Start with two devices that can send a message. Then give them a shared chat
+and a game where players take turns. Each step adds one part of kuilt and
+shows why you need it.
 
 ## Step 1: Two peers over WebSocket
 

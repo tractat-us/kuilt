@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 230" role="img" aria-labelledby="title desc">
+  <title id="title">Reserve ten, spend seven</title>
+  <desc id="desc">One job reserves ten units of allowance. It spends seven; the remaining three are free for more work.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0 0 8 4 0 8" fill="#8ec5ff"/>
+    </marker>
+  </defs>
+  <rect width="800" height="230" rx="16" fill="#111827"/>
+  <g fill="#1e293b" stroke="#475569">
+    <rect x="28" y="44" width="214" height="138" rx="10"/>
+    <rect x="303" y="44" width="194" height="138" rx="10"/>
+    <rect x="558" y="27" width="214" height="77" rx="10"/>
+    <rect x="558" y="125" width="214" height="77" rx="10"/>
+  </g>
+  <g fill="none" stroke="#8ec5ff" stroke-width="2" marker-end="url(#arrow)">
+    <path d="M242 113 H298"/>
+    <path d="M497 113 H526 V65 H553"/>
+    <path d="M526 113 V164 H553"/>
+  </g>
+  <g font-family="system-ui, sans-serif" text-anchor="middle" fill="#f1f5f9">
+    <text x="135" y="99" font-size="30">10 units</text>
+    <text x="135" y="130" font-size="17" fill="#cbd5e1">Set aside for the job</text>
+    <text x="400" y="99" font-size="21">Resize a photo</text>
+    <text x="400" y="130" font-size="17" fill="#cbd5e1">Actual cost: 7</text>
+    <text x="665" y="61" font-size="22">7 spent</text>
+    <text x="665" y="85" font-size="15" fill="#cbd5e1">Charged once</text>
+    <text x="665" y="158" font-size="22" fill="#a7f3d0">3 free again</text>
+    <text x="665" y="182" font-size="15" fill="#cbd5e1">Ready for more work</text>
+  </g>
+</svg>

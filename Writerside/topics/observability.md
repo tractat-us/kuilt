@@ -1,18 +1,16 @@
 # Device to dashboard
 
-When your app is running on someone's phone, you want to know what it's actually
-doing — did the screen load, did the payment go through, how long did it take, did
-anything go wrong? Apps record little notes about all of this as they run. Those
-notes are how you tell whether things are healthy or broken.
+An app goes wrong on a phone with no signal. You need to know what happened.
+Did the screen load? How long did it take? Apps record notes as they run so
+you can answer those questions later.
 
 The hard part is collecting those notes from real users. Phones go through tunnels.
 Browsers get closed. Laptops sleep. When a device is offline, the usual approach
 just *loses* whatever it couldn't send.
 
-kuilt takes a different path: **write the note down safely on the device first, and
-deliver it whenever the network comes back** — minutes or hours later. Nothing is
-lost while offline, and — this is the part that's normally hard — **nothing is
-counted twice** when a flaky connection makes the device send the same note again.
+kuilt **saves the note on the device first**. It sends the note when the
+network comes back, even hours later. If a poor connection makes it send
+the same note again, that note is counted once.
 
 The rest of this page walks the whole path, in the order you'll build it:
 
@@ -157,22 +155,21 @@ which is the ordinary case — the distinction never comes up.
 It works on every platform kuilt targets — phones (Android, iOS), desktop and servers
 (JVM, macOS), and the browser (wasm) — each with crash-safe local storage underneath.
 
-A few things to know going in: timestamps come from each device's own clock, so a
-long-offline device with a skewed clock can mis-order against its peers; a trace that
-straddles an offline and an online device only completes once the offline half syncs;
-and local storage settles for a device that only records its own activity — it keeps
-about a capful and stops growing — while a device that also passes its neighbours'
-records along can never quite let go of them. Ageing one out leaves behind a marker
-saying "this one is retired", the marker has to be kept forever, and keeping it means
-keeping the batch of records filed alongside it — in full, bodies and all. So that
-device's storage keeps growing over a long run, by whole records rather than by a little
-bookkeeping. Either way, when a cap is hit the items dropped to make room are always
-accounted for, never quietly discarded. How they are accounted for depends on how fast
-they go: things that are dropped rarely get a note written about each one, while things
-that are dropped constantly — as ordinary log lines are, once the store is full — are
-*counted* instead, exactly, with an occasional note saying how many. A note per dropped
-line would arrive as often as the lines themselves, which tells you nothing you did not
-already know.
+Timestamps come from each device's clock. A device with a skewed clock can
+mis-order records against its peers. A trace spanning an offline and an online
+device only completes once the offline half syncs.
+
+A device that records only its own activity keeps about a capful of data,
+then stops growing. A device that also passes its neighbours' records along
+cannot fully discard them. Ageing a record out leaves a permanent retirement
+marker. That marker retains the whole batch of records filed alongside it,
+including their bodies. Storage on that device therefore keeps growing over
+a long run.
+
+When a cap is hit, dropped items are accounted for. Rare drops get a note
+per item. Frequent drops, such as ordinary log lines in a full store, are
+counted exactly, with an occasional note saying how many. Writing a note for
+every dropped line would merely replace one stream of log traffic with another.
 
 ## Going deeper
 

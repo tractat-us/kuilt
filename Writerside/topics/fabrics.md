@@ -1,8 +1,10 @@
 # Connections
 
-Connections are how peers reach each other. In kuilt, each connection implementation is called a **fabric**.
+Two phones might talk through a server or send data straight to each other.
+kuilt calls each way of connecting a **fabric**.
 
-Every fabric is wrapped in the same `Loom`/`Seam` contract, so from your app's point of view the workflow stays the same. Your app logic never needs to know whether peers are connected by WebSocket, LAN discovery, or direct radio.
+Each fabric gives your app the same way to send and receive. Pick one that
+fits where your devices run. The code that uses the link stays the same.
 
 ## Pick a connection path by deployment shape
 

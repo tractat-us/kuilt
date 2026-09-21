@@ -1,8 +1,13 @@
-# Consensus and Leader Election
+# Consensus
 
-Use `kuilt-raft` when every peer must agree on what happens next, in exactly the same order.
+Two players try to take the next turn at once. The game needs one agreed
+move, then the next, so both players see the same game. Consensus gives
+the group that shared order.
 
-At a high level, this gives your session one current leader and a shared decision log that every node applies in lockstep.
+The group chooses a leader to put decisions in order. Each device keeps a
+copy of that record. If the leader goes away, the group can choose another.
+
+## When to use it
 
 Use it for turn order, locks, and durable workflow steps — situations where peers disagreeing would be a correctness bug, not just an inconvenience.
 

@@ -1,16 +1,13 @@
 # Testing
 
-kuilt moves messages between peers — phones, laptops, browsers, servers — that come
-and go, drop off the network, and reconnect. Testing a library like that sounds like
-it should need real devices and real Wi-Fi. It doesn't. Every test in kuilt runs
-**in one process, in a fraction of a second**, with the passage of time under the
-test's control — so "wait five seconds for an election" costs no real seconds at all.
+kuilt connects devices that come and go. You need to know what happens
+when one drops off the network or comes back. Many of those tests can run
+on one computer, with no real phones or Wi-Fi. The test controls time,
+so a five-second wait need not take five real seconds.
 
-The catch with tests that stand up a little network of peers is that when one *does*
-fail, "it failed" is not much to go on. Which peer? Doing what? Waiting on whom? So
-the second half of this page is about **turning on the instruments** — asking each
-peer to record what it's doing as it runs, so a red test hands you the story instead
-of a shrug.
+When a test fails, you need more than a red light. Which device got stuck?
+What was it waiting for? The second half of this page shows how to record
+each device's activity, so you can follow the story of a failure.
 
 You'll build up in three steps:
 
@@ -49,14 +46,13 @@ other, and passes the *same* suite. One checklist, every fabric.
 
 ## Time you control {id="virtual-time"}
 
-kuilt's tests run on a **virtual clock**. Election timers, heartbeats, retry
-back-offs — all the waiting a networked system does — happen on a clock the test
-advances itself, so a test that exercises a 5-second timeout finishes in
-milliseconds and gives the exact same answer on every machine.
+These tests use a **virtual clock**. The test advances that clock to drive
+election timers, heartbeats, and retry delays. A five-second timeout can then
+finish in milliseconds, with the same result on each machine.
 
-Getting this right has a few rules (use a fixed, single-threaded scheduler; never ask
-the clock to "run until everything's quiet" when the system has timers that never stop
-re-arming). They're spelled out, with the reasoning, in
+Use a fixed, single-threaded scheduler. If the system has timers that keep
+re-arming, do not ask the clock to "run until everything's quiet."
+The rules and their reasoning are in
 **[Coroutine test determinism](https://github.com/tractat-us/kuilt/blob/main/docs/testing-coroutine-determinism.md)**.
 The harnesses below already encode those rules, so most of the time you just use them.
 
@@ -80,9 +76,8 @@ cluster, wires an in-process network between the peers, and hands it to your tes
 
 Three peers, elect a leader, check the cluster's invariants still hold — in a few
 milliseconds of real time. `awaitLeader()` is one of a family of bounded **`await*`**
-helpers: they nudge the virtual clock forward in small steps until the thing you're
-waiting for happens, and — this is the point — if it *never* happens, they give up
-quickly and print a full state dump instead of hanging.
+helpers. They nudge the virtual clock forward in small steps until the event
+you need happens. If it never happens, they stop and print a full state dump.
 
 A few rules keep cluster tests fast and honest, all handled for you by `raftSimTest`:
 

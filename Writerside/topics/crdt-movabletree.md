@@ -64,7 +64,10 @@ check(mergedByAlice == mergedByBob)
 check(mergedByAlice.parentOf(idA) == idC)
 ```
 
-Here Bob's move has a higher timestamp (`ts=5` vs. `ts=4`), so A ends up under C on both replicas. Alice's move is recorded in the log and participates in the replay, but the cycle check skips it once Bob's higher-priority move has already placed A under C (applying Alice's move at that point would give A two parents — but since the replay is sequential, the first move to apply determines the parent, and only the *later* timestamp is allowed to override it).
+Here Bob's move has a higher timestamp (`ts=5` vs. `ts=4`), so A ends up under C
+on both replicas. Both moves remain in the log. Replay puts them in timestamp
+order and checks each move for cycles. In this example, Bob's later move
+determines A's final parent.
 
 ## Cycle prevention in detail
 

@@ -1,6 +1,8 @@
 # How connections work
 
-kuilt's connection contract is a small, stable API that sits in front of every fabric. Learn it once; your app code stays the same when you swap WebSocket for Bluetooth or LAN.
+Your app needs to send a message from one device to another. kuilt gives it
+one way to do that. You can change how the devices connect without changing
+the code that sends the message.
 
 At a high level, it is three things:
 

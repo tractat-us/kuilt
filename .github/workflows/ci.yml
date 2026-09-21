@@ -694,6 +694,24 @@ jobs:
       - name: Verify the generated llms.txt index is up to date
         run: python3 .github/scripts/llms-txt.py --check
 
+      - name: Install Vale 3.22.0
+        run: |
+          mkdir -p "$RUNNER_TEMP/vale"
+          curl --fail --location --retry 3 \
+            https://github.com/vale-cli/vale/releases/download/v3.22.0/vale_3.22.0_Linux_64-bit.tar.gz \
+            --output "$RUNNER_TEMP/vale/vale.tar.gz"
+          echo "52f5cd0314a1b7384cac6aa102a68193977312f6ba9c9f3ae001b5deec8e3a10  $RUNNER_TEMP/vale/vale.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/vale/vale.tar.gz" -C "$RUNNER_TEMP/vale" vale
+          echo "$RUNNER_TEMP/vale" >> "$GITHUB_PATH"
+
+      - name: Prove the readability gates reject dense prose
+        run: python3 .github/scripts/test-vale.py
+
+      - name: Report and enforce documentation readability
+        run: |
+          python3 .github/scripts/readability.py >> "$GITHUB_STEP_SUMMARY"
+          vale --no-global README.md Writerside/topics
+
       - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
