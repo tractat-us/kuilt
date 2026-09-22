@@ -323,11 +323,20 @@ class SnapshotEnvelopeReserveTest {
      *
      * ### Measured, not argued
      *
-     * Mutations of the engine's sizing, run against this suite — see the PR that introduced the
-     * header-aware form for the per-row counts. The pattern is the one that matters: `overBudget`, the
-     * arm's headline assertion, stays green on every one of them, and this stride assertion reds on
-     * every one. That is not a defect in `overBudget`: it is the slack described above, and it is why
-     * this row exists.
+     * Mutations of the engine's sizing, each run against the whole `:kuilt-raft` suite (577 tests)
+     * with the header-aware form in place:
+     *
+     * | mutation | `overBudget`, both arms | this stride assertion, both arms |
+     * |---|---|---|
+     * | naive port, `wireCap − reserve` | green | **red** — 2 B wide |
+     * | empty payload's header not stripped | green | **red** — 1 B short |
+     * | probe measured at `offset = 0` | green | **red** — 8 B wide |
+     * | divisor re-introduced | green | **red** — half |
+     * | flat 256 B reserve (before #2720) | joint **red**, simple green | **red** |
+     *
+     * The first is the shape a rebase onto byte strings produces by default, and it is 1–4 B over
+     * budget at the plausibility ceiling on every chunk; `overBudget` saw none of the first four.
+     * That is not a defect in it: it is the slack described above, and it is why this row exists.
      */
     private suspend fun assertTransferFitsTheBudget(t: Transfer) {
         val installs = t.sim.collectInstalls(t.behind)
@@ -873,6 +882,12 @@ class SnapshotEnvelopeReserveTest {
          * fits — the refusal case. Deliberately still well above a config-free envelope, so heartbeats
          * and vote frames keep flowing and the arm is about the snapshot lane rather than about a
          * cluster that has stopped working.
+         *
+         * ⚠ **The margin is thin: 3 B.** #2160's short frame tags took the joint envelope from 444 B to
+         * 387 B. The first refusal arm asserts `reserve > STARVED_BUDGET` outright and the other two
+         * assert that refusals actually fired, so the next envelope change reds a rig rather than
+         * quietly turning a refusal into a transfer — which is also why an 8 B narrower probe
+         * (measured at `offset = 0`) reds all three refusal arms as well as the stride.
          */
         const val STARVED_BUDGET = 384
 
@@ -883,10 +898,10 @@ class SnapshotEnvelopeReserveTest {
          * Budgets [aSliceAtThePlausibilityCeilingFitsTheBudgetWithNoSlack] checks the sizing at.
          *
          * Spread across three orders of magnitude on purpose, so the slice lands under each of the
-         * byte-string header widths a chunk can carry: two bytes at 512, three at 1 KiB to 16 KiB, five
-         * at 128 KiB. That is what makes the naive port's overshoot +1, +2 or +4 here rather than one
-         * number. 512 B is roughly the smallest budget at which a joint five-voter config still leaves
-         * room for data at all.
+         * byte-string header widths a chunk can carry: two or three bytes at 512 (the joint slice is
+         * under 256 B, the simple one over it), three at 1 KiB to 16 KiB, five at 128 KiB. That is what
+         * makes the naive port's overshoot +1, +2 or +4 here rather than one number. 512 B is roughly
+         * the smallest budget at which a joint config still leaves room for data at all.
          */
         val EDGE_BUDGETS = listOf(512, 1024, 4096, 16_384, 131_072)
     }
