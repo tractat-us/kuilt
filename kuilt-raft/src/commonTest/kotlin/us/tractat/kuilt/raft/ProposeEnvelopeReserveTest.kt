@@ -138,12 +138,17 @@ class ProposeEnvelopeReserveTest {
     /**
      * A `ClientIdentity.Durable` id long enough to outrun a flat 256 B reserve even on a young log.
      *
-     * 96 characters — a prefixed uuid, or a tenant-scoped token. Not a pathological value: a plain
-     * 36-character uuid is already past the flat reserve once the log is long-lived, which is what
-     * [aFlatReserveIsStillInsufficientAtThePlausibilityCeiling] guards.
+     * 160 characters — a tenant-scoped token wrapping a uuid and a routing path. It was 96 until
+     * #2160's short frame tags took 55 B off every `AppendEntries`: at 96 the narrowest envelope
+     * around it fell to 216 B, inside the flat reserve, and the behaviour arm below stopped reddening
+     * on the flat-reserve engine it exists to catch — green, and measuring nothing, with no test
+     * saying so. The arm now asserts that precondition itself, so the next envelope change reds the
+     * rig instead of quietly retiring the arm.
      */
-    private val durableId = "tenant-7f3a9c21:client-0f8e1d4b-6a52-4c9e-b1d7-3e8a5f2c0946:shard-11-writer"
-        .padEnd(96, 'z')
+    private val durableId = (
+        "tenant-7f3a9c21:client-0f8e1d4b-6a52-4c9e-b1d7-3e8a5f2c0946:shard-11-writer:" +
+            "route/eu-west-2/az-c/rack-17/host-0042/process-3/lane-writer"
+        ).padEnd(160, 'z')
 
     /**
      * The behaviour: at the limit the engine publishes, nothing it mints exceeds the transport it was
@@ -198,6 +203,13 @@ class ProposeEnvelopeReserveTest {
                 "would hold for a cluster that never sent a frame — ${sim.network.overBudget}",
         )
         sim.network.overBudget.clear()
+        val narrowest = envelopeOverhead(durableId, index = 1, term = 1, round = 0, requestId = 1)
+        assertTrue(
+            narrowest > headerBudget,
+            "rig: even the narrowest envelope around this ${durableId.length}-character id must outgrow the " +
+                "flat $headerBudget B reserve, or an engine that charged only the flat reserve would fit this " +
+                "command too and the arm could not tell it from the fix — it costs $narrowest B",
+        )
 
         val command = commandOfWireSize(budget - headerBudget)
         assertEquals(
