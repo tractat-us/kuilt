@@ -227,9 +227,9 @@ internal fun raftSim(
 internal suspend fun awaitLeader(sim: RaftSimulation): RaftNode = sim.awaitLeader()
 
 /**
- * Starts a single-voter node over [storage] in a scope whose failures are **captured** rather than
- * propagated, and returns the throwable the `RaftEngine` init-restore surfaced — or `null` if the node
- * started cleanly.
+ * Starts a node over [storage] — a single voter unless [start] says otherwise — in a scope whose failures
+ * are **captured** rather than propagated, and returns the throwable the `RaftEngine` init-restore
+ * surfaced — or `null` if the node started cleanly.
  *
  * The restore runs in a coroutine (`storage.term()` suspends, so it cannot happen in the `raftNode` call
  * itself), which is why the failure is observed through a [CoroutineExceptionHandler] on a [SupervisorJob]
@@ -239,13 +239,18 @@ internal suspend fun awaitLeader(sim: RaftSimulation): RaftNode = sim.awaitLeade
  * Bounded by [withTimeoutOrNull] on virtual time, so a node that *does* start returns `null` promptly
  * instead of hanging on its perpetually re-arming election timer.
  *
- * Lives here rather than in a test class because two suites now assert on the restore refusals — the term
- * bound (#1855) and the log/snapshot-metadata bounds (#1887) — and this is the sanctioned home for a
- * bounded await (issue #192 harness discipline).
+ * Lives here rather than in a test class because several suites assert on the restore refusals — the term
+ * bound (#1855), the log/snapshot-metadata bounds (#1887) and the restored-config bounds (#2676) — and this
+ * is the sanctioned home for a bounded await (issue #192 harness discipline).
+ *
+ * [start] builds the node over [storage] in the capturing scope it is handed. The default is the
+ * single-voter node; pass another to restore under a different `bootstrapConfig`, which a refusal
+ * keyed on the bootstrap needs (#2676).
  */
 internal suspend fun TestScope.awaitRestoreFailure(
     storage: InMemoryRaftStorage,
     within: Duration = 2.seconds,
+    start: (CoroutineScope) -> Unit = { singleVoterNode(it, storage) },
 ): Throwable? {
     val caught = CompletableDeferred<Throwable>()
     val nodeScope = CoroutineScope(
@@ -254,7 +259,7 @@ internal suspend fun TestScope.awaitRestoreFailure(
             CoroutineExceptionHandler { _, e -> caught.complete(e) },
     )
     try {
-        singleVoterNode(nodeScope, storage)
+        start(nodeScope)
         return withTimeoutOrNull(within) { caught.await() }
     } finally {
         nodeScope.cancel()

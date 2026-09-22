@@ -27,6 +27,11 @@ import kotlin.test.assertTrue
  * The discriminator is `voters.isNotEmpty() || self ∈ learners`, not "has members": the foreign-learner
  * arm passes `voters ∪ learners ≠ ∅` and is still refused, which is why it is its own arm.
  *
+ * The bootstrap is also what a restored snapshot falls back to when its `config` names no voters, so
+ * the second half of this suite restores snapshots under the seed and under a bootstrap that seats
+ * voters. Only the seed plus a poisoned config refuses to start; the other three arms pin what stays
+ * unchanged.
+ *
  * ## Test discipline
  *
  * The admitted arms are a **discriminator**, not a state read: the identical forged `AppendEntries`,
@@ -53,6 +58,7 @@ internal class BootstrapConfigValidationTest {
     private data class Observed(
         val membership: ClusterConfig,
         val role: RaftRole,
+        val commitIndex: Long,
         val termBefore: Long,
         val termAfter: Long,
         val leader: NodeId?,
@@ -81,11 +87,12 @@ internal class BootstrapConfigValidationTest {
         sim.settle() // subscribe the collector before the frame is produced
         val membership = node.membership.value
         val role = node.role.value
+        val commitIndex = node.commitIndex.value
         val termBefore = storage.term()
         sim.deliverAppendEntries(to = victim, from = attacker, term = termBefore + 9L)
         sim.settle()
         sim.settle()
-        return Observed(membership, role, termBefore, storage.term(), node.leader.value, refusals.toList())
+        return Observed(membership, role, commitIndex, termBefore, storage.term(), node.leader.value, refusals.toList())
     }
 
     private fun assertDisarmed(o: Observed) = assertAll(
@@ -192,6 +199,128 @@ internal class BootstrapConfigValidationTest {
         val o = forgeAgainst(sim, v3)
         assertAll(
             { assertTrue(v3 !in o.membership.allMembers, "premise: v3 is in no set of its own bootstrap") },
+            { assertArmed(o) },
+        )
+    }
+
+    // ── The bootstrap a restored snapshot falls back to ───────────────────────
+    //
+    // `RaftEngine.checkedRestoredSnapshotMeta` drops a restored snapshot config that names no voters
+    // and falls back to `bootstrapConfig`. That repairs a node only when the bootstrap seats voters.
+    // On the learner seed it would land the node back in the unarmed seed, so there it refuses to
+    // start instead, like a poisoned restored log entry. A snapshot with no config is untouched:
+    // `config == null` is the legitimate "the covered prefix carried no config change".
+
+    /**
+     * Comfortably past any log a test writes and well inside `MAX_PLAUSIBLE_INDEX`, so the index bound
+     * is not what fires. Every restore arm asserts the node really reached it: the booting arms by
+     * `commitIndex`, the refusing arm by the diagnostic naming it.
+     */
+    private val snapshotIndex = 1L shl 40
+
+    private val seed = ClusterConfig(voters = emptySet(), learners = setOf(v3))
+    private val seated = ClusterConfig(voters = setOf(v1, v2))
+    private val poisoned = ConfigPayload(old = null, new = ClusterConfig(voters = emptySet(), learners = emptySet()))
+
+    private suspend fun RaftSimulation.restartWithSnapshotConfig(victim: NodeId, config: ConfigPayload?) {
+        val storage = storages.getValue(victim)
+        crash(victim)
+        storage.saveSnapshot(SnapshotMeta(snapshotIndex, 1L, config), byteArrayOf(1))
+        restart(victim)
+    }
+
+    /** Restore [v3] on the learner seed over a snapshot carrying [config]; the failure it surfaced, if any. */
+    private suspend fun TestScope.restoreSeedWith(config: ConfigPayload): Throwable? {
+        val storage = InMemoryRaftStorage()
+        storage.saveTermAndVotedFor(5L, null)
+        storage.saveSnapshot(SnapshotMeta(snapshotIndex, 1L, config), byteArrayOf(1))
+        return awaitRestoreFailure(storage) { scope ->
+            scope.raftNode(seed, InMemoryRaftNetwork().transport(v3), storage, fastRaftConfig())
+        }
+    }
+
+    private fun assertRefusedOnTheSnapshot(failure: Throwable?) {
+        assertAll(
+            { assertTrue(failure is CorruptDurableStateException, "expected CorruptDurableStateException, got: $failure") },
+            {
+                assertTrue(
+                    failure?.message.orEmpty().contains("lastIncludedIndex=$snapshotIndex"),
+                    "precondition: the refusal must come from the restored snapshot: ${failure?.message}",
+                )
+            },
+            {
+                assertTrue(
+                    failure?.message.orEmpty().contains("no voters"),
+                    "the diagnostic must name the degenerate voter set: ${failure?.message}",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun learnerSeed_poisonedSnapshotConfig_refusesToStart() = raftRunTest {
+        assertRefusedOnTheSnapshot(restoreSeedWith(poisoned))
+    }
+
+    /**
+     * The `old` half. A joint config whose `old` side names no voters is rejected by the same predicate
+     * as an empty `new`, so on the seed it must refuse too: dropping it would land the node on the
+     * unarmed seed just the same. Without this arm, a refusal narrowed to `config.new.voters.isEmpty()`
+     * passes every other test.
+     */
+    @Test
+    fun learnerSeed_jointSnapshotConfigWithAnEmptyOldSide_refusesToStart() = raftRunTest {
+        assertRefusedOnTheSnapshot(restoreSeedWith(ConfigPayload(old = ClusterConfig(voters = emptySet()), new = seated)))
+    }
+
+    /** The over-rejection guard for the seed: a snapshot config that seats voters is adopted and arms. */
+    @Test
+    fun learnerSeed_legitimateSnapshotConfig_bootsArmed() = raftRunTest {
+        val sim = sim(this) { id -> if (id == v3) seed else seated }
+        sim.awaitLeader()
+        sim.restartWithSnapshotConfig(v3, ConfigPayload(old = null, new = seated))
+        val o = forgeAgainst(sim, v3)
+        assertAll(
+            { assertTrue(o.commitIndex >= snapshotIndex, "precondition: snapshot restored, commitIndex=${o.commitIndex}") },
+            { assertEquals(seated, o.membership) },
+            { assertArmed(o) },
+        )
+    }
+
+    /**
+     * A seed restoring a snapshot that carries **no** config boots as the seed. This is the accepted
+     * exposure, unchanged: `null` is legitimate, and refusing it could strand a healthy joiner.
+     */
+    @Test
+    fun learnerSeed_snapshotWithNoConfig_stillBootsAsTheSeed() = raftRunTest {
+        val sim = sim(this) { id -> if (id == v3) seed else seated }
+        sim.awaitLeader()
+        sim.restartWithSnapshotConfig(v3, config = null)
+        val o = forgeAgainst(sim, v3)
+        assertAll(
+            { assertTrue(o.commitIndex >= snapshotIndex, "precondition: snapshot restored, commitIndex=${o.commitIndex}") },
+            { assertEquals(seed, o.membership) },
+            { assertEquals(RaftRole.Learner, o.role) },
+            { assertDisarmed(o) },
+        )
+    }
+
+    /**
+     * A bootstrap that seats voters keeps the drop-and-fall-back, because there the fallback arms the
+     * gate. The victim is a *learner* under that bootstrap (the `serverCore` player shape), so this also
+     * pins that the refusal keys on the bootstrap's voters, not on this node's role.
+     */
+    @Test
+    fun voterBootstrap_poisonedSnapshotConfig_stillDropsAndFallsBack_armed() = raftRunTest {
+        val playerShape = ClusterConfig(voters = setOf(v1, v2), learners = setOf(v3))
+        val sim = sim(this) { id -> if (id == v3) playerShape else seated }
+        sim.awaitLeader()
+        sim.restartWithSnapshotConfig(v3, poisoned)
+        val o = forgeAgainst(sim, v3)
+        assertAll(
+            { assertTrue(o.commitIndex >= snapshotIndex, "precondition: snapshot restored, commitIndex=${o.commitIndex}") },
+            { assertEquals(playerShape, o.membership, "poisoned config dropped, fell back to the bootstrap") },
+            { assertEquals(RaftRole.Learner, o.role, "premise: the victim is a learner, not a voter") },
             { assertArmed(o) },
         )
     }
