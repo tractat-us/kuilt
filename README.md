@@ -220,7 +220,7 @@ contract enforces).
 ## Building
 
 ```bash
-source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem  # JDK 21, matches CI
+source ~/.sdkman/bin/sdkman-init.sh && sdk use java 25.0.2-tem  # JDK 25, the major CI builds on
 ./gradlew build       # build + test everything
 ./gradlew jvmTest     # fast inner loop
 ```

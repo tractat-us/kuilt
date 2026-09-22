@@ -88,7 +88,7 @@ it. A few things bear directly on investigation:
   time. Tight fence outside, generous backstop inside.
 - If you must run a build, `--max-workers=6`, and seed `local.properties` with
   `sdk.dir=/Users/keddie/Library/Android/sdk` plus
-  `JAVA_HOME=/Users/keddie/.sdkman/candidates/java/21.0.5-tem` first.
+  `JAVA_HOME=/Users/keddie/.sdkman/candidates/java/25.0.2-tem` first.
 
 ## What to return
 

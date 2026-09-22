@@ -8,7 +8,7 @@ description: The contract for a background worker dispatched into an isolated gi
 **A dispatched worker already has the CLAUDE.md hierarchy.** Measured 2026-09-03: a
 `isolation: "worktree"` subagent's starting context contains `~/.claude/CLAUDE.md`,
 `~/tractatus/CLAUDE.md` and the worktree's own `CLAUDE.md`, verbatim. A probe agent asked to answer
-*without reading any file* quoted back the `pkill` ban, JDK 21 and the SDKMAN rule. So **do not restate them in a brief** — a forty-line preamble of rules the worker already holds
+*without reading any file* quoted back the `pkill` ban, the JDK pin and the SDKMAN rule. So **do not restate them in a brief** — a forty-line preamble of rules the worker already holds
 buries the handful that are genuinely new. Family rules under `.claude/rules/` are NOT in that
 starting context — they arrive on the first read of a file under a family's modules — so read one
 file from your module before planning.
@@ -33,7 +33,7 @@ worker reads them as advice addressed to someone else.
 
 2. **Seed the build environment.** Before any Gradle call:
    ```bash
-   export JAVA_HOME=/Users/keddie/.sdkman/candidates/java/21.0.5-tem
+   export JAVA_HOME=/Users/keddie/.sdkman/candidates/java/25.0.2-tem
    export PATH="$JAVA_HOME/bin:$PATH"
    echo "sdk.dir=/Users/keddie/Library/Android/sdk" > local.properties
    ```
