@@ -6756,8 +6756,10 @@ val forbidCleanGateMeasurementSkew by tasks.registering {
     // `ORG_GRADLE_PROJECT_` env var can turn wasm IC off without touching the repo, while an ambient
     // override to `true` would mask a committed `kotlin.incremental.wasm=false`.
     //
-    // ON means the property is absent (Kotlin's default) or exactly `true`; anything else reds. An
-    // explicit `true` is accepted because it builds the same population the paragraph measured.
+    // ON means the property is absent (Kotlin's default) or reads as true the way the Kotlin Gradle
+    // plugin reads it, which is `String.toBoolean()`: measured on 2.4.20, `TRUE` creates the wasm
+    // link's IC cache and `yes` does not. Anything that reads as false reds. An explicit true is
+    // accepted because it builds the same population the paragraph measured.
     val effectiveWasmIc = providers.gradleProperty("kotlin.incremental.wasm").orElse("<unset>")
     inputs.property("effectiveWasmIncremental", effectiveWasmIc)
     val stamp = layout.buildDirectory.file("verification/forbid-clean-gate-measurement-skew.ok")
@@ -6790,7 +6792,7 @@ val forbidCleanGateMeasurementSkew by tasks.registering {
         val committedWasmIc = java.util.Properties()
             .also { loaded -> propertiesFile.inputStream().use { stream -> loaded.load(stream) } }
             .getProperty("kotlin.incremental.wasm")
-        if (committedWasmIc != null && committedWasmIc != "true") {
+        if (committedWasmIc != null && !committedWasmIc.toBoolean()) {
             error(
                 "`gradle.properties` now declares `kotlin.incremental.wasm=$committedWasmIc`, which " +
                     "turns Kotlin/Wasm incremental compilation OFF, so point (4) of `AGENTS.md`'s " +
@@ -6805,7 +6807,7 @@ val forbidCleanGateMeasurementSkew by tasks.registering {
             )
         }
         val effective = effectiveWasmIc.get()
-        if (effective != "<unset>" && effective != "true") {
+        if (effective != "<unset>" && !effective.toBoolean()) {
             error(
                 "`gradle.properties` leaves Kotlin/Wasm incremental compilation on, but the " +
                     "EFFECTIVE `kotlin.incremental.wasm` in this build is `$effective` — an " +
