@@ -40,7 +40,9 @@ import kotlin.test.assertTrue
  *   prefix carried no config change"). So nulling a payload no honest producer can emit lands the node
  *   in a state the engine reaches routinely, rather than one invented for the occasion. Refusing to
  *   start instead would strand every node whose snapshot predates the wire fix on data that was
- *   legitimate when written, with no in-place remedy.
+ *   legitimate when written, with no in-place remedy. The one exception is a bootstrap with no voters,
+ *   the learner seed, where falling back would not arm the gate, so there the node refuses to start;
+ *   those arms live in [BootstrapConfigValidationTest]. Every arm here bootstraps with voters.
  * - **A restored [LogEntry]'s `config` — refuse to start**, like the four numeric bounds beside it in
  *   [checkedRestoredEntries]. A log entry is *replicated content*, not local metadata: this node can
  *   become leader and serve that entry onward, so repairing the field in memory would make it publish a
