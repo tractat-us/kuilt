@@ -147,8 +147,26 @@ internal fun byteStringHeaderBytes(length: Int): Int = when {
  * The raw state bytes one `InstallSnapshot` chunk may carry inside a [wireCap]-byte frame budget,
  * given the [reserve] its envelope costs around an **empty** payload. Zero or less means no chunk
  * fits at all.
+ *
+ * **Header-aware, because the payload's header steps with its length (#2160).** [reserve] was
+ * measured around a zero-length payload, so it includes that payload's one-byte header, while a real
+ * chunk carries a two-, three- or five-byte one. So: strip the empty payload's header to get the
+ * envelope's own `overhead`; spend the budget on the `window` that leaves; and charge the header of
+ * the **whole** window. That is safe because [byteStringHeaderBytes] is monotone — a slice no longer
+ * than the window never needs a wider header than the window does — so the frame is at most
+ * `overhead + window == wireCap`.
+ *
+ * Dropping the old `CBOR_BYTE_EXPANSION` divisor alone (`wireCap − reserve`) looks equivalent and is
+ * not: it charges the one-byte empty header where the chunk carries a wider one, so every full chunk
+ * comes out 1–4 B over the budget at the plausibility ceiling. It under-fills instead by at most two
+ * bytes, and only at a window sitting on a header step; everywhere else it is exact. Both halves are
+ * pinned against real encodings by `SnapshotEnvelopeReserveTest`.
  */
-internal fun snapshotSliceBytes(wireCap: Int, reserve: Int): Int = wireCap - reserve
+internal fun snapshotSliceBytes(wireCap: Int, reserve: Int): Int {
+    val overhead = reserve - EMPTY_PAYLOAD_WIRE_BYTES
+    val window = wireCap - overhead
+    return window - byteStringHeaderBytes(window)
+}
 
 /**
  * How long a run of refused leader→peer frames has to get before [noteRefusedLeaderFrame]
