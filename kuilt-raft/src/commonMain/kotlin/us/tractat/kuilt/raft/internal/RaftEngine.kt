@@ -2155,8 +2155,8 @@ internal class RaftEngine(
     // ── §7 InstallSnapshot ──────────────────────────────────────────────────────
 
     /**
-     * Raw state bytes carried per chunk of the snapshot described by [meta], on its way to [peer]: the
-     * configured ceiling, or what the transport's payload budget leaves once the **measured** envelope
+     * Raw state bytes carried per chunk of a snapshot whose membership is [config], on its way to
+     * [peer]: the configured ceiling, or what the transport's payload budget leaves once the **measured** envelope
      * reserve and CBOR's byte-array expansion are paid — whichever is smaller. `null` refuses the
      * transfer outright; see "Why a refusal" below.
      *
@@ -2226,9 +2226,9 @@ internal class RaftEngine(
      * `snapshotChunkCeiling` bounds the chunk's *state bytes*, and there is no frame limit to reserve
      * against when the transport names none.
      */
-    private fun chunkBytes(peer: NodeId, meta: SnapshotMeta): Int? {
+    private fun chunkBytes(peer: NodeId, config: ConfigPayload?): Int? {
         val wireCap = transport.maxPayloadBytes ?: return raftConfig.snapshotChunkCeiling
-        val reserved = maxOf(HEADER_BUDGET, snapshotChunkReserve(meta.config))
+        val reserved = maxOf(HEADER_BUDGET, snapshotChunkReserve(config))
         val rawFromWire = (wireCap - reserved).coerceAtLeast(0) / CBOR_BYTE_EXPANSION
         if (rawFromWire < 1) {
             reportSnapshotChunkEnvelopeOverBudget(peer, reserved, wireCap)
@@ -2275,8 +2275,10 @@ internal class RaftEngine(
      *
      * **Why it is not cached.** The result is a pure function of the snapshot's `config`, which
      * changes only at a compaction; a cache keyed on it would be sound. But this runs once per chunk
-     * on the actor loop against a `copyOfRange` of up to `snapshotChunkCeiling` bytes taken in the
-     * same call, and it encodes only the config — the copy dominates it by orders of magnitude.
+     * (twice on a transfer's first, see `SnapshotSender.nextChunk`) on the actor loop against a
+     * `copyOfRange` of up to `snapshotChunkCeiling` bytes taken in the same call, and it encodes only
+     * the config — the copy dominates it by orders of magnitude. On a refusal there is no copy and no
+     * load, so this `O(|config|)` encode is the whole per-heartbeat cost of a stranded peer.
      */
     private fun snapshotChunkReserve(config: ConfigPayload?): Int {
         val probe: RaftMessage = RaftMessage.InstallSnapshot(
@@ -2349,7 +2351,10 @@ internal class RaftEngine(
     private suspend fun sendSnapshotChunk(peer: NodeId) {
         // null = nothing to send yet, or chunkBytes refused this transfer outright (#2720) — in which
         // case it has already emitted RaftMetric.SnapshotChunkEnvelopeOverBudget naming why.
-        val chunk = snapshotSender.nextChunk(peer) ?: return
+        // `state.snapshotConfig` tracks the stored snapshot's config (set beside every `saveSnapshot`,
+        // and at restore), so a refusal can be decided before the stored snapshot is loaded — see
+        // SnapshotSender.nextChunk's "A refusal costs no load".
+        val chunk = snapshotSender.nextChunk(peer, storedConfig = state.snapshotConfig) ?: return
         val start = chunk.offset.toInt()
         val end = start + chunk.data.size
         debug { "sendSnapshotChunk($peer): through=${chunk.meta.lastIncludedIndex} offset=$start..$end/${chunk.totalBytes} done=${chunk.done}" }
