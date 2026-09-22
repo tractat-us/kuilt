@@ -504,6 +504,17 @@ public suspend fun RaftNode.awaitRead(applied: StateFlow<Long>): Long {
  *   assertion. **Must not block** — the callback runs synchronously on the engine actor;
  *   blocking stalls replication for the entire cluster. `null` (default) disables the hook.
  * @return A running [RaftNode] ready to receive proposals and emit committed entries.
+ * @throws IllegalArgumentException if [clusterConfig] has no voters and its learners do not include
+ *   `transport.selfId`. A bootstrap must seat at least one voter, or be a **learner seed**: no voters,
+ *   with this node among the learners, as in `ClusterConfig(voters = emptySet(), learners = setOf(self))`.
+ *   That is how a joiner starts until the leader's config seats it: Raft §4.4's empty start for a new
+ *   server, with the intent to join spelled out. The refused shapes, `(voters = ∅, learners = ∅)` and
+ *   `(voters = ∅, learners = {someone else})`, would join the same way and carry the same exposure as
+ *   the seed: the §5.2 leader-authority gate stays unarmed until a config seats voters, so until then
+ *   any peer's `AppendEntries` can move this node's term (#2676). They are refused so that the seed is
+ *   the one voterless bootstrap, and because the likelier way to reach them is an accident, such as a
+ *   roster computed as empty or the wrong node id. A deliberate joiner migrates by adding itself to
+ *   `learners`.
  */
 public fun CoroutineScope.raftNode(
     clusterConfig: ClusterConfig,

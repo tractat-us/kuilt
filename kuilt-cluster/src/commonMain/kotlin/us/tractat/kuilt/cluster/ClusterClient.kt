@@ -195,6 +195,9 @@ public data class ClusterEndpoints(
  *   timestamps and drives partition detection. (Cross-*server* resume is always terminally refused
  *   per the in-memory per-room reconnect registry, so the token is issued but never consumed
  *   across a failover — the clock still governs same-server room timing.)
+ * @throws IllegalArgumentException if [clusterConfig] has no voters and does not name [clientNodeId]
+ *   among its learners — the bootstrap shape `raftNode` refuses. A config with the cluster's voters in
+ *   it, as documented above, never reaches this.
  */
 public fun CoroutineScope.clusterClient(
     loom: Loom,

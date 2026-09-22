@@ -104,12 +104,13 @@ internal sealed interface MembershipState {
      * **A peer can no longer put an established node back into that state** (#2663):
      * `RaftEngine.configPayloadRefusal` drops a wire [us.tractat.kuilt.raft.ConfigPayload] whose `new`
      * — or, for a joint payload, whose `old` — names no voters, on both the `AppendEntries` and the
-     * `InstallSnapshot` lane. Two ways in remain, and neither is a remote peer: a consumer's own
-     * `bootstrapConfig`, which nothing validates, and a snapshot already on disk carrying such a
-     * config, since `RaftEngine.checkedRestoredSnapshotMeta` bounds index and term but not `config`.
-     * Both are open under #2676, which is separate because its *disposition* is a different decision —
-     * the restore bounds refuse to start, and for a config there is a fallback available that the
-     * index and term halves do not have.
+     * `InstallSnapshot` lane. **Nor can the node's own durable state or bootstrap** (#2676):
+     * `RaftEngine.checkedRestoredEntries` refuses to start on a restored config entry of that shape,
+     * `RaftEngine.checkedRestoredSnapshotMeta` drops a restored snapshot config of that shape back to
+     * the bootstrap, and `raftNode` admits a voterless bootstrap only as a learner seed, with this node
+     * among its learners. What is left is the seed itself, including a seeded node whose dropped
+     * snapshot config fell back into it;
+     * the second of those is still open under #2676.
      */
     val voters: Set<NodeId>
         get() = when (this) {

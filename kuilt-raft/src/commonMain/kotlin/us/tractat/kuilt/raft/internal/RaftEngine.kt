@@ -118,6 +118,25 @@ internal class RaftEngine(
     identity: ClientIdentity = ClientIdentity.Auto,
 ) : RaftNode {
 
+    // ── Bootstrap shape (#2676) ───────────────────────────────────────────────
+    // First in the class body, so it runs before any field initializer and before the `init` block that
+    // launches the actor (#1077): a refused bootstrap builds nothing, and every construction path gets it.
+    init {
+        // A bootstrap with no voters boots with [onMessage]'s §5.2 gate unarmed until a config seats
+        // voters, the carve-out a joiner needs to catch up. Any voterless shape would join that way, so
+        // the exposure is the same for all of them; what this admits is only the one that says it is
+        // joining (this node among the learners). That keeps the learner seed the one voterless
+        // bootstrap, and turns the likelier way to reach the others, a roster computed as empty or a
+        // wrong node id, into a loud failure rather than a node that boots unarmed.
+        require(bootstrapConfig.voters.isNotEmpty() || transport.selfId in bootstrapConfig.learners) {
+            "RaftNode bootstrap $bootstrapConfig has no voters and does not name ${transport.selfId.value} " +
+                "among its learners. Refused: no voters and no learners, or no voters with learners that " +
+                "do not include this node — the usual cause is a roster computed as empty or the wrong " +
+                "node id. Seat at least one voter, or, if this node is joining, pass a learner seed such as " +
+                "ClusterConfig(voters = emptySet(), learners = setOf(${transport.selfId.value}))."
+        }
+    }
+
     // ── Raft §8 client-serial dedup ───────────────────────────────────────────
     /** Whether the caller supplied a stable durable id (collision ⇒ fail loud) vs an auto id (re-mint). */
     private val isDurableId: Boolean = identity is ClientIdentity.Durable
@@ -1168,7 +1187,7 @@ internal class RaftEngine(
      * different decision: a config has a third option the two bounds below do not (fall back to
      * `bootstrapConfig`, which [recomputeMembership] already does for a null config), and refusing to
      * start would strand a node whose snapshot predates the wire fix. What remains open under #2676 is
-     * only the `bootstrapConfig` residue named at the end of this KDoc.
+     * only the learner-seed case named at the end of this KDoc.
      *
      * **Refuse, don't repair** — the disposition [checkedRestoredTerm] argues for, and the reason it also
      * applies to the alternative available *here* but not there. A trailing corrupt suffix could in
@@ -1199,13 +1218,13 @@ internal class RaftEngine(
      * That is a worse trade than a fallback into an already-reachable state, and it is why this half was
      * split out of #2663 rather than landed with it.
      *
-     * **What this now rests on: `bootstrapConfig` being non-empty.** The fallback is only a repair
-     * while the config it falls back *to* seats voters. A consumer may pass
-     * `ClusterConfig(voters = emptySet(), learners = emptySet())`, which nothing validates, and such a
-     * node boots disarmed with or without this bound — measured, not assumed. That is the same accepted
-     * exposure as the deliberate learner seed rather than a new one (both are `voters.isEmpty()`, and
-     * both arm the instant they learn a real config), but it is load-bearing here and is the residue
-     * left open under #2676.
+     * **What this now rests on: `bootstrapConfig` seating voters.** The fallback is only a repair
+     * while the config it falls back *to* seats voters. `raftNode` admits a voterless bootstrap only as
+     * a learner seed, `voters = ∅` with this node among the `learners` (#2676), so a seed is the one
+     * bootstrap left where it does not: a learner-seeded node that restores a poisoned snapshot config
+     * drops it, falls back into the seed and boots with the §5.2 gate unarmed. That is not a regression
+     * (before this bound it adopted the poisoned config with the same result), but it is not a repair
+     * either, and it is the case left open under #2676.
      */
     private fun checkedRestoredSnapshotMeta(meta: SnapshotMeta): SnapshotMeta {
         if (meta.lastIncludedTerm < 0L || meta.lastIncludedTerm > MAX_PLAUSIBLE_TERM) {
@@ -4057,9 +4076,11 @@ internal class RaftEngine(
         // log path does no `from` validation at all, so the next non-voter's AppendEntries truncated
         // the victim's committed log and replaced it (#2663, reproduced). Both routes a peer's config
         // arrives by are now bounded in [configPayloadRefusal]; what this predicate rests on is that
-        // `state.membershipState.voters` cannot be emptied by a remote frame. It can still be empty
-        // from a consumer's own `bootstrapConfig` and from a snapshot already on disk, neither of
-        // which is a peer — see [MembershipState.voters].
+        // `state.membershipState.voters` cannot be emptied by a non-voter's frame. It can still be empty
+        // on a learner-seeded node, and on no other: `raftNode` admits a voterless bootstrap only with
+        // this node among its learners, and the restore bounds a durable config (#2676). That covers
+        // the seed above and a seeded node whose poisoned snapshot config the restore dropped back into
+        // it — see [MembershipState.voters].
         //
         // This gate is the module's exemplar of the "defend — the recipient holds a local
         // witness" half of its trust policy; the accepted, unauthenticated exposures on the
