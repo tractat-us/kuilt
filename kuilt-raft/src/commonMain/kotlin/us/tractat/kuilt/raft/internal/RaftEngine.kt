@@ -1168,7 +1168,7 @@ internal class RaftEngine(
      * different decision: a config has a third option the two bounds below do not (fall back to
      * `bootstrapConfig`, which [recomputeMembership] already does for a null config), and refusing to
      * start would strand a node whose snapshot predates the wire fix. What remains open under #2676 is
-     * only the `bootstrapConfig` residue named at the end of this KDoc.
+     * only the learner-seed case named at the end of this KDoc.
      *
      * **Refuse, don't repair** — the disposition [checkedRestoredTerm] argues for, and the reason it also
      * applies to the alternative available *here* but not there. A trailing corrupt suffix could in
@@ -1199,13 +1199,13 @@ internal class RaftEngine(
      * That is a worse trade than a fallback into an already-reachable state, and it is why this half was
      * split out of #2663 rather than landed with it.
      *
-     * **What this now rests on: `bootstrapConfig` being non-empty.** The fallback is only a repair
-     * while the config it falls back *to* seats voters. A consumer may pass
-     * `ClusterConfig(voters = emptySet(), learners = emptySet())`, which nothing validates, and such a
-     * node boots disarmed with or without this bound — measured, not assumed. That is the same accepted
-     * exposure as the deliberate learner seed rather than a new one (both are `voters.isEmpty()`, and
-     * both arm the instant they learn a real config), but it is load-bearing here and is the residue
-     * left open under #2676.
+     * **What this now rests on: `bootstrapConfig` seating voters.** The fallback is only a repair
+     * while the config it falls back *to* seats voters. `raftNode` refuses every voterless bootstrap
+     * except the learner seed `(voters = ∅, learners = {self})` (#2676), so the seed is the one
+     * bootstrap left where it does not: a learner-seeded node that restores a poisoned snapshot config
+     * drops it, falls back into the seed and boots with the §5.2 gate unarmed. That is not a regression
+     * (before this bound it adopted the poisoned config with the same result), but it is not a repair
+     * either, and it is the case left open under #2676.
      */
     private fun checkedRestoredSnapshotMeta(meta: SnapshotMeta): SnapshotMeta {
         if (meta.lastIncludedTerm < 0L || meta.lastIncludedTerm > MAX_PLAUSIBLE_TERM) {
