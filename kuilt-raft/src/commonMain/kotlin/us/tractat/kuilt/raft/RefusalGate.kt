@@ -280,8 +280,15 @@ public enum class RefusalGate {
      * returns an established node to that state permanently, for every subsequent sender. The damage is
      * not term inflation — with the gate disarmed the log path does no `from` validation, so any
      * non-voter's `AppendEntries` truncates the victim's committed log and replaces it, and via
-     * `InstallSnapshot` the poisoned config reaches **durable storage**, where
-     * `checkedRestoredSnapshotMeta` bounds index and term but not `config`.
+     * `InstallSnapshot` the poisoned config reached **durable storage**, where the restore then read
+     * it back.
+     *
+     * **The same predicate as the restore (#2840).** The restore now bounds a stored config too
+     * (#2676): `checkedRestoredEntries` refuses to start on one, and `checkedRestoredSnapshotMeta`
+     * drops one, or refuses to start on the learner seed (#2838). Both they and this gate decide
+     * through `RaftEngine.namesNoActiveVoters`, one function, because a config this gate admits is
+     * one the restore will read back. Two spellings that drifted apart would let a seed accept a
+     * snapshot over the wire and then refuse to boot on it.
      *
      * **Both sides, because they fail differently.** `MembershipState.Joint.voters` is the *union*, so
      * an empty `old` leaves §5.2 armed; what it takes out is quorum, since commit and election need
