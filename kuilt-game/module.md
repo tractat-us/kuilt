@@ -3,6 +3,12 @@
 Turn-based game facade over `:kuilt-raft`. Provides two bootstrap paths and a
 typed turn sequencer; hides all Raft machinery from application code.
 
+One thing it cannot hide: **every player in a game must run the same kuilt build.** Raft's
+message format changes between releases, and a player on a different build cannot read the
+others' messages — an older one may not survive them. If players update at their own pace,
+check an app or protocol version before starting a `GameSession`. See "Every peer in a group
+runs the same version" in `:kuilt-raft`'s module documentation.
+
 ## Bootstrap paths
 
 ### Roster-given — `gameNode`

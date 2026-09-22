@@ -2,7 +2,6 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.serialization.builtins.ByteArraySerializer
-import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll

@@ -43,21 +43,36 @@ scratch; it keeps nothing across a process exit.
 The peers in one group talk to each other in a private format, and that format is allowed
 to change between kuilt releases. When it changes, a peer on the newer build and a peer on
 the older one cannot read **any** message the other sends — not some of them, all of them.
-So upgrade a group **all at once**, not one device at a time. A half-upgraded group behaves
-like a group cut in half by a broken network: a side that still holds a majority carries on,
-and the other side stops. Raft is built to survive that, but not to be put there on purpose.
+So upgrade a group **all at once**, not one device at a time.
 
-What a peer does with a message it cannot read depends on how old it is:
+What a mixed group does depends on how old the older peers are:
 
-- **0.7.3 or later** drops it, and reports a `RaftTraceEvent.FrameUndecodable` naming the
-  peer it came from. If you see those after a rollout, some peers are still on the old build.
+- **0.7.3 or later** drops each message it cannot read and reports a
+  `RaftTraceEvent.FrameUndecodable` naming the peer it came from. The group splits as if the
+  network had been cut between the two builds. If you see those events after a rollout, some
+  peers are still on the old build.
 - **0.7.2 or earlier** does not survive it. Its receive loop was only ready for the link
-  closing, so the first message it cannot read stops that node until its process restarts.
+  closing, so the first message it cannot read stops that node — and anything else the app
+  runs in the same coroutine scope — until its process restarts. A newer peer that hears no
+  leader it can read starts an election within one election timeout, so its first vote
+  request stops every such peer in the group. On Kotlin/Native the escaped exception probably
+  aborts the whole process; that is likely, but untested.
 
-The format last changed in #2160, which ships in the next 0.7 patch release. Opaque payloads
-became compact byte strings, and every message type got a short tag. The tags only ever
-change together, so a mixed group refuses every message rather than exchanging some — votes,
-say — and failing on the rest, which would let it elect leaders it can never use.
+**When peers cannot upgrade together** — phones updating from an app store at their own
+pace, or clients already deployed against a server cluster — kuilt will not sort it out for
+you: there is no version negotiation. Refuse mixed builds in your own admission step, before
+consensus starts. For example, fold a protocol or app version into what peers must agree on
+to meet at all, such as the session name they advertise, or exchange it in your own hello
+and reject a mismatch before starting a `GameSession` or `ClusterClient`.
+
+The format last changed in #2160, first released after v0.7.3. Opaque payloads became
+compact byte strings, and every message type got a short tag. The tags only ever change
+together, so a mixed group refuses every message rather than exchanging some — votes, say —
+and failing on the rest, which would let it elect leaders it can never use.
+
+Snapshot builds need care: they are numbered `0.7.0-dev.N`, which sorts **below** v0.7.3, so
+the version rule above cannot be read off a snapshot's number. Any snapshot built from #2160
+onward speaks the new format, whatever it is called.
 
 ## Proposing from any peer
 

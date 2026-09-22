@@ -58,9 +58,9 @@ class InstallSnapshotTest {
     /**
      * A small snapshot still spans many chunks when the transport reports a tiny [maxPayloadBytes].
      *
-     * 320 B is `HEADER_BUDGET` (256 B, for the CBOR envelope around an empty payload) plus a 64-byte
-     * window, which carries **63 B of raw state per chunk** and the two-byte byte-string header that
-     * a 63-byte payload needs. It used to be 32 B: `chunkBytes()` halved what the reserve left,
+     * 320 B is `HEADER_BUDGET` (256 B, for the CBOR envelope around an empty payload, one-byte
+     * header included) plus 64 B; stripping that empty header leaves a 65-byte window, which carries
+     * **63 B of raw state per chunk** and the two-byte byte-string header a 63-byte payload needs. It used to be 32 B: `chunkBytes()` halved what the reserve left,
      * because CBOR rendered a `ByteArray` as an array of integers and a byte could cost two (#2150).
      * #2160's byte-string framing removed the halving, so the 1000-byte snapshot below spans 16
      * chunks rather than ~32. The exact stride is pinned by [aChunkIsSizedToTheWireBudget_notTheRawOne],

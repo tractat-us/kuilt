@@ -2284,9 +2284,10 @@ internal class RaftEngine(
      * chunk, deliberately, so an installer can adopt the membership whichever chunk it finalizes on. A
      * flat 256 B cannot cover that and no bound on anything the library controls can make it: five
      * twenty-character ids cost 309 B in a simple payload and 445 B in a joint one at the plausibility
-     * ceiling, against an envelope of 175 B with no config at all, when #2720 was found. (#2160's short
-     * frame tags took 57 B off every one of those; six such ids still cost 272 B, and a joint payload
-     * moving five to six costs 387 B.) Every full chunk was therefore
+     * ceiling, against an envelope of 175 B with no config at all, when #2720 was found. (#2160 took
+     * 58 B off every one of those — 57 B for the short frame tags, one for the empty payload's
+     * byte-string header; six such ids still cost 272 B, and a joint payload moving five to six
+     * costs 387 B.) Every full chunk was therefore
      * minted over the transport's budget, refused at [SeamRaftTransport.sendTo] (which must swallow
      * `PayloadTooLarge`), never acked — so [SnapshotSender] never advanced that peer's offset and the
      * leader re-sent the identical frame forever. A follower needing a snapshot could never be caught
@@ -3589,15 +3590,20 @@ internal class RaftEngine(
      * identity. Byte-string framing (#2160) does not disturb this: the command's header is still the
      * only size-dependent one, it just steps 1→2→3→5 instead of being a flat two.
      *
-     * **#2160 leaves this quantity numerically unchanged, which is not obvious and was measured
-     * rather than assumed.** The result is a *difference* — `frame(empty) − wire(empty)` — and the
-     * change moves both terms by the same one byte, since the empty command inside the frame and the
-     * empty command encoded alone are the same value under the same codec. Measured across both
-     * codecs for a 23-character [ClientId] at the plausibility ceiling: 268 B either way. So every
-     * figure #2156 derived from this probe — the reserve, the id-length table above, the ~70 B of
-     * over-reserve on a young log recorded in #2729 — carries over as it stands. What *does* move is
-     * the limit the caller sees, because `wireBytes(command)` fell from about twice the command to
-     * the command plus a header: roughly twice the payload now fits the same budget.
+     * **What #2160 did to this quantity: its two halves pull differently, and both were measured.**
+     * *Byte-string framing alone left it unchanged.* The result is a *difference* —
+     * `frame(empty) − wire(empty)` — and that change moves both terms by the same one byte, since the
+     * empty command inside the frame and the empty command encoded alone are the same value under the
+     * same codec: 268 B either way for a 23-character [ClientId] at the plausibility ceiling. *The
+     * short frame tags did move it*, by about 55 B — `AppendEntries`' tag went from its 58-byte
+     * fully-qualified class name to `ae` — so the same id now costs 213 B. That is what moved the
+     * id-length table in [checkProposeFitsTransport] (from 81 / 48 / 11 characters, as #2156
+     * measured it, to 129 / 97 / 65 under the method stated there) and what put the shortest
+     * `ClientId.auto` inside [HEADER_BUDGET]. The ~70 B of over-reserve on a young log recorded in
+     * #2729 carries over as it stands: it is the gap between this probe and a real young-log frame,
+     * and both carry the same tag, so the tag cancels. What moved for the caller besides is the
+     * limit itself, because `wireBytes(command)` fell from about twice the command to the command
+     * plus a header: roughly twice the payload now fits the same budget.
      *
      * **Why the widest `Long`s.** `index` / `term` are assigned on the actor loop and do not exist at
      * this call site, and `round` moves on its own; charging [MAX_PLAUSIBLE_INDEX] /
