@@ -173,7 +173,7 @@ public sealed interface RaftMetric {
      *
      * **What to do about a standing one.** Raise the transport's payload budget above
      * [reservedBytes] with room for a chunk, or shorten the [NodeId]s: the envelope is dominated by
-     * the config's node ids, and five twenty-character ids already cost more than the 256 B the
+     * the config's node ids, and six twenty-character ids already cost more than the 256 B the
      * engine's flat reserve used to assume.
      *
      * **A refusal caused by a joint configuration does not clear when the change commits.** A joint

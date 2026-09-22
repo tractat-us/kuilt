@@ -27,12 +27,14 @@ import kotlin.test.assertTrue
  * ### Why a flat number could not be repaired by bounding the ClientId
  *
  * The envelope holds eight `Long`s and CBOR widens each from one byte to nine as the log grows, so
- * the headroom a 256 B reserve leaves an id is not a constant: 81 characters on a fresh log, 48 at
- * 1e9 entries, 30 at 1e12, and **11** at `MAX_PLAUSIBLE_INDEX` / `MAX_PLAUSIBLE_TERM`. `ClientId.auto`
- * — which the library mints for itself — is 23 characters at its shortest. A maximum admitting the
- * library's own id and a maximum fitting the reserve are disjoint sets, which is why the fix measures
- * rather than bounds. [aFlatReserveIsStillInsufficientAtThePlausibilityCeiling] keeps that premise
- * under a test rather than in prose.
+ * the headroom a 256 B reserve leaves an id is not a constant: 129 characters on a fresh log, 97 at
+ * 1e9 entries, and 65 once every `Long` is at its widest, up to `MAX_PLAUSIBLE_INDEX` /
+ * `MAX_PLAUSIBLE_TERM`. And the id is the consumer's: a durable one is whatever it persists, and
+ * `ClientId.auto` embeds the consumer's `NodeId`, so it outgrows the reserve for any `NodeId` past 43
+ * characters. That is why the fix measures rather than bounds.
+ * [aFlatReserveIsStillInsufficientAtThePlausibilityCeiling] keeps the premise under a test rather than
+ * in prose — and #2160's short frame tags have already moved it once (the headroom at the ceiling was
+ * 11 characters, below the shortest auto id's 23), which is the case for keeping it there.
  *
  * ### What each test holds
  *
@@ -378,24 +380,41 @@ class ProposeEnvelopeReserveTest {
      * `checkProposeFitsTransport`'s measurement could be reconsidered — so the red is an instruction
      * to revisit #2156, not a defect.
      *
-     * **#2160's byte-string framing was the candidate for that and did not move it at all.** The
-     * overhead is `frame(empty) − wire(empty)`, and the change moves both terms by the same byte, so
-     * it cancels: measured 268 B for the id below under either framing. What byte-string framing
-     * shrank is the *command's* cost, which is not this quantity.
+     * **It has moved once, and this arm was re-scoped rather than deleted.** #2160's byte-string
+     * framing did not move it — the overhead is `frame(empty) − wire(empty)`, and that change moves
+     * both terms by the same byte. #2160's short frame tags did: they took 55 B off every
+     * `AppendEntries`, so `ClientId.auto`'s **shortest possible** form, `"auto:" + a one-character
+     * NodeId + "-" + 16 hex`, fell from 268 B to 213 B at the ceiling — inside the flat reserve. That
+     * was this arm's id, and it was the sharpest statement of the refutation, because no
+     * consumer-supplied value was involved. It no longer refutes anything.
      *
-     * The id measured is `ClientId.auto`'s **shortest possible** form, `"auto:" + a one-character
-     * NodeId + "-" + 16 hex`. That is the sharpest statement of the refutation: no consumer-supplied
-     * value is involved, so no bound on a consumer's id could have helped.
+     * What still holds is the weaker, and still sufficient, statement: **an id the API admits can
+     * outgrow the flat reserve**, so no flat number is a bound. Both kinds do. A durable id is
+     * whatever the consumer persists, and an auto id is `"auto:" + NodeId + "-" + 16 hex`, whose
+     * `NodeId` is the consumer's too — the flat reserve now covers an auto id only for a `NodeId` of
+     * at most 43 characters at the ceiling. The arm pins one of each past it: this suite's own
+     * durable id, and the auto id a Kubernetes StatefulSet's DNS name produces.
      */
     @Test
     fun aFlatReserveIsStillInsufficientAtThePlausibilityCeiling() {
-        val shortestAutoId = "auto:v-0123456789abcdef"
-        assertTrue(
-            worstCaseOverhead(shortestAutoId) > headerBudget,
-            "a ${shortestAutoId.length}-character auto-minted ClientId costs " +
-                "${worstCaseOverhead(shortestAutoId)} B at the plausibility ceiling, and the flat " +
-                "reserve is $headerBudget B — if this is no longer true, the measured enforcement " +
-                "in checkProposeFitsTransport can be reconsidered (#2156)",
+        val statefulSetAutoId = ClientId.auto(NodeId("raft-2.raft-headless.consensus.svc.cluster.local:7000"), Random(1)).value
+        assertAll(
+            {
+                assertTrue(
+                    worstCaseOverhead(durableId) > headerBudget,
+                    "a ${durableId.length}-character durable ClientId costs ${worstCaseOverhead(durableId)} B " +
+                        "at the plausibility ceiling, and the flat reserve is $headerBudget B — if this is no " +
+                        "longer true, the measured enforcement in checkProposeFitsTransport can be reconsidered (#2156)",
+                )
+            },
+            {
+                assertTrue(
+                    worstCaseOverhead(statefulSetAutoId) > headerBudget,
+                    "the ${statefulSetAutoId.length}-character auto id minted for a StatefulSet NodeId costs " +
+                        "${worstCaseOverhead(statefulSetAutoId)} B at the ceiling against a $headerBudget B flat " +
+                        "reserve — the library's own id, outgrowing it for an ordinary NodeId",
+                )
+            },
         )
     }
 }

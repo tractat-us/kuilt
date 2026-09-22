@@ -191,9 +191,9 @@ class InstallSnapshotTest {
      *
      * What survives is two assertions. **No chunk this engine mints may exceed the budget its
      * transport published**, at a budget large enough that the reserve does not dominate — which reds
-     * if the reserve is dropped or the envelope outgrows it, but has about 120 B of slack here (the
+     * if the reserve is dropped or the envelope outgrows it, but has about 177 B of slack here (the
      * config-free reserve is floored at 256 B, while this transfer's real envelope, small `Long`s and
-     * all, is about 135 B), so it cannot see a byte or two of header miscounted. And **every
+     * all, is about 78 B), so it cannot see a byte or two of header miscounted. And **every
      * chunk carries exactly the stride the floor implies**, which can: the offsets are pinned against a
      * stride found by searching the codec, so a slice that forgets the byte-string header steps, a
      * re-introduced divisor, or a dropped `HEADER_BUDGET` floor each move it. The header steps

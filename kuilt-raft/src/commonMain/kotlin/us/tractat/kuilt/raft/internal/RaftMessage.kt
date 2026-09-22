@@ -1,5 +1,6 @@
 package us.tractat.kuilt.raft.internal
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import us.tractat.kuilt.raft.ConfigPayload
 import us.tractat.kuilt.raft.DedupKey
@@ -17,6 +18,35 @@ import us.tractat.kuilt.raft.RaftMessageType
  * `persistVote(…)`, §3.10 transfer confirmation. Five such fields were deleted rather than
  * checked against `from`, which removes the forgery instead of adding four checks that a new read
  * site can forget. A new frame type must not reintroduce one: read `from`.
+ *
+ * ## Tags are wire identifiers (#2160)
+ *
+ * kotlinx CBOR writes a sealed frame as `[tag, fields]`, and the tag is what the receiver decodes the
+ * rest by. Each subtype therefore carries a short, explicit [SerialName] rather than the class's
+ * fully-qualified name, which is what it carried before #2160:
+ *
+ * | frame | tag | | frame | tag |
+ * |---|---|---|---|---|
+ * | [RequestVote] | `rv` | | [RequestVoteResponse] | `rvr` |
+ * | [AppendEntries] | `ae` | | [AppendEntriesResponse] | `aer` |
+ * | [InstallSnapshot] | `is` | | [InstallSnapshotResponse] | `isr` |
+ * | [PreVote] | `pv` | | [PreVoteResponse] | `pvr` |
+ * | [TimeoutNow] | `tn` | | [Forward] | `fw` |
+ * | [ForwardResponse] | `fwr` | | | |
+ *
+ * and [ForwardOutcome]'s `cm` / `nl` / `fl`.
+ *
+ * **Never change a tag on its own.** A peer that does not recognise a tag refuses the frame
+ * (`RaftTraceEvent.FrameUndecodable`), so renaming one splits a group along that one frame type —
+ * and a group that can still exchange votes while failing on everything else elects leaders and then
+ * churns instead of refusing cleanly. That partial break is exactly what #2160 had before the tags
+ * moved: byte-string framing changed only the frames that carry bytes. A tag changes only as part of
+ * a new wire epoch that changes **all** of them, so a mixed group refuses every frame. Renaming or
+ * moving a class no longer touches the wire; that is the other half of why the tags are explicit.
+ * Pinned, all fourteen, by `RaftWireGoldenVectorTest.everyFrameTypeCarriesItsDocumentedTag`.
+ *
+ * Short on purpose, too: a fully-qualified tag cost 52–68 bytes on every frame, where these cost 3
+ * or 4 — and a vote is only about 30 bytes of fields.
  */
 @Serializable
 internal sealed interface RaftMessage {
@@ -33,6 +63,7 @@ internal sealed interface RaftMessage {
      * vote as an ordinary one, i.e. denying it under stickiness (the correct graceful degradation).
      */
     @Serializable
+    @SerialName("rv")
     data class RequestVote(
         val term: Long,
         val lastLogIndex: Long,
@@ -44,6 +75,7 @@ internal sealed interface RaftMessage {
     }
 
     @Serializable
+    @SerialName("rvr")
     data class RequestVoteResponse(
         val term: Long,
         val voteGranted: Boolean,
@@ -53,6 +85,7 @@ internal sealed interface RaftMessage {
     // whose ByteArray command fields compare by reference in generated equals. It is only used as a
     // transport envelope decoded from the wire; identity equality is never meaningful here.
     @Serializable
+    @SerialName("ae")
     data class AppendEntries(
         val term: Long,
         val prevLogIndex: Long,
@@ -70,6 +103,7 @@ internal sealed interface RaftMessage {
 
     /** Response includes §5.3 fast-backup fields for efficient log reconciliation. */
     @Serializable
+    @SerialName("aer")
     data class AppendEntriesResponse(
         val term: Long,
         val success: Boolean,
@@ -102,6 +136,7 @@ internal sealed interface RaftMessage {
      * compares by reference. This is a transport envelope only; identity equality is never meaningful.
      */
     @Serializable
+    @SerialName("is")
     data class InstallSnapshot(
         val term: Long,
         val lastIncludedIndex: Long,
@@ -119,6 +154,7 @@ internal sealed interface RaftMessage {
      * request (BLOCKER 1a fix — same purpose as [AppendEntriesResponse.echoedRound]).
      */
     @Serializable
+    @SerialName("isr")
     data class InstallSnapshotResponse(
         val term: Long,
         val nextOffset: Long,
@@ -136,6 +172,7 @@ internal sealed interface RaftMessage {
      * indistinguishable from one in the current cycle and can prematurely satisfy a quorum.
      */
     @Serializable
+    @SerialName("pv")
     data class PreVote(
         val term: Long,
         val lastLogIndex: Long,
@@ -151,6 +188,7 @@ internal sealed interface RaftMessage {
      * [PreVote.round] so the candidate can reject responses from a previous probe cycle.
      */
     @Serializable
+    @SerialName("pvr")
     data class PreVoteResponse(
         val term: Long,
         val voteGranted: Boolean,
@@ -169,6 +207,7 @@ internal sealed interface RaftMessage {
      * currently recognises — see the banner above for why the frame carries no `leaderId` (#1912).
      */
     @Serializable
+    @SerialName("tn")
     data class TimeoutNow(
         val term: Long,
     ) : RaftMessage
@@ -182,6 +221,7 @@ internal sealed interface RaftMessage {
      * re-stamps), so a retried forward maps to the same key. `null` for an unkeyed/legacy proposal.
      */
     @Serializable
+    @SerialName("fw")
     data class Forward(
         val clientRequestId: Long,
         val command: ByteArray,
@@ -195,6 +235,7 @@ internal sealed interface RaftMessage {
 
     /** Leader's reply to [Forward]: the proposal's fate, correlated by [clientRequestId]. */
     @Serializable
+    @SerialName("fwr")
     data class ForwardResponse(
         val clientRequestId: Long,
         val outcome: ForwardOutcome,
@@ -282,18 +323,26 @@ internal val RaftMessage.messageType: RaftMessageType
         is RaftMessage.ForwardResponse         -> RaftMessageType.ForwardResponse
     }
 
-/** Outcome of a forwarded proposal, carried in [RaftMessage.ForwardResponse]. */
+/**
+ * Outcome of a forwarded proposal, carried in [RaftMessage.ForwardResponse].
+ *
+ * Polymorphic on the wire like [RaftMessage], so its tags are wire identifiers under the same rule —
+ * see "Tags are wire identifiers" there.
+ */
 @Serializable
 internal sealed interface ForwardOutcome {
     /** Committed at [index] in [term]. */
     @Serializable
+    @SerialName("cm")
     data class Committed(val index: Long, val term: Long) : ForwardOutcome
 
     /** The target was not (or no longer) the leader; the caller should retry. */
     @Serializable
+    @SerialName("nl")
     data object NotLeader : ForwardOutcome
 
     /** The proposal failed for a non-retryable reason. */
     @Serializable
+    @SerialName("fl")
     data object Failed : ForwardOutcome
 }

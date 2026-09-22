@@ -300,13 +300,13 @@ class UndecodableFrameTest {
  *
  * Only its wire shape matters: kotlinx-serialization writes the same `{"type", "value"}` envelope for
  * any sealed base, so encoding this produces the bytes a peer one version ahead would send for a
- * frame type the local hierarchy does not declare. The `@SerialName` is the fully-qualified name such
- * a subclass would carry, so the discriminator in the bytes is the real thing rather than an
- * obviously-foreign string.
+ * frame type the local hierarchy does not declare. The `@SerialName` is a short tag in the style
+ * `RaftMessage`'s own subtypes carry since #2160 (`rv`, `ae`, …), so the discriminator in the bytes
+ * is the shape a real newer frame would have rather than an obviously-foreign string.
  */
 @Serializable
 private sealed interface FutureWire {
     @Serializable
-    @SerialName("us.tractat.kuilt.raft.internal.RaftMessage.Rejoin")
+    @SerialName("rj")
     data class Rejoin(val term: Long, val reason: String) : FutureWire
 }

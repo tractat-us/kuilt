@@ -2273,8 +2273,10 @@ internal class RaftEngine(
      * carries `config: ConfigPayload?` — a [ClusterConfig] of consumer-supplied [NodeId]s — on *every*
      * chunk, deliberately, so an installer can adopt the membership whichever chunk it finalizes on. A
      * flat 256 B cannot cover that and no bound on anything the library controls can make it: five
-     * twenty-character ids cost 308 B in a simple payload and 444 B in a joint one at the plausibility
-     * ceiling, against an envelope of 174 B with no config at all. Every full chunk was therefore
+     * twenty-character ids cost 309 B in a simple payload and 445 B in a joint one at the plausibility
+     * ceiling, against an envelope of 175 B with no config at all, when #2720 was found. (#2160's short
+     * frame tags took 57 B off every one of those; six such ids still cost 272 B, and a joint payload
+     * moving five to six costs 387 B.) Every full chunk was therefore
      * minted over the transport's budget, refused at [SeamRaftTransport.sendTo] (which must swallow
      * `PayloadTooLarge`), never acked — so [SnapshotSender] never advanced that peer's offset and the
      * leader re-sent the identical frame forever. A follower needing a snapshot could never be caught
@@ -2289,10 +2291,10 @@ internal class RaftEngine(
      * **Correctness does not rest on that floor.** [snapshotChunkReserve] is already the true worst
      * case, so dropping the `maxOf` would leave every frame inside the budget. The floor changes two
      * things, neither of them safety. It makes config-free chunks smaller — 3838 raw bytes rather than
-     * 3920 at a 4 KiB budget — and that stride is now pinned
+     * 3977 at a 4 KiB budget — and that stride is now pinned
      * (`InstallSnapshotTest.aChunkIsSizedToTheWireBudget_notTheRawOne`), so removing the floor reds.
-     * And it **decides the refusal** for a config-free snapshot at budgets from 175 B to 256 B: the
-     * measured config-free reserve is 174 B, so a one-byte chunk fits from 175 B, but the floor charges
+     * And it **decides the refusal** for a config-free snapshot at budgets from 118 B to 256 B: the
+     * measured config-free reserve is 117 B, so a one-byte chunk fits from 118 B, but the floor charges
      * 256 B and refuses everything up to it — a transfer that used to progress there, one byte per
      * chunk, before the refusal existed. No test sits in that band. The floor is kept for
      * compatibility — the existing chunking tests' arithmetic — and as the one number a reader of
@@ -3491,13 +3493,16 @@ internal class RaftEngine(
      * **Why [HEADER_BUDGET] is the floor and not the answer (#2156).** The command does not ride
      * alone: it is wrapped in the CBOR [RaftMessage.AppendEntries] envelope alongside `prevLogIndex` /
      * `prevLogTerm` / `leaderCommit` / `round`, plus the entry's own `index` / `term` / `dedupKey`.
-     * A flat 256 B **cannot** cover that, and no bound on [ClientId] can make it: the envelope holds
-     * eight `Long`s, each of which CBOR widens from one byte to nine as the log grows, so the
-     * headroom the reserve leaves an id is not a constant. Measured (`raftCbor`), the longest
-     * [ClientId] 256 B covers is 81 characters on a fresh log, 48 at 1e9 entries, 30 at 1e12, and
-     * **11** at [MAX_PLAUSIBLE_INDEX] / [MAX_PLAUSIBLE_TERM] — where `ClientId.auto`'s own shortest
-     * form, 23 characters, already costs 268 B. A maximum admitting the id this library mints for
-     * itself and a maximum that fits the reserve are disjoint.
+     * A flat 256 B **cannot** cover that for every id this API admits: the envelope holds eight
+     * `Long`s, each of which CBOR widens from one byte to nine as the log grows, so the headroom the
+     * reserve leaves an id is not a constant, and the id itself is the consumer's. Measured
+     * (`raftCbor`, every `Long` in the frame at the given value), the longest [ClientId] 256 B covers
+     * is 129 characters on a fresh log, 97 at 1e9 entries, and 65 from about 4.3e9 on, where every
+     * `Long` is already at its widest — up to [MAX_PLAUSIBLE_INDEX] / [MAX_PLAUSIBLE_TERM]. A
+     * `ClientIdentity.Durable` id is whatever the consumer persists, and `ClientId.auto` is
+     * `"auto:" + NodeId + "-" + 16 hex`, so it outgrows the reserve for any `NodeId` past 43
+     * characters. (Before #2160's short frame tags took 55 B off the envelope, even the shortest
+     * auto id did: 23 characters cost 268 B at the ceiling, where it now costs 213 B.)
      *
      * So this follows `SeamRoom.maxPayloadBytes`, which has the identical shape over a long `PeerId`:
      * **published conservatively, enforced exactly.** [HEADER_BUDGET] survives as the number a caller
@@ -4558,16 +4563,16 @@ internal class RaftEngine(
          * One constant serves all three because the envelopes carry the same *kind* of thing: a handful
          * of `Long`s (`term`, `prevLogIndex` / `lastIncludedIndex`, `leaderCommit` / `offset`, `round`)
          * around opaque bytes. Measured (`:kuilt-raft` commonTest, `raftCbor`, term 1 and indices at
-         * 0 or 1): an entry-less `AppendEntries` encodes to 119 B and a config-free `InstallSnapshot`
-         * with no data to 127 B on a fresh log, and a leading entry's own `index` / `term` /
+         * 0 or 1): an entry-less `AppendEntries` encodes to 64 B and a config-free `InstallSnapshot`
+         * with no data to 70 B on a fresh log, and a leading entry's own `index` / `term` /
          * `dedupKey` is another 79 B for a 23-character [ClientId]. Deliberately generous: a byte of
          * framing reserved and not needed costs a byte of payload, while one that falls short costs a
          * silently dropped frame the sender believed it had sized to fit.
          *
          * ⚠ **The `InstallSnapshot` figure is a *fresh-log* number, and `offset` is the field that
-         * grows across the very transfer this reserve bounds.** The same config-free frame costs 166 B
-         * at `offset = 0` once `term` / `lastIncludedIndex` / `round` are at their ceilings, 170 B at a
-         * 2 GiB offset, and 174 B at [MAX_PLAUSIBLE_INDEX] — so a reader taking 127 B as the worst case
+         * grows across the very transfer this reserve bounds.** The same config-free frame costs 109 B
+         * at `offset = 0` once `term` / `lastIncludedIndex` / `round` are at their ceilings, 113 B at a
+         * 2 GiB offset, and 117 B at [MAX_PLAUSIBLE_INDEX] — so a reader taking 70 B as the worst case
          * is reading a number that only holds before the transfer starts. Still under 256, so this
          * constant survives as a floor for the config-free case; [chunkBytes] charges
          * [snapshotChunkReserve] at the ceilings for exactly this reason.
@@ -4578,17 +4583,19 @@ internal class RaftEngine(
          *
          * **This is a published floor, not a sufficient reserve, and the difference is load-bearing
          * (#2156).** It was written as though 256 B covered every envelope it is spent on. It does
-         * not, and nothing about a `ClientId` can make it: the `AppendEntries` envelope holds eight
-         * `Long`s, each of which CBOR widens from one byte to nine as the log grows, so the slack
-         * left for an id shrinks from 81 characters on a fresh log to **11** at [MAX_PLAUSIBLE_INDEX]
-         * / [MAX_PLAUSIBLE_TERM] — below `ClientId.auto`'s own 23. So the number survives as the
+         * not for every id the API admits: the `AppendEntries` envelope holds eight `Long`s, each of
+         * which CBOR widens from one byte to nine as the log grows, so the slack left for an id
+         * shrinks from 129 characters on a fresh log to **65** at [MAX_PLAUSIBLE_INDEX] /
+         * [MAX_PLAUSIBLE_TERM], and both a durable id and an auto id's `NodeId` are the consumer's to
+         * choose. (It was 11 before #2160's short frame tags — below `ClientId.auto`'s own shortest
+         * 23 — which made the argument sharper than it now is, not different.) So the number survives as the
          * conservative bound a caller may *rely* on, and [checkProposeFitsTransport] enforces against
          * [proposeEnvelopeBytes] instead, taking whichever is larger. `SeamRoom.maxPayloadBytes`
          * carries the same split for the same reason over a long `PeerId`.
          *
          * [chunkBytes] now takes the same split, for the same reason reached through a different
          * field: its envelope carries a `ConfigPayload` of consumer-supplied `NodeId`s on every chunk,
-         * already past 256 B for five voters with twenty-character ids, so it enforces against
+         * already past 256 B for six voters with twenty-character ids, so it enforces against
          * [snapshotChunkReserve] and keeps this as the floor (#2720).
          *
          * [boundedBatch] is the one site that still spends it flat, and is **not** covered by either:

@@ -28,7 +28,8 @@ import kotlin.test.fail
  * `RaftMessage.InstallSnapshot` carries `config: ConfigPayload?` — a `ClusterConfig` of
  * consumer-supplied [NodeId]s — on *every* chunk, deliberately, so an installer can adopt the
  * membership whichever chunk it finalizes on. `chunkBytes()` reserved a flat `HEADER_BUDGET` for the
- * whole envelope, and five twenty-character node ids already cost more than that. Each chunk was
+ * whole envelope, and six twenty-character node ids already cost more than that (five did, before
+ * #2160's short frame tags took 57 B off the envelope). Each chunk was
  * therefore minted over the transport's budget, refused at `SeamRaftTransport.sendTo` (which must
  * swallow `PayloadTooLarge`), never acked, and re-sent forever: a follower that needs a snapshot can
  * never be caught up, and `AppendEntries` cannot help it because its prefix was compacted away.
@@ -633,14 +634,21 @@ class SnapshotEnvelopeReserveTest {
      * If this ever reds the envelope shrank far enough that a flat reserve covers it again, and the
      * measurement could be reconsidered — the red is an instruction to revisit #2720, not a defect.
      *
+     * **It has already moved once.** #2160's short frame tags took 57 B off every `InstallSnapshot`,
+     * and five twenty-character voter ids in a simple payload fell from 308 B to 251 B — under the
+     * flat reserve. The simple arm therefore uses the six-voter membership this suite's promotion
+     * settles on (272 B), which is still ordinary; the joint arm is untouched by the choice. What
+     * that says about the design is narrower than it looks: node ids are consumer-chosen and
+     * unbounded, so *some* ordinary cluster outgrows any flat number, and the measurement stays.
+     *
      * The values are measured here rather than quoted, so the arm cannot drift from what CBOR
-     * actually costs. What it pins is the *shape* of the answer: a simple five-voter config already
+     * actually costs. What it pins is the *shape* of the answer: a simple six-voter config already
      * exceeds the reserve, and a joint one exceeds it by substantially more.
      */
     @Test
     fun theChunkEnvelopeAlreadyOutgrowsTheFlatReserve() {
         val voters = ClusterConfig(voters = voterIds.toSet())
-        val simple = worstCaseReserve(ConfigPayload(old = null, new = voters))
+        val simple = worstCaseReserve(ConfigPayload(old = null, new = promoted))
         val joint = worstCaseReserve(ConfigPayload(old = voters, new = promoted))
         val none = worstCaseReserve(null)
         assertAll(
@@ -654,7 +662,7 @@ class SnapshotEnvelopeReserveTest {
             {
                 assertTrue(
                     simple > headerBudget,
-                    "five ${voterIds.first().value.length}-character voter ids in a simple ConfigPayload " +
+                    "${promoted.voters.size} ${voterIds.first().value.length}-character voter ids in a simple ConfigPayload " +
                         "cost $simple B against a $headerBudget B flat reserve — this is the ordinary " +
                         "configuration the wedge is reachable from",
                 )
