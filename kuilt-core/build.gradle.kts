@@ -32,6 +32,15 @@ tasks.withType<Test>().configureEach {
     }
 }
 
+// Installing DebugProbes loads JNA (a coroutines-debug dependency), and JNA's `System.load` is a
+// restricted method: from JDK 24 the JVM prints a native-access warning on stderr the first time it
+// is called (#2842). Same argument as the agent flag above — stderr cleanliness is itself evidence —
+// but NOT scoped to the stress runs, because `CompositePumpCensusTest` installs DebugProbes in the
+// normal run too. `ALL-UNNAMED` because JNA sits on the test classpath, not the module path.
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
 kotlin {
     sourceSets {
         commonMain.dependencies {
