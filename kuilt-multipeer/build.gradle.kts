@@ -5,6 +5,15 @@ tasks.withType<Test>().configureEach {
     if (flag != null) systemProperty("multipeer.realnet.tests", flag)
 }
 
+// The JVM tests load `libkuilt.dylib` through JNA, and JNA's `System.load` is a restricted method:
+// from JDK 24 the JVM prints a native-access warning on stderr the first time it is called (#2842).
+// It refuses nothing today, but stderr cleanliness is itself evidence here (see the stress block
+// below), so pre-approve the load rather than teach every reader to skim past it. `ALL-UNNAMED`
+// because JNA sits on the test classpath, not the module path. Same wiring as `:kuilt-nw`.
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
 // Every `*ConcurrencyTest` in this module is a real-threaded probe (the name is the contract, not an
 // enumeration — the same convention as `:kuilt-core`, `:kuilt-nearby` and `:kuilt-nw`). They run on
 // real threads rather than virtual time, so their coroutines depend on the OS scheduling a

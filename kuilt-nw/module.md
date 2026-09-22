@@ -69,6 +69,12 @@ This is **macOS-arm64 only**. On any other JVM (Linux, Windows, Intel Macs) the 
 use the mDNS/WebSocket fabrics for cross-platform LAN there. Probe `NwNativeLib.jvmAvailability()`
 first if you need to branch gracefully.
 
+On JDK 24 or later, the JVM prints a warning when the bridge first loads: *"A restricted method in
+java.lang.System has been called"*, naming JNA as the caller. Today it is only a warning, and the
+bridge loads anyway. A future JDK may refuse to load the library instead. So launch your app with
+`--enable-native-access=ALL-UNNAMED` — or, if JNA sits on the module path rather than the class path,
+name its module: `--enable-native-access=com.sun.jna`.
+
 ## When two devices see each other but never connect
 
 Both phones are in the lobby, the signal is strong, and no session ever forms. Nothing crashes and

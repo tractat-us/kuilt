@@ -4,6 +4,15 @@ plugins {
     alias(libs.plugins.kover)
 }
 
+// The JVM tests run a Netty server (`WarpNodeWebSocketTest`), and Netty's native-library loader calls
+// `System.loadLibrary`, a restricted method: from JDK 24 the JVM prints a native-access warning on
+// stderr the first time it is called (#2842). It refuses nothing today, but stderr cleanliness is
+// evidence when a test here hangs or reds, so pre-approve the load rather than teach every reader
+// to skim past it. `ALL-UNNAMED` because Netty sits on the test classpath, not the module path.
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
 kotlin {
     sourceSets {
         commonMain.dependencies {

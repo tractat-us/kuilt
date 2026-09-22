@@ -8,6 +8,16 @@ tasks.withType<Test>().configureEach {
     if (flag != null) systemProperty("nw.realnet.tests", flag)
 }
 
+// The JVM tests load `libkuilt.dylib` through JNA, and JNA's `System.load` is a restricted method:
+// from JDK 24 the JVM prints a native-access warning on stderr the first time it is called (#2842).
+// It refuses nothing today, but stderr cleanliness is itself evidence on this module's hangs (see
+// the stress block below), so pre-approve the load rather than teach every reader to skim past it.
+// `ALL-UNNAMED` because JNA sits on the test classpath, not the module path. Consumers need the same
+// flag in their own launch; `module.md` tells them.
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
 // `-Pconcurrency.stress.tests=true` opts this module's real-threaded probes in. Two name contracts,
 // deliberately NOT an enumeration (which is what went stale in kuilt-core as probes were added):
 //
