@@ -2186,11 +2186,16 @@ internal class RaftEngine(
      * what [snapshotChunkReserve] measures around its actual membership.
      *
      * **Correctness does not rest on that floor, and nothing pins it.** [snapshotChunkReserve] is
-     * already the true worst case, so dropping the `maxOf` would leave every frame inside the budget;
-     * it would only make config-free chunks larger (1960 raw bytes rather than 1920 at a 4 KiB
-     * budget), which is why no test reds on its removal. It is kept for compatibility — the existing
-     * chunking tests' arithmetic — and as the one number a reader of [HEADER_BUDGET] may still rely
-     * on. Stated here so a future reader does not mistake an unpinned constant for an unverified one.
+     * already the true worst case, so dropping the `maxOf` would leave every frame inside the budget.
+     * The floor changes two things, neither of them safety. It makes config-free chunks smaller (1920
+     * raw bytes rather than 1960 at a 4 KiB budget), which is why no test reds on its removal. And it
+     * **decides the refusal** for a config-free snapshot at budgets from 177 B to 257 B: the measured
+     * config-free reserve is 175 B, so a one-byte chunk fits from 177 B, but the floor charges 256 B
+     * and refuses everything below 258 B — a transfer that used to progress there, one byte per
+     * chunk, before the refusal existed. No test sits in that band either. The floor is kept for
+     * compatibility — the existing chunking tests' arithmetic — and as the one number a reader of
+     * [HEADER_BUDGET] may still rely on. Stated here so a future reader does not mistake an unpinned
+     * constant for an unverified one.
      *
      * **Why the reserve is the whole probe frame here, where the propose lane subtracts its empty
      * payload.** [checkProposeFitsTransport] measures the command's *encoded* size and compares it to
@@ -2220,6 +2225,11 @@ internal class RaftEngine(
      * terminates the transfer. Both orderings are safe because the refusal has already established
      * `rawFromWire >= 1`, so the floor can only ever raise a non-positive *ceiling* to one byte the
      * budget is known to have room for.
+     *
+     * ⚠ **It covers that case only on a transport that publishes a budget.** With none, the first line
+     * returns `snapshotChunkCeiling` as given, before the floor is reached: a `0` there still yields
+     * zero-byte chunks that never finish, and a negative value throws in `copyOfRange` on the actor
+     * loop. Nothing guards the ceiling itself, and this change does not add the missing `require`.
      *
      * A consequence worth naming: with **no** published budget this returns `snapshotChunkCeiling`
      * whole, where it once subtracted [HEADER_BUDGET] from it. That subtraction was never right —

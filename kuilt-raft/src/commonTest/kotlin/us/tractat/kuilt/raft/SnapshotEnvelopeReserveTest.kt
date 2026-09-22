@@ -55,6 +55,9 @@ import kotlin.test.fail
  *   over the two `ConfigPayload` shapes a real cluster produces. These are the arms that reddened.
  * - [aBudgetTooSmallForTheWholeEnvelopeRefusesObservablyInsteadOfMintingAChunkThatCannotFit] — the
  *   refusal, and that it is not permanent.
+ * - [aRefusalMidTransferResumesFromTheAckedOffsetWhenTheBudgetRecovers] — a refusal that lands on a
+ *   transfer in flight keeps its acked offset.
+ * - [aRefusalWithNoTransferInFlightNeverLoadsTheStoredSnapshot] — a refusal costs no snapshot load.
  * - [theChunkEnvelopeAlreadyOutgrowsTheFlatReserve] — the premise the fix exists for, over an
  *   **independently constructed** envelope.
  * - [theChunkEnvelopeOverheadIsAdditiveInTheChunkData] — the property the probe's cheapness rests on.
