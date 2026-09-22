@@ -81,8 +81,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
  * facing a newer one that added a single defaulted field would drop **every** frame from it — a node
  * that is up, traced, emitting [RaftTraceEvent.FrameUndecodable], and completely unable to
  * participate. Forward-compatibility is load-bearing on its own; the crash was never the argument.
+ *
+ * `internal` rather than `private` so a test that measures wire sizes encodes with **this** instance.
+ * A restated copy agrees with it only until one of them changes, and a size premise measured on the
+ * copy stays green through the very codec change it exists to catch (#2720).
  */
-private val raftCbor = Cbor { ignoreUnknownKeys = true }
+internal val raftCbor = Cbor { ignoreUnknownKeys = true }
 
 /**
  * How long a run of refused leader→peer frames has to get before [noteRefusedLeaderFrame]
@@ -2257,7 +2261,10 @@ internal class RaftEngine(
      * measurement, spend the budget on the wire quantity, then subtract the header of the *whole*
      * remaining window, which is safe because the step function is monotone.
      * `SnapshotEnvelopeReserveTest.theWireWrapperAroundAChunkIsLengthIndependent` reds when the
-     * premise goes, which is the only thing standing between that change and a silent regression.
+     * premise goes, and so does the propose-shape arm of `theReserveMustIncludeTheChunkArraysOwnHeader`
+     * — but only because both encode with this file's [raftCbor] rather than a codec of their own.
+     * Measured with `alwaysUseByteString = true` set here: 5 of 8 and 5 of 10 of their checks red.
+     * Measured again with the suite on a restated `Cbor`: neither reddened, so do not give it one.
      *
      * **Why the widest `Long`s.** `offset` grows across the very transfer this reserve bounds, and
      * `term` / `lastIncludedIndex` / `round` move on their own; charging [MAX_PLAUSIBLE_INDEX] /

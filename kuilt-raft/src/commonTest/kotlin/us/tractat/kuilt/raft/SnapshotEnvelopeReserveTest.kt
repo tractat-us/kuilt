@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.serialization.builtins.ByteArraySerializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -82,11 +83,18 @@ class SnapshotEnvelopeReserveTest {
     private val plausibleCeiling = 1L shl 60
 
     /**
-     * A bare [Cbor] suffices: the engine's instance differs only by `ignoreUnknownKeys`, a *decoding*
-     * option. `encodeDefaults` is off in both, so a `null` config and a zero `round` are omitted in
-     * both — which is why the probe must be built from the *real* config rather than a placeholder.
+     * The engine's own wire codec, not a restated one. The codec is the one thing on this lane the
+     * suite must **not** construct independently: the codec-premise tests below exist to red when the
+     * codec's framing changes, and a bare [Cbor] would carry on measuring the old framing through
+     * that change. Measured with `raftCbor` flipped to `alwaysUseByteString = true`: while this field
+     * was a bare `Cbor`, [theWireWrapperAroundAChunkIsLengthIndependent],
+     * [theReserveMustIncludeTheChunkArraysOwnHeader] and [theChunkEnvelopeOverheadIsAdditiveInTheChunkData]
+     * all stayed green; on `raftCbor` the first two red.
+     *
+     * `encodeDefaults` is off, so a `null` config and a zero `round` are omitted — which is why the
+     * probe must be built from the *real* config rather than a placeholder.
      */
-    private val cbor = Cbor
+    private val cbor = raftCbor
 
     private fun wireBytes(data: ByteArray): Int = cbor.encodeToByteArray(ByteArraySerializer(), data).size
 
@@ -497,6 +505,11 @@ class SnapshotEnvelopeReserveTest {
      * kotlinx-serialization writes indefinite-length and therefore at a constant two bytes. Asserted
      * rather than reasoned, across three chunk sizes and all three config shapes, because if it ever
      * stops holding the probe silently under-measures and the sizing goes quietly unsound again.
+     *
+     * **Not a detector for a length-dependent payload header.** Both sides of the equation carry the
+     * payload's header, so they cancel: with `raftCbor` flipped to `alwaysUseByteString = true` this
+     * stays green (measured). Catching that change is [theWireWrapperAroundAChunkIsLengthIndependent]'s
+     * job.
      */
     @Test
     fun theChunkEnvelopeOverheadIsAdditiveInTheChunkData() {
