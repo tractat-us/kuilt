@@ -4057,9 +4057,10 @@ internal class RaftEngine(
         // log path does no `from` validation at all, so the next non-voter's AppendEntries truncated
         // the victim's committed log and replaced it (#2663, reproduced). Both routes a peer's config
         // arrives by are now bounded in [configPayloadRefusal]; what this predicate rests on is that
-        // `state.membershipState.voters` cannot be emptied by a remote frame. It can still be empty
-        // from a consumer's own `bootstrapConfig` and from a snapshot already on disk, neither of
-        // which is a peer — see [MembershipState.voters].
+        // `state.membershipState.voters` cannot be emptied by a remote frame. It can still be empty on
+        // a learner-seeded node, and on no other: `raftNode` refuses every other voterless bootstrap,
+        // and the restore bounds a durable config (#2676). That covers the seed above and a seeded node
+        // whose poisoned snapshot config the restore dropped back into it — see [MembershipState.voters].
         //
         // This gate is the module's exemplar of the "defend — the recipient holds a local
         // witness" half of its trust policy; the accepted, unauthenticated exposures on the
