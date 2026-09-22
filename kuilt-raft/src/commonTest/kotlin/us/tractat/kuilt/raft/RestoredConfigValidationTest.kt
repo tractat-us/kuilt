@@ -30,7 +30,7 @@ import kotlin.test.assertTrue
  * `RaftStorageConformanceSuite` constrains none of these fields, and kuilt's own
  * [DurableStoreRaftStorage] validates none of them either, so a damaged medium reaches the engine
  * through it exactly as through a consumer's adapter — and the consumer's own `bootstrapConfig`, which
- * is out of scope here and stays under #2676.
+ * `raftNode` bounds at construction instead ([BootstrapConfigValidationTest]).
  *
  * ## Two dispositions, because the two sources are not the same kind of thing
  *
