@@ -1260,6 +1260,14 @@ internal class RaftEngine(
      * ("is this config reachable from what I last committed" cannot work — a long-absent node must be
      * catchable-up to an arbitrarily distant config). #1898's staleness relaxation is untouched: a node
      * holding `{A,B,X}` still adopts `{X,C,D}`. Authorization remains open under #1907.
+     *
+     * **The one definition, for the wire and for the restore (#2840).** [configPayloadRefusal] drops a
+     * wire config through this function, and [checkedRestoredEntries] and [checkedRestoredSnapshotMeta]
+     * judge a stored one through it too. Keep it that way. What the wire gate admits reaches storage,
+     * and since #2838 a learner seed whose restored snapshot config fails this check refuses to start.
+     * So a wire gate narrower than this predicate would let a seed install a snapshot its own build
+     * accepted and then fail to boot on it. `NoActiveVotersAgreementTest` runs one table of configs
+     * through both wire lanes and both restore lanes and reds if they disagree.
      */
     private fun namesNoActiveVoters(config: ConfigPayload): Boolean =
         config.new.voters.isEmpty() || (config.old != null && config.old.voters.isEmpty())
@@ -2953,6 +2961,12 @@ internal class RaftEngine(
      * must name at least one voter (issue #2663). Shared by [batchRefusal] (an `AppendEntries` entry's
      * `config`) and [snapshotChunkRefusal] (an `InstallSnapshot`'s), which are the only two routes by
      * which a peer's config reaches [recomputeMembership].
+     *
+     * **It decides through [namesNoActiveVoters], the predicate the restore path uses (#2840).** It used
+     * to spell the same test inline. That was harmless while a restore that failed it only fell back to
+     * the bootstrap, but since #2838 a learner seed refuses to start on one. Whatever this gate admits
+     * is written to storage, so the two must never disagree. Only the log line's `new`/`old` is worked
+     * out here.
      *
      * **What an empty `new` costs.** The §5.2 leader-authority gate in [onMessage] is conditioned on
      * `membershipState.voters.isNotEmpty()` — a deliberate carve-out for the pre-bootstrap learner seed,
