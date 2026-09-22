@@ -60,8 +60,10 @@ public class LeadershipTransferException(message: String) : Exception(message)
 
 /**
  * Thrown during a node's start-up restore when the [RaftStorage] it was given returns durable state
- * that violates the storage contract — currently, a persisted term outside the plausible range
- * (issue #1855).
+ * that violates the storage contract: a persisted term outside the plausible range (issue #1855), a
+ * snapshot position or log that no real node could have stored (#1887), a restored log entry whose
+ * config names no voters, or a restored snapshot config naming no voters on a node whose bootstrap is
+ * the learner seed and so has nothing to fall back to (#2676). The term case is the one argued below.
  *
  * ### Why this is loud rather than repaired
  *
