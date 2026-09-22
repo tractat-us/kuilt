@@ -11,6 +11,11 @@ plugins {
 tasks.withType<Test>().configureEach {
     val flag = providers.gradleProperty("cluster.realsocket.tests").orNull
     if (flag != null) systemProperty("cluster.realsocket.tests", flag)
+    // Those tests start a Netty server per voter, and Netty's native-library loader calls
+    // `System.loadLibrary`, a restricted method: JDK 24+ prints a native-access warning on stderr
+    // for it (#2842). Stderr cleanliness is evidence when a real-socket run hangs or reds, so
+    // pre-approve the load. Scoped to that lane — the normal run loads no native code.
+    if (flag == "true") jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
 // Every `*ConcurrencyTest` in this module is a real-threaded probe (the name is the contract, not an
@@ -41,6 +46,10 @@ tasks.withType<Test>().configureEach {
         // attaches a java agent at runtime. JDK 21+ warns on stderr when that happens (JEP 451), and
         // stderr cleanliness is itself evidence on these hangs. Scoped to the stress runs.
         jvmArgs("-XX:+EnableDynamicAgentLoading")
+        // Installing DebugProbes also loads JNA (a coroutines-debug dependency), whose `System.load`
+        // is a restricted method: JDK 24+ prints a native-access warning on stderr for it (#2842).
+        // Same argument, same scope.
+        jvmArgs("--enable-native-access=ALL-UNNAMED")
     }
 }
 
