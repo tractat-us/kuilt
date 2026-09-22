@@ -504,6 +504,13 @@ public suspend fun RaftNode.awaitRead(applied: StateFlow<Long>): Long {
  *   assertion. **Must not block** — the callback runs synchronously on the engine actor;
  *   blocking stalls replication for the entire cluster. `null` (default) disables the hook.
  * @return A running [RaftNode] ready to receive proposals and emit committed entries.
+ * @throws IllegalArgumentException if [clusterConfig] has no voters and its learners do not include
+ *   `transport.selfId`. A bootstrap must seat at least one voter, or be the **learner seed**
+ *   `ClusterConfig(voters = emptySet(), learners = setOf(self))` that a joiner starts from until the
+ *   leader's config seats it. The two shapes refused, `(voters = ∅, learners = ∅)` and
+ *   `(voters = ∅, learners = {someone else})`, would boot with the §5.2 leader-authority gate
+ *   unarmed and no join to finish, so any peer's `AppendEntries` could move this node's term and
+ *   install its sender as leader (#2676).
  */
 public fun CoroutineScope.raftNode(
     clusterConfig: ClusterConfig,
@@ -513,6 +520,18 @@ public fun CoroutineScope.raftNode(
     identity: ClientIdentity = ClientIdentity.Auto,
     onMetric: ((RaftMetric) -> Unit)? = null,
 ): RaftNode {
+    // The §5.2 gate in `RaftEngine.onMessage` stays unarmed while the voter set is empty — a carve-out
+    // that exists for the learner seed alone, which must accept a leader's frames to catch up. Any other
+    // voterless bootstrap reaches the same unarmed state with no join to justify it, so it is refused
+    // here, before the engine exists, rather than discovered after a stranger's first frame.
+    require(clusterConfig.voters.isNotEmpty() || transport.selfId in clusterConfig.learners) {
+        "raftNode: bootstrap $clusterConfig leaves ${transport.selfId.value} outside its own cluster. " +
+            "Refused: no voters and no learners, or no voters with learners that does not include this " +
+            "node — either would boot with the §5.2 leader-authority gate unarmed, accepting any peer's " +
+            "AppendEntries. Seat at least one voter, or pass the learner seed " +
+            "ClusterConfig(voters = emptySet(), learners = setOf(${transport.selfId.value})) that a " +
+            "joiner starts from until the leader's config seats it."
+    }
     checkNotUnderTestDispatcher(
         scope = this,
         typeName = "RaftNode",
