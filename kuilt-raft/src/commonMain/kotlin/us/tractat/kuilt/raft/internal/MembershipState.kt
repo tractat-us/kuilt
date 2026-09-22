@@ -107,8 +107,9 @@ internal sealed interface MembershipState {
      * `InstallSnapshot` lane. **Nor can the node's own durable state or bootstrap** (#2676):
      * `RaftEngine.checkedRestoredEntries` refuses to start on a restored config entry of that shape,
      * `RaftEngine.checkedRestoredSnapshotMeta` drops a restored snapshot config of that shape back to
-     * the bootstrap, and `raftNode` refuses every voterless bootstrap except the learner seed. What is
-     * left is the seed itself, including a seeded node whose dropped snapshot config fell back into it;
+     * the bootstrap, and `raftNode` admits a voterless bootstrap only as a learner seed, with this node
+     * among its learners. What is left is the seed itself, including a seeded node whose dropped
+     * snapshot config fell back into it;
      * the second of those is still open under #2676.
      */
     val voters: Set<NodeId>

@@ -1219,8 +1219,8 @@ internal class RaftEngine(
      * split out of #2663 rather than landed with it.
      *
      * **What this now rests on: `bootstrapConfig` seating voters.** The fallback is only a repair
-     * while the config it falls back *to* seats voters. `raftNode` refuses every voterless bootstrap
-     * except the learner seed `(voters = ∅, learners = {self})` (#2676), so the seed is the one
+     * while the config it falls back *to* seats voters. `raftNode` admits a voterless bootstrap only as
+     * a learner seed, `voters = ∅` with this node among the `learners` (#2676), so a seed is the one
      * bootstrap left where it does not: a learner-seeded node that restores a poisoned snapshot config
      * drops it, falls back into the seed and boots with the §5.2 gate unarmed. That is not a regression
      * (before this bound it adopted the poisoned config with the same result), but it is not a repair
@@ -4076,10 +4076,11 @@ internal class RaftEngine(
         // log path does no `from` validation at all, so the next non-voter's AppendEntries truncated
         // the victim's committed log and replaced it (#2663, reproduced). Both routes a peer's config
         // arrives by are now bounded in [configPayloadRefusal]; what this predicate rests on is that
-        // `state.membershipState.voters` cannot be emptied by a remote frame. It can still be empty on
-        // a learner-seeded node, and on no other: `raftNode` refuses every other voterless bootstrap,
-        // and the restore bounds a durable config (#2676). That covers the seed above and a seeded node
-        // whose poisoned snapshot config the restore dropped back into it — see [MembershipState.voters].
+        // `state.membershipState.voters` cannot be emptied by a non-voter's frame. It can still be empty
+        // on a learner-seeded node, and on no other: `raftNode` admits a voterless bootstrap only with
+        // this node among its learners, and the restore bounds a durable config (#2676). That covers
+        // the seed above and a seeded node whose poisoned snapshot config the restore dropped back into
+        // it — see [MembershipState.voters].
         //
         // This gate is the module's exemplar of the "defend — the recipient holds a local
         // witness" half of its trust policy; the accepted, unauthenticated exposures on the
