@@ -1,5 +1,6 @@
 package us.tractat.kuilt.raft.internal
 
+import us.tractat.kuilt.raft.ConfigPayload
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.SnapshotMeta
@@ -22,13 +23,19 @@ import us.tractat.kuilt.raft.SnapshotMeta
  *
  * @property storage source of the snapshot bytes — the machine's only side-effect (a [nextChunk]
  *   read from [RaftStorage.loadSnapshot]); this is why the machine takes [storage].
- * @property chunkBytes supplies the per-chunk byte budget (transport payload cap ∩ configured
- *   ceiling, header budget already subtracted); the engine owns that computation, so the machine
- *   depends on neither the transport nor [us.tractat.kuilt.raft.RaftConfig].
+ * @property chunkBytes supplies the per-chunk **raw** byte budget for a transfer to the given peer
+ *   of a snapshot whose membership is the given [ConfigPayload] (transport payload cap ∩ configured
+ *   ceiling, envelope reserve already subtracted); the engine owns that computation, so the machine
+ *   depends on neither the transport nor [us.tractat.kuilt.raft.RaftConfig]. It takes the config
+ *   because the reserve is a function of it alone — the snapshot's `config` rides on every chunk
+ *   (#2720) — and the peer because a refusal has to name the follower it strands. **`null` is a
+ *   refusal**: the transport's budget cannot carry this snapshot's envelope at all, so there is no
+ *   slice size that would fit and the engine has already reported it. [nextChunk] then emits nothing
+ *   rather than a chunk that could only be dropped.
  */
 internal class SnapshotSender(
     private val storage: RaftStorage,
-    private val chunkBytes: () -> Int,
+    private val chunkBytes: (NodeId, ConfigPayload?) -> Int?,
 ) {
     /** One in-flight transfer to a peer: the stored snapshot's [meta]/[state] bytes and the next byte offset to send. */
     private class SnapshotXfer(val meta: SnapshotMeta, val state: ByteArray, var nextOffset: Long)
@@ -39,17 +46,41 @@ internal class SnapshotSender(
      * The next chunk for [peer]'s in-flight transfer, loading the stored snapshot fresh (from offset 0)
      * iff there is none in flight; otherwise it resumes from the peer's acked offset. A restart is never
      * initiated here — the follower drives any rewind via its `ReAdvertise(0)` ack. Returns null when no
-     * snapshot is stored yet (nothing to send).
+     * snapshot is stored yet (nothing to send), and when [chunkBytes] refuses the transfer outright.
+     *
+     * **A refusal does not start a transfer, and does not end one already running.** A budget too small
+     * for this snapshot's envelope is a *level*, not a verdict — `Seam.maxPayloadBytes` is a reading
+     * that a peer attaching over a tighter link lowers and leaving raises — so an in-flight transfer
+     * keeps its acked offset and resumes when the budget recovers, while a fresh one is not installed
+     * at all. The second half matters beyond tidiness: installing it would retain a private copy of the
+     * whole snapshot per peer, for a transfer that has not sent a byte.
+     *
+     * **A refusal costs no load.** With no transfer in flight the refusal is decided against
+     * [storedConfig] — the caller's record of the stored snapshot's membership — *before*
+     * [RaftStorage.loadSnapshot] runs. The refusal repeats at every heartbeat divert for every stranded
+     * peer, and a durable adapter's load copies the whole snapshot, so deciding it after the load
+     * meant an `O(snapshot)` copy on the actor loop at the heartbeat interval, thrown away each time.
+     *
+     * The slice is still sized against the meta the chunk will actually **carry** — on a fresh load,
+     * the one just read — so a wrong [storedConfig] can cost a load, never an over-budget chunk. The
+     * two can differ: a restore that drops a malformed stored config leaves the engine's record `null`
+     * over it, and there the early check passes and the second one refuses, loading on each refusal.
+     *
+     * @param storedConfig the membership the stored snapshot carries, as the caller last recorded it
+     *   beside [RaftStorage.saveSnapshot]. Consulted only when no transfer is in flight.
      */
-    suspend fun nextChunk(peer: NodeId): Chunk? {
+    suspend fun nextChunk(peer: NodeId, storedConfig: ConfigPayload?): Chunk? {
         val xfer = snapshotXfer[peer] ?: run {
+            chunkBytes(peer, storedConfig) ?: return null        // refused before paying for the load
             val stored = storage.loadSnapshot() ?: return null   // nothing to send yet
-            SnapshotXfer(stored.meta, stored.state, 0L).also { snapshotXfer[peer] = it }
+            SnapshotXfer(stored.meta, stored.state, 0L)
         }
+        val budget = chunkBytes(peer, xfer.meta.config) ?: return null  // sized on what the chunk carries
+        snapshotXfer[peer] = xfer
         // Lossless by construction: nextOffset is only ever 0 (fresh load) or a value [onAck] clamped
         // into 0..state.size, and state.size is an Int. Keep that clamp if you touch [onAck] (#1818).
         val start = xfer.nextOffset.toInt()
-        val end = minOf(start + chunkBytes(), xfer.state.size)
+        val end = minOf(start + budget, xfer.state.size)
         val done = end >= xfer.state.size
         return Chunk(
             meta = xfer.meta,

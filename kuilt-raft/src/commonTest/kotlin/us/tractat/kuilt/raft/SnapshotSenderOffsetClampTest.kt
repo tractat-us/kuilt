@@ -57,7 +57,7 @@ internal class SnapshotSenderOffsetClampTest {
     private suspend fun senderWithTransferInFlight(): SnapshotSender {
         val storage = InMemoryRaftStorage()
         storage.saveSnapshot(meta, snapshotBytes)
-        return SnapshotSender(storage) { chunkBytes }.also { it.nextChunk(peer) }
+        return SnapshotSender(storage) { _, _ -> chunkBytes }.also { it.nextChunk(peer, meta.config) }
     }
 
     /**
@@ -81,7 +81,7 @@ internal class SnapshotSenderOffsetClampTest {
                 // Pre-fix with forged = -1 this line THROWS IndexOutOfBoundsException from
                 // copyOfRange(-1, 3) — inside the engine's uncaught actor loop, killing the leader.
                 SnapshotSender.AckOutcome.SendNext -> {
-                    val chunk = assertNotNull(sender.nextChunk(peer), "forged=$forged: a transfer is in flight")
+                    val chunk = assertNotNull(sender.nextChunk(peer, meta.config), "forged=$forged: a transfer is in flight")
                     assertAll(
                         {
                             assertTrue(
@@ -111,7 +111,7 @@ internal class SnapshotSenderOffsetClampTest {
         val sender = senderWithTransferInFlight()
 
         val afterPartial = sender.onAck(peer, chunkBytes.toLong())          // stored 4 of 10 bytes
-        val resumed = assertNotNull(sender.nextChunk(peer), "transfer must still be in flight")
+        val resumed = assertNotNull(sender.nextChunk(peer, meta.config), "transfer must still be in flight")
         val afterFinal = sender.onAck(peer, snapshotBytes.size.toLong())    // stored all 10
 
         assertAll(
@@ -132,7 +132,7 @@ internal class SnapshotSenderOffsetClampTest {
         val sender = senderWithTransferInFlight()
 
         val outcome = sender.onAck(peer, -1L)
-        val chunk = assertNotNull(sender.nextChunk(peer), "a rewound transfer must still be in flight")
+        val chunk = assertNotNull(sender.nextChunk(peer, meta.config), "a rewound transfer must still be in flight")
 
         assertAll(
             { assertEquals(SnapshotSender.AckOutcome.SendNext, outcome, "a negative ack must resume, not complete") },
