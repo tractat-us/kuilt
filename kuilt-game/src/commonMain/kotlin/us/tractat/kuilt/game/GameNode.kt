@@ -628,8 +628,9 @@ public suspend fun CoroutineScope.gameJoin(
  * [gameSpectate] throws [SpectatorsClosedException] immediately — never a silent hang.
  *
  * **Permanent role — no promotion.** A spectator's [GameSession.node] role is permanently
- * [RaftRole.Learner]. There is no promotion-to-voter path in this entry point; that is a
- * separate concern (see issue #594).
+ * [RaftRole.Learner]. Unlike [gameJoin]'s learner, which the host promotes to voter on
+ * admission, a spectator is never promoted. Promoting one mid-game, which handing a live
+ * game's leadership to a spectator would need, is deferred to #1445.
  *
  * **Internal multiplexing.** [gameSpectate] wraps [seam] in a [MuxSeam] and routes Raft
  * traffic on channel tag 1, lobby presence on channel tag 2, and the application-envelope
