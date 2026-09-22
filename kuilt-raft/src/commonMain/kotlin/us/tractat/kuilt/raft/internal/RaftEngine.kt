@@ -2991,12 +2991,10 @@ internal class RaftEngine(
      * launders a forgery into the most favourable valid value (#1817).
      */
     private fun configPayloadRefusal(from: NodeId, rpc: String, config: ConfigPayload?): RefusalGate? {
-        if (config == null) return null
-        val emptySide = when {
-            config.new.voters.isEmpty() -> "new"
-            config.old != null && config.old.voters.isEmpty() -> "old"
-            else -> return null
-        }
+        if (config == null || !namesNoActiveVoters(config)) return null
+        // The decision is the line above, and it is the restore path's too. Which side was empty is
+        // worked out only for the log, so it cannot disagree with the verdict: both empty reports `new`.
+        val emptySide = if (config.new.voters.isEmpty()) "new" else "old"
         debug {
             "$rpc($from): DROP — the config payload's `$emptySide` side names no voters ($config); a " +
                 "wire config may not leave an active side voterless (§5.2's gate is conditioned on a " +
