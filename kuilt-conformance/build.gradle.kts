@@ -40,6 +40,10 @@ tasks.withType<Test>().configureEach {
         // attaching a java agent at runtime; JDK 21+ warns on stderr when that happens (JEP 451),
         // and stderr cleanliness is itself evidence on these hangs. Scoped to the stress runs.
         jvmArgs("-XX:+EnableDynamicAgentLoading")
+        // Installing DebugProbes also loads JNA (a coroutines-debug dependency), whose `System.load`
+        // is a restricted method: JDK 24+ prints a native-access warning on stderr for it (#2842).
+        // Same argument, same scope — the normal run loads no native code.
+        jvmArgs("--enable-native-access=ALL-UNNAMED")
     }
 }
 
