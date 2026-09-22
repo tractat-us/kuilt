@@ -2257,22 +2257,24 @@ internal class RaftEngine(
 
     /**
      * Raw state bytes carried per chunk of a snapshot whose membership is [config], on its way to
-     * [peer]: the configured ceiling, or what the transport's payload budget leaves once the **measured** envelope
-     * reserve and CBOR's byte-array expansion are paid — whichever is smaller. `null` refuses the
-     * transfer outright; see "Why a refusal" below.
+     * [peer]: the configured ceiling, or what the transport's payload budget leaves once the
+     * **measured** envelope and the payload's own byte-string header are paid — whichever is smaller.
+     * `null` refuses the transfer outright; see "Why a refusal" below.
      *
      * The two inputs are in **different units**, which is what this used to get wrong.
      * `snapshotChunkCeiling` bounds the *raw* state bytes in a chunk; `maxPayloadBytes` bounds the
      * *encoded frame*. Taking `minOf` of them directly and subtracting [HEADER_BUDGET] treated a wire
      * bound as a raw one, so a chunk sized to fit could encode to twice the budget and be dropped — at
-     * the 16 KiB default ceiling, a chunk sized to 16128 B encodes to as much as 32258 B (#2150).
+     * the 16 KiB default ceiling, a chunk sized to 16128 B encoded to as much as 32258 B while CBOR
+     * still wrote a `ByteArray` as an array of integers (#2150). Since #2160 the two units differ by
+     * a 1–5 byte header rather than by a factor, and [snapshotSliceBytes] converts between them.
      *
      * **Why the reserve is measured and not [HEADER_BUDGET] (#2720).** [RaftMessage.InstallSnapshot]
      * carries `config: ConfigPayload?` — a [ClusterConfig] of consumer-supplied [NodeId]s — on *every*
      * chunk, deliberately, so an installer can adopt the membership whichever chunk it finalizes on. A
      * flat 256 B cannot cover that and no bound on anything the library controls can make it: five
-     * twenty-character ids cost 309 B in a simple payload and 445 B in a joint one at the plausibility
-     * ceiling, against an envelope of 175 B with no config at all. Every full chunk was therefore
+     * twenty-character ids cost 308 B in a simple payload and 444 B in a joint one at the plausibility
+     * ceiling, against an envelope of 174 B with no config at all. Every full chunk was therefore
      * minted over the transport's budget, refused at [SeamRaftTransport.sendTo] (which must swallow
      * `PayloadTooLarge`), never acked — so [SnapshotSender] never advanced that peer's offset and the
      * leader re-sent the identical frame forever. A follower needing a snapshot could never be caught
@@ -2284,26 +2286,29 @@ internal class RaftEngine(
      * existing chunking tests were calibrated against — while a config-carrying snapshot is charged
      * what [snapshotChunkReserve] measures around its actual membership.
      *
-     * **Correctness does not rest on that floor, and nothing pins it.** [snapshotChunkReserve] is
-     * already the true worst case, so dropping the `maxOf` would leave every frame inside the budget.
-     * The floor changes two things, neither of them safety. It makes config-free chunks smaller (1920
-     * raw bytes rather than 1960 at a 4 KiB budget), which is why no test reds on its removal. And it
-     * **decides the refusal** for a config-free snapshot at budgets from 177 B to 257 B: the measured
-     * config-free reserve is 175 B, so a one-byte chunk fits from 177 B, but the floor charges 256 B
-     * and refuses everything below 258 B — a transfer that used to progress there, one byte per
-     * chunk, before the refusal existed. No test sits in that band either. The floor is kept for
+     * **Correctness does not rest on that floor.** [snapshotChunkReserve] is already the true worst
+     * case, so dropping the `maxOf` would leave every frame inside the budget. The floor changes two
+     * things, neither of them safety. It makes config-free chunks smaller — 3838 raw bytes rather than
+     * 3920 at a 4 KiB budget — and that stride is now pinned
+     * (`InstallSnapshotTest.aChunkIsSizedToTheWireBudget_notTheRawOne`), so removing the floor reds.
+     * And it **decides the refusal** for a config-free snapshot at budgets from 175 B to 256 B: the
+     * measured config-free reserve is 174 B, so a one-byte chunk fits from 175 B, but the floor charges
+     * 256 B and refuses everything up to it — a transfer that used to progress there, one byte per
+     * chunk, before the refusal existed. No test sits in that band. The floor is kept for
      * compatibility — the existing chunking tests' arithmetic — and as the one number a reader of
-     * [HEADER_BUDGET] may still rely on. Stated here so a future reader does not mistake an unpinned
-     * constant for an unverified one.
+     * [HEADER_BUDGET] may still rely on.
      *
-     * **Why the reserve is the whole probe frame here, where the propose lane subtracts its empty
-     * payload.** [checkProposeFitsTransport] measures the command's *encoded* size and compares it to
-     * `budget − reserved`, so the payload array's own header is inside the measured half. This lane
-     * has no bytes to measure yet — it must choose a slice *before* there are any — so it converts a
-     * raw count through `CBOR_BYTE_EXPANSION` (deleted by #2160), which accounted for the per-element cost and nothing
-     * else. The array header has nowhere else to live but the reserve, and a reserve short by its
-     * width produces a frame over budget on every chunk, forever. Pinned by
-     * `SnapshotEnvelopeReserveTest.theReserveMustIncludeTheChunkArraysOwnHeader`.
+     * **Why the slice is sized in closed form here, where the propose lane measures.**
+     * [checkProposeFitsTransport] measures the command's *encoded* size, header included, and compares
+     * it to `budget − reserved`, so it never has to know what the header costs. This lane has no bytes
+     * yet — it must choose a slice *before* there are any — so it computes the header instead, in
+     * [snapshotSliceBytes]: strip the one-byte header the empty-payload probe carries, and charge the
+     * header of the whole window that is left. Merely dropping the old divisor would have charged the
+     * empty payload's header against a chunk that carries a wider one, putting every full chunk 1–4 B
+     * over budget at the plausibility ceiling — invisible to any assertion with slack, which is why
+     * `SnapshotEnvelopeReserveTest.aSliceAtThePlausibilityCeilingFitsTheBudgetWithNoSlack` checks it
+     * with none. Both of [SnapshotSender.nextChunk]'s checks — against the caller's record before the
+     * load and against the loaded meta after it — call this, so they cannot disagree on the form.
      *
      * **Why a refusal, and why there is no `coerceAtLeast(0)` escape.** This used to floor at 1,
      * because a zero-byte chunk would never terminate a transfer. That floor is right for its original
@@ -2351,29 +2356,19 @@ internal class RaftEngine(
      * wire — the quantity [chunkBytes] holds back, **measured** around the snapshot's actual
      * membership rather than assumed to be [HEADER_BUDGET] (#2720).
      *
-     * **Why an empty payload, and the codec property that makes it sound.** CBOR is definite in
-     * structure and every enclosing header here is a function of element *count*, so the envelope's
-     * cost is additive in the payload — `frame(data) == reserve − wire(empty) + wire(data)`. The half
-     * that is not merely structural, and that this rests on entirely, is that `raftCbor` renders a
-     * [ByteArray] as an **indefinite-length array** (`0x9F` … `0xFF`), whose wrapper is a constant two
-     * bytes *at every length*. That length-independence is what lets a measurement taken with no data
-     * stand in for a full chunk, and it is what makes the probe `O(|config|)` rather than a second
-     * `O(chunk)` encode.
-     *
-     * ⚠ **A codec change that gives the payload a length-dependent header invalidates this, silently.**
-     * `@ByteString` framing (#2160) replaces the wrapper with a real CBOR byte string whose header
-     * steps 1 → 2 → 3 → 5 bytes across payload lengths 24 / 256 / 65536, so an empty-payload probe
-     * would charge the *narrowest* header while every real chunk carries a wider one, and the wedge
-     * above returns deterministically at every budget. Worse, the [HEADER_BUDGET] floor would absorb
-     * the difference at the budgets this module's tests use, so it would land green. Whoever lands
-     * that change owns re-deriving the arithmetic — strip the empty payload's header from the
-     * measurement, spend the budget on the wire quantity, then subtract the header of the *whole*
-     * remaining window, which is safe because the step function is monotone.
-     * `SnapshotEnvelopeReserveTest.theWireWrapperAroundAChunkIsLengthIndependent` reds when the
-     * premise goes, and so does the propose-shape arm of `theReserveMustIncludeTheChunkArraysOwnHeader`
-     * — but only because both encode with this file's [raftCbor] rather than a codec of their own.
-     * Measured with `alwaysUseByteString = true` set here: 5 of 8 and 5 of 10 of their checks red.
-     * Measured again with the suite on a restated `Cbor`: neither reddened, so do not give it one.
+     * **Why an empty payload, and what it does not measure.** CBOR is definite in structure and every
+     * enclosing header here is a function of element *count*, so the envelope's cost is additive in
+     * the payload — `frame(data) == reserve − wire(empty) + wire(data)` — which is what makes the
+     * probe `O(|config|)` rather than a second `O(chunk)` encode. What the empty payload does **not**
+     * stand in for is the payload's own header: under [raftCbor]'s byte-string framing (#2160) that
+     * steps 1 → 2 → 3 → 5 bytes across lengths 24 / 256 / 65536, and the probe carries the narrowest.
+     * So this number is not the slice's reserve on its own: [snapshotSliceBytes] strips the empty
+     * header back out and charges the header of the whole window instead. Using it directly — the
+     * shape this lane had while CBOR wrote a `ByteArray` as an indefinite-length array with a constant
+     * two-byte wrapper — puts every full chunk 1–4 B over budget, and the [HEADER_BUDGET] floor hides
+     * that at the budgets most tests use. `SnapshotEnvelopeReserveTest` pins the sizing with no slack,
+     * and it can only do so because it encodes with this file's [raftCbor]: a restated `Cbor` stayed
+     * green through #2160's codec change (measured), so do not give it one.
      *
      * **Why the widest `Long`s.** `offset` grows across the very transfer this reserve bounds, and
      * `term` / `lastIncludedIndex` / `round` move on their own; charging [MAX_PLAUSIBLE_INDEX] /
@@ -4562,20 +4557,24 @@ internal class RaftEngine(
          *
          * One constant serves all three because the envelopes carry the same *kind* of thing: a handful
          * of `Long`s (`term`, `prevLogIndex` / `lastIncludedIndex`, `leaderCommit` / `offset`, `round`)
-         * around opaque bytes. Measured (`:kuilt-raft` commonTest, `raftCbor`): an entry-less
-         * `AppendEntries` encodes to 126 B and a config-free `InstallSnapshot` with no data to 128 B
-         * on a fresh log, and the leading entry's own `index` / `term` / `dedupKey` is another 60 B for
-         * a short [ClientId]. Deliberately generous: a byte of framing reserved and not needed costs a
-         * byte of payload, while one that falls short costs a silently dropped frame the sender
-         * believed it had sized to fit.
+         * around opaque bytes. Measured (`:kuilt-raft` commonTest, `raftCbor`, term 1 and indices at
+         * 0 or 1): an entry-less `AppendEntries` encodes to 119 B and a config-free `InstallSnapshot`
+         * with no data to 127 B on a fresh log, and a leading entry's own `index` / `term` /
+         * `dedupKey` is another 79 B for a 23-character [ClientId]. Deliberately generous: a byte of
+         * framing reserved and not needed costs a byte of payload, while one that falls short costs a
+         * silently dropped frame the sender believed it had sized to fit.
          *
          * ⚠ **The `InstallSnapshot` figure is a *fresh-log* number, and `offset` is the field that
-         * grows across the very transfer this reserve bounds.** The same config-free frame costs 167 B
-         * at `offset = 0` once `term` / `lastIncludedIndex` / `round` are at their ceilings, 171 B at a
-         * 2 GiB offset, and 175 B at [MAX_PLAUSIBLE_INDEX] — so a reader taking 128 B as the worst case
+         * grows across the very transfer this reserve bounds.** The same config-free frame costs 166 B
+         * at `offset = 0` once `term` / `lastIncludedIndex` / `round` are at their ceilings, 170 B at a
+         * 2 GiB offset, and 174 B at [MAX_PLAUSIBLE_INDEX] — so a reader taking 127 B as the worst case
          * is reading a number that only holds before the transfer starts. Still under 256, so this
          * constant survives as a floor for the config-free case; [chunkBytes] charges
          * [snapshotChunkReserve] at the ceilings for exactly this reason.
+         *
+         * **It is a reserve for the envelope around an *empty* payload, header included.** A payload's
+         * byte-string header steps with its length (#2160), so what a chunk's own header costs is
+         * charged separately, by [snapshotSliceBytes]; it does not ride inside this number.
          *
          * **This is a published floor, not a sufficient reserve, and the difference is load-bearing
          * (#2156).** It was written as though 256 B covered every envelope it is spent on. It does

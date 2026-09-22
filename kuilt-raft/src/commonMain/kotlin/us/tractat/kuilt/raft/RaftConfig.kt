@@ -92,9 +92,10 @@ import kotlin.time.Duration.Companion.milliseconds
  *   §7 InstallSnapshot chunk. A fabric with a tighter framing limit shrinks chunks
  *   automatically: when the transport publishes a [RaftTransport.maxPayloadBytes], the
  *   engine takes the lesser of this and what that budget leaves once the envelope reserve
- *   is paid. Raw and wire bytes are not the same unit and never were: they differed by up
- *   to a factor of two until #2160, and since it by a 1–5 byte CBOR byte-string header
- *   that the reserve absorbs (#2150).
+ *   and the chunk's own length header are paid. Raw and wire bytes are not the same unit
+ *   and never were: they differed by up to a factor of two until #2160, and since it by a
+ *   1–5 byte header that steps with the chunk's length, which the engine charges for
+ *   explicitly rather than hoping the envelope reserve covers it (#2150).
  * @param snapshotTotalCeiling Upper bound on the bytes a follower will accumulate
  *   reassembling one §7 snapshot. [snapshotChunkCeiling] bounds a single chunk; this
  *   bounds their **sum**. The sender chooses `done`, so without it a peer that keeps
