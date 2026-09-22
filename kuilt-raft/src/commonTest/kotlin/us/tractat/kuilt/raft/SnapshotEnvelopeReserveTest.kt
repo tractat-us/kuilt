@@ -276,9 +276,10 @@ class SnapshotEnvelopeReserveTest {
      * roughly twice as large.
      *
      * Worth its own arm rather than folding into the one above because a cluster whose steady-state
-     * config fits the budget can still be wedged for the duration of a membership change — and a
-     * snapshot taken during one is stamped joint, so the transfer that installs it carries the wider
-     * payload on every chunk.
+     * config fits the budget can still be wedged by a snapshot cut during a membership change. That
+     * snapshot is stamped joint, keeps the stamp after the change commits, and so every chunk of every
+     * transfer that installs it carries the wider payload until the application cuts a newer snapshot
+     * past the change.
      */
     @Test
     fun aJointConfigOnTheChunkNeverMintsAnOverBudgetFrame() = raftRunTest {
@@ -385,6 +386,10 @@ class SnapshotEnvelopeReserveTest {
      * So the refusal is a metric plus a log, the shape [RaftMetric.SnapshotRejectedSizeCeiling]
      * already uses for the receiver-side analogue of this. The metric is the assertable half —
      * `kuilt-raft`'s tests are `commonTest` with no log-capture backend on Kotlin/Native or wasmJs.
+     *
+     * The snapshot here is cut at the joint entry *after* `changeMembership` has returned, which is
+     * after the settled `Simple` config committed — so these refusals, still naming the joint
+     * envelope, are also the receipt that a joint-config refusal does not clear when the change does.
      *
      * ### What proves the rig fired
      *

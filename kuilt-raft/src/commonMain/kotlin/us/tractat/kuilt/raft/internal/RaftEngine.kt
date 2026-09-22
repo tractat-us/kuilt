@@ -2327,19 +2327,21 @@ internal class RaftEngine(
      * while both stay lazy — neither builds the string unless its level is enabled. Mirrors
      * [snapshotCeilingDiagnostic].
      *
-     * Names the two numbers an operator can actually move, and the third thing that moves on its own:
-     * a joint configuration carries two [ClusterConfig]s, so a cluster whose settled membership fits
-     * can still be stranded for the duration of a membership change, and that case clears without
-     * intervention.
+     * Names the two numbers an operator can actually move, and the third remedy, which is the
+     * application's: a joint configuration carries two [ClusterConfig]s, so a cluster whose settled
+     * membership fits can still be stranded by a snapshot cut mid-change. That does **not** clear when
+     * the change commits — [onCompact] stamps a snapshot's config once, at the cut, and nothing
+     * re-stamps it — so the text names the one thing that does: a new snapshot cut past the change.
      */
     private fun snapshotEnvelopeDiagnostic(peer: NodeId, reserved: Int, wireCap: Int): String =
         "sendSnapshotChunk($peer): REFUSED — the InstallSnapshot envelope costs $reserved bytes and the " +
             "transport publishes maxPayloadBytes=$wireCap, so no chunk can carry any state bytes at all. " +
             "$peer cannot be caught up until one of those moves: raise the transport's payload budget " +
             "above $reserved with room for a chunk, or shorten the NodeIds — the envelope is dominated by " +
-            "the snapshot's ConfigPayload, which rides on every chunk. A joint configuration carries two " +
-            "ClusterConfigs and costs roughly twice a simple one, so a refusal that appears at the start " +
-            "of a membership change and stops at the end needs no action (#2720)."
+            "the snapshot's ConfigPayload, which rides on every chunk. A snapshot cut during a membership " +
+            "change carries a joint config (two ClusterConfigs, roughly twice the cost) and keeps it after " +
+            "the change commits; if the settled membership fits, publish a new snapshot cut past the " +
+            "change to re-stamp it (#2720)."
 
     /**
      * Sends the next snapshot chunk to [peer], resuming its in-flight transfer from the peer's acked

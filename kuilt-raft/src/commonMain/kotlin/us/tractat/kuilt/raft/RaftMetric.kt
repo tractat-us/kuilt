@@ -174,9 +174,15 @@ public sealed interface RaftMetric {
      * **What to do about a standing one.** Raise the transport's payload budget above
      * [reservedBytes] with room for a chunk, or shorten the [NodeId]s: the envelope is dominated by
      * the config's node ids, and five twenty-character ids already cost more than the 256 B the
-     * engine's flat reserve used to assume. A joint configuration carries two `ClusterConfig`s and
-     * so costs roughly twice a simple one — a cluster that only exceeds the budget *during* a
-     * membership change will show this metric appear and then stop of its own accord.
+     * engine's flat reserve used to assume.
+     *
+     * **A refusal caused by a joint configuration does not clear when the change commits.** A joint
+     * configuration carries two `ClusterConfig`s and so costs roughly twice a simple one. The envelope
+     * is measured around the **stored snapshot's** config, which is stamped when the snapshot is cut
+     * and never re-stamped afterwards — so a snapshot cut in the middle of a membership change keeps
+     * its joint payload after the settled `Simple` config commits. What clears it is the application
+     * publishing a new snapshot cut at or past the entry that settled the change; for a cluster whose
+     * settled membership fits the budget, that is the only remedy needed.
      *
      * @property peer the follower that cannot be caught up.
      * @property reservedBytes what the engine measured the envelope to cost, charged at the widest
