@@ -118,6 +118,25 @@ internal class RaftEngine(
     identity: ClientIdentity = ClientIdentity.Auto,
 ) : RaftNode {
 
+    // ── Bootstrap shape (#2676) ───────────────────────────────────────────────
+    // First in the class body, so it runs before any field initializer and before the `init` block that
+    // launches the actor (#1077): a refused bootstrap builds nothing, and every construction path gets it.
+    init {
+        // A bootstrap with no voters boots with [onMessage]'s §5.2 gate unarmed until a config seats
+        // voters, the carve-out a joiner needs to catch up. Any voterless shape would join that way, so
+        // the exposure is the same for all of them; what this admits is only the one that says it is
+        // joining (this node among the learners). That keeps the learner seed the one voterless
+        // bootstrap, and turns the likelier way to reach the others, a roster computed as empty or a
+        // wrong node id, into a loud failure rather than a node that boots unarmed.
+        require(bootstrapConfig.voters.isNotEmpty() || transport.selfId in bootstrapConfig.learners) {
+            "RaftNode bootstrap $bootstrapConfig has no voters and does not name ${transport.selfId.value} " +
+                "among its learners. Refused: no voters and no learners, or no voters with learners that " +
+                "do not include this node — the usual cause is a roster computed as empty or the wrong " +
+                "node id. Seat at least one voter, or, if this node is joining, pass a learner seed such as " +
+                "ClusterConfig(voters = emptySet(), learners = setOf(${transport.selfId.value}))."
+        }
+    }
+
     // ── Raft §8 client-serial dedup ───────────────────────────────────────────
     /** Whether the caller supplied a stable durable id (collision ⇒ fail loud) vs an auto id (re-mint). */
     private val isDurableId: Boolean = identity is ClientIdentity.Durable
