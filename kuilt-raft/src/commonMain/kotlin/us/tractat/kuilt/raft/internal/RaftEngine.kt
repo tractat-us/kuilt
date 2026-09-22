@@ -118,6 +118,39 @@ internal val raftCbor = Cbor {
 }
 
 /**
+ * What an **empty** opaque payload costs on the wire under [raftCbor]: the byte-string header of a
+ * zero-length payload, and nothing else.
+ *
+ * Derived from the codec rather than written as `1`, so a codec change moves it rather than
+ * contradicting it. [byteStringHeaderBytes]`(0)` restates the same number from the CBOR spec; the two
+ * agreeing is pinned by `SnapshotEnvelopeReserveTest`.
+ */
+internal val EMPTY_PAYLOAD_WIRE_BYTES: Int = raftCbor.encodeToByteArray(ByteArraySerializer(), ByteArray(0)).size
+
+/**
+ * The CBOR byte-string header [raftCbor] writes in front of an opaque payload of [length] bytes: the
+ * length's own encoding under major type 2 (RFC 8949 §3.1), which steps 1 → 2 → 3 → 5 bytes at
+ * 24, 256 and 65536. No `ByteArray` is long enough to need the 9-byte form.
+ *
+ * Monotone in [length], which is the property [snapshotSliceBytes] rests on. A non-positive [length]
+ * is not a payload anyone can send, and gets the narrowest header so the arithmetic above it stays
+ * total. Pinned against the codec at every step by `SnapshotEnvelopeReserveTest`.
+ */
+internal fun byteStringHeaderBytes(length: Int): Int = when {
+    length < 24 -> 1
+    length < 256 -> 2
+    length < 65_536 -> 3
+    else -> 5
+}
+
+/**
+ * The raw state bytes one `InstallSnapshot` chunk may carry inside a [wireCap]-byte frame budget,
+ * given the [reserve] its envelope costs around an **empty** payload. Zero or less means no chunk
+ * fits at all.
+ */
+internal fun snapshotSliceBytes(wireCap: Int, reserve: Int): Int = wireCap - reserve
+
+/**
  * How long a run of refused leader→peer frames has to get before [noteRefusedLeaderFrame]
  * calls it a wedge (#1898).
  *
@@ -2287,7 +2320,7 @@ internal class RaftEngine(
     private fun chunkBytes(peer: NodeId, config: ConfigPayload?): Int? {
         val wireCap = transport.maxPayloadBytes ?: return raftConfig.snapshotChunkCeiling
         val reserved = maxOf(HEADER_BUDGET, snapshotChunkReserve(config))
-        val rawFromWire = (wireCap - reserved).coerceAtLeast(0)
+        val rawFromWire = snapshotSliceBytes(wireCap, reserved)
         if (rawFromWire < 1) {
             reportSnapshotChunkEnvelopeOverBudget(peer, reserved, wireCap)
             return null
