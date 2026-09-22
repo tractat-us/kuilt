@@ -1,6 +1,7 @@
 # Getting started
 
-Connect peers, share data, then add strict ordering only where needed. This page walks through that in four steps, adding one kuilt module at a time without changing your app code.
+Connect two devices. Give them a shared chat, then a game with turns.
+Four steps, one new piece of kuilt at a time.
 
 ## Step 1: Two peers over WebSocket
 
@@ -67,7 +68,7 @@ implementation("us.tractat.kuilt:kuilt-crdt")
 ```
 { src="../../kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt" include-symbol="sampleRgaChatReplicator" }
 
-→ [Replication](crdt-overview.md)
+→ [Replicated Data](crdt-overview.md)
 
 ---
 
@@ -87,7 +88,7 @@ implementation("us.tractat.kuilt:kuilt-game")
 ```
 { src="../../kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt" include-symbol="sampleTurnSequencer" }
 
-→ [Consensus and leader election](raft.md)
+→ [Consensus](raft.md)
 
 ---
 

@@ -1,9 +1,12 @@
-# Replication
+# Replicated Data
 
-Replication keeps your app's shared state — counters, lists, maps, documents — in sync across devices, even when people edit at the same time or spend time offline.
-`kuilt-crdt` gives you data structures that merge those edits automatically, so no change is quietly lost.
+Two people edit a shared list; one is offline. Neither should have to wait.
+kuilt gives each device a copy and merges their changes when they reconnect.
 
-Think of each update as a quilt patch: patches can arrive in different orders and still sew into the same final pattern.
+Updates can arrive out of order and still sew into the same final pattern.
+Choose the merge rules that fit your data.
+
+## How the copies agree
 
 The technical name for these structures is **CRDTs** (Conflict-free Replicated Data Types): any two peers that have seen the same set of updates will always hold the same value, regardless of arrival order.
 

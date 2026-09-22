@@ -1,12 +1,10 @@
 # Keeping the guide easy to enter
 
-Start with a person, a task, and a problem. Introduce technical names when
-the story needs them. Keep examples short; link to setup rather than repeat it.
+Follow [kuilt's voice](voice.md): a concrete story, compact prose, a little wit.
+These checks catch density; the voice guide sets the editorial target.
 
-Vale checks the README and all `Writerside/topics/*.md` in the required
-`doc-citations` CI job, including docs-only changes. This tooling step reports
-existing violations with `--no-exit`; the documentation follow-up fixes the
-baseline and removes that flag to make violations block merges.
+Vale gates the README and all `Writerside/topics/*.md` in the required
+`doc-citations` CI job, including docs-only changes.
 
 ## Limits
 
@@ -31,7 +29,7 @@ limits and the entry jargon checks still apply.
 
 **Flesch–Kincaid grade** estimates difficulty from sentence length and syllables.
 Lower is easier. The report also shows **Flesch reading ease**: higher is easier.
-Only grade is used by the rules. Neither score measures accuracy or explains jargon.
+Only grade is gated. Neither score measures accuracy or explains jargon.
 
 Whole-page grades exclude code, headings, and table cells. Link labels count;
 link targets and Writerside source-inclusion directives do not. Sentence checks
@@ -59,14 +57,16 @@ CI puts the report in its job summary. `--no-global` excludes personal settings.
 
 ## Starting point
 
-Measured with Vale 3.22.0 on revision `034c7075`. These are
+Measured with Vale 3.22.0 on revision `034c7075`, before this pass. These are
 whole-page scores, so the README row includes setup and reference material.
 
-| Page | Reading grade | Reading ease |
-| --- | ---: | ---: |
-| Guide overview | 8.77 | 58.83 |
-| Warp | 8.90 | 60.14 |
-| Heddle | 9.74 | 61.03 |
-| README | 10.07 | 48.99 |
+| Page | Before: reading grade | Before: reading ease | After this pass: reading grade |
+| --- | ---: | ---: | ---: |
+| Guide overview | 8.77 | 58.83 | 4.34 |
+| Warp | 8.90 | 60.14 | 3.95 |
+| Heddle | 9.74 | 61.03 | 4.83 |
+| README | 10.07 | 48.99 | 9.70 |
 
+The lower entry scores come partly from moving detail into companion pages.
+Those pages keep short examples and explain the limits in more depth.
 For current numbers across the whole guide, run the report above.

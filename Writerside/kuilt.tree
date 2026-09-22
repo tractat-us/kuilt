@@ -105,9 +105,13 @@
 
     <toc-element toc-title="Playground">
         <toc-element topic="warp.md">
+            <toc-element topic="warp-jobs.md"/>
+            <toc-element topic="warp-planning.md"/>
             <toc-element topic="warp-compiler.md"/>
         </toc-element>
-        <toc-element topic="heddle.md"/>
+        <toc-element topic="heddle.md">
+            <toc-element topic="heddle-accounting.md"/>
+        </toc-element>
     </toc-element>
 
 </instance-profile>

@@ -73,14 +73,14 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 
 ## Guide: Consensus
 
-- [Consensus and Leader Election](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/raft.md)
+- [Consensus](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/raft.md)
 - [Picking a host](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/picking-a-host.md)
 - [Turn-based game bootstrap (kuilt-game)](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/game-bootstrap.md)
 - [Server-Cluster Topology](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/cluster-server-client.md)
 
 ## Guide: Replicated Data
 
-- [Replication](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/crdt-overview.md)
+- [Replicated Data](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/crdt-overview.md)
 - [GCounter](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/crdt-gcounter.md): Counters
 - [GCounterDouble](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/crdt-gcounterdouble.md): Counters
 - [PNCounter](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/crdt-pncounter.md): Counters
@@ -129,8 +129,11 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 ## Guide: Playground
 
 - [Warp](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/warp.md)
+- [Following a job](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/warp-jobs.md): Warp
+- [Planning the work](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/warp-planning.md): Warp
 - [The compiler node](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/warp-compiler.md): Warp
-- [Fair Share](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle.md)
+- [Fair share with Heddle](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle.md)
+- [Inside Heddle](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle-accounting.md): Fair share with Heddle
 
 ## Modules: Contract & core
 

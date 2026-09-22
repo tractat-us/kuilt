@@ -1,9 +1,8 @@
 # Quick start
 
-If you want to learn kuilt quickly, start with `InMemoryLoom`. It gives you two
-peers exchanging real `Seam` frames with no sockets, no radios, and almost no
-setup. It is ideal for tests and for building app behavior before choosing a
-real transport.
+Try both sides of a chat on one computer. `InMemoryLoom` connects the two
+peers with no sockets, no radios, and almost no setup. Build and test the
+app, then choose how real devices will connect.
 
 ## Host a session and broadcast a frame
 

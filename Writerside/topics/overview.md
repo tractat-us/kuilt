@@ -1,63 +1,52 @@
 # kuilt
 
-kuilt stitches peers together and keeps their shared data in sync — across WebSocket, LAN, Bluetooth, and WebRTC — without changing your app code when you swap connection paths.
+kuilt stitches peers together and keeps their shared data in sync—across
+the room or across the web.
 
-It is a Kotlin Multiplatform library (JVM, Android, iOS, macOS, wasmJs).
+One Kotlin library spans phones, browsers, and servers. Start with a link
+between two devices; add shared data and decisions as your app grows.
 
-## Building blocks — pick what you need
+## First, connect
 
-- **Network Fabric** — one API for devices to find each other and exchange messages.
-  kuilt calls this the network fabric (`Loom`/`Seam`).
-  Swap WebSocket for LAN discovery or Bluetooth without touching your app logic.
+A chat needs a path between people. Through a server or straight to a nearby
+phone, kuilt gives your app the same way to send and receive. Each kind of
+link is a **fabric**.
 
-- **Replicated Data** — shared data stays in sync, even when devices edit offline or at the same time.
-  Under the hood this uses CRDT data types such as `LWWMap`, `ORSet`, `Rga`, and `JsonCrdt` from `kuilt-crdt`.
-  Add `Quilter` to propagate changes live over a `Seam`. For large sessions, a `GossipSeam` keeps the cost flat as peers grow.
+[Connect two devices](getting-started.md), or
+[try it on one computer](quick-start.md) with no network setup.
 
-- **Consensus** — when every peer must agree on one order of decisions (turns in a game, locks, durable steps), this keeps one leader and everyone aligned.
-  Under the hood this is `kuilt-raft`. `TurnSequencer` (from `kuilt-game`) wraps it for turn-based games.
+## Then, share what changes
 
-- **Observability** — see what your app is doing on real devices, even ones that were offline.
-  It records three kinds of note — **traces** (how long something took), **metrics** (running counts and levels), and **logs** (text lines) — saves them on the device first, and delivers them with no duplicates once the network returns.
-  Under the hood this is `kuilt-otel`.
+Now both people send at once. The chat needs both messages, even if one
+arrives late. Shared lists, counts, and notes have the same need.
 
-## Pick by the guarantee you need
+[Replicated Data](crdt-overview.md) gives each device a copy that merges
+changes when they can talk again. Choose the merge rules that fit your data.
 
-- **Connect and send bytes** → add a fabric only.
-- **Shared state that survives offline edits and concurrent updates** → add Replicated Data.
-- **Strict turn order or globally-agreed decisions** → add Consensus on top.
+## Agree when order matters
 
-Observability is orthogonal to those three — turn it on whenever you want to see what your app is doing on real devices, at any guarantee level.
+A game adds a wrinkle: two players cannot both take the next turn.
+They need one agreed sequence of moves.
 
-Start with the weakest guarantee that keeps your product correct. Add stronger guarantees only where needed.
+[Consensus](raft.md) keeps that sequence. Use it where the group must agree
+before anyone acts.
 
-→ [Getting started: two peers, one session](getting-started.md)
+## Find out what happened
 
-## How it fits together
+When an app goes wrong on a phone with no signal, you still need the story.
+kuilt can save notes on the device and send them when the network comes back.
 
-Think of a quilt: a **loom** creates sessions, a **seam** is one peer's view of a live session, and a **swatch** is one frame of bytes. Every fabric — WebSocket, TCP, Network.framework on Apple devices, Nearby on Android, WebRTC in the browser — implements these three types. Your app code never deals with socket APIs, Bluetooth internals, or peer-connection objects directly.
+[Observability](observability.md) follows those notes from the device to
+your dashboard. [Testing](testing.md) shows how to try failures on your own
+computer.
 
-Every peer in a session uses the same `Seam` interface — there is no client/server split at this layer. The same app code runs with two peers or twenty, and over relay or direct links.
+## Keep going
 
-## Modules at a glance
+Use the parts you need on their own. See
+[how connections work](contract.md), [choose a connection](fabrics.md), or
+[browse the modules](modules.md) when you are ready to build.
 
-| Module | What it gives you |
-|--------|-------------------|
-| `kuilt-core` | The contract (`Loom`/`Seam`/`Swatch`), `InMemoryLoom` reference impl, `MuxSeam` + `NamedMux` channel splitters |
-| `kuilt-crdt` | Replication data structures (`GCounter`, `ORSet`, `LWWMap`, `JsonCrdt`, …) |
-| `kuilt-quilter` | Live replication over a `Seam`: `Quilter` propagates deltas and merges inbound changes |
-| `kuilt-raft` | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer |
-| `kuilt-game` | Turn-based game facade: `gameHost`/`gameJoin`/`gameNode` → `GameSession`, `TurnSequencer`, `SpeculativeSequencer` |
-| `kuilt-websocket` | Ktor WebSocket fabric (`KtorClientLoom` + `KtorServerLoom`) |
-| `kuilt-otel` | Offline-first telemetry: record logs, metrics, and traces on any device; they sync up when the network returns, with no duplicates |
-
-→ [All modules](modules.md) — the wider list, including the other fabrics (mDNS, [Network.framework](nw.md), Nearby, WebRTC), gossip, dealing, clustering, liveness, and sessions.
-
-**Beyond the core:** the [Observability](observability.md) page walks the whole
-telemetry path — record on any device, survive being offline, and deliver to your
-dashboard with no duplicates — and the [Warp](warp.md) page covers an experimental
-way to spread work across a roomful of devices.
-
-## What kuilt is not
-
-kuilt moves bytes between peers. It does not assign roles, manage membership lifecycles, or interpret your payload bytes. Those responsibilities belong to your app — or to `kuilt-session` when you need a `Room` with admit/leave semantics.
+In the **Playground**, we explore what else these parts can do.
+[Warp](warp.md) shares a pile of work across devices.
+[Heddle](heddle.md) gives each team its fair share of that work.
+These parts work today, but their APIs can still change.

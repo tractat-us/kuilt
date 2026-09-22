@@ -28,10 +28,10 @@ Shared state — counters, sets, maps, collaborative sequences — replicates by
 ## Partial-mesh gossip: O(N) → O(k)
 
 The cost above is per peer you actually talk to. On a full mesh every peer talks to
-every other one, so "per peer" means *all N−1 of them* — broadcast fan-out, and the
-acknowledgements Quilter tracks to garbage-collect, both grow with N. [Partial-mesh
-gossip](partial-mesh.md) caps that at a constant handful of neighbours **k** (≈ `ln N`,
-so 4–7 peers for tens-to-hundreds), and the costs stop tracking N:
+every other one, so "per peer" means *all N−1 of them*. Both broadcast fan-out
+and the acknowledgements Quilter tracks for garbage collection grow with N.
+[Partial-mesh gossip](partial-mesh.md) uses a smaller set of neighbours **k**
+(≈ `ln N`, so 4–7 peers for tens-to-hundreds). Per-peer costs then track k:
 
 - **Broadcast fan-out stays ≈ k.** A single broadcast disseminates across the whole
   overlay, but each node only floods to its ~k neighbours. Measured on the in-memory

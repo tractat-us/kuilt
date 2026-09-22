@@ -4,11 +4,10 @@
 [![CI](https://github.com/tractat-us/kuilt/actions/workflows/ci.yml/badge.svg)](https://github.com/tractat-us/kuilt/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-A Kotlin Multiplatform networking library — one codebase, every domain.
+One Kotlin codebase for phones, browsers, and servers.
 
-Kotlin Multiplatform lets you share application logic across servers, browsers,
-and phones. kuilt extends that to the parts of a connected app that are usually
-different on every platform:
+kuilt stitches peers together and keeps their shared data in sync. Connect
+a chat, share its messages, then add turn order for a game.
 
 ### One network fabric — server, web, and phone
 

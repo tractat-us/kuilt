@@ -530,10 +530,13 @@ before the upload.
 
 ### Readability checks
 
+Follow [kuilt's voice](docs/voice.md) across the repo: concrete stories, compact
+prose, a little wit, and depth as the reader needs it. Keep the character when
+simplifying; extra explanation must earn its space.
+
 The README and Writerside guide use Vale 3.22.0. Run
-`vale --no-global README.md Writerside/topics` after editing prose. CI currently
-reports existing violations without blocking; the documentation follow-up removes
-`--no-exit` to enforce them. Entry pages target reading grade 7,
+`vale --no-global README.md Writerside/topics` after editing prose; the same gate
+runs in the required `doc-citations` CI job. Entry pages target reading grade 7,
 practical guides grade 11, and deeper topics grade 13. README and practical-guide
 opening paragraphs have a separate grade-7 gate. See `docs/readability.md` for
 the exact scope, sentence limits, baseline measurements, and local commands.
