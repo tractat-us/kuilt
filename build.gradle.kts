@@ -6666,18 +6666,21 @@ val forbidLintFrontendSkew by tasks.registering {
 //
 // TWO INDEPENDENTLY-MOVING INPUTS FALSIFY IT, and today neither fails anything:
 //
-//   1. `kotlin.incremental.wasm=false` in `gradle.properties` — #1893's fix, which #1914 tracks
-//      REMOVING once a stable Kotlin carries the upstream ICE fix. Flip it and the set of IC
-//      directories that exist at all changes, so the measured population changes with it.
+//   1. Whether Kotlin/Wasm incremental compilation is on. `gradle.properties` leaves
+//      `kotlin.incremental.wasm` at Kotlin's default, which is ON: #1909 set it `false` to avoid
+//      #1893's ICE, and #1914 removed that line once 2.4.20 carried the upstream fix. Turn it off
+//      again — committed, or through a `-P`/ambient override — and the wasm link's IC cache under
+//      `<module>/build/klib/cache/` is never created, so the measured population changes with it.
 //   2. The Kotlin version. A release can change which task families keep IC state, or turn a new
 //      one on by default. The live example is Kotlin/Native link IC (`kotlin.incremental.native`):
 //      2.4.20-Beta2 defaulted it ON, which would have handed the NATIVE lane its own retained-IC
-//      surface, and 2.4.20 shipped with it OFF again — so the 2.4.20 re-measurement found the
-//      2.4.10 population unchanged. The next release can flip it back.
+//      surface, and 2.4.20 shipped with it OFF again — so the 2.4.20 re-measurement, still with wasm
+//      IC off, found the 2.4.10 population unchanged. The next release can flip it back.
 //
-// FAILS ON CHANGE, not on regression, exactly like `forbidLintFrontendSkew`. Re-enabling wasm IC is good
-// news and a Kotlin bump is routine; the point is that both silently invalidate a measurement
-// nobody re-runs, and the only cheap way to stop that being silent is to red on it.
+// FAILS ON CHANGE, not on regression, exactly like `forbidLintFrontendSkew`. Turning wasm IC off
+// again may be the right call if the ICE returns, and a Kotlin bump is routine; the point is that
+// both silently invalidate a measurement nobody re-runs, and the only cheap way to stop that being
+// silent is to red on it.
 //
 // DELIBERATELY NO MEASURED NUMBERS IN THE MESSAGES. Restating the survivor counts here would
 // reproduce the very rot this guard exists to catch, one level down — a number in a failure string
@@ -6750,8 +6753,13 @@ val forbidCleanGateMeasurementSkew by tasks.registering {
     inputs.property("catalogKotlinVersion", catalogKotlin)
     // The EFFECTIVE property as well as the committed line, because they fail in opposite directions
     // and neither subsumes the other: `~/.gradle/gradle.properties`, a `-P` flag or an
-    // `ORG_GRADLE_PROJECT_` env var can turn wasm IC back on without touching the repo, while an
-    // ambient override to `false` would mask the committed line having gone away.
+    // `ORG_GRADLE_PROJECT_` env var can turn wasm IC off without touching the repo, while an ambient
+    // override to `true` would mask a committed `kotlin.incremental.wasm=false`.
+    //
+    // ON means the property is absent (Kotlin's default) or reads as true the way the Kotlin Gradle
+    // plugin reads it, which is `String.toBoolean()`: measured on 2.4.20, `TRUE` creates the wasm
+    // link's IC cache and `yes` does not. Anything that reads as false reds. An explicit true is
+    // accepted because it builds the same population the paragraph measured.
     val effectiveWasmIc = providers.gradleProperty("kotlin.incremental.wasm").orElse("<unset>")
     inputs.property("effectiveWasmIncremental", effectiveWasmIc)
     val stamp = layout.buildDirectory.file("verification/forbid-clean-gate-measurement-skew.ok")
@@ -6766,47 +6774,52 @@ val forbidCleanGateMeasurementSkew by tasks.registering {
                 "depends on this guard, so while it is red the measurement build would stop here " +
                 "before compiling anything), and count survivors BY TASK FAMILY — confirming each " +
                 "surviving task actually shows `EXECUTED` in that run, since a task that did not " +
-                "run retains its state trivially and is not the finding.\n" +
+                "run retains its state trivially and is not the finding. Do NOT write into the " +
+                "wasm link's cache under `<module>/build/klib/cache/`: that IC reads every entry " +
+                "of its `version.<hash>/` directory as a library cache, so a planted file fails " +
+                "the link with an IC internal error and the run measures the sentinel instead of " +
+                "the build. Witness those directories without writing to them — inode and birth " +
+                "time per directory, inode and modification time per file.\n" +
                 "    2. Rewrite point (4) of the gate paragraph in `AGENTS.md` with the new " +
                 "population. No numbers are restated in this guard on purpose, so the paragraph is " +
                 "the single copy to keep true.\n" +
                 "    3. Decide whether `clean` can now be narrowed or must stay the sledgehammer. " +
                 "#1913 records why a path-keyed wipe rots — its own table named " +
-                "`<module>/build/klib/cache`, 37 directories when filed and 0 by the time anyone " +
-                "acted on it — so narrowing needs an argument, not merely a smaller population.\n" +
+                "`<module>/build/klib/cache`, which was 37 directories when filed, none while " +
+                "wasm IC was off, and back once #1914 turned it on again — so narrowing needs an " +
+                "argument, not merely a smaller population.\n" +
                 "    4. Re-point this guard at whatever is true afterwards."
         val committedWasmIc = java.util.Properties()
             .also { loaded -> propertiesFile.inputStream().use { stream -> loaded.load(stream) } }
             .getProperty("kotlin.incremental.wasm")
-        if (committedWasmIc != "false") {
+        if (committedWasmIc != null && !committedWasmIc.toBoolean()) {
             error(
-                "`gradle.properties` no longer declares `kotlin.incremental.wasm=false` (it now " +
-                    "declares " +
-                    (committedWasmIc?.let { "`kotlin.incremental.wasm=$it`" } ?: "no such property") +
-                    "), so point (4) of `AGENTS.md`'s pre-merge gate paragraph rests on a premise " +
-                    "that has moved.\n" +
-                    "  THIS IS PROBABLY GOOD NEWS: #1914 tracks removing that line once a stable " +
-                    "Kotlin carries the upstream ICE fix, and its removal is precisely the event " +
-                    "this guard exists to catch. With wasm incremental compilation back on there " +
-                    "are IC directories that did not exist when the paragraph was measured, so the " +
-                    "population it reports is no longer the population.\n" +
+                "`gradle.properties` now declares `kotlin.incremental.wasm=$committedWasmIc`, which " +
+                    "turns Kotlin/Wasm incremental compilation OFF, so point (4) of `AGENTS.md`'s " +
+                    "pre-merge gate paragraph rests on a premise that has moved.\n" +
+                    "  Point (4) was measured with wasm incremental compilation ON, Kotlin's " +
+                    "default, where the wasm link keeps an IC cache under " +
+                    "`<module>/build/klib/cache/`. With it off that cache is never created, so the " +
+                    "population the paragraph reports is no longer the population. If the flag is " +
+                    "back because the wasm ICE #1893 describes has returned, that may well be the " +
+                    "right call — the paragraph still has to move with it.\n" +
                     reMeasure,
             )
         }
         val effective = effectiveWasmIc.get()
-        if (effective != "false") {
+        if (effective != "<unset>" && !effective.toBoolean()) {
             error(
-                "`gradle.properties` declares `kotlin.incremental.wasm=false`, but the EFFECTIVE " +
-                    "Gradle property in this build is `$effective` — an override from " +
-                    "`~/.gradle/gradle.properties`, a `-P` flag, or an `ORG_GRADLE_PROJECT_` " +
-                    "environment variable.\n" +
+                "`gradle.properties` leaves Kotlin/Wasm incremental compilation on, but the " +
+                    "EFFECTIVE `kotlin.incremental.wasm` in this build is `$effective` — an " +
+                    "override from `~/.gradle/gradle.properties`, a `-P` flag, or an " +
+                    "`ORG_GRADLE_PROJECT_` environment variable.\n" +
                     "  Point (4) of `AGENTS.md`'s pre-merge gate paragraph was measured with wasm " +
-                    "incremental compilation OFF, so it does not describe the build running here, " +
+                    "incremental compilation ON, so it does not describe the build running here, " +
                     "and a gate run under this override proves something other than what the " +
                     "paragraph says it proves.\n" +
-                    "  THE FIX is to drop the override. If it is deliberate and permanent — #1914 " +
-                    "landing, say — make it a committed change to `gradle.properties`, which is " +
-                    "the arm of this guard that prints the re-measurement steps.",
+                    "  THE FIX is to drop the override. If it is deliberate and permanent, make it " +
+                    "a committed change to `gradle.properties`, which is the arm of this guard that " +
+                    "prints the re-measurement steps.",
             )
         }
         val applied = KotlinCatalogScanner.pluginVersion(catalogFile.readText())
@@ -6844,13 +6857,20 @@ val forbidCleanGateMeasurementSkew by tasks.registering {
                     "on by default in 2.4.20-Beta2 and off again in 2.4.20, so check its default " +
                     "in the new release before trusting the old population.\n" +
                     reMeasure + "\n" +
-                    "    5. Set `cleanGateMeasuredKotlin` in `build.gradle.kts` to $catalogKotlin.",
+                    "    5. Set `cleanGateMeasuredKotlin` in `build.gradle.kts` to $catalogKotlin.\n" +
+                    "    6. Re-run #1914's wasm ICE reproducer on the new Kotlin: add a `kotlin.text` " +
+                    "call to `commonTest` in a few modules, link their wasm test executables, delete " +
+                    "the call, and link again. Wasm IC is on only because a Kotlin release fixed that " +
+                    "ICE, and CI's cold runners never keep an IC cache, so no CI job would see it " +
+                    "come back.",
             )
         }
         val out = stamp.get().asFile
         out.parentFile.mkdirs()
         out.writeText(
-            "ok — `kotlin.incremental.wasm` is `false` both in `gradle.properties` and effectively, " +
+            "ok — Kotlin/Wasm incremental compilation is on (`kotlin.incremental.wasm` is " +
+                (committedWasmIc?.let { "`$it`" } ?: "unset") + " in `gradle.properties` and " +
+                "`$effective` effectively), " +
                 "and this repo's Kotlin ($catalogKotlin, confirmed against catalog " +
                 "org.jetbrains.kotlin:kotlin-gradle-plugin:$applied) still matches the version point " +
                 "(4)'s sentinel measurement was taken on, so the gate paragraph's premises hold\n",
