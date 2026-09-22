@@ -186,8 +186,8 @@ class InstallSnapshotTest {
      * of integers: at the 16 KiB default ceiling the old formula sized a chunk to 16128 B, encoding to
      * as much as 32258 B, and reverting `chunkBytes()` alone left all 518 tests in this module green —
      * which is what this case was written to close. Byte-string framing makes the gap a 1–5 byte
-     * length header instead, absorbed by the 256 B reserve, so the division is gone and this test can
-     * no longer distinguish "sized in raw bytes" from "sized in wire bytes" at that magnitude.
+     * length header instead, which the engine charges explicitly (`snapshotSliceBytes`), so the
+     * division is gone and a factor-of-two error is no longer the one to look for here.
      *
      * What survives is two assertions. **No chunk this engine mints may exceed the budget its
      * transport published**, at a budget large enough that the reserve does not dominate — which reds

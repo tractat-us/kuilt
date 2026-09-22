@@ -75,11 +75,21 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.raft.RaftEngine")
  * and [RaftMessage.Forward.command]. With the flag those are real CBOR byte strings: the payload's
  * own length plus a 1/2/3/5-byte header, so the same 768 B costs 771 B.
  *
- * **This is a breaking wire change and was approved as one.** The two framings are different CBOR
- * major types, so a peer on either build refuses the other's frames outright rather than mis-reading
- * them — see `RaftWireGoldenVectorTest.aPreByteStringFrameIsRefusedRatherThanMisread`, which holds
- * the pre-change bytes and asserts exactly that. A cluster is upgraded by replacing every node, not
- * by rolling one at a time.
+ * **This is a breaking wire change, approved as one, and the break is total.** The two framings are
+ * different CBOR major types, so a payload-carrying frame is refused rather than mis-read. That alone
+ * would have left every payload-free frame — votes, heartbeats, responses, `TimeoutNow` —
+ * byte-identical across builds, and a mixed group would have elected leaders and then churned on
+ * every entry. So the same epoch gave every [RaftMessage] type a short explicit tag in place of its
+ * fully-qualified class name (the table is on [RaftMessage]), and **no frame from one build decodes
+ * on the other**, in either direction. `RaftWireGoldenVectorTest.aPre2160FrameIsRefusedInBothDirections`
+ * holds the pre-change bytes and asserts it.
+ *
+ * What a peer does with a frame it cannot decode depends on its build. From 0.7.3 on it is dropped
+ * in `RaftEngine.decodeInbound` and reported as [RaftTraceEvent.FrameUndecodable] (#2051). On 0.7.2
+ * and earlier the inbound collector caught only `ClosedSendChannelException`, so the first
+ * undecodable frame escapes into the node's scope and the node is dead until its process restarts.
+ * Either way a group is upgraded by replacing every node together, not by rolling one at a time —
+ * `kuilt-raft/module.md` says so to consumers.
  *
  * **Why the codec option and not `@ByteString` on the three fields.** Measured, the two produce
  * *byte-identical* output, so the choice is only about blast radius, and the annotation's is wider

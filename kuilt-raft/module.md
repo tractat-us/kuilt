@@ -41,18 +41,23 @@ scratch; it keeps nothing across a process exit.
 ## Every peer in a group runs the same version
 
 The peers in one group talk to each other in a private format, and that format is allowed
-to change between kuilt releases. So upgrade a group **all at once**, not one device at a
-time: a peer on a newer build and a peer on an older one cannot read each other's messages,
-and neither of them will pretend otherwise — each simply ignores what it cannot understand
-and reports it. A half-upgraded group therefore behaves like a group that has been cut in
-half by a broken network, which is a state Raft is designed to survive but not one you want
-to enter by accident.
+to change between kuilt releases. When it changes, a peer on the newer build and a peer on
+the older one cannot read **any** message the other sends — not some of them, all of them.
+So upgrade a group **all at once**, not one device at a time. A half-upgraded group behaves
+like a group cut in half by a broken network: a side that still holds a majority carries on,
+and the other side stops. Raft is built to survive that, but not to be put there on purpose.
 
-Concretely: the frames are refused rather than misread, and each refusal is reported as a
-`RaftTraceEvent.FrameUndecodable` naming the peer it came from. If you see those after a
-rollout, some peers are still on the old build.
+What a peer does with a message it cannot read depends on how old it is:
 
-The wire format last changed in #2160 (byte-string framing for opaque payloads).
+- **0.7.3 or later** drops it, and reports a `RaftTraceEvent.FrameUndecodable` naming the
+  peer it came from. If you see those after a rollout, some peers are still on the old build.
+- **0.7.2 or earlier** does not survive it. Its receive loop was only ready for the link
+  closing, so the first message it cannot read stops that node until its process restarts.
+
+The format last changed in #2160, which ships in the next 0.7 patch release. Opaque payloads
+became compact byte strings, and every message type got a short tag. The tags only ever
+change together, so a mixed group refuses every message rather than exchanging some — votes,
+say — and failing on the rest, which would let it elect leaders it can never use.
 
 ## Proposing from any peer
 
