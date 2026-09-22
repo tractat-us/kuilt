@@ -149,6 +149,7 @@ class SnapshotEnvelopeReserveTest {
     private fun sim(
         scope: TestScope,
         budget: Int,
+        wrapStorage: (NodeId, RaftStorage) -> RaftStorage = { _, storage -> storage },
         onMetric: ((NodeId, RaftMetric) -> Unit)? = null,
     ): RaftSimulation {
         val voterConfig = ClusterConfig(voters = voterIds.toSet())
@@ -166,7 +167,7 @@ class SnapshotEnvelopeReserveTest {
                 nodeScope.raftNode(
                     if (id == joinerId) joinerConfig else voterConfig,
                     transport,
-                    storage,
+                    wrapStorage(id, storage),
                     raftCfg,
                     onMetric = onMetric?.let { sink -> { metric -> sink(id, metric) } },
                 )
@@ -238,11 +239,12 @@ class SnapshotEnvelopeReserveTest {
             }
         }
         sim.settle()                                         // subscribe before the transfer starts
-        return Transfer(sim, behind, through, finalCommit, stamped, bigState, chunkOffsets)
+        return Transfer(sim, leaderId, behind, through, finalCommit, stamped, bigState, chunkOffsets)
     }
 
     private class Transfer(
         val sim: RaftSimulation,
+        val leaderId: NodeId,
         val behind: NodeId,
         val through: Long,
         val finalCommit: Long,
@@ -448,6 +450,73 @@ class SnapshotEnvelopeReserveTest {
             "rig: the transfer must complete once the budget is restored, or 'no chunk was sent' is " +
                 "indistinguishable from the leader having forgotten this peer",
         )
+    }
+
+    /**
+     * A refusal with no transfer in flight must be decided **before** the stored snapshot is loaded,
+     * not after loading it and throwing the copy away.
+     *
+     * The refusal repeats at every heartbeat divert, for every stranded peer, for as long as the
+     * budget stays short. `DurableStoreRaftStorage.loadSnapshot` returns a fresh copy of the whole
+     * snapshot, so a load per refusal is an `O(snapshot)` copy on the actor loop at the heartbeat
+     * interval. [InMemoryRaftStorage] hands back the same reference, which is why no other test in
+     * this module can see the cost — hence a counting wrapper, and a count rather than a timing.
+     *
+     * ### What proves the rig fired
+     *
+     * A zero is only evidence if the refusal fired and the counter can count. So the arm asserts
+     * both: the leader refused this peer more than once inside the window, and the counter sees the
+     * load the transfer makes once the budget is restored.
+     */
+    @Test
+    fun aRefusalWithNoTransferInFlightNeverLoadsTheStoredSnapshot() = raftRunTest {
+        val metrics = mutableListOf<Pair<NodeId, RaftMetric>>()
+        val loads = mutableMapOf<NodeId, Int>()
+        val sim = sim(
+            this,
+            BUDGET,
+            wrapStorage = { id, storage -> LoadCountingStorage(storage) { loads[id] = (loads[id] ?: 0) + 1 } },
+        ) { id, m -> metrics += id to m }
+        val t = snapshotStampedWithConfig(sim, wantJoint = true)
+        fun leaderLoads() = loads[t.leaderId] ?: 0
+        fun leaderRefusals() = metrics.count { (id, m) ->
+            id == t.leaderId && m is RaftMetric.SnapshotChunkEnvelopeOverBudget && m.peer == t.behind
+        }
+
+        t.sim.network.maxPayloadBytes = STARVED_BUDGET      // no transfer exists yet: the fresh-load path
+        val loadsBefore = leaderLoads()
+        t.sim.restart(t.behind)
+        val hb = fastRaftConfig().heartbeatInterval.inWholeMilliseconds
+        advanceTimeBy(hb * 4); runCurrent(); t.sim.settle()  // several divert rounds at the starved budget
+        val refusals = leaderRefusals()
+        val loadsWhileRefused = leaderLoads() - loadsBefore
+
+        assertTrue(
+            refusals > 1,
+            "rig: the leader must refuse ${t.behind} repeatedly inside the window, or zero loads is a " +
+                "statement about a leader that never tried; refusals=$refusals",
+        )
+        assertEquals(
+            0, loadsWhileRefused,
+            "a refused transfer must not load the stored snapshot: $refusals refusals cost " +
+                "$loadsWhileRefused loads, one O(snapshot) copy per heartbeat per stranded peer",
+        )
+
+        t.sim.network.maxPayloadBytes = BUDGET               // the tighter link leaves
+        t.sim.awaitCommit(t.finalCommit, on = setOf(t.behind))
+        assertTrue(
+            leaderLoads() - loadsBefore >= 1,
+            "rig: the counter must see the load the recovered transfer makes, or the zero above proves " +
+                "nothing about loads at all",
+        )
+    }
+
+    /** Counts [RaftStorage.loadSnapshot] calls and otherwise delegates to [inner] untouched. */
+    private class LoadCountingStorage(
+        private val inner: RaftStorage,
+        private val onLoad: () -> Unit,
+    ) : RaftStorage by inner {
+        override suspend fun loadSnapshot(): StoredSnapshot? = inner.loadSnapshot().also { onLoad() }
     }
 
     // ── Premises, over an independently constructed envelope ──────────────────
