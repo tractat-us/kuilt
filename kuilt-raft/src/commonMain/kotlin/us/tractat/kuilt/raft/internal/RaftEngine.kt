@@ -2337,11 +2337,14 @@ internal class RaftEngine(
      * while both stay lazy — neither builds the string unless its level is enabled. Mirrors
      * [snapshotCeilingDiagnostic].
      *
-     * Names the two numbers an operator can actually move, and the third remedy, which is the
-     * application's: a joint configuration carries two [ClusterConfig]s, so a cluster whose settled
-     * membership fits can still be stranded by a snapshot cut mid-change. That does **not** clear when
-     * the change commits — [onCompact] stamps a snapshot's config once, at the cut, and nothing
-     * re-stamps it — so the text names the one thing that does: a new snapshot cut past the change.
+     * Names the two numbers an operator can actually move, and what clears a joint-config refusal,
+     * which differs by state. A joint configuration carries two [ClusterConfig]s, so a cluster whose
+     * settled membership fits can still be stranded by a snapshot cut mid-change, and that does
+     * **not** clear when the change commits: [onCompact] stamps a snapshot's config once, at the cut,
+     * and nothing re-stamps it. With no transfer in flight, a new snapshot cut past the change clears
+     * it, since each attempt measures the stored snapshot. A transfer already in flight is sized on
+     * the snapshot it loaded, and [onCompact] never touches [snapshotSender] — so that one clears only
+     * when the budget recovers or a leadership change runs [SnapshotSender.abandonAll].
      */
     private fun snapshotEnvelopeDiagnostic(peer: NodeId, reserved: Int, wireCap: Int): String =
         "sendSnapshotChunk($peer): REFUSED — the InstallSnapshot envelope costs $reserved bytes and the " +
@@ -2350,8 +2353,9 @@ internal class RaftEngine(
             "above $reserved with room for a chunk, or shorten the NodeIds — the envelope is dominated by " +
             "the snapshot's ConfigPayload, which rides on every chunk. A snapshot cut during a membership " +
             "change carries a joint config (two ClusterConfigs, roughly twice the cost) and keeps it after " +
-            "the change commits; if the settled membership fits, publish a new snapshot cut past the " +
-            "change to re-stamp it (#2720)."
+            "the change commits. If no transfer to $peer was in flight, publishing a new snapshot cut past " +
+            "the change clears it; a transfer already in flight keeps its snapshot and clears only when " +
+            "the budget recovers or leadership changes (#2720)."
 
     /**
      * Sends the next snapshot chunk to [peer], resuming its in-flight transfer from the peer's acked

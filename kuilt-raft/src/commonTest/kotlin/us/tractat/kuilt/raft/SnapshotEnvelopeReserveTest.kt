@@ -281,8 +281,9 @@ class SnapshotEnvelopeReserveTest {
      * Worth its own arm rather than folding into the one above because a cluster whose steady-state
      * config fits the budget can still be wedged by a snapshot cut during a membership change. That
      * snapshot is stamped joint, keeps the stamp after the change commits, and so every chunk of every
-     * transfer that installs it carries the wider payload until the application cuts a newer snapshot
-     * past the change.
+     * transfer that installs it carries the wider payload. A newer snapshot cut past the change ends
+     * that only for transfers that start after it: one already in flight keeps the joint snapshot
+     * until it completes, the budget recovers, or leadership changes.
      */
     @Test
     fun aJointConfigOnTheChunkNeverMintsAnOverBudgetFrame() = raftRunTest {

@@ -178,11 +178,17 @@ public sealed interface RaftMetric {
      *
      * **A refusal caused by a joint configuration does not clear when the change commits.** A joint
      * configuration carries two `ClusterConfig`s and so costs roughly twice a simple one. The envelope
-     * is measured around the **stored snapshot's** config, which is stamped when the snapshot is cut
-     * and never re-stamped afterwards — so a snapshot cut in the middle of a membership change keeps
-     * its joint payload after the settled `Simple` config commits. What clears it is the application
-     * publishing a new snapshot cut at or past the entry that settled the change; for a cluster whose
-     * settled membership fits the budget, that is the only remedy needed.
+     * is measured around the config of the snapshot being **sent**, which is stamped when that
+     * snapshot is cut and never re-stamped afterwards — so a snapshot cut in the middle of a
+     * membership change keeps its joint payload after the settled `Simple` config commits. Which
+     * snapshot is being sent depends on whether [peer] had a transfer in flight when the budget
+     * dropped, and so does the remedy:
+     * - **No transfer in flight.** Each attempt measures the snapshot currently stored, so the
+     *   application publishing a new snapshot cut at or past the entry that settled the change clears
+     *   it. For a cluster whose settled membership fits the budget, that is the only remedy needed.
+     * - **A transfer in flight.** The transfer keeps the snapshot it started with, and a newer one
+     *   does not replace it. The refusal clears only when the budget recovers, or when leadership
+     *   changes — which abandons the transfer, so the next leader starts from its own stored snapshot.
      *
      * @property peer the follower that cannot be caught up.
      * @property reservedBytes what the engine measured the envelope to cost, charged at the widest
