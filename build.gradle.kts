@@ -6658,7 +6658,7 @@ val forbidLintFrontendSkew by tasks.registering {
 //
 // The #2471 / #2595 shape a third time, and this time the subject is not a tool's bundled frontend
 // but a measurement of this build's own behaviour. Point (4) of the pre-merge gate paragraph in
-// `CLAUDE.md` says `clean` must LEAD the mandated command because `--rerun-tasks` does not clear
+// `AGENTS.md` says `clean` must LEAD the mandated command because `--rerun-tasks` does not clear
 // Kotlin's incremental-compilation state, and backs that with a sentinel experiment: plant a file in
 // every Kotlin IC directory, run one `:kuilt-core:build --rerun-tasks`, count survivors BY TASK
 // FAMILY. That paragraph is the command every contributor and agent runs before arming auto-merge,
@@ -6669,9 +6669,11 @@ val forbidLintFrontendSkew by tasks.registering {
 //   1. `kotlin.incremental.wasm=false` in `gradle.properties` — #1893's fix, which #1914 tracks
 //      REMOVING once a stable Kotlin carries the upstream ICE fix. Flip it and the set of IC
 //      directories that exist at all changes, so the measured population changes with it.
-//   2. The Kotlin version. Kotlin/Native klib incremental compilation is on by default from
-//      2.4.20-Beta2, so the first move past the measured pin hands the NATIVE lane its own
-//      retained-IC surface — a task family the experiment never saw.
+//   2. The Kotlin version. A release can change which task families keep IC state, or turn a new
+//      one on by default. The live example is Kotlin/Native link IC (`kotlin.incremental.native`):
+//      2.4.20-Beta2 defaulted it ON, which would have handed the NATIVE lane its own retained-IC
+//      surface, and 2.4.20 shipped with it OFF again — so the 2.4.20 re-measurement found the
+//      2.4.10 population unchanged. The next release can flip it back.
 //
 // FAILS ON CHANGE, not on regression, exactly like `forbidLintFrontendSkew`. Re-enabling wasm IC is good
 // news and a Kotlin bump is routine; the point is that both silently invalidate a measurement
@@ -6684,14 +6686,18 @@ val forbidLintFrontendSkew by tasks.registering {
 //
 // EXACT MATCH on the Kotlin pin, not a `>`. Three reasons, in order of weight. The claim is not "IC
 // is retained above version X" but "at THIS version the surviving population is this one task
-// family", which a DOWNGRADE falsifies just as thoroughly as an upgrade. The boundary that actually
-// matters (2.4.20-Beta2) is a move WITHIN the 2.4 line, so any ordering comparison would have to
-// hard-code that boundary and would then rot beside the prose it protects. And exact match needs no
-// version-ordering semantics at all — `2.4.10`, `2.4.9` and `2.10.0` do not compare as strings, and
-// a hand-rolled comparator is one more thing to get wrong inside a required gate.
+// family", which a DOWNGRADE falsifies just as thoroughly as an upgrade. The boundaries that matter
+// move WITHIN a minor line — 2.4.20-Beta2 turned native link IC on and 2.4.20 turned it off again —
+// so any ordering comparison would have to hard-code a boundary and would then rot beside the prose
+// it protects. And exact match needs no version-ordering semantics at all — `2.4.10`, `2.4.9` and
+// `2.10.0` do not compare as strings, and a hand-rolled comparator is one more thing to get wrong
+// inside a required gate.
 //
 // WHAT IT CANNOT SEE: a backend that changes its IC layout without the version moving. Nothing
-// cheap can; the version pin is the proxy, and its exactness is what keeps the proxy honest.
+// cheap can; the version pin is the proxy, and its exactness is what keeps the proxy honest. Nor
+// does it watch `kotlin.incremental.native`, the native twin of the wasm flag it does watch: opting
+// in (committed, `-P` or ambient) adds `<module>/build/kotlin-native-ic-cache/`, which survives
+// `--rerun-tasks` just as the wasm link's state does and which `clean` removes.
 //
 // COSTS NOTHING AT CONFIGURATION TIME, unlike `forbidLintFrontendSkew`: it resolves no configuration and
 // opens no jar. It reads two committed files and one Gradle property, all in `doLast`.
@@ -6699,7 +6705,7 @@ val forbidLintFrontendSkew by tasks.registering {
 // The Kotlin version point (4)'s sentinel experiment was measured on. A LITERAL here on purpose:
 // per "Guard plumbing" above, a literal in this script is folded into the task-action
 // implementation hash, so editing it re-runs the guard instead of replaying a cached verdict.
-val cleanGateMeasuredKotlin = "2.4.10"
+val cleanGateMeasuredKotlin = "2.4.20"
 
 // The version the catalog entry `build-logic` actually applies Kotlin through resolves to. A
 // sibling of `AgpCatalogScanner` rather than a generalisation of it, for the reason given there (a
@@ -6729,7 +6735,7 @@ object KotlinCatalogScanner {
 
 val forbidCleanGateMeasurementSkew by tasks.registering {
     group = "verification"
-    description = "Fails when a premise of CLAUDE.md's `clean`-leads-the-gate measurement moves — the wasm IC flag or the Kotlin pin (#2692)."
+    description = "Fails when a premise of AGENTS.md's `clean`-leads-the-gate measurement moves — the wasm IC flag or the Kotlin pin (#2692)."
     // See "Guard plumbing" above: the stamp is what makes UP-TO-DATE possible (#1827). The verdict
     // is a pure function of two committed files and one Gradle property, all declared as inputs.
     val propertiesFile = rootDir.resolve("gradle.properties")
@@ -6756,10 +6762,12 @@ val forbidCleanGateMeasurementSkew by tasks.registering {
             "  THE FIX is to RE-MEASURE, then move the paragraph and this guard together:\n" +
                 "    1. Plant a sentinel file in every Kotlin incremental-compilation directory " +
                 "under the module build directories, run one `./gradlew :kuilt-core:build " +
-                "--rerun-tasks`, and count survivors BY TASK FAMILY — confirming each surviving " +
-                "task actually shows `EXECUTED` in that run, since a task that did not run retains " +
-                "its state trivially and is not the finding.\n" +
-                "    2. Rewrite point (4) of the gate paragraph in `CLAUDE.md` with the new " +
+                "--rerun-tasks -x forbidCleanGateMeasurementSkew` (the exclusion because `check` " +
+                "depends on this guard, so while it is red the measurement build would stop here " +
+                "before compiling anything), and count survivors BY TASK FAMILY — confirming each " +
+                "surviving task actually shows `EXECUTED` in that run, since a task that did not " +
+                "run retains its state trivially and is not the finding.\n" +
+                "    2. Rewrite point (4) of the gate paragraph in `AGENTS.md` with the new " +
                 "population. No numbers are restated in this guard on purpose, so the paragraph is " +
                 "the single copy to keep true.\n" +
                 "    3. Decide whether `clean` can now be narrowed or must stay the sledgehammer. " +
@@ -6775,7 +6783,7 @@ val forbidCleanGateMeasurementSkew by tasks.registering {
                 "`gradle.properties` no longer declares `kotlin.incremental.wasm=false` (it now " +
                     "declares " +
                     (committedWasmIc?.let { "`kotlin.incremental.wasm=$it`" } ?: "no such property") +
-                    "), so point (4) of `CLAUDE.md`'s pre-merge gate paragraph rests on a premise " +
+                    "), so point (4) of `AGENTS.md`'s pre-merge gate paragraph rests on a premise " +
                     "that has moved.\n" +
                     "  THIS IS PROBABLY GOOD NEWS: #1914 tracks removing that line once a stable " +
                     "Kotlin carries the upstream ICE fix, and its removal is precisely the event " +
@@ -6792,7 +6800,7 @@ val forbidCleanGateMeasurementSkew by tasks.registering {
                     "Gradle property in this build is `$effective` — an override from " +
                     "`~/.gradle/gradle.properties`, a `-P` flag, or an `ORG_GRADLE_PROJECT_` " +
                     "environment variable.\n" +
-                    "  Point (4) of `CLAUDE.md`'s pre-merge gate paragraph was measured with wasm " +
+                    "  Point (4) of `AGENTS.md`'s pre-merge gate paragraph was measured with wasm " +
                     "incremental compilation OFF, so it does not describe the build running here, " +
                     "and a gate run under this override proves something other than what the " +
                     "paragraph says it proves.\n" +
@@ -6825,15 +6833,16 @@ val forbidCleanGateMeasurementSkew by tasks.registering {
         }
         if (catalogKotlin != measuredKotlin) {
             error(
-                "This repo's Kotlin is $catalogKotlin, but point (4) of `CLAUDE.md`'s pre-merge " +
+                "This repo's Kotlin is $catalogKotlin, but point (4) of `AGENTS.md`'s pre-merge " +
                     "gate paragraph records a sentinel measurement taken on $measuredKotlin, so the " +
                     "paragraph describes a build that is no longer this one.\n" +
                     "  ANY move counts, in EITHER direction — this is an exact match rather than a " +
                     "`>` because the claim is about which task families retained IC state at one " +
-                    "pinned version, not about a threshold. The specific hazard is Kotlin/Native " +
-                    "klib incremental compilation, on by default from 2.4.20-Beta2: a move WITHIN " +
-                    "the 2.4 line that hands the native lane its own retained-IC surface the " +
-                    "experiment never saw.\n" +
+                    "pinned version, not about a threshold. The specific hazard is a new task " +
+                    "family keeping IC state across `--rerun-tasks`: Kotlin/Native link IC " +
+                    "(`kotlin.incremental.native`, which writes `build/kotlin-native-ic-cache/`) was " +
+                    "on by default in 2.4.20-Beta2 and off again in 2.4.20, so check its default " +
+                    "in the new release before trusting the old population.\n" +
                     reMeasure + "\n" +
                     "    5. Set `cleanGateMeasuredKotlin` in `build.gradle.kts` to $catalogKotlin.",
             )
