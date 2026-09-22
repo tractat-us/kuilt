@@ -111,6 +111,9 @@ internal sealed interface MembershipState {
      * admits a voterless bootstrap only as a learner seed, with this node among its learners. What is
      * left is the learner seed itself, the accepted exposure: it arms the instant it learns a config
      * that seats voters.
+     *
+     * "That shape" is one predicate, `RaftEngine.namesNoActiveVoters`, which the wire gate and both
+     * restore checks all call (#2840). What the wire admits is what the restore reads back.
      */
     val voters: Set<NodeId>
         get() = when (this) {
