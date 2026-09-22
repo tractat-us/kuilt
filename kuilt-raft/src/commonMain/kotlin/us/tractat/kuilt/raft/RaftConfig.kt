@@ -96,6 +96,11 @@ import kotlin.time.Duration.Companion.milliseconds
  *   and never were: they differed by up to a factor of two until #2160, and since it by a
  *   1–5 byte header that steps with the chunk's length, which the engine charges for
  *   explicitly rather than hoping the envelope reserve covers it (#2150).
+ *
+ *   **Validated at construction to at least 1 (#2839).** With no published budget the engine
+ *   uses this value as given, so it is the chunk size itself: at `0` every chunk is empty and the
+ *   transfer never finishes, and a negative value makes the slice throw on the actor loop. The
+ *   engine's own `maxOf(1, …)` floor never covered either case — it sits on the budgeted path only.
  * @param snapshotTotalCeiling Upper bound on the bytes a follower will accumulate
  *   reassembling one §7 snapshot. [snapshotChunkCeiling] bounds a single chunk; this
  *   bounds their **sum**. The sender chooses `done`, so without it a peer that keeps
@@ -258,6 +263,14 @@ public data class RaftConfig(
                 "milliseconds, like the window relation above, because nextLong takes Long bounds and cannot " +
                 "take a Duration (#1991)."
         }
+        require(snapshotChunkCeiling >= MIN_SNAPSHOT_CHUNK_BYTES) {
+            "snapshotChunkCeiling must be at least $MIN_SNAPSHOT_CHUNK_BYTES, was $snapshotChunkCeiling. " +
+                "On a transport that publishes no payload budget the engine slices every InstallSnapshot " +
+                "chunk to exactly this many state bytes: at 0 each chunk is empty, the transfer's offset " +
+                "never advances, and the leader re-sends the same chunk forever without the follower ever " +
+                "catching up; below 0 the slice itself throws on the engine's actor loop. Neither failure " +
+                "names this setting, which is why it is refused here (#2839)."
+        }
     }
 
     private companion object {
@@ -273,5 +286,8 @@ public data class RaftConfig(
 
         /** `2^20`. Derived on the [maxTermJump] KDoc from the attack cost and the largest honest absence. */
         const val MAX_TERM_JUMP = 1L shl 20
+
+        /** Smallest [snapshotChunkCeiling] whose chunks advance a transfer. See its KDoc. */
+        const val MIN_SNAPSHOT_CHUNK_BYTES = 1
     }
 }

@@ -2362,19 +2362,15 @@ internal class RaftEngine(
      * [reportSnapshotChunkEnvelopeOverBudget], whose [RaftMetric.SnapshotChunkEnvelopeOverBudget]
      * names both numbers an operator can move.
      *
-     * **The `maxOf(1, …)` floor survives the refusal, and guards a different thing.** It is easy to
-     * read the two as the same guard and drop it here; they are not. The refusal covers the *wire*
-     * term — no room left in the budget — while the floor covers the *ceiling* term:
-     * `RaftConfig.snapshotChunkCeiling` is a public `Int` with no `require` on it, so a consumer
-     * passing `0` would otherwise get a zero-byte slice that never advances `done` and never
-     * terminates the transfer. Both orderings are safe because the refusal has already established
-     * `rawFromWire >= 1`, so the floor can only ever raise a non-positive *ceiling* to one byte the
-     * budget is known to have room for.
-     *
-     * ⚠ **It covers that case only on a transport that publishes a budget.** With none, the first line
-     * returns `snapshotChunkCeiling` as given, before the floor is reached: a `0` there still yields
-     * zero-byte chunks that never finish, and a negative value throws in `copyOfRange` on the actor
-     * loop. Nothing guards the ceiling itself, and this change does not add the missing `require`.
+     * **The ceiling is not this function's to guard; `RaftConfig.init` refuses one below 1 (#2839).**
+     * The refusal above covers the *wire* term — no room left in the budget. The *ceiling* term is
+     * consumer configuration, and a `0` or negative ceiling breaks the transfer on **both** paths: the
+     * unbudgeted first line returns it as given, so a `0` yields zero-byte chunks that never advance
+     * `done` and a negative value throws in `copyOfRange` on the actor loop. That is why the check
+     * lives at construction rather than here. The trailing `maxOf(1, …)` predates it and never reached
+     * the unbudgeted path; with the ceiling validated and `rawFromWire >= 1` established by the
+     * refusal, `minOf` is already at least 1, so the floor changes nothing reachable. Do not read it
+     * as what makes a small ceiling safe.
      *
      * A consequence worth naming: with **no** published budget this returns `snapshotChunkCeiling`
      * whole, where it once subtracted [HEADER_BUDGET] from it. That subtraction was never right —
