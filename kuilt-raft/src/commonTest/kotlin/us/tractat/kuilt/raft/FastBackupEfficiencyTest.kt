@@ -4,9 +4,9 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -119,7 +119,7 @@ internal class FastBackupEfficiencyTest {
         )
     }
 
-    private fun encode(m: RaftMessage): ByteArray = Cbor.encodeToByteArray<RaftMessage>(m)
+    private fun encode(m: RaftMessage): ByteArray = raftCbor.encodeToByteArray<RaftMessage>(m)
 
     // ----------------------------------------------------------------------------------------
     // A — §5.3 fast-backup EFFICIENCY. The discriminating test.

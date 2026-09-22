@@ -12,10 +12,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.ForwardOutcome
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -151,7 +151,7 @@ class RaftSimulation(
         lastLogTerm: Long,
         round: Long = 1L,
     ) {
-        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+        val bytes = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.PreVote(term, lastLogIndex, lastLogTerm, round)
         )
         network.deliver(from = from, to = to, bytes = bytes)
@@ -175,7 +175,7 @@ class RaftSimulation(
         lastLogTerm: Long,
         leadershipTransfer: Boolean = false,
     ) {
-        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+        val bytes = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.RequestVote(term, lastLogIndex, lastLogTerm, leadershipTransfer)
         )
         network.deliver(from = from, to = to, bytes = bytes)
@@ -195,7 +195,7 @@ class RaftSimulation(
         proposedTerm: Long,
         round: Long,
     ) {
-        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+        val bytes = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.PreVoteResponse(term, voteGranted, proposedTerm, round)
         )
         network.deliver(from = from, to = to, bytes = bytes)
@@ -210,7 +210,7 @@ class RaftSimulation(
      */
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     suspend fun deliverTimeoutNow(to: NodeId, from: NodeId, term: Long) {
-        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+        val bytes = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.TimeoutNow(term)
         )
         network.deliver(from = from, to = to, bytes = bytes)
@@ -233,7 +233,7 @@ class RaftSimulation(
         leaderCommit: Long = 0L,
         round: Long = 0L,
     ) {
-        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+        val bytes = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.AppendEntries(term, prevLogIndex, prevLogTerm, entries, leaderCommit, round)
         )
         network.deliver(from = from, to = to, bytes = bytes)
@@ -253,7 +253,7 @@ class RaftSimulation(
         success: Boolean = false,
         matchIndex: Long = 0L,
     ) {
-        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+        val bytes = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.AppendEntriesResponse(term, success, matchIndex)
         )
         network.deliver(from = from, to = to, bytes = bytes)
@@ -282,7 +282,7 @@ class RaftSimulation(
         round: Long = 0L,
         config: ConfigPayload? = null,
     ) {
-        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+        val bytes = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.InstallSnapshot(
                 term = term,
                 lastIncludedIndex = lastIncludedIndex,
@@ -313,7 +313,7 @@ class RaftSimulation(
         nextOffset: Long,
         echoedRound: Long = 0L,
     ) {
-        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+        val bytes = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.InstallSnapshotResponse(term, nextOffset, echoedRound)
         )
         network.deliver(from = from, to = to, bytes = bytes)
@@ -328,7 +328,7 @@ class RaftSimulation(
      */
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     internal suspend fun deliverForwardResponse(to: NodeId, from: NodeId, clientRequestId: Long, outcome: ForwardOutcome) {
-        val bytes = Cbor.encodeToByteArray<RaftMessage>(
+        val bytes = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.ForwardResponse(clientRequestId, outcome)
         )
         network.deliver(from = from, to = to, bytes = bytes)

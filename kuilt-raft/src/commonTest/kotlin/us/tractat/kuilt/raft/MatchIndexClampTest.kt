@@ -4,10 +4,10 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
 import kotlin.random.Random
+import us.tractat.kuilt.raft.internal.raftCbor
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -63,7 +63,7 @@ class MatchIndexClampTest {
         // Poison: a *successful* response claiming a match three entries past the leader's own log.
         // A real follower's match can never exceed lastLogIndex, so this is only reachable from a
         // malformed/foreign response — exactly what the clamp must contain.
-        val poison = Cbor.encodeToByteArray<RaftMessage>(
+        val poison = raftCbor.encodeToByteArray<RaftMessage>(
             RaftMessage.AppendEntriesResponse(term = leaderTerm, success = true, matchIndex = lastLogIndex + 3L),
         )
         network.deliver(from = f1, to = l, bytes = poison)

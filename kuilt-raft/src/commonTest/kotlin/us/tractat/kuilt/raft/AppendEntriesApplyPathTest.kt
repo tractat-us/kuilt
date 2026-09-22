@@ -4,9 +4,9 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -67,7 +67,7 @@ class AppendEntriesApplyPathTest {
         prevLogTerm: Long,
         entries: List<LogEntry>,
         leaderCommit: Long,
-    ): ByteArray = Cbor.encodeToByteArray<RaftMessage>(
+    ): ByteArray = raftCbor.encodeToByteArray<RaftMessage>(
         RaftMessage.AppendEntries(term, prevLogIndex, prevLogTerm, entries, leaderCommit, round = 0L),
     )
 

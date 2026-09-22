@@ -9,8 +9,11 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.serialization.builtins.ByteArraySerializer
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.raft.internal.EMPTY_PAYLOAD_WIRE_BYTES
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.byteStringHeaderBytes
 import us.tractat.kuilt.raft.internal.raftCbor
+import us.tractat.kuilt.raft.internal.snapshotSliceBytes
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -25,7 +28,8 @@ import kotlin.test.fail
  * `RaftMessage.InstallSnapshot` carries `config: ConfigPayload?` — a `ClusterConfig` of
  * consumer-supplied [NodeId]s — on *every* chunk, deliberately, so an installer can adopt the
  * membership whichever chunk it finalizes on. `chunkBytes()` reserved a flat `HEADER_BUDGET` for the
- * whole envelope, and five twenty-character node ids already cost more than that. Each chunk was
+ * whole envelope, and six twenty-character node ids already cost more than that (five did, before
+ * #2160's short frame tags took 57 B off the envelope). Each chunk was
  * therefore minted over the transport's budget, refused at `SeamRaftTransport.sendTo` (which must
  * swallow `PayloadTooLarge`), never acked, and re-sent forever: a follower that needs a snapshot can
  * never be caught up, and `AppendEntries` cannot help it because its prefix was compacted away.
@@ -34,13 +38,15 @@ import kotlin.test.fail
  * different field, and the remedy is the same shape — **published conservatively, enforced by
  * measuring** — with two differences this suite exists to hold:
  *
- * 1. **The reserve is the whole probe frame, not the frame minus its empty payload.** The propose
- *    gate measures the command's *encoded* size and subtracts it, so the payload array's own header
- *    is counted there. `chunkBytes` picks a slice size *before* there are bytes to encode, so it
- *    converts a raw count through `CBOR_BYTE_EXPANSION` instead, and the array header has nowhere
- *    else to live. [theReserveMustIncludeTheChunkArraysOwnHeader] *establishes* that two-byte
- *    difference arithmetically; the **detector** for an engine that gets it wrong is the offset
- *    stride pinned in [assertTransferFitsTheBudget], and the distinction is measured rather than
+ * 1. **The slice is charged the byte-string header of the whole remaining window.** The propose
+ *    gate measures the command's *encoded* size, header included, so it can subtract an empty
+ *    payload's cost and compare wire bytes to wire bytes. `chunkBytes` picks a slice size *before*
+ *    there are bytes to encode, and since #2160 a payload's header steps 1 → 2 → 3 → 5 bytes with
+ *    its length — so the empty-payload probe charges a one-byte header while a real chunk carries
+ *    two, three or five. The engine strips the empty payload's header from the probe and charges the
+ *    header of the whole window instead. [aSliceAtThePlausibilityCeilingFitsTheBudgetWithNoSlack]
+ *    holds that against the engine's own arithmetic with no slack; the offset stride pinned in
+ *    [assertTransferFitsTheBudget] holds it end to end, and the distinction is measured rather than
  *    assumed — see the mutation note there.
  * 2. **There is no `coerceAtLeast(0)` escape.** A config large enough to exhaust the budget leaves
  *    no room for any data at all, and a one-byte chunk that can never fit is a silent wedge rather
@@ -61,7 +67,10 @@ import kotlin.test.fail
  * - [theChunkEnvelopeAlreadyOutgrowsTheFlatReserve] — the premise the fix exists for, over an
  *   **independently constructed** envelope.
  * - [theChunkEnvelopeOverheadIsAdditiveInTheChunkData] — the property the probe's cheapness rests on.
- * - [theReserveMustIncludeTheChunkArraysOwnHeader] — the off-by-two above.
+ * - [aSliceAtThePlausibilityCeilingFitsTheBudgetWithNoSlack] — the header-aware sizing, at the one
+ *   place its error is visible: a frame charged at the plausibility ceiling.
+ * - [theSliceUnderFillsByAtMostTwoBytesAtAHeaderStep] — what the header-aware form costs.
+ * - [theEngineHeaderStepAgreesWithTheCodec] — the step table the sizing reads, against the codec.
  */
 class SnapshotEnvelopeReserveTest {
 
@@ -75,9 +84,6 @@ class SnapshotEnvelopeReserveTest {
      */
     private val headerBudget = 256
 
-    /** `RaftEngine.CBOR_BYTE_EXPANSION`, restated by value for the same reason. */
-    private val cborByteExpansion = 2
-
     /**
      * The engine's own plausibility ceiling for a term and an index (`RaftEngine.MAX_PLAUSIBLE_TERM`
      * / `MAX_PLAUSIBLE_INDEX`, both `1L shl 60`), restated by value. Anything above it the engine
@@ -87,12 +93,11 @@ class SnapshotEnvelopeReserveTest {
 
     /**
      * The engine's own wire codec, not a restated one. The codec is the one thing on this lane the
-     * suite must **not** construct independently: the codec-premise tests below exist to red when the
+     * suite must **not** construct independently: the sizing premises below exist to red when the
      * codec's framing changes, and a bare [Cbor] would carry on measuring the old framing through
-     * that change. Measured with `raftCbor` flipped to `alwaysUseByteString = true`: while this field
-     * was a bare `Cbor`, [theWireWrapperAroundAChunkIsLengthIndependent],
-     * [theReserveMustIncludeTheChunkArraysOwnHeader] and [theChunkEnvelopeOverheadIsAdditiveInTheChunkData]
-     * all stayed green; on `raftCbor` the first two red.
+     * that change. Measured when #2160 flipped `raftCbor` to `alwaysUseByteString = true`: while this
+     * field was a bare `Cbor`, the codec-premise tests of the time stayed green; on `raftCbor` they
+     * reddened, which is what told #2746's rebase that the sizing had to be re-derived.
      *
      * `encodeDefaults` is off, so a `null` config and a zero `round` are omitted — which is why the
      * probe must be built from the *real* config rather than a placeholder.
@@ -125,10 +130,11 @@ class SnapshotEnvelopeReserveTest {
 
     /**
      * The widest chunk frame this cluster can ever mint around an **empty** payload — the quantity
-     * the engine must hold back.
+     * the engine measures, and reports as its reserve.
      *
-     * Deliberately *not* `frame − wireBytes(empty)`, which is what the propose lane's
-     * `proposeEnvelopeBytes` computes. See [theReserveMustIncludeTheChunkArraysOwnHeader].
+     * It includes the empty payload's own one-byte header, which a real chunk does not carry — it
+     * carries a wider one. The sizing strips it and charges the window's header instead; see
+     * [aSliceAtThePlausibilityCeilingFitsTheBudgetWithNoSlack].
      */
     private fun worstCaseReserve(config: ConfigPayload?): Int =
         frameBytes(config, plausibleCeiling, plausibleCeiling, plausibleCeiling, Long.MAX_VALUE, ByteArray(0))
@@ -302,30 +308,35 @@ class SnapshotEnvelopeReserveTest {
      *
      * `overBudget.isEmpty()` has **slack**, and the slack is not small: the reserve charges the
      * widest `Long`s the engine admits, while a real transfer's `term` / `lastIncludedIndex` /
-     * `offset` are small, so a correctly-sized chunk sits roughly fifty bytes under the budget. An
-     * under-count of two bytes — the exact size of the mistake this suite exists to prevent — is
+     * `offset` are small, so a correctly-sized chunk sits tens of bytes under the budget. An
+     * over-count of two bytes — the exact size of the mistake this suite exists to prevent — is
      * therefore invisible to it. Pinning the offset stride against an independently computed slice
      * size removes that slack: nothing about the sizing can move without this reddening, including a
-     * re-introduced divisor or a reserve that drops the payload array's header.
+     * slice that forgets the byte-string header steps, a re-introduced divisor, or a probe taken at
+     * small `Long`s.
      *
-     * It is deliberately coupled to the *formula*, not just to the outcome, and that coupling is the
-     * point: a codec change that alters the sizing (#2160 / #2746 replace the
-     * `CBOR_BYTE_EXPANSION` divisor outright) **must** red here and re-derive [expectedStride]. A
-     * green suite across such a change would mean nothing pinned how much data a chunk carries —
-     * which is the state this arm was written to leave behind.
+     * It is deliberately coupled to the *outcome of the sizing*, not merely to "it fitted", and that
+     * coupling is the point: a codec change that alters the sizing **must** red here and re-derive
+     * [expectedStride]. #2746's rebase is the receipt — the byte-string framing moved the stride and
+     * this arm said so. A green suite across such a change would mean nothing pinned how much data a
+     * chunk carries — which is the state this arm was written to leave behind.
      *
      * ### Measured, not argued
      *
-     * Two mutations of the engine's reserve, run against this suite:
+     * Mutations of the engine's sizing, each run against the whole `:kuilt-raft` suite (577 tests)
+     * with the header-aware form in place:
      *
-     * | mutation | `overBudget` | this stride assertion |
+     * | mutation | `overBudget`, both arms | this stride assertion, both arms |
      * |---|---|---|
-     * | reserve drops the payload array's header (the propose lane's shape) | green | **red** — 1826 vs 1825 |
-     * | probe measured at `offset = 0` instead of the ceiling | green | **red** — 1829 vs 1825 |
+     * | naive port, `wireCap − reserve` | green | **red** — 2 B wide |
+     * | empty payload's header not stripped | green | **red** — 1 B short |
+     * | probe measured at `offset = 0` | green | **red** — 8 B wide |
+     * | divisor re-introduced | green | **red** — half |
+     * | flat 256 B reserve (before #2720) | joint **red**, simple green | **red** |
      *
-     * Both are exactly the mistakes the reserve's KDoc warns against, and `overBudget` — the arm's
-     * headline assertion — saw neither. That is not a defect in it: it is the slack described above,
-     * and it is why this row exists.
+     * The first is the shape a rebase onto byte strings produces by default, and it is 1–4 B over
+     * budget at the plausibility ceiling on every chunk; `overBudget` saw none of the first four.
+     * That is not a defect in it: it is the slack described above, and it is why this row exists.
      */
     private suspend fun assertTransferFitsTheBudget(t: Transfer) {
         val installs = t.sim.collectInstalls(t.behind)
@@ -356,25 +367,35 @@ class SnapshotEnvelopeReserveTest {
                 assertEquals(
                     (0 until BIG_STATE step stride).map { it.toLong() },
                     t.chunkOffsets.distinct().sorted(),
-                    "every chunk must carry exactly $stride raw bytes — the slice the measured " +
-                        "${worstCaseReserve(t.config)} B reserve leaves inside a ${BUDGET} B budget. " +
-                        "Nothing else in this module pins how much data a chunk carries, so a changed " +
-                        "divisor or a reserve missing the payload header would otherwise be silent",
+                    "every chunk must carry exactly $stride raw bytes — the largest slice whose byte " +
+                        "string fits what the measured ${worstCaseReserve(t.config)} B reserve leaves inside " +
+                        "a ${BUDGET} B budget. overBudget has tens of bytes of slack here, so a slice that " +
+                        "forgets the header steps, a divisor, or a probe at small Longs is silent to it",
                 )
             },
         )
     }
 
     /**
-     * The raw bytes per chunk the engine must choose for [config] at [BUDGET], computed here from an
-     * independently constructed envelope rather than read back from the engine.
+     * The raw bytes per chunk the engine must choose for [config] at [BUDGET], found here by
+     * **searching** the codec rather than by restating the engine's closed form.
+     *
+     * The largest slice whose frame — the reserve with its empty payload's header stripped, plus the
+     * slice as the codec actually encodes it — fits the budget. The engine computes the same number
+     * in closed form (`snapshotSliceBytes`); a search over real encodings is the independent route to
+     * it, so an error in that form cannot be copied into the expectation. The two agree exactly at
+     * [BUDGET] for both configs this suite builds. They would part by a byte or two only if the window
+     * landed on a header step — see [theSliceUnderFillsByAtMostTwoBytesAtAHeaderStep] — and a red here
+     * naming a stride one or two below this one should be read as that before anything else.
      *
      * `RaftConfig.snapshotChunkCeiling` (16 KiB by default) does not bind at this budget, so it is
      * deliberately absent: including it would make the expression agree with the engine by
      * construction on the one term that actually decides the answer.
      */
-    private fun expectedStride(config: ConfigPayload?): Int =
-        (BUDGET - maxOf(headerBudget, worstCaseReserve(config))) / cborByteExpansion
+    private fun expectedStride(config: ConfigPayload?): Int {
+        val overhead = maxOf(headerBudget, worstCaseReserve(config)) - wireBytes(ByteArray(0))
+        return (BUDGET - overhead downTo 1).first { raw -> overhead + wireBytes(ByteArray(raw)) <= BUDGET }
+    }
 
     /**
      * The constraint that makes this more than a port of the propose lane's fix: a budget the
@@ -622,14 +643,21 @@ class SnapshotEnvelopeReserveTest {
      * If this ever reds the envelope shrank far enough that a flat reserve covers it again, and the
      * measurement could be reconsidered — the red is an instruction to revisit #2720, not a defect.
      *
+     * **It has already moved once.** #2160's short frame tags took 57 B off every `InstallSnapshot`,
+     * and five twenty-character voter ids in a simple payload fell from 308 B to 251 B — under the
+     * flat reserve. The simple arm therefore uses the six-voter membership this suite's promotion
+     * settles on (272 B), which is still ordinary; the joint arm is untouched by the choice. What
+     * that says about the design is narrower than it looks: node ids are consumer-chosen and
+     * unbounded, so *some* ordinary cluster outgrows any flat number, and the measurement stays.
+     *
      * The values are measured here rather than quoted, so the arm cannot drift from what CBOR
-     * actually costs. What it pins is the *shape* of the answer: a simple five-voter config already
+     * actually costs. What it pins is the *shape* of the answer: a simple six-voter config already
      * exceeds the reserve, and a joint one exceeds it by substantially more.
      */
     @Test
     fun theChunkEnvelopeAlreadyOutgrowsTheFlatReserve() {
         val voters = ClusterConfig(voters = voterIds.toSet())
-        val simple = worstCaseReserve(ConfigPayload(old = null, new = voters))
+        val simple = worstCaseReserve(ConfigPayload(old = null, new = promoted))
         val joint = worstCaseReserve(ConfigPayload(old = voters, new = promoted))
         val none = worstCaseReserve(null)
         assertAll(
@@ -643,7 +671,7 @@ class SnapshotEnvelopeReserveTest {
             {
                 assertTrue(
                     simple > headerBudget,
-                    "five ${voterIds.first().value.length}-character voter ids in a simple ConfigPayload " +
+                    "${promoted.voters.size} ${voterIds.first().value.length}-character voter ids in a simple ConfigPayload " +
                         "cost $simple B against a $headerBudget B flat reserve — this is the ordinary " +
                         "configuration the wedge is reachable from",
                 )
@@ -659,20 +687,21 @@ class SnapshotEnvelopeReserveTest {
     }
 
     /**
-     * The property the probe's cheapness rests on: the envelope's cost does not depend on the chunk's
-     * size, so the engine may measure it once around an **empty** payload — `O(|config|)` rather than
-     * a second `O(chunk)` encode.
+     * The property the probe's cheapness rests on: apart from the payload's own header, the
+     * envelope's cost does not depend on the chunk's size, so the engine may measure it once around an
+     * **empty** payload — `O(|config|)` rather than a second `O(chunk)` encode.
      *
      * True because CBOR is definite in structure: every enclosing map/array header here is a function
-     * of element *count*, and the only size-dependent header is the data array's own, which
-     * kotlinx-serialization writes indefinite-length and therefore at a constant two bytes. Asserted
-     * rather than reasoned, across three chunk sizes and all three config shapes, because if it ever
-     * stops holding the probe silently under-measures and the sizing goes quietly unsound again.
+     * of element *count*, so the only size-dependent bytes in the frame are the payload's own — its
+     * length plus its byte-string header. Asserted rather than reasoned, across four chunk sizes and
+     * all three config shapes, because if it ever stops holding the probe silently under-measures and
+     * the sizing goes quietly unsound again.
      *
      * **Not a detector for a length-dependent payload header.** Both sides of the equation carry the
-     * payload's header, so they cancel: with `raftCbor` flipped to `alwaysUseByteString = true` this
-     * stays green (measured). Catching that change is [theWireWrapperAroundAChunkIsLengthIndependent]'s
-     * job.
+     * payload's header, so they cancel: this stayed green when #2160 made that header step with the
+     * length (measured). Catching *that* is [aSliceAtThePlausibilityCeilingFitsTheBudgetWithNoSlack]'s
+     * job, and the steps themselves are pinned by [theEngineHeaderStepAgreesWithTheCodec] and by
+     * `RaftWireGoldenVectorTest.anOpaquePayloadCostsItsOwnLengthPlusAByteStringHeader`.
      */
     @Test
     fun theChunkEnvelopeOverheadIsAdditiveInTheChunkData() {
@@ -699,125 +728,166 @@ class SnapshotEnvelopeReserveTest {
     }
 
     /**
-     * Why the chunk lane's reserve is the **whole** probe frame while the propose lane's is the frame
-     * *minus* its empty payload — a two-byte difference that is precisely enough to put every
-     * full-size chunk over the budget.
+     * The sizing `chunkBytes` performs, checked against real encodings at the one place its error is
+     * visible: a frame charged at the **plausibility ceiling**, where the reserve has no slack left.
      *
-     * The propose gate measures `wireBytes(command)` and compares it against `budget − reserved`, so
-     * the payload array's own header is inside the measured half. `chunkBytes` has no bytes to
-     * measure yet: it converts a *raw* count with `CBOR_BYTE_EXPANSION`, which accounts for the
-     * per-element cost and nothing else. The header therefore has to sit in the reserve, or the
-     * arithmetic is short by exactly its width — and a reserve that is short by two produces a frame
-     * two bytes over, on every chunk, forever.
+     * The empty-payload probe measures the envelope around a zero-length payload, whose byte-string
+     * header is one byte. A real chunk's header is two, three or five (#2160), so a slice sized as
+     * `budget − reserve` — the naive port of the pre-#2160 arithmetic with its divisor dropped — mints
+     * a frame one to four bytes over the budget on every chunk. The engine instead strips the empty
+     * payload's header, spends the budget on the window that is left, and charges the header of that
+     * **whole** window, which is safe because the step function is monotone: a slice no longer than
+     * the window can never need a wider header than the window does.
      *
-     * Stated as the inequality `chunkBytes` must satisfy: with `raw = (budget − reserve) / expansion`,
-     * the frame it produces must fit the budget. Checked at **every** budget in [EDGE_BUDGETS] and
-     * with no slack in the assertion, because a two-byte overshoot is invisible to any assertion that
-     * has any — including this suite's own `overBudget.isEmpty()` behaviour arms, whose reserve is
-     * charged at the plausibility ceiling while a real transfer's `Long`s are small.
+     * Three statements per budget and config, all with **no slack**:
      *
-     * ### The codec property this rests on, and what would invalidate it
+     * 1. the engine's slice fits — the frame it produces at the ceiling is `<=` the budget;
+     * 2. it is not wastefully small — one more byte would not fit, so at these budgets the form is
+     *    exact (it can under-fill by a byte or two only at a header step, which none of
+     *    [EDGE_BUDGETS] lands on; see [theSliceUnderFillsByAtMostTwoBytesAtAHeaderStep]);
+     * 3. the naive `budget − reserve` slice does **not** fit. If this reds the header has stopped
+     *    stepping inside these budgets and the distinction above is no longer load-bearing.
      *
-     * An empty-payload probe can stand in for a full chunk **only** because kotlinx-serialization
-     * writes a `ByteArray` as an *indefinite-length* CBOR array — a `0x9F` … `0xFF` wrapper of
-     * exactly two bytes whatever the payload's length. [theWireWrapperAroundAChunkIsLengthIndependent]
-     * pins that separately, and it is the load-bearing half of the whole approach: a codec change
-     * that gives the payload a **length-dependent** header (a real byte string steps 1 / 2 / 3 / 5
-     * bytes as the payload crosses 24 / 256 / 65536 — which is exactly what `alwaysUseByteString`
-     * does under #2160, implemented in #2746) makes the probe charge the *empty* header while the
-     * chunk carries a wider one, and every full chunk goes over budget again, deterministically.
-     *
-     * Whoever lands that codec change owns re-deriving this: strip the empty payload's header from
-     * the measurement, spend the budget on the wire quantity, and take the header of the *whole*
-     * remaining window (safe because the step function is monotone). Do not simply keep the
-     * `maxOf(HEADER_BUDGET, measured)` floor and assume it absorbs the difference — at the budgets
-     * this module's existing tests use it does, which is precisely how the regression would land
-     * green.
+     * The frames are encoded here, around an independently constructed envelope, so the codec is the
+     * oracle; only the slice size comes from the engine. `overBudget.isEmpty()` in the behaviour arms
+     * cannot see this error — a real transfer's `Long`s are tens of bytes narrower than the probe's —
+     * which is why the verdict lives here and in the stride, not there.
      */
     @Test
-    fun theReserveMustIncludeTheChunkArraysOwnHeader() {
+    fun aSliceAtThePlausibilityCeilingFitsTheBudgetWithNoSlack() {
         val voters = ClusterConfig(voters = voterIds.toSet())
-        val config = ConfigPayload(old = null, new = voters)
-        val reserve = worstCaseReserve(config)
-        val overheadOnly = reserve - wireBytes(ByteArray(0))     // what the propose lane's shape charges
+        val configs = listOf(ConfigPayload(old = null, new = voters), ConfigPayload(old = voters, new = promoted))
 
-        // Every byte high-valued, so each costs two on the wire — the worst case the sizing must survive.
-        fun frameAt(raw: Int) = frameBytes(
-            config, plausibleCeiling, plausibleCeiling, plausibleCeiling, Long.MAX_VALUE,
-            ByteArray(raw) { (0x80 or (it and 0x3F)).toByte() },
-        )
-
-        val checks: List<() -> Unit> = EDGE_BUDGETS.flatMap { budget ->
-            listOf<() -> Unit>(
-                {
-                    val frame = frameAt((budget - reserve) / cborByteExpansion)
-                    assertTrue(
-                        frame <= budget,
-                        "budget=$budget: reserving the whole probe frame ($reserve B) must leave a slice " +
-                            "whose worst-case frame fits, got $frame B",
-                    )
-                },
-                {
-                    val frame = frameAt((budget - overheadOnly) / cborByteExpansion)
-                    assertTrue(
-                        frame > budget,
-                        "budget=$budget: reserving only the overhead ($overheadOnly B), as the propose " +
-                            "lane does, must NOT — if this reds the two shapes have converged and the " +
-                            "distinction above has stopped being load-bearing",
-                    )
-                },
+        val checks: List<() -> Unit> = configs.flatMap { config ->
+            val reserve = worstCaseReserve(config)
+            val shape = if (config.old != null) "joint" else "simple"
+            fun frameAt(raw: Int) = frameBytes(
+                config, plausibleCeiling, plausibleCeiling, plausibleCeiling, Long.MAX_VALUE, ByteArray(raw),
             )
-        }
-        assertAll(*checks.toTypedArray())
-    }
-
-    /**
-     * The codec property the empty-payload probe stands on: the wire wrapper around a chunk's
-     * `ByteArray` costs the **same two bytes at every length**, so measuring the envelope with no
-     * data measures it for a full chunk too.
-     *
-     * kotlinx-serialization renders a `ByteArray` as an indefinite-length CBOR array (`0x9F` …
-     * `0xFF`), which is why the cost is a constant rather than a function of the length — and why
-     * `CBOR_BYTE_EXPANSION` alone describes the whole difference between a raw count and a wire one.
-     *
-     * **A red here is not a defect in `chunkBytes`; it is notice that `chunkBytes`' arithmetic no
-     * longer holds.** The `@ByteString` framing of #2160 (implemented in #2746) replaces the wrapper
-     * with a real byte-string header that steps 1 → 2 → 3 → 5 bytes across 24 / 256 / 65536, at which
-     * point an empty-payload measurement under-charges every full chunk by two to four bytes and the
-     * wedge of #2720 returns with nothing else in the module reddening. See
-     * [theReserveMustIncludeTheChunkArraysOwnHeader] for the shape the replacement has to take.
-     */
-    @Test
-    fun theWireWrapperAroundAChunkIsLengthIndependent() {
-        val empty = wireBytes(ByteArray(0))
-        val checks: List<() -> Unit> = listOf(0, 1, 23, 24, 255, 256, 65_535, 65_536).map { size ->
-            {
-                // All-zero data, so every element costs exactly one wire byte and the residue is the wrapper.
-                assertEquals(
-                    empty,
-                    wireBytes(ByteArray(size)) - size,
-                    "a $size-byte chunk's wire wrapper must cost the same $empty B as an empty one's, or " +
-                        "the empty-payload envelope probe under-measures a full chunk (#2160/#2746)",
+            EDGE_BUDGETS.flatMap { budget ->
+                val raw = snapshotSliceBytes(budget, reserve)
+                listOf<() -> Unit>(
+                    {
+                        val frame = frameAt(raw)
+                        assertTrue(
+                            frame <= budget,
+                            "$shape, budget=$budget: the engine's $raw B slice must fit at the ceiling, " +
+                                "got a ${frame} B frame (${frame - budget} B over)",
+                        )
+                    },
+                    {
+                        val frame = frameAt(raw + 1)
+                        assertTrue(
+                            frame > budget,
+                            "$shape, budget=$budget: one more byte than the engine's $raw B slice still " +
+                                "fits ($frame B), so the slice under-fills the budget",
+                        )
+                    },
+                    {
+                        val naive = budget - reserve
+                        val frame = frameAt(naive)
+                        assertTrue(
+                            frame > budget,
+                            "$shape, budget=$budget: the naive `budget − reserve` slice ($naive B) must NOT " +
+                                "fit at the ceiling — if this reds the header no longer steps inside this " +
+                                "budget and the header-aware form is no longer load-bearing here",
+                        )
+                    },
                 )
             }
         }
         assertAll(*checks.toTypedArray())
     }
 
+    /**
+     * What the header-aware form costs, bounded: at a window that sits on a byte-string header step
+     * the slice can come out a byte or two short of the best that fits, and never over.
+     *
+     * `window − header(window)` charges the header of the whole window, and a slice just below a step
+     * needs a narrower one. The shortfall is one byte at windows of 24, 256, 257 and 65539 bytes, and
+     * two at 65536 to 65538 (the header there drops from five bytes to three). Every other window is
+     * exact. Checked here over a run of windows straddling each step, against the codec, so the claim
+     * about the cost is a measurement rather than a remark — and so a "fix" that recovers those bytes
+     * by overshooting reds on the first statement.
+     */
+    @Test
+    fun theSliceUnderFillsByAtMostTwoBytesAtAHeaderStep() {
+        val reserve = 101                               // any reserve: only the window it leaves matters
+        val overhead = reserve - wireBytes(ByteArray(0))
+        val windows = (20..28) + (252..260) + (65_532..65_542)
+        val checks: List<() -> Unit> = windows.map { window ->
+            {
+                val raw = snapshotSliceBytes(window + overhead, reserve)
+                val best = (window downTo 0).first { r -> wireBytes(ByteArray(r)) <= window }
+                assertAll(
+                    {
+                        assertTrue(
+                            wireBytes(ByteArray(raw)) <= window,
+                            "window=$window: a $raw B slice encodes to ${wireBytes(ByteArray(raw))} B, over the window",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            best - raw in 0..2,
+                            "window=$window: the slice is $raw B where $best B would fit — short by ${best - raw}",
+                        )
+                    },
+                )
+            }
+        }
+        assertAll(*checks.toTypedArray())
+    }
+
+    /**
+     * The step table `chunkBytes` reads, and the empty-payload cost it strips from the probe, agree
+     * with what the codec actually writes.
+     *
+     * The engine sizes a slice *before* there are bytes to encode, so it cannot measure the header it
+     * charges; it reads it from `byteStringHeaderBytes`, a restatement of RFC 8949's length encoding.
+     * A restatement is exactly what drifts from the thing it restates, so it is checked here at every
+     * step boundary through the engine's own codec, alongside `EMPTY_PAYLOAD_WIRE_BYTES`.
+     */
+    @Test
+    fun theEngineHeaderStepAgreesWithTheCodec() {
+        val lengths = listOf(0, 1, 23, 24, 255, 256, 65_535, 65_536, 100_000)
+        assertAll(
+            {
+                assertEquals(
+                    wireBytes(ByteArray(0)), EMPTY_PAYLOAD_WIRE_BYTES,
+                    "the empty payload's cost the probe strips must be what the codec writes",
+                )
+            },
+            *lengths.map { length ->
+                {
+                    assertEquals(
+                        wireBytes(ByteArray(length)) - length,
+                        byteStringHeaderBytes(length),
+                        "a $length-byte payload's header, as the sizing charges it vs as the codec writes it",
+                    )
+                }
+            }.toTypedArray(),
+        )
+    }
+
     private companion object {
         /**
          * A transport budget large enough that the reserve does not dominate the chunk, so the sizing
          * arithmetic is what decides whether a frame fits — the same 4096 B
-         * `InstallSnapshotTest.BIG_BUDGET` uses, and for the same reason. Below roughly 768 B the
-         * reserve absorbs the expansion and neither defect is visible.
+         * `InstallSnapshotTest.BIG_BUDGET` uses, and for the same reason.
          */
         const val BUDGET = 4096
 
         /**
          * A budget smaller than the joint envelope itself, so no slice size can produce a frame that
-         * fits — the refusal case. Deliberately still well above a config-free envelope (~175 B at
-         * the plausibility ceiling), so heartbeats and vote frames keep flowing and the arm is about
-         * the snapshot lane rather than about a cluster that has stopped working.
+         * fits — the refusal case. Deliberately still well above a config-free envelope, so heartbeats
+         * and vote frames keep flowing and the arm is about the snapshot lane rather than about a
+         * cluster that has stopped working.
+         *
+         * ⚠ **The margin is thin: 3 B.** #2160's short frame tags took the joint envelope from 444 B to
+         * 387 B. The first refusal arm asserts `reserve > STARVED_BUDGET` outright and the other two
+         * assert that refusals actually fired, so the next envelope change reds a rig rather than
+         * quietly turning a refusal into a transfer — which is also why an 8 B narrower probe
+         * (measured at `offset = 0`) reds all three refusal arms as well as the stride.
          */
         const val STARVED_BUDGET = 384
 
@@ -825,12 +895,13 @@ class SnapshotEnvelopeReserveTest {
         const val BIG_STATE = 8000
 
         /**
-         * Budgets [theReserveMustIncludeTheChunkArraysOwnHeader] checks the sizing inequality at.
+         * Budgets [aSliceAtThePlausibilityCeilingFitsTheBudgetWithNoSlack] checks the sizing at.
          *
-         * Spread across three orders of magnitude on purpose: the two-byte error the arm is about is
-         * constant, so a single budget large enough would let a *proportional* mistake hide inside
-         * it, and one small enough would be dominated by the reserve. 512 B is roughly the smallest
-         * budget at which a five-voter config still leaves room for data at all.
+         * Spread across three orders of magnitude on purpose, so the slice lands under each of the
+         * byte-string header widths a chunk can carry: two or three bytes at 512 (the joint slice is
+         * under 256 B, the simple one over it), three at 1 KiB to 16 KiB, five at 128 KiB. That is what
+         * makes the naive port's overshoot +1, +2 or +4 here rather than one number. 512 B is roughly
+         * the smallest budget at which a joint config still leaves room for data at all.
          */
         val EDGE_BUDGETS = listOf(512, 1024, 4096, 16_384, 131_072)
     }

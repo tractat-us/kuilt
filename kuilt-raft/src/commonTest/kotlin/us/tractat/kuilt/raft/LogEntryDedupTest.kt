@@ -2,7 +2,7 @@
 
 package us.tractat.kuilt.raft
 
-import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.raft.internal.raftCbor
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -14,9 +14,9 @@ class LogEntryDedupTest {
         assertEquals(null, plain.dedupKey)
 
         val keyed = plain.copy(dedupKey = DedupKey(ClientId("c"), 5))
-        val decoded = Cbor.decodeFromByteArray(
+        val decoded = raftCbor.decodeFromByteArray(
             LogEntry.serializer(),
-            Cbor.encodeToByteArray(LogEntry.serializer(), keyed),
+            raftCbor.encodeToByteArray(LogEntry.serializer(), keyed),
         )
         assertEquals(keyed, decoded)
     }

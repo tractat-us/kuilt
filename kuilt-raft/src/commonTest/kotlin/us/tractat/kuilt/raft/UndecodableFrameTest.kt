@@ -15,9 +15,9 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.yield
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -36,7 +36,7 @@ import kotlin.test.assertTrue
  *
  * ### The trigger is version skew, not an attacker
  *
- * `raftCbor` is `Cbor { ignoreUnknownKeys = true }`, which buys forward-compatibility for an unknown
+ * `raftCbor` sets `ignoreUnknownKeys`, which buys forward-compatibility for an unknown
  * *field* — a new peer adding `RequestVote.leadershipTransfer` does not break an old one. It buys
  * nothing for an unknown **sealed-class discriminator**: a peer on a newer build sending a
  * `RaftMessage` variant this build's hierarchy has never heard of decodes to a
@@ -212,7 +212,7 @@ class UndecodableFrameTest {
         solo.network.deliver(
             from = ghost,
             to = solo.self,
-            bytes = Cbor.encodeToByteArray<RaftMessage>(
+            bytes = raftCbor.encodeToByteArray<RaftMessage>(
                 RaftMessage.RequestVote(term = probeTerm, lastLogIndex = 0L, lastLogTerm = 0L),
             ),
         )
@@ -284,8 +284,14 @@ class UndecodableFrameTest {
         /** Enough dispatch turns for the inbound pump to pick the injected frame up and act on it. */
         const val SETTLE_YIELDS = 10
 
-        /** Mirrors `RaftEngine.raftCbor`, so the reproducer's bytes are the ones that codec produces. */
-        val futureWireCodec = Cbor { ignoreUnknownKeys = true }
+        /**
+         * The engine's own codec, so the reproducer's bytes are the ones a real peer produces.
+         *
+         * This used to be a hand-written mirror (`Cbor { ignoreUnknownKeys = true }`). #2160 added an
+         * *encoding* option to the engine's instance, at which point a mirror would have had to be
+         * kept in step by hand — so it reads the real one instead.
+         */
+        val futureWireCodec = raftCbor
     }
 }
 
@@ -294,13 +300,13 @@ class UndecodableFrameTest {
  *
  * Only its wire shape matters: kotlinx-serialization writes the same `{"type", "value"}` envelope for
  * any sealed base, so encoding this produces the bytes a peer one version ahead would send for a
- * frame type the local hierarchy does not declare. The `@SerialName` is the fully-qualified name such
- * a subclass would carry, so the discriminator in the bytes is the real thing rather than an
- * obviously-foreign string.
+ * frame type the local hierarchy does not declare. The `@SerialName` is a short tag in the style
+ * `RaftMessage`'s own subtypes carry since #2160 (`rv`, `ae`, …), so the discriminator in the bytes
+ * is the shape a real newer frame would have rather than an obviously-foreign string.
  */
 @Serializable
 private sealed interface FutureWire {
     @Serializable
-    @SerialName("us.tractat.kuilt.raft.internal.RaftMessage.Rejoin")
+    @SerialName("rj")
     data class Rejoin(val term: Long, val reason: String) : FutureWire
 }

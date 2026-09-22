@@ -5,6 +5,13 @@ the two-tier overlay topology — a complete-graph voter core (`K_m`) plus a
 sparse learner periphery — as two high-level types: `ServerCluster` (server side)
 and `ClusterClient` (client side).
 
+**Servers and clients must run the same kuilt build.** A `ClusterClient` is a Raft learner,
+so it speaks Raft's message format, and that format changes between releases: upgrading the
+servers strands every deployed client still on the old build, which cannot read their
+messages — and an old enough one does not survive them. Check an app or protocol version
+before starting a `ClusterClient`. See "Every peer in a group runs the same version" in
+`:kuilt-raft`'s module documentation.
+
 ## What it provides
 
 ### `ClusterClient` (commonMain)

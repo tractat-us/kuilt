@@ -2,10 +2,10 @@
 package us.tractat.kuilt.raft
 
 import kotlinx.serialization.builtins.ByteArraySerializer
-import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -27,12 +27,14 @@ import kotlin.test.assertTrue
  * ### Why a flat number could not be repaired by bounding the ClientId
  *
  * The envelope holds eight `Long`s and CBOR widens each from one byte to nine as the log grows, so
- * the headroom a 256 B reserve leaves an id is not a constant: 81 characters on a fresh log, 48 at
- * 1e9 entries, 30 at 1e12, and **11** at `MAX_PLAUSIBLE_INDEX` / `MAX_PLAUSIBLE_TERM`. `ClientId.auto`
- * — which the library mints for itself — is 23 characters at its shortest. A maximum admitting the
- * library's own id and a maximum fitting the reserve are disjoint sets, which is why the fix measures
- * rather than bounds. [aFlatReserveIsStillInsufficientAtThePlausibilityCeiling] keeps that premise
- * under a test rather than in prose.
+ * the headroom a 256 B reserve leaves an id is not a constant: 129 characters on a fresh log, 97 at
+ * 1e9 entries, and 65 once every `Long` is at its widest, up to `MAX_PLAUSIBLE_INDEX` /
+ * `MAX_PLAUSIBLE_TERM`. And the id is the consumer's: a durable one is whatever it persists, and
+ * `ClientId.auto` embeds the consumer's `NodeId`, so it outgrows the reserve for any `NodeId` past 43
+ * characters. That is why the fix measures rather than bounds.
+ * [aFlatReserveIsStillInsufficientAtThePlausibilityCeiling] keeps the premise under a test rather than
+ * in prose — and #2160's short frame tags have already moved it once (the headroom at the ceiling was
+ * 11 characters, below the shortest auto id's 23), which is the case for keeping it there.
  *
  * ### What each test holds
  *
@@ -66,10 +68,17 @@ class ProposeEnvelopeReserveTest {
     private val plausibleCeiling = 1L shl 60
 
     /**
-     * A bare [Cbor] suffices: the engine's instance differs only by `ignoreUnknownKeys`, a *decoding*
-     * option. `encodeDefaults` is off in both, so a defaulted `round` / `isNoOp` is omitted in both.
+     * The engine's own codec, not a bare `Cbor`.
+     *
+     * This used to be `Cbor`, on the argument that the engine's instance differed only by
+     * `ignoreUnknownKeys`, a *decoding* option. #2160 falsified that: `alwaysUseByteString` is an
+     * **encoding** option, and a bare `Cbor` would measure an envelope around a command framed as an
+     * array of integers while the engine reserves against one framed as a byte string. The frames
+     * are the same size either way — the command is empty in every probe here — but the identity
+     * [theEnvelopeOverheadIsAdditiveInTheCommand] asserts is not, and neither is
+     * [commandOfWireSize]'s arithmetic.
      */
-    private val cbor = Cbor
+    private val cbor = raftCbor
 
     private fun wireBytes(command: ByteArray): Int =
         cbor.encodeToByteArray(ByteArraySerializer(), command).size
@@ -113,22 +122,33 @@ class ProposeEnvelopeReserveTest {
 
     /**
      * A command of exactly [wire] encoded bytes — copied from [ProposePayloadBudgetTest] so both
-     * suites sit the propose on the same edge. `0x7F` costs two wire bytes, `0x00` costs one, and the
-     * array header costs two (kotlinx CBOR writes an indefinite-length array, so that two is a
-     * constant rather than a function of the length).
+     * suites sit the propose on the same edge. Found by walking down from `wire - 1` rather than
+     * computed: since #2160 the raw→wire relation is a CBOR byte-string header stepping 1/2/3/5 with
+     * the length, and a test that modelled it would agree with a model of the codec rather than with
+     * the codec.
      */
-    private fun commandOfWireSize(wire: Int, wide: Int = 100): ByteArray =
-        ByteArray(wide + (wire - 2 - 2 * wide)) { if (it < wide) 0x7F else 0 }
+    private fun commandOfWireSize(wire: Int): ByteArray {
+        for (raw in (wire - 1) downTo maxOf(0, wire - 8)) {
+            val candidate = ByteArray(raw) { if (it % 2 == 0) 0x7F else 0 }
+            if (wireBytes(candidate) == wire) return candidate
+        }
+        error("no command encodes to exactly $wire wire bytes")
+    }
 
     /**
      * A `ClientIdentity.Durable` id long enough to outrun a flat 256 B reserve even on a young log.
      *
-     * 96 characters — a prefixed uuid, or a tenant-scoped token. Not a pathological value: a plain
-     * 36-character uuid is already past the flat reserve once the log is long-lived, which is what
-     * [aFlatReserveIsStillInsufficientAtThePlausibilityCeiling] guards.
+     * 160 characters — a tenant-scoped token wrapping a uuid and a routing path. It was 96 until
+     * #2160's short frame tags took 55 B off every `AppendEntries`: at 96 the narrowest envelope
+     * around it fell to 216 B, inside the flat reserve, and the behaviour arm below stopped reddening
+     * on the flat-reserve engine it exists to catch — green, and measuring nothing, with no test
+     * saying so. The arm now asserts that precondition itself, so the next envelope change reds the
+     * rig instead of quietly retiring the arm.
      */
-    private val durableId = "tenant-7f3a9c21:client-0f8e1d4b-6a52-4c9e-b1d7-3e8a5f2c0946:shard-11-writer"
-        .padEnd(96, 'z')
+    private val durableId = (
+        "tenant-7f3a9c21:client-0f8e1d4b-6a52-4c9e-b1d7-3e8a5f2c0946:shard-11-writer:" +
+            "route/eu-west-2/az-c/rack-17/host-0042/process-3/lane-writer"
+        ).padEnd(160, 'z')
 
     /**
      * The behaviour: at the limit the engine publishes, nothing it mints exceeds the transport it was
@@ -183,6 +203,13 @@ class ProposeEnvelopeReserveTest {
                 "would hold for a cluster that never sent a frame — ${sim.network.overBudget}",
         )
         sim.network.overBudget.clear()
+        val narrowest = envelopeOverhead(durableId, index = 1, term = 1, round = 0, requestId = 1)
+        assertTrue(
+            narrowest > headerBudget,
+            "rig: even the narrowest envelope around this ${durableId.length}-character id must outgrow the " +
+                "flat $headerBudget B reserve, or an engine that charged only the flat reserve would fit this " +
+                "command too and the arm could not tell it from the fix — it costs $narrowest B",
+        )
 
         val command = commandOfWireSize(budget - headerBudget)
         assertEquals(
@@ -284,7 +311,7 @@ class ProposeEnvelopeReserveTest {
      *
      * True because CBOR is definite in structure and indefinite in array length here: every enclosing
      * map/array header is a function of element *count*, and the only payload-sized header is the
-     * command array's own, which the gate measures separately. Asserted rather than reasoned, across
+     * command's own byte-string header, which the gate measures separately. Asserted rather than reasoned, across
      * three payload sizes and both a short and a long id, because if it ever stops holding the probe
      * silently under-measures and the bound goes quietly unsound again.
      */
@@ -360,24 +387,46 @@ class ProposeEnvelopeReserveTest {
      * The premise the measured enforcement exists for — kept under a test so it cannot quietly stop
      * being true.
      *
-     * If this ever reds, the envelope shrank (`@ByteString` framing, #2160, or a dropped field) far
-     * enough that a flat [headerBudget] covers it again at the top of the admitted range, and
+     * If this ever reds, the envelope shrank (a dropped field, say) far enough that a flat
+     * [headerBudget] covers it again at the top of the admitted range, and
      * `checkProposeFitsTransport`'s measurement could be reconsidered — so the red is an instruction
      * to revisit #2156, not a defect.
      *
-     * The id measured is `ClientId.auto`'s **shortest possible** form, `"auto:" + a one-character
-     * NodeId + "-" + 16 hex`. That is the sharpest statement of the refutation: no consumer-supplied
-     * value is involved, so no bound on a consumer's id could have helped.
+     * **It has moved once, and this arm was re-scoped rather than deleted.** #2160's byte-string
+     * framing did not move it — the overhead is `frame(empty) − wire(empty)`, and that change moves
+     * both terms by the same byte. #2160's short frame tags did: they took 55 B off every
+     * `AppendEntries`, so `ClientId.auto`'s **shortest possible** form, `"auto:" + a one-character
+     * NodeId + "-" + 16 hex`, fell from 268 B to 213 B at the ceiling — inside the flat reserve. That
+     * was this arm's id, and it was the sharpest statement of the refutation, because no
+     * consumer-supplied value was involved. It no longer refutes anything.
+     *
+     * What still holds is the weaker, and still sufficient, statement: **an id the API admits can
+     * outgrow the flat reserve**, so no flat number is a bound. Both kinds do. A durable id is
+     * whatever the consumer persists, and an auto id is `"auto:" + NodeId + "-" + 16 hex`, whose
+     * `NodeId` is the consumer's too — the flat reserve now covers an auto id only for a `NodeId` of
+     * at most 43 characters at the ceiling. The arm pins one of each past it: this suite's own
+     * durable id, and the auto id a Kubernetes StatefulSet's DNS name produces.
      */
     @Test
     fun aFlatReserveIsStillInsufficientAtThePlausibilityCeiling() {
-        val shortestAutoId = "auto:v-0123456789abcdef"
-        assertTrue(
-            worstCaseOverhead(shortestAutoId) > headerBudget,
-            "a ${shortestAutoId.length}-character auto-minted ClientId costs " +
-                "${worstCaseOverhead(shortestAutoId)} B at the plausibility ceiling, and the flat " +
-                "reserve is $headerBudget B — if this is no longer true, the measured enforcement " +
-                "in checkProposeFitsTransport can be reconsidered (#2156)",
+        val statefulSetAutoId = ClientId.auto(NodeId("raft-2.raft-headless.consensus.svc.cluster.local:7000"), Random(1)).value
+        assertAll(
+            {
+                assertTrue(
+                    worstCaseOverhead(durableId) > headerBudget,
+                    "a ${durableId.length}-character durable ClientId costs ${worstCaseOverhead(durableId)} B " +
+                        "at the plausibility ceiling, and the flat reserve is $headerBudget B — if this is no " +
+                        "longer true, the measured enforcement in checkProposeFitsTransport can be reconsidered (#2156)",
+                )
+            },
+            {
+                assertTrue(
+                    worstCaseOverhead(statefulSetAutoId) > headerBudget,
+                    "the ${statefulSetAutoId.length}-character auto id minted for a StatefulSet NodeId costs " +
+                        "${worstCaseOverhead(statefulSetAutoId)} B at the ceiling against a $headerBudget B flat " +
+                        "reserve — the library's own id, outgrowing it for an ordinary NodeId",
+                )
+            },
         )
     }
 }
