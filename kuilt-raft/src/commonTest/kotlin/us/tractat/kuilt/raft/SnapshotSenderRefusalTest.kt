@@ -23,6 +23,51 @@ internal class SnapshotSenderRefusalTest {
     private val wide = ConfigPayload(old = null, new = ClusterConfig(voters = setOf(NodeId("a"), NodeId("b"))))
 
     /**
+     * A refusal never leaves a transfer behind: after a refused [SnapshotSender.nextChunk], an ack for
+     * that peer finds nothing in flight.
+     *
+     * Installing the transfer first and refusing second would retain a private copy of the whole
+     * snapshot per stranded peer, for a transfer that has not sent a byte, and it would turn the next
+     * stray ack into a `SendNext` for a transfer the engine never started. No cluster test can see
+     * it: a stranded peer never acks.
+     *
+     * Two arms, because a fresh transfer can be refused at two points. The **early** refusal — the
+     * `{ _, _ -> null }` sizer — happens before the load, so nothing exists yet that could be
+     * installed; it stays green if the install is moved ahead of the *second* check. The **late**
+     * refusal passes the early check on the caller's record and refuses the loaded config, which is
+     * the one arm that can see a transfer installed before refusing.
+     *
+     * ### What proves the rig fired
+     *
+     * Each arm counts loads: none for the early refusal, exactly one for the late one. Without the
+     * count the late arm could be refused early and prove nothing about the second check.
+     */
+    @Test
+    fun aRefusalNeverLeavesATransferBehind() = raftRunTest {
+        suspend fun refused(storedConfig: ConfigPayload?, sizer: (NodeId, ConfigPayload?) -> Int?): Pair<SnapshotSender.AckOutcome, Int> {
+            var loads = 0
+            val storage = object : RaftStorage by InMemoryRaftStorage() {
+                override suspend fun loadSnapshot(): StoredSnapshot? =
+                    StoredSnapshot(SnapshotMeta(lastIncludedIndex = 42L, lastIncludedTerm = 3L, config = wide), ByteArray(10))
+                        .also { loads++ }
+            }
+            val sender = SnapshotSender(storage, sizer)
+            assertNull(sender.nextChunk(peer, storedConfig), "rig: this sizer must refuse the transfer")
+            return sender.onAck(peer, 4L) to loads
+        }
+
+        val (early, earlyLoads) = refused(storedConfig = wide) { _, _ -> null }
+        val (late, lateLoads) = refused(storedConfig = null) { _, config -> if (config == wide) null else 4 }
+
+        assertAll(
+            { assertEquals(0, earlyLoads, "rig: the early refusal must precede the load") },
+            { assertEquals(SnapshotSender.AckOutcome.NoTransfer, early, "an early refusal must install nothing") },
+            { assertEquals(1, lateLoads, "rig: the late refusal must come after exactly one load") },
+            { assertEquals(SnapshotSender.AckOutcome.NoTransfer, late, "a late refusal must install nothing") },
+        )
+    }
+
+    /**
      * A fresh transfer is sized on the config it **loads**, not on the caller's record of it.
      *
      * `nextChunk` decides a refusal against the caller's `storedConfig` before loading, so a refusal
@@ -56,12 +101,6 @@ internal class SnapshotSenderRefusalTest {
                 )
             },
             { assertNull(chunk, "the chunk would carry a config the sizer refuses, so none may be minted") },
-            {
-                assertEquals(
-                    SnapshotSender.AckOutcome.NoTransfer, sender.onAck(peer, 4L),
-                    "and a refused transfer must not be installed",
-                )
-            },
         )
     }
 }

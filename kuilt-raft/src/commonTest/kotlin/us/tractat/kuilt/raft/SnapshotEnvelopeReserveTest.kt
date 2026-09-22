@@ -396,8 +396,13 @@ class SnapshotEnvelopeReserveTest {
      * The budget is **restored at the end and the transfer then completes**. Without that, "no chunk
      * was sent" is indistinguishable from "the leader was never trying to send one", and the arm
      * would pass against an engine that had simply forgotten this peer. Completion afterwards proves
-     * the leader held the transfer live across the refusal, and that the refusal is a level that
-     * clears rather than a latch.
+     * the leader still owes this peer a snapshot, and that the refusal is a level that clears rather
+     * than a latch.
+     *
+     * It proves nothing about a transfer **in flight**. The budget is starved before the follower
+     * restarts, so no transfer exists when these refusals fire and the one that completes is started
+     * afresh after recovery — an engine that dropped an in-flight transfer on refusal passes here.
+     * [aRefusalMidTransferResumesFromTheAckedOffsetWhenTheBudgetRecovers] holds that half.
      */
     @Test
     fun aBudgetTooSmallForTheWholeEnvelopeRefusesObservablyInsteadOfMintingAChunkThatCannotFit() = raftRunTest {
@@ -454,6 +459,86 @@ class SnapshotEnvelopeReserveTest {
             t.state, installs.last().snapshot.state,
             "rig: the transfer must complete once the budget is restored, or 'no chunk was sent' is " +
                 "indistinguishable from the leader having forgotten this peer",
+        )
+    }
+
+    /**
+     * A refusal that lands on a transfer **already in flight** must keep it: when the budget recovers,
+     * the next chunk starts at the offset the follower acked, not at zero.
+     *
+     * `SnapshotSender.nextChunk`'s contract is that a refusal "does not end" a running transfer,
+     * because a budget too small for the envelope is a level — a peer attaching over a tighter link
+     * lowers it and leaving raises it — rather than a verdict on the transfer. An engine that dropped
+     * the transfer instead would still converge, by re-sending the whole snapshot from offset 0, so
+     * nothing about completion can see the difference. The offset of the first chunk after recovery
+     * can.
+     *
+     * ### What proves the rig fired
+     *
+     * The budget is starved from the leader's trace, the moment it sends a chunk past offset 0, so the
+     * first ack has already landed. The arm then asserts, before recovering, that the follower acked
+     * part of the snapshot and not all of it, that the leader refused this peer inside the window,
+     * and that nothing was dropped for size — so every chunk sent before the starvation was delivered
+     * and acked, and "the acked offset" is a value the follower actually sent.
+     */
+    @Test
+    fun aRefusalMidTransferResumesFromTheAckedOffsetWhenTheBudgetRecovers() = raftRunTest {
+        val metrics = mutableListOf<Pair<NodeId, RaftMetric>>()
+        val t = snapshotStampedWithConfig(sim(this, BUDGET) { id, m -> metrics += id to m }, wantJoint = true)
+        val network = t.sim.network
+        var starvedAfter: Long? = null
+        backgroundScope.launch {
+            t.sim.nodes.getValue(t.leaderId).trace.collect { event ->
+                if (starvedAfter == null && event is RaftTraceEvent.InstallSnapshot &&
+                    event.to == t.behind && event.offset > 0L
+                ) {
+                    network.maxPayloadBytes = STARVED_BUDGET  // a peer attaches over a tighter link, mid-transfer
+                    starvedAfter = event.offset
+                }
+            }
+        }
+        t.sim.settle()                                        // subscribe before the transfer starts
+        network.recording = true
+
+        t.sim.restart(t.behind)
+        t.sim.awaitTrue("the budget was starved mid-transfer") { starvedAfter != null }
+        val hb = fastRaftConfig().heartbeatInterval.inWholeMilliseconds
+        advanceTimeBy(hb * 4); runCurrent(); t.sim.settle()  // several divert rounds at the starved budget
+
+        val acked = network.sent
+            .filter { it.from == t.behind && it.to == t.leaderId }
+            .mapNotNull { (it.message as? RaftMessage.InstallSnapshotResponse)?.nextOffset }
+            .lastOrNull()
+        val refusals = metrics.count { (id, m) ->
+            id == t.leaderId && m is RaftMetric.SnapshotChunkEnvelopeOverBudget && m.peer == t.behind
+        }
+        assertAll(
+            {
+                assertTrue(
+                    acked != null && acked in 1L until BIG_STATE.toLong(),
+                    "rig: the follower must have acked part of the snapshot and not all of it, or no " +
+                        "transfer was in flight when the refusal fired; acked=$acked of $BIG_STATE",
+                )
+            },
+            { assertTrue(refusals > 0, "rig: the leader must refuse ${t.behind} inside the window") },
+            {
+                assertTrue(
+                    network.overBudget.isEmpty(),
+                    "rig: nothing may be dropped for size, or the acked offset is not the transfer's " +
+                        "true position: ${network.overBudget}",
+                )
+            },
+        )
+
+        val sentBeforeRecovery = t.chunkOffsets.size
+        network.maxPayloadBytes = BUDGET                      // the tighter link leaves
+        t.sim.awaitCommit(t.finalCommit, on = setOf(t.behind))
+        assertEquals(
+            acked,
+            t.chunkOffsets.getOrNull(sentBeforeRecovery),
+            "the first chunk after the budget recovers must resume at the offset the follower acked; " +
+                "offsets before recovery=${t.chunkOffsets.take(sentBeforeRecovery)}, " +
+                "after=${t.chunkOffsets.drop(sentBeforeRecovery)}",
         )
     }
 
