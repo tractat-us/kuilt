@@ -137,11 +137,11 @@ ADR-034 / ADR-002; the full rationale is in `docs/architecture.md`.
 
 ## Build & test commands
 
-Non-interactive shells don't load `~/.zshrc`, so source SDKMAN and select JDK 21
-first (matches CI):
+Non-interactive shells don't load `~/.zshrc`, so source SDKMAN and select JDK 25
+first (the major CI builds on):
 
 ```bash
-source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem
+source ~/.sdkman/bin/sdkman-init.sh && sdk use java 25.0.2-tem
 ```
 
 | Task | Command |
