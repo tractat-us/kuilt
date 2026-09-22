@@ -95,12 +95,30 @@ ADR-034 / ADR-002; the full rationale is in `docs/architecture.md`.
 
 ## Build & test commands
 
-Non-interactive shells don't load `~/.zshrc`, so source SDKMAN and select JDK 21
-first (matches CI):
+Non-interactive shells don't load `~/.zshrc`, so source SDKMAN and select the JDK first.
+`.sdkmanrc` pins it, so `sdk env` is enough and can't drift from CI:
 
 ```bash
-source ~/.sdkman/bin/sdkman-init.sh && sdk use java 21.0.5-tem
+source ~/.sdkman/bin/sdkman-init.sh && sdk env    # reads .sdkmanrc → 21.0.5-tem
 ```
+
+**The JDK is pinned in three places that must agree:** `.sdkmanrc`, `javaToolchain` in
+the version catalogue (enforced by the `subprojects` toolchain block in the root
+`build.gradle.kts`), and `java-version` in every `.github/workflows/*.yml`. The toolchain
+block is what makes it real — before it, the compiling JVM was whatever launched Gradle
+and only this paragraph said otherwise.
+
+**Don't assume sibling repos use the same JDK — they don't.** `fireworks-compose` pins
+**25**; kuilt pins **21**, because detekt 1.23.8 cannot run on 25 (detekt/detekt#8714 —
+its embedded Kotlin compiler hardcodes a `< 25` version check). Everything else in kuilt
+already builds and tests clean on 25. That is fine: what prevents the class-file-version
+trap is each repo being *unambiguous*, not the versions matching. Run `sdk env` on
+entering a repo rather than carrying the last one's JDK — a build under the wrong JDK
+leaves artifacts the next build can't load, and the `UnsupportedClassVersionError` lands
+nowhere near the cause.
+
+The **emitted bytecode is `JVM_11`** regardless — the toolchain is the compiling JDK
+only, so consumers on older JVMs are unaffected.
 
 | Task | Command |
 |------|---------|

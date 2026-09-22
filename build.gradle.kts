@@ -5,6 +5,10 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform) apply false
     alias(libs.plugins.kotlinSerialization) apply false
     alias(libs.plugins.androidLibrary) apply false
+    // Not applied at the root — declared only so the `Detekt` task type resolves in the
+    // repo-wide jvmTarget pin below. Modules apply detekt themselves (via the
+    // kuilt.kmp-library convention, or directly in the case of :kuilt-warp-ksp).
+    alias(libs.plugins.detekt) apply false
 }
 
 // Root aggregation for both doc/coverage tools:
@@ -34,6 +38,47 @@ allprojects {
     group = "us.tractat.kuilt"
     version = (findProperty("version") as? String)
         ?.takeIf { it.isNotBlank() && it != "unspecified" } ?: "$kuiltVersionLine.0-dev"
+}
+
+// Pin the toolchain: the JVM that RUNS javac/kotlinc and the test JVMs.
+//
+// Before this, the compiling JVM was whatever launched Gradle, so build output depended
+// on the developer's ambient JDK and nothing but prose in CLAUDE.md said which one. That
+// is a live hazard, not untidiness: a build under the wrong JDK produces artifacts at a
+// class-file version the next build cannot load, and the resulting
+// `UnsupportedClassVersionError` surfaces nowhere near the cause. (A fireworks-compose
+// build died exactly this way on a cached lint ruleset compiled at class-file 69 by a
+// JDK-25 build, then loaded under 21.) Sibling repos legitimately pin DIFFERENT JDKs —
+// what prevents recurrence is each repo being unambiguous, not the versions matching.
+//
+// Applied over `subprojects` rather than in the `kuilt.kmp-library` convention plugin so
+// it also covers modules that do NOT apply that plugin — `:kuilt-warp-ksp` is a plain
+// kotlin-jvm KSP processor and would otherwise keep floating on the daemon's JDK.
+//
+// Why 21 and not 25 (which fireworks-compose uses): detekt 1.23.8 cannot RUN on JDK 25
+// — detekt/detekt#8714, its embedded Kotlin compiler hardcodes a `< 25` check in
+// `JavaVersion.parse()` and dies with `IllegalArgumentException: 25.0.2`. Fixed upstream
+// only in Kotlin 2.1.20, which just detekt 2.x embeds, and the catalog pins 1.23.x
+// deliberately (2.0 alpha regressed KMP type-resolution performance — and this repo's
+// null-safety gate depends on type resolution, see #1537). Everything else already
+// builds and tests clean on 25; detekt is the sole blocker. See #1708.
+//
+// This is the COMPILE JDK ONLY. The emitted bytecode stays `JVM_11` (set per-target in
+// the convention plugin) and Android's `compileOptions` stays at 11, so published
+// artifacts keep working for consumers on older JVMs.
+val javaToolchainVersion = JavaLanguageVersion.of(libs.versions.javaToolchain.get())
+
+subprojects {
+    plugins.withType<JavaBasePlugin> {
+        extensions.configure<JavaPluginExtension> {
+            toolchain.languageVersion.set(javaToolchainVersion)
+        }
+    }
+    plugins.withType<org.jetbrains.kotlin.gradle.plugin.KotlinBasePlugin> {
+        extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinProjectExtension> {
+            jvmToolchain { languageVersion.set(javaToolchainVersion) }
+        }
+    }
 }
 
 // Categorical test backstops — applied to every JVM test task in every subproject.
