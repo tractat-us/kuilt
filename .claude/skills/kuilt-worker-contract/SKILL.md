@@ -163,6 +163,21 @@ ceiling.
 - Under saturation Kotlin/Native hits a one-time symbolication cliff that can fake an
   `UncompletedCoroutinesError`, and real-socket assertions lose their loopback upgrade. **A red from
   a saturated window describes the box, not the code** — re-run it quiet before believing it.
+- **A full build outlives one foreground call — so background it and wait for it yourself.** The
+  Bash tool caps a foreground call at 10 minutes, and the stream watchdog kills a call silent for
+  about as long, while a full `./gradlew build` here runs 13+ minutes at `--max-workers=4`. Ending
+  your turn to wait for the completion notice parks you: a subagent is not reliably re-invoked. So
+  start it with `run_in_background: true` as
+  `timeout <fence> ./gradlew build … > <log> 2>&1; echo "EXIT=$?" >> <log>`, then wait in
+  foreground calls of at most 4½ minutes each, repeating until the log has its `EXIT=` line:
+  ```bash
+  timeout 270 zsh -c "until grep -q '^EXIT=' <log>; do sleep 20; done"
+  ```
+  Keep each wait under 5 minutes: a subagent's prompt cache lives about that long, and a longer
+  quiet gap makes your next turn re-write your whole context. Never end your turn while the build
+  runs. The `EXIT=` line also covers the failure paths (a timeout kill and a compile failure both
+  write one), so the wait cannot hang on a build that died. Receipt: #2804's JDK 25 build (12m51s,
+  5,895 tasks) finished inside the second wait, with no parking and no dispatcher round trip.
 
 ## Evidence a dispatcher will ask for
 
