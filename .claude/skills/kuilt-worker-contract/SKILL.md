@@ -107,11 +107,26 @@ evidence.
   state. `./gradlew check` runs them all; each has a header comment saying what it does and does not see.
 
 - **The build cache can serve a stale `FROM-CACHE` success** for a test-compile task whose source is
-  broken. If any test-compile task shows `FROM-CACHE`, re-run with `--rerun-tasks` (add
-  `--no-build-cache` if it persists) and confirm tasks are `EXECUTED`.
+  broken. If any test-compile task shows `FROM-CACHE`, re-run as `./gradlew clean && ./gradlew build
+  --rerun-tasks` (add `--no-build-cache` if it persists) and confirm tasks are `EXECUTED`.
+  `--rerun-tasks` without the leading `clean` is not cache-disabled: it leaves Kotlin's incremental
+  state in place (#1913, receipts in AGENTS.md § *Build & test commands*).
 
 - **A `--tests` filter matching nothing passes silently.** Confirm your new tests actually *ran* by
   counting them in `build/test-results/`.
+
+- **Run each new test alone** (`--tests "*One*"`) as well as in its suite. A test that passes only
+  beside its siblings is leaning on state one of them left behind, and the suite run cannot show it.
+  Count it in `build/test-results/` here too — the alone run is where a mistyped filter bites.
+
+- **A `-P`-gated probe does not run in `build`.** If your change touches one, run it with its flag.
+  The live ones: `-Pconcurrency.stress.tests=true` (every `*ConcurrencyTest`, across `:kuilt-core`,
+  `:kuilt-conformance`, `:kuilt-cluster` and the fabric modules), `-Pmdns.multicast.tests=true`,
+  `-Pscale.tcp.tests=true`, `-Pkuilt.benchmark.tests=true`; the module's `build.gradle.kts` names
+  the rest. Without the flag a probe is either *excluded* — and the exclude outranks your `--tests`
+  include, so `--tests "*FooConcurrencyTest"` with the flag off matches nothing and, per the bullet
+  above, passes — or it runs as a JVM `Assume` and is recorded `skipped`. Neither is a run; check
+  `skipped=0` in the XML.
 
 ## Sharing the machine
 
