@@ -53,10 +53,14 @@ worker reads them as advice addressed to someone else.
    not infer an infrastructure hazard from it. Say at most one sentence noting you did not arm it.
 
    This has now been misread **five times**, escalating each time: a worker reporting confusion, then
-   a worker inventing a non-existent "rogue auto-merge sweeper", then a worker recommending PRs be
-   opened **draft** to avoid it — which would have inverted an existing rule, since a draft run
-   leaves a stale `ci-required` FAILURE. On 2026-09-05 a worker went further and **actively disarmed
-   its dispatcher's arming**, which delays the merge indefinitely if nobody notices.
+   a worker inventing a non-existent "rogue auto-merge sweeper", then a worker recommending drafts as
+   a defence against it. On 2026-09-05 a worker went further and **actively disarmed its
+   dispatcher's arming**, which delays the merge indefinitely if nobody notices.
+
+   You do open as a **Draft** — that is the claim (AGENTS.md § *CI & merging*) — and mark it ready
+   once its gate passes. The stale `ci-required` FAILURE row that draft run leaves behind after
+   draft→ready is expected and is **not a verdict**: `gh-pr-wait` discriminates it, and CLAUDE.md
+   § *CI & merging* explains why. Do not report it as a red.
 
    **You cannot settle this from GitHub, so do not try.** `enabledBy.login` is `keddie` for every
    session, worker and human alike. And the *absence* of an `auto_merge_enabled` timeline event
