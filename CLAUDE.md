@@ -147,5 +147,6 @@ verdict to the newest run id — the fix this file used to recommend — is also
 wrong:** for ~30 s after `gh pr ready` the post-ready run does not exist yet, so
 the newest row *is* the stale draft row. The sound discriminator is structural:
 **a run whose non-aggregator jobs are all `SKIPPED` executed nothing, and is
-never a verdict.** (Opening the PR ready when you can avoids the stale run
-entirely.)
+never a verdict.** Do not avoid it by opening the PR ready: the claim is the
+Draft PR (see AGENTS.md), so this stale row is the expected cost of every
+draft→ready PR.
