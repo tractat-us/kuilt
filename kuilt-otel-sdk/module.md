@@ -1,9 +1,9 @@
 # Module kuilt-otel-sdk
 
-Bridge an app's existing OpenTelemetry setup into kuilt's offline-first log
-buffer — on the JVM and Android.
+Bridge an app's existing OpenTelemetry setup into kuilt's offline-first
+telemetry buffer — on the JVM and Android.
 
-Two optional, additive pieces, both for apps that already run OpenTelemetry:
+Three optional, additive pieces, all for apps that already run OpenTelemetry:
 
 - `OtelSdkTraceContextProvider` lets kuilt's log capture follow your tracing
   sampler: logs emitted inside a sampled span are kept and stamped with their
@@ -12,5 +12,8 @@ Two optional, additive pieces, both for apps that already run OpenTelemetry:
 - `KuiltLogRecordExporter` is an OpenTelemetry SDK log exporter: point your
   existing log pipeline at it and every record also lands in kuilt's durable,
   extractable buffer — without adopting kuilt's own capture edge.
+- `KuiltMetricExporter` is its metric twin: register it on your metric reader
+  and every counter and gauge also lands in the same durable buffer. Histograms
+  and summaries are dropped with a warning.
 
-Neither is required for kuilt logging; off the JVM there is nothing here.
+None is required for kuilt telemetry; off the JVM there is nothing here.
