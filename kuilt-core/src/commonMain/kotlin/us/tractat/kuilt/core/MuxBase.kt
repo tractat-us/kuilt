@@ -3,6 +3,7 @@ package us.tractat.kuilt.core
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -140,7 +141,8 @@ internal class MuxBase<K>(
         private val _peers = MutableStateFlow(delegate.peers.value)
 
         init {
-            scope.launch {
+            // Subscribe before channel() returns: a first send can receive an immediate reply.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 sharedIncoming.filter { swatch -> framing.belongsTo(swatch) }.collect { swatch ->
                     spool.deliver(framing.strip(swatch))
                 }
