@@ -56,8 +56,8 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
     assertEquals(2, joinerMove.action)
 
     // Ride an application channel (chat, cursors, …) over the same fabric as consensus.
-    // Subscribe before the sender broadcasts: delivery is best-effort (`replay = 0`), so a
-    // frame sent while nobody is collecting is dropped and this receiver waits forever (#2289).
+    // Create the receiving channel before broadcasting: an existing view buffers frames,
+    // but frames for an unopened name are not replayed. runCurrent() lets async create it.
     val incoming = async { joiner.appChannel("chat").incoming.first() }
     runCurrent()
     host.appChannel("chat").broadcast(byteArrayOf(0x68, 0x69)) // "hi"
