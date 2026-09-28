@@ -322,6 +322,10 @@ can receive a reply even before the caller collects `incoming`. The channel
 buffers those replies. Both splitters use `replay = 0`: frames emitted before
 the matching channel is created are not replayed.
 
+Consume created views promptly: each has a bounded, suspending spool. An unread
+or slow view can fill that spool and the shared buffer, stalling all channels
+on the same mux. Separate channel names do not isolate backpressure.
+
 **Closing one channel does not close the others.** `close()` on a channel view
 ends only that view: its `incoming` completes, its `state` becomes `Torn` and its
 `peers` collapses to just your own id, while the underlying `Seam` — and every

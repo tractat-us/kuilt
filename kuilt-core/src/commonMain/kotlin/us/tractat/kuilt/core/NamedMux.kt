@@ -35,6 +35,15 @@ import kotlinx.coroutines.flow.StateFlow
  * [Seam] instance. Thread-safe: concurrent [channel] calls are serialised by an internal
  * reentrant lock so the backing map is never raced.
  *
+ * ## Unread channels
+ *
+ * Each view's spool holds [DeliveryPolicy.DEFAULT_CAPACITY] frames with [Overflow.SUSPEND].
+ * An unread or slow view retains its frames and then blocks its internal subscriber. Once
+ * the shared buffer also fills, this backpressures the single upstream collector and can
+ * stall every channel on this mux. Consume created views promptly. The queue is bounded in
+ * frames per view, not bytes or total views; channel creation has no aggregate memory bound.
+ * This limitation also existed before subscriptions began starting at view creation.
+ *
  * ## Per-channel close
  *
  * Closing a channel view ends **that view only**: its [Seam.incoming] completes, its

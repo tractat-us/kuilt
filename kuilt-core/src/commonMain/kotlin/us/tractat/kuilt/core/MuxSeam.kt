@@ -23,6 +23,9 @@ import kotlinx.coroutines.CoroutineScope
  * Each view subscribes before [channel] returns and buffers frames in its reliable spool,
  * so the caller can send immediately and collect the reply later. The shared upstream uses
  * `replay = 0`: frames emitted before the matching channel is created are still discarded.
+ * Each view's spool holds [DeliveryPolicy.DEFAULT_CAPACITY] frames with [Overflow.SUSPEND].
+ * An unread or slow view can fill its spool and the shared buffer, stalling all channels on
+ * this mux. Consume created views promptly; the per-view bound is in frames, not bytes.
  *
  * ## Channel identity
  *

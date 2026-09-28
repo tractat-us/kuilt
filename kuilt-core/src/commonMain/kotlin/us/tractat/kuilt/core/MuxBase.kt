@@ -60,6 +60,9 @@ internal class MuxBase<K>(
     /**
      * A single shared subscription on [delegate.incoming]. All channel views subscribe to this
      * rather than [delegate] directly, ensuring exactly one collection of the underlying seam.
+     * For an upstream without fused buffer operators, shareIn uses the coroutines default
+     * buffer capacity and SUSPEND overflow. A view blocked in spool.deliver can fill that
+     * shared buffer and suspend this single upstream collector, stalling every channel.
      */
     private val sharedIncoming = delegate.incoming
         .shareIn(scope = scope, started = SharingStarted.Eagerly, replay = 0)
@@ -128,6 +131,9 @@ internal class MuxBase<K>(
         /**
          * Per-view delivery spool. Frames are piped from [sharedIncoming] via a
          * background coroutine; closing the spool completes [incoming].
+         * Reliable uses [DeliveryPolicy.DEFAULT_CAPACITY] frames and [Overflow.SUSPEND].
+         * An unread view retains frames up to that bound, then backpressures the shared
+         * collector; it does not drop frames or grow an unbounded per-view queue.
          */
         private val spool = Spool<Swatch>(DeliveryPolicy.Reliable)
 
