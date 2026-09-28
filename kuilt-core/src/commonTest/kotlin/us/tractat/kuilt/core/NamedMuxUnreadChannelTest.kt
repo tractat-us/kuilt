@@ -15,10 +15,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 /**
- * Known failure found while checking #2862: an unread view backpressures the whole mux.
- * This also fails with main's dispatched subscription once its subscribers have started.
- * Keep the desired isolation assertion as an explicit expected failure until a separate
- * overflow-policy change resolves it. An unexpected pass must make this test fail.
+ * Tripwire pinning a known defect, #2863: an unread view backpressures the whole mux.
+ * Found while checking #2862; it also fails with main's dispatched subscription once its
+ * subscribers have started. When #2863 is fixed this test goes red: invert it then, turning
+ * the expected isolation failure into a plain passing assertion.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class NamedMuxUnreadChannelTest {
