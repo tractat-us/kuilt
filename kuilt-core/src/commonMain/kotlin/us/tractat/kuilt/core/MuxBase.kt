@@ -3,6 +3,7 @@ package us.tractat.kuilt.core
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -59,6 +60,9 @@ internal class MuxBase<K>(
     /**
      * A single shared subscription on [delegate.incoming]. All channel views subscribe to this
      * rather than [delegate] directly, ensuring exactly one collection of the underlying seam.
+     * For an upstream without fused buffer operators, shareIn uses the coroutines default
+     * buffer capacity and SUSPEND overflow. A view blocked in spool.deliver can fill that
+     * shared buffer and suspend this single upstream collector, stalling every channel.
      */
     private val sharedIncoming = delegate.incoming
         .shareIn(scope = scope, started = SharingStarted.Eagerly, replay = 0)
@@ -127,6 +131,9 @@ internal class MuxBase<K>(
         /**
          * Per-view delivery spool. Frames are piped from [sharedIncoming] via a
          * background coroutine; closing the spool completes [incoming].
+         * Reliable uses [DeliveryPolicy.DEFAULT_CAPACITY] frames and [Overflow.SUSPEND].
+         * An unread view retains frames up to that bound, then backpressures the shared
+         * collector; it does not drop frames or grow an unbounded per-view queue.
          */
         private val spool = Spool<Swatch>(DeliveryPolicy.Reliable)
 
@@ -140,7 +147,8 @@ internal class MuxBase<K>(
         private val _peers = MutableStateFlow(delegate.peers.value)
 
         init {
-            scope.launch {
+            // Subscribe before channel() returns: a first send can receive an immediate reply.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 sharedIncoming.filter { swatch -> framing.belongsTo(swatch) }.collect { swatch ->
                     spool.deliver(framing.strip(swatch))
                 }

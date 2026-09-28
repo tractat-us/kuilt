@@ -56,8 +56,12 @@ val cursorSeam: Seam = named.channel("cursors")
 ```
 
 `channel()` is idempotent and thread-safe on both types: the same name or tag
-always returns the same `Seam` instance. Both use `replay = 0` — frames emitted
-before a channel view starts collecting are not replayed.
+always returns the same `Seam` instance. Each view subscribes before `channel()`
+returns and buffers replies until its caller collects them. Both use `replay = 0`:
+frames emitted before the matching channel is created are not replayed.
+Each view has a bounded, suspending spool. An unread or slow view can fill its
+spool and the shared buffer, stalling all channels on the same mux; channel
+names and tags do not isolate backpressure.
 
 **`CompositeLoom` / `CompositeSeam` — multipath transport bonding (`Seams →
 Seam`).** Bonds several `Loom`s (called *plies*) into one `Seam` over the union.

@@ -20,10 +20,12 @@ import kotlinx.coroutines.CoroutineScope
  *
  * ## Late-subscriber semantics
  *
- * The shared upstream is started with `replay = 0`. Frames emitted before a
- * channel view begins collecting are **not** replayed — this is best-effort
- * delivery, suitable for [Quilter] (which heals gaps via FullState +
- * resend) but **not** suitable for raw at-least-once consumers.
+ * Each view subscribes before [channel] returns and buffers frames in its reliable spool,
+ * so the caller can send immediately and collect the reply later. The shared upstream uses
+ * `replay = 0`: frames emitted before the matching channel is created are still discarded.
+ * Each view's spool holds [DeliveryPolicy.DEFAULT_CAPACITY] frames with [Overflow.SUSPEND].
+ * An unread or slow view can fill its spool and the shared buffer, stalling all channels on
+ * this mux. Consume created views promptly; the per-view bound is in frames, not bytes.
  *
  * ## Channel identity
  *

@@ -25,17 +25,24 @@ import kotlinx.coroutines.flow.StateFlow
  *
  * ## Late-subscriber semantics
  *
- * The shared upstream is started with `replay = 0`. Frames emitted before a channel view
- * begins collecting are **not** replayed — this is best-effort delivery, suitable for
- * [Quilter]-grade consumers (which heal gaps via FullState + resend) but **not** for raw
- * at-least-once consumers, which must layer their own reliability. Identical caveat to
- * [MuxSeam].
+ * Each view subscribes before [channel] returns and buffers frames in its reliable spool,
+ * so the caller can send immediately and collect the reply later. The shared upstream uses
+ * `replay = 0`: frames emitted before the matching channel is created are still discarded.
  *
  * ## Channel identity
  *
  * [channel] is idempotent: calling it twice with the same [name][channel] returns the same
  * [Seam] instance. Thread-safe: concurrent [channel] calls are serialised by an internal
  * reentrant lock so the backing map is never raced.
+ *
+ * ## Unread channels
+ *
+ * Each view's spool holds [DeliveryPolicy.DEFAULT_CAPACITY] frames with [Overflow.SUSPEND].
+ * An unread or slow view retains its frames and then blocks its internal subscriber. Once
+ * the shared buffer also fills, this backpressures the single upstream collector and can
+ * stall every channel on this mux. Consume created views promptly. The queue is bounded in
+ * frames per view, not bytes or total views; channel creation has no aggregate memory bound.
+ * This limitation also existed before subscriptions began starting at view creation.
  *
  * ## Per-channel close
  *

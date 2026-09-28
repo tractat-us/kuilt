@@ -107,8 +107,8 @@ internal fun sampleGameHostJoin() = runTest(StandardTestDispatcher(), timeout = 
     assertEquals(2, joinerMove.action)
 
     // Ride an application channel (chat, cursors, …) over the same fabric as consensus.
-    // Subscribe before the sender broadcasts: delivery is best-effort (`replay = 0`), so a
-    // frame sent while nobody is collecting is dropped and this receiver waits forever (#2289).
+    // Create the receiving channel before broadcasting: an existing view buffers frames,
+    // but frames for an unopened name are not replayed. runCurrent() lets async create it.
     val incoming = async { joiner.appChannel("chat").incoming.first() }
     runCurrent()
     host.appChannel("chat").broadcast(byteArrayOf(0x68, 0x69)) // "hi"
@@ -164,12 +164,9 @@ internal fun sampleGameNode() = runTest(StandardTestDispatcher(), timeout = TEST
 
     // Ride named application channels (chat, cursors, …) over the same fabric.
     //
-    // Subscribe BEFORE the sender broadcasts. [GameSession.appChannel] delivery is
-    // best-effort (`replay = 0`), so a frame sent while nobody is collecting is dropped,
-    // not queued — and this receiver would then wait forever. A real app subscribes once
-    // at startup, long before any peer sends; under `runTest`'s `StandardTestDispatcher`
-    // the `async` below is merely *queued*, so `runCurrent()` is what lets it reach
-    // `incoming` and subscribe first (#2289).
+    // Create the receiving channel BEFORE broadcasting. Its view buffers frames even before
+    // incoming is collected, but frames for an unopened name are not replayed. Under
+    // StandardTestDispatcher the async below is queued; runCurrent() lets it create the view.
     val chatIncoming = async { session2.appChannel("chat").incoming.first() }
     runCurrent()
     session1.appChannel("chat").broadcast(byteArrayOf(0x68, 0x69)) // "hi"
@@ -329,8 +326,9 @@ internal fun sampleTurnSequencer() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
  * travel over the same [us.tractat.kuilt.core.Seam] as Raft — no second connection. The
  * application owns the entire name namespace; there are no reserved names.
  *
- * Delivery is **best-effort** (`replay = 0`): a delta sent before the peer subscribes is
- * not replayed. Layer your own reliability on top if you need at-least-once delivery.
+ * Creating the channel subscribes its view; arriving deltas wait in its spool until collected.
+ * Deltas arriving before the peer creates the named channel are not replayed (`replay = 0`).
+ * Quilter heals those gaps through state exchange.
  */
 @Suppress("unused")
 internal fun sampleGameChat() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {

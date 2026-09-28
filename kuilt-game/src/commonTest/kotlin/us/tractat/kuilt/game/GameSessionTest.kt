@@ -12,7 +12,9 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -25,9 +27,9 @@ import kotlin.test.assertTrue
  * Virtual time via [StandardTestDispatcher]; consensus is driven through the canonical [seats]
  * harness with per-node seeded [fastRaftConfig].
  *
- * App-channel delivery is best-effort (`replay = 0`): a frame sent before the receiver subscribes
- * is lost. Each test subscribes via [produceIn] on [backgroundScope] and pumps the scheduler with
- * `runCurrent()` so the receiver is collecting *before* the broadcast — deterministic, no race.
+ * Creating an app channel subscribes its view immediately. Its spool retains frames until the
+ * application collects [Seam.incoming][us.tractat.kuilt.core.Seam.incoming], including traffic sent
+ * before election. Frames for a channel that has not been created are still not replayed.
  */
 class GameSessionTest {
 
@@ -68,13 +70,24 @@ class GameSessionTest {
         val move = TurnSequencer(leaderNode, Int.serializer()).propose(100)
         assertEquals(100, move.action, "raft must reach agreement despite concurrent app-channel traffic")
 
-        // App traffic after election still flows between the two sessions.
+        // The view retained pre-election traffic; later app traffic follows it in send order.
         val leader = if (leaderNode === a.node) a else b
         val other = if (leader === a) b else a
         val received = other.appChannel("chat").incoming.produceIn(backgroundScope)
         runCurrent()
+        val earlyFrame = received.receive().toByteArray()
         leader.appChannel("chat").broadcast(byteArrayOf(55))
-        assertTrue(received.receive().toByteArray().contentEquals(byteArrayOf(55)))
+        val laterFrame = received.receive().toByteArray()
+        assertAll(
+            {
+                assertContentEquals(
+                    if (leader === a) byteArrayOf(1) else byteArrayOf(2),
+                    earlyFrame,
+                    "the other peer's pre-election chat frame must arrive first",
+                )
+            },
+            { assertContentEquals(byteArrayOf(55), laterFrame, "post-election chat must follow the buffered frame") },
+        )
     }
 
     @Test

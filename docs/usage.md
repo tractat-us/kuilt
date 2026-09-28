@@ -317,10 +317,14 @@ val chatSeam: Seam = named.channel("chat")
 val cursorSeam: Seam = named.channel("cursors")
 ```
 
-Both splitters use `replay = 0` — frames emitted before a channel view starts
-collecting are not replayed. They are suitable for `Quilter`-grade consumers
-(which heal gaps via FullState + resend) but require application-level
-reliability for raw at-least-once consumers.
+Each splitter subscribes a channel before returning it, so an immediate send
+can receive a reply even before the caller collects `incoming`. The channel
+buffers those replies. Both splitters use `replay = 0`: frames emitted before
+the matching channel is created are not replayed.
+
+Consume created views promptly: each has a bounded, suspending spool. An unread
+or slow view can fill that spool and the shared buffer, stalling all channels
+on the same mux. Separate channel names do not isolate backpressure.
 
 **Closing one channel does not close the others.** `close()` on a channel view
 ends only that view: its `incoming` completes, its `state` becomes `Torn` and its

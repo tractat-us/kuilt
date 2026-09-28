@@ -105,7 +105,7 @@ authoritative state.
 ### Application channels — `appChannel`
 
 `session.appChannel(name)` returns a `Seam` for that name, carried over the same
-fabric as consensus without a second connection. Use it for best-effort traffic that
+fabric as consensus without a second connection. Use it for extra traffic that
 lives alongside the game — chat, cursor positions, voice signalling:
 
 ```kotlin
@@ -116,9 +116,10 @@ scope.launch { chat.incoming.collect { frame -> renderChat(frame.decodeToString(
 chat.broadcast(message.encodeToByteArray())
 ```
 
-Delivery is best-effort (`replay = 0`): a frame sent before the peer subscribes is
-not replayed. The application owns the entire name namespace — there are no reserved
-names.
+Calling `appChannel(name)` opens the receiving view before returning it. The view
+buffers arriving frames until you collect them, including replies to an immediate send.
+Frames arriving before the peer opens that name are not replayed (`replay = 0`).
+The application owns the entire name namespace — there are no reserved names.
 
 ### Optimistic UI — SpeculativeSequencer
 

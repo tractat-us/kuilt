@@ -25,9 +25,9 @@ import us.tractat.kuilt.raft.RaftNode
  * bootstrap paths. The application owns the entire [appChannel] name namespace — there are no
  * reserved names, because internal channels never live in it.
  *
- * App-channel delivery is **best-effort** (`replay = 0`, like the underlying mux): a frame sent
- * before the peer subscribes to that name is not replayed. Layer your own reliability on top if
- * you need at-least-once delivery.
+ * Calling [appChannel] subscribes that name before returning. The view buffers arriving frames
+ * until the application collects its incoming flow, including replies to an immediate send.
+ * Frames arriving before the peer creates that named channel are not replayed (`replay = 0`).
  */
 public open class GameSession internal constructor(
     public val node: RaftNode,

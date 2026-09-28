@@ -88,8 +88,9 @@ Ride extra named application traffic (chat, cursors, voice signalling, …) over
 fabric** as consensus. `session.appChannel(name)` returns a `Seam` for that name, nested as
 a `NamedMux` under the reserved app-envelope tag — so the app wire-layout is identical across
 all three bootstrap paths, and there is no second connection. The application owns the entire
-name namespace (no reserved names). Delivery is best-effort (`replay = 0`); layer your own
-reliability if you need at-least-once.
+name namespace (no reserved names). Creating a channel subscribes its view before returning;
+it buffers arriving frames until collected. Frames arriving before the peer creates that name
+are not replayed (`replay = 0`).
 
 ```kotlin
 val chat = session.appChannel("chat")
