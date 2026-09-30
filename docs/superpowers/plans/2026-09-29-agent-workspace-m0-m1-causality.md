@@ -38,6 +38,8 @@ Each is pinned by a named test in Task 7 or Task 8.
 
 ### Task 1: Hypotheses, metrics and scenario script (the pre-registration)
 
+> Iain's rulings (2026-09-29) amended this task; `demo/workspace/HYPOTHESES.md` § Rulings is authoritative where the list below differs.
+
 This is the M0 gate. Pass/stop criteria are fixed **before** any measurement. The PR is **held for Iain's approval**. Do not arm auto-merge. When it is open, set the peer session to `blocked` with the PR link, and go on to Tasks 2–4, which do not depend on its wording. Task 5 must not start until this PR merges.
 
 **Files:**
@@ -45,13 +47,14 @@ This is the M0 gate. Pass/stop criteria are fixed **before** any measurement. Th
 
 - [ ] **Step 1: Write the doc.** Required sections, in this order, accessible-first:
   1. *The story in one paragraph*: two friends, a closure, a late agent reply.
-  2. *Scenarios* S1–S6, each in 2–4 plain sentences with its step list:
+  2. *Scenarios* S1–S7, each in 2–4 plain sentences with its step list:
      - S1 independent edits: A adds a note on venue V2, B reports V3 full; no agent.
      - S2 budget changed during inference: remote agent captures, A lowers budget to 30, agent returns V1 (price 40).
      - S3 closure report: remote agent captures, B (on the network) reports V1 closed, agent returns V1.
      - S4 two conflicting human choices: A and B, partitioned, each accept a different proposal.
      - S5 corrected report: B reports V1 closed (`closeV1`), agent captures, B corrects (`reopenV1`), agent returns V2, the stale answer since V1 is nearer.
-     - S6 control: single user, always connected, same steps as S3 with no partition.
+     - S6 S2 without the outage: S2's steps with A connected throughout.
+     - S7 harmless note: remote agent captures, B adds a note on V1, agent returns V1, still right.
   3. *Metrics*, each with an exact definition:
      - `editsMade` and `editsPreserved`: the human edit steps, and those whose effect is visible in every actor's final view.
      - `agentRuns` and `unnecessaryReruns`: a rerun is unnecessary when it returns the same recommendation as the run it replaced.
@@ -64,7 +67,7 @@ This is the M0 gate. Pass/stop criteria are fixed **before** any measurement. Th
   4. *Relevance policy* (what a backend may use cheaply, without rerunning the agent): a missing input is relevant if (a) it is a `Report` about the recommended venue, (b) it is a `Report.Reopened` about any venue (a nearer place may be back), (c) it is a `PreferenceSet` below the recommended venue's price, or (d) it is a `PreferenceSet` that makes a nearer venue affordable. Notes are never relevant. This is **policy**; staleness is scored against ground truth (the metric above), so the policy's misses and over-flags are measured rather than assumed. S5 exists to test (b): its missing input concerns a venue *other* than the recommended one.
   5. *Hypotheses table*: columns `id | claim | metric | pass if | stop if`. Required rows:
      - H1: the kuilt backend has `staleTreatedAsCurrent == 0` on S2, S3 and S5, where the baseline has ≥ 1 or needs a rerun to avoid it.
-     - H1b: kuilt's `falseInvalidations` is ≤ 1 across S1–S6. More means the policy asks people too often.
+     - H1b: kuilt's `falseInvalidations` is ≤ 1 across S1–S7. More means the policy asks people too often.
      - H2: `unnecessaryReruns` is lower for kuilt on S1 and S5.
      - H3: `outageActionsServed / outageActions` is 1.0 for kuilt, and below 1.0 for the baseline on S2–S4.
      - H4: `humanPrompts` is equal or lower for kuilt.
@@ -247,7 +250,7 @@ public object ScriptedAgent {
 - Produces:
   - `InputKey(val value: String)`, the step id that created an input.
   - `sealed interface Step` with `Edit(key, actor, entry)`, `StartAgent(request: String, host: ActorId, selectExcluding: Set<InputKey> = emptySet())`, `ToolResult(request, key, entry)`, `ReleaseAgent(request)`, `Accept(actor, request)`, `Partition(actor)`, `Reconnect(actor)`.
-  - `Scenario(val name: String, val actors: List<ActorId>, val steps: List<Step>)` and `Scenarios.all: List<Scenario>` (S1–S6 from Task 1).
+  - `Scenario(val name: String, val actors: List<ActorId>, val steps: List<Step>)` and `Scenarios.all: List<Scenario>` (S1–S7 from Task 1).
   - `Presentation(actor: ActorId, request: String, recommendation: Recommendation, basis: Set<InputKey>, known: Set<InputKey>, shownAsApplicable: Boolean)`.
   - `RunResult(presentations, finalViews: Map<ActorId, List<WorkspaceEntry>>, agentRuns: Int, reruns: List<Pair<Recommendation, Recommendation>>, humanPrompts: Int, outageActions: Int, outageActionsServed: Int)`.
   - `interface WorkspaceBackend { suspend fun run(scenario: Scenario): RunResult }`.
@@ -308,7 +311,7 @@ class OracleTest {
 The oracle resolves an `InputKey` to its `WorkspaceEntry` through the scenario's `Edit`/`ToolResult` steps. Scenario key names used above (`closeV1`, `noteV2`) are fixed in `Scenarios`.
 
 - [ ] **Step 2: Run it and watch it fail.** Run `./gradlew :demo-workspace:jvmTest --tests "*OracleTest*"`. Expected: a compilation failure.
-- [ ] **Step 3: Implement `Scenario.kt`.** Use the types above. Define S1–S6 exactly as `HYPOTHESES.md` lists them, with actors `alex`, `sam` and `remote`; the remote agent is hosted on `remote`. Example (S3):
+- [ ] **Step 3: Implement `Scenario.kt`.** Use the types above. Define S1–S7 exactly as `HYPOTHESES.md` lists them, with actors `alex`, `sam` and `remote`; the remote agent is hosted on `remote`. Example (S3):
 
 ```kotlin
 Scenario("S3", listOf(alex, sam, remote), listOf(
@@ -450,14 +453,14 @@ If a scenario's step list makes one of these expectations wrong, the scenario de
 - Test: `demo/workspace/src/commonTest/kotlin/us/tractat/kuilt/demo/workspace/BaselineMeasurementTest.kt`
 - Create: `demo/workspace/RESULTS.md`
 
-- [ ] **Step 1: Write a golden test.** For each of S1–S6 × `optimisticLocal ∈ {false, true}`, assert the full `Metrics` value. Run it once to learn the values, **then review every number by hand against the scenario**. A value you cannot explain from the semantics is a bug in the backend or the oracle, not a number to record.
+- [ ] **Step 1: Write a golden test.** For each of S1–S7 × `optimisticLocal ∈ {false, true}`, assert the full `Metrics` value. Run it once to learn the values, **then review every number by hand against the scenario**. A value you cannot explain from the semantics is a bug in the backend or the oracle, not a number to record.
 
 ```kotlin
 @Test
 fun baselineMetrics() = runTest {
     val expected: Map<Pair<String, Boolean>, Metrics> = mapOf(
         ("S1" to false) to Metrics(/* filled from the explained run */),
-        // … all 12 rows
+        // … all 14 rows
     )
     val actual = expected.keys.associateWith { (name, opt) ->
         val s = Scenarios.all.first { it.name == name }
@@ -467,7 +470,7 @@ fun baselineMetrics() = runTest {
 }
 ```
 
-- [ ] **Step 2: Write `RESULTS.md`.** It holds the baseline table (12 rows), a one-line explanation per non-zero cell, and the "counts over scripted actors, not a user study" caveat. Leave a `## kuilt backend` section for Task 9 whose only content is "Pending M1."
+- [ ] **Step 2: Write `RESULTS.md`.** It holds the baseline table (14 rows), a one-line explanation per non-zero cell, and the "counts over scripted actors, not a user study" caveat. Leave a `## kuilt backend` section for Task 9 whose only content is "Pending M1."
 - [ ] **Step 3: Commit.** Take the Draft PR out of draft once Tasks 2–5 are in, and arm auto-merge. **This ends M0.** Post a comment on #2869 with the baseline table and the link.
 
 ---
@@ -628,7 +631,7 @@ Each test **asserts that its rig fired**. For example, `seam.framesDelayed > 0` 
 - Modify: `demo/workspace/RESULTS.md`
 - Create: `demo/workspace/CONTRACTS.md`
 
-- [ ] **Step 1: Write the golden kuilt metrics** for S1–S6. Explain every cell before recording it.
+- [ ] **Step 1: Write the golden kuilt metrics** for S1–S7. Explain every cell before recording it.
 - [ ] **Step 2: Fill `RESULTS.md`'s kuilt section.** Put the side-by-side table in, then score H0–H4 **against the criteria as merged in Task 1, unedited**. For each hypothesis write pass, fail, or stop, with one sentence each.
 - [ ] **Step 3: Write `CONTRACTS.md`** in three columns:
   - *existing primitive used*: `Rga.entries`, `RgaId.dot`, `causalDots`/`causalFloor`, `Quilter`, `RgaGcCoordinator`, `FaultyLoom`.
