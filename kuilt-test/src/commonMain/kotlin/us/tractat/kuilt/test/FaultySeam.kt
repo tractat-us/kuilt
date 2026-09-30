@@ -15,6 +15,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -194,8 +195,20 @@ public class FaultySeam(
             is OutboundDecision.SendBurst -> {
                 // Each held frame goes where IT was addressed — not where the call that happened to
                 // fill the window was going (#2879).
+                //
+                // Routing each frame to its own peer means a held `sendTo` can name a peer that has
+                // left since it was queued. That PeerNotConnected belongs to the held frame, not to
+                // the unrelated call flushing the window — which may be a `broadcast`, which never
+                // throws for a missing peer — so the frame is dropped and the rest of the burst still
+                // goes out. Narrow on purpose: PeerNotConnected is not a supertype of
+                // CancellationException, so cancellation still propagates.
                 for (held in decision.frames) {
-                    send(held.route, held.payload)
+                    try {
+                        send(held.route, held.payload)
+                    } catch (_: PeerNotConnected) {
+                        _framesDropped.incrementAndGet()
+                        continue
+                    }
                     _framesDelivered.incrementAndGet()
                 }
             }
