@@ -218,8 +218,11 @@ different currencies:
   H1 counts against it. kuilt flags the reopening under clause (b).
 - On **S2** the budget scope is unchanged on the server when `r1` returns, because Alex's edit is
   still queued, so the baseline asks nobody. kuilt flags `r1` for Alex under clause (c) once Alex
-  reconnects. This assumes the baseline neither reruns nor prompts when the queued edit flushes on
-  reconnect; that ordering belongs to the baseline's reconnect design (Task 4, and see Q4).
+  reconnects. The baseline's design re-checks a deferred proposal when its actor reconnects, after
+  that actor's queue replays: Alex's `budget30` lands, `budget` has moved since `r1`'s capture, and
+  the server reruns `r1` (`v1` → `v2`) before showing it. That costs one extra agent run and no
+  prompt. So the baseline stays at 0 prompts on S2, and it meets H1's baseline arm there through
+  `agentRuns` rather than `staleTreatedAsCurrent`.
 
 In each case kuilt's prompt is the price of not rerunning, or of not showing a stale answer. What
 **would** count against kuilt on H4: any prompt on S1, where nothing an agent said is in doubt;
