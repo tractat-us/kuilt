@@ -1,6 +1,7 @@
 package us.tractat.kuilt.test
 
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Swatch
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -72,6 +73,16 @@ public sealed interface FaultProfile {
      * controls which message stream is reordered.
      *
      * [seed] guarantees determinism across test runs.
+     *
+     * Each held outbound frame is flushed to its own destination: a `sendTo` frame to its peer, a
+     * `broadcast` frame to everyone. A held `sendTo` whose peer has left by the flush is dropped.
+     * Every held frame counts in [FaultySeam.framesDelayed] when it enters the window.
+     *
+     * **A partial window is never flushed.** Frames still in a window that never fills — because the
+     * test ends, or the profile is swapped or healed — are never delivered. They were counted as
+     * delayed, not dropped, so `framesDropped == 0` does **not** mean nothing was lost under this
+     * profile: compare [FaultySeam.framesDelivered] with what was sent. Flushing on a profile change
+     * is tracked by #2882.
      */
     public data class ReorderWindow(
         val windowSize: Int,
@@ -144,9 +155,14 @@ internal class FaultState(
     private var outboundRandom: Random? = null
     private var inboundRandom: Random? = null
 
-    // Reorder window buffers (outbound / inbound)
-    private val outboundWindow = mutableListOf<ByteArray>()
+    // Reorder window buffers (outbound / inbound). An outbound entry keeps its own [Route]: the
+    // call that fills the window is not the call that queued the other frames in it (#2879).
+    private val outboundWindow = mutableListOf<OutboundFrame>()
     private val inboundWindow = mutableListOf<Swatch>()
+
+    // How many inbound frames a ReorderWindow has taken into its window, lifetime. Read as a delta
+    // around one evaluation so [evaluateInbound] can tell "held" from "dropped" (#2879).
+    private var inboundFramesHeld = 0L
 
     private fun nextOutboundIndex(): Int = outboundCount++
 
@@ -156,26 +172,30 @@ internal class FaultState(
      * Evaluate [profile] for an outbound frame.
      * Returns [OutboundDecision] that tells the link what to do with the send.
      */
-    fun evaluateOutbound(payload: ByteArray): OutboundDecision = evaluateOutboundFor(profile, payload, nextOutboundIndex())
+    fun evaluateOutbound(frame: OutboundFrame): OutboundDecision = evaluateOutboundFor(profile, frame, nextOutboundIndex())
 
     /**
      * Evaluate [profile] for an inbound frame.
-     * Returns the list of frames that should be delivered (may be empty,
-     * may be reordered, may contain the original plus buffered frames).
+     * The outcome's frames are what should be delivered now (may be empty, may be reordered, may
+     * contain the original plus buffered frames); [InboundOutcome.held] says whether [frame] went
+     * into a reorder window rather than being dropped.
      */
-    fun evaluateInbound(frame: Swatch): List<Swatch> {
+    fun evaluateInbound(frame: Swatch): InboundOutcome {
         val index = nextInboundIndex()
-        return evaluateInboundFor(profile, frame, index)
+        val heldBefore = inboundFramesHeld
+        val frames = evaluateInboundFor(profile, frame, index)
+        return InboundOutcome(frames, held = inboundFramesHeld != heldBefore)
     }
 
     // ── Outbound evaluation ───────────────────────────────────────────────────
 
     private fun evaluateOutboundFor(
         p: FaultProfile,
-        payload: ByteArray,
+        frame: OutboundFrame,
         index: Int,
-    ): OutboundDecision =
-        when (p) {
+    ): OutboundDecision {
+        val payload = frame.payload
+        return when (p) {
             is FaultProfile.Healthy -> OutboundDecision.Send(payload)
             is FaultProfile.DropAll -> if (p.direction.appliesToOutbound()) OutboundDecision.Drop else OutboundDecision.Send(payload)
             is FaultProfile.DropProbabilistic -> {
@@ -198,7 +218,7 @@ internal class FaultState(
             }
             is FaultProfile.ReorderWindow -> {
                 if (!p.direction.appliesToOutbound()) return OutboundDecision.Send(payload)
-                outboundWindow += payload
+                outboundWindow += frame
                 if (outboundWindow.size >= p.windowSize) {
                     val flushed = flushOutboundWindow(p)
                     OutboundDecision.SendBurst(flushed)
@@ -218,10 +238,11 @@ internal class FaultState(
             is FaultProfile.CloseAt -> {
                 if (index >= p.frameIndex) OutboundDecision.CloseLink(p.reason) else OutboundDecision.Send(payload)
             }
-            is FaultProfile.Composite -> evaluateCompositeOutbound(p.profiles, payload, index)
+            is FaultProfile.Composite -> evaluateCompositeOutbound(p.profiles, frame, index)
         }
+    }
 
-    private fun flushOutboundWindow(p: FaultProfile.ReorderWindow): List<ByteArray> {
+    private fun flushOutboundWindow(p: FaultProfile.ReorderWindow): List<OutboundFrame> {
         val rng = outboundRandom ?: Random(p.seed).also { outboundRandom = it }
         val shuffled = outboundWindow.toMutableList().also { it.shuffle(rng) }
         outboundWindow.clear()
@@ -230,13 +251,14 @@ internal class FaultState(
 
     private fun evaluateCompositeOutbound(
         profiles: List<FaultProfile>,
-        payload: ByteArray,
+        frame: OutboundFrame,
         index: Int,
     ): OutboundDecision {
-        var current: OutboundDecision = OutboundDecision.Send(payload)
+        var current: OutboundDecision = OutboundDecision.Send(frame.payload)
         var accumulatedDelay = Duration.ZERO
         for (p in profiles) {
-            val decision = evaluateOutboundFor(p, (current as? OutboundDecision.Send)?.payload ?: payload, index)
+            val sendPayload = (current as? OutboundDecision.Send)?.payload ?: frame.payload
+            val decision = evaluateOutboundFor(p, OutboundFrame(sendPayload, frame.route), index)
             when (decision) {
                 is OutboundDecision.Drop -> return OutboundDecision.Drop
                 is OutboundDecision.CloseLink -> return decision
@@ -284,6 +306,7 @@ internal class FaultState(
                     inboundWindow.clear()
                     shuffled
                 } else {
+                    inboundFramesHeld++
                     emptyList()
                 }
             }
@@ -322,6 +345,33 @@ private fun Direction.appliesToOutbound() = this == Direction.Outbound || this =
 
 private fun Direction.appliesToInbound() = this == Direction.Inbound || this == Direction.Both
 
+/** Where an outbound frame is going: one peer, or every peer. */
+internal sealed interface Route {
+    data class To(
+        val peer: PeerId,
+    ) : Route
+
+    data object Broadcast : Route
+}
+
+/**
+ * An outbound frame together with its [route]. A reorder window holds these rather than bare
+ * payloads, so each held frame is flushed to where *it* was going (#2879).
+ */
+internal class OutboundFrame(
+    val payload: ByteArray,
+    val route: Route,
+)
+
+/**
+ * What the inbound path should do with one received frame: deliver [frames] now, and whether the
+ * received frame was [held] in a reorder window (delayed, not dropped) when [frames] is empty.
+ */
+internal class InboundOutcome(
+    val frames: List<Swatch>,
+    val held: Boolean,
+)
+
 /** What the outbound path should do with a frame. */
 internal sealed interface OutboundDecision {
     /** Deliver the (possibly mutated) payload immediately. */
@@ -341,9 +391,9 @@ internal sealed interface OutboundDecision {
     /** Buffer internally for later reorder-window flush. */
     data object Buffer : OutboundDecision
 
-    /** Flush a batch of reordered frames. */
+    /** Flush a batch of reordered frames, each to its own [OutboundFrame.route]. */
     data class SendBurst(
-        val payloads: List<ByteArray>,
+        val frames: List<OutboundFrame>,
     ) : OutboundDecision
 
     /** Close the link with this reason instead of sending. */

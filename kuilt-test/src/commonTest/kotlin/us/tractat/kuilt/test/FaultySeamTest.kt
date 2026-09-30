@@ -384,6 +384,162 @@ class FaultySeamTest {
             assertEquals(3, frames.size)
         }
 
+    /**
+     * A held frame keeps its own destination (#2879). The hub interleaves `sendTo(alex)` and
+     * `sendTo(sam)` through one six-frame window, so the call that fills the window is a
+     * `sendTo(sam)`. Flushing every held frame through *that* call's route would hand sam all six and
+     * alex none.
+     *
+     * **Reordering is proved, not assumed.** Seed 0 permutes a six-frame window to
+     * `[2, 1, 5, 4, 3, 0]`, which puts both peers' frames out of send order, and the test asserts
+     * the exact order each peer saw. A window that forwarded in send order would fail the order
+     * assertions while passing the routing ones. [FaultySeam.framesDelayed] counts the five frames
+     * held before the sixth filled the window.
+     */
+    @Test
+    fun `ReorderWindow flushes each held sendTo frame to its own peer — reordered`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val hub = factory.host(Pattern("Hub"))
+            val alex = factory.join(InMemoryTag("Hub"))
+            val sam = factory.join(InMemoryTag("Hub"))
+            val atAlex = collectBytes(alex)
+            val atSam = collectBytes(sam)
+            testScheduler.runCurrent()
+
+            hub.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 6, seed = 0L, direction = Direction.Outbound))
+            // Send order: A0 S0 A1 S1 A2 S2. The sixth call, sendTo(sam), fills the window.
+            hub.sendTo(alex.selfId, byteArrayOf(10))
+            hub.sendTo(sam.selfId, byteArrayOf(20))
+            hub.sendTo(alex.selfId, byteArrayOf(11))
+            hub.sendTo(sam.selfId, byteArrayOf(21))
+            hub.sendTo(alex.selfId, byteArrayOf(12))
+            hub.sendTo(sam.selfId, byteArrayOf(22))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(listOf(11, 12, 10), atAlex, "alex gets only its own frames, permuted") },
+                { assertEquals(listOf(20, 22, 21), atSam, "sam gets only its own frames, permuted") },
+                { assertEquals(5L, hub.framesDelayed, "five frames sat in the window before the sixth filled it") },
+                { assertEquals(6L, hub.framesDelivered) },
+                { assertEquals(0L, hub.framesDropped) },
+            )
+        }
+
+    /**
+     * A held `broadcast` frame is flushed as a broadcast, and a held `sendTo` frame to its one peer,
+     * even when the call that fills the window is a `sendTo` (#2879).
+     *
+     * Send order: B0 (broadcast), A0 (alex), B1 (broadcast), S0 (sam). Seed 0 permutes a four-frame
+     * window to `[3, 1, 0, 2]`, so alex sees A0 B0 B1 and sam sees S0 B0 B1 — both out of send order.
+     */
+    @Test
+    fun `ReorderWindow flushes a held broadcast to every peer and a held sendTo to one`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val hub = factory.host(Pattern("Hub"))
+            val alex = factory.join(InMemoryTag("Hub"))
+            val sam = factory.join(InMemoryTag("Hub"))
+            val atAlex = collectBytes(alex)
+            val atSam = collectBytes(sam)
+            testScheduler.runCurrent()
+
+            hub.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 4, seed = 0L, direction = Direction.Outbound))
+            hub.broadcast(byteArrayOf(1))
+            hub.sendTo(alex.selfId, byteArrayOf(10))
+            hub.broadcast(byteArrayOf(2))
+            hub.sendTo(sam.selfId, byteArrayOf(20))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(listOf(10, 1, 2), atAlex, "alex gets both broadcasts and its own frame, permuted") },
+                { assertEquals(listOf(20, 1, 2), atSam, "sam gets both broadcasts and its own frame, permuted") },
+                { assertEquals(3L, hub.framesDelayed, "three frames sat in the window before the fourth filled it") },
+                { assertEquals(4L, hub.framesDelivered) },
+            )
+        }
+
+    /**
+     * A held `sendTo` frame whose peer left before the flush is dropped, and the flush carries on.
+     *
+     * Routing each held frame to its own peer (#2879) means the flush can address a peer that is
+     * gone, and `sendTo` throws [us.tractat.kuilt.core.PeerNotConnected] for that. The throw must not
+     * escape the unrelated call that filled the window. Here that call is a `broadcast`, which the
+     * `Seam` contract never lets throw for a missing peer. It must also not cut the burst short, so
+     * sam still gets both broadcasts, and the lost frame is counted as dropped.
+     *
+     * Seed 9 permutes a three-frame window to `[0, 2, 1]`, so alex's frame is flushed **first**: a
+     * flush that stopped at the throw would deliver nothing to sam.
+     */
+    @Test
+    fun `ReorderWindow drops a held sendTo whose peer left — and still flushes the rest`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val hub = factory.host(Pattern("Hub"))
+            val alex = factory.join(InMemoryTag("Hub"))
+            val sam = factory.join(InMemoryTag("Hub"))
+            val atSam = collectBytes(sam)
+            testScheduler.runCurrent()
+
+            hub.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 3, seed = 9L, direction = Direction.Outbound))
+            hub.sendTo(alex.selfId, byteArrayOf(10))
+            alex.close()
+            testScheduler.runCurrent()
+            val alexGone = alex.selfId !in hub.peers.value
+            hub.broadcast(byteArrayOf(1))
+            val escaped =
+                try {
+                    hub.broadcast(byteArrayOf(2))
+                    null
+                } catch (e: us.tractat.kuilt.core.PeerNotConnected) {
+                    e
+                }
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(alexGone, "precondition: alex has left the hub's roster before the flush") },
+                { assertEquals(null, escaped, "the broadcast that filled the window must not throw") },
+                { assertEquals(listOf(2, 1), atSam, "sam gets every frame that still has a peer, permuted") },
+                { assertEquals(1L, hub.framesDropped, "the frame for the departed alex is dropped") },
+                { assertEquals(2L, hub.framesDelayed) },
+                { assertEquals(2L, hub.framesDelivered) },
+            )
+        }
+
+    /**
+     * An inbound frame held in the reorder window is delayed, not dropped (#2879). Before the fix the
+     * held frames were counted in [FaultySeam.framesDropped] even though every one was delivered.
+     */
+    @Test
+    fun `ReorderWindow Inbound counts held frames as delayed — not dropped`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.host(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Alice"))
+            val atB = collectBytes(b)
+            testScheduler.runCurrent()
+
+            b.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 3, seed = 0L, direction = Direction.Inbound))
+            a.broadcast(byteArrayOf(1))
+            a.broadcast(byteArrayOf(2))
+            a.broadcast(byteArrayOf(3))
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(setOf(1, 2, 3), atB.toSet(), "every held frame is delivered once the window fills") },
+                { assertEquals(3, atB.size) },
+                { assertEquals(0L, b.framesDropped, "a held frame is not a dropped frame") },
+                { assertEquals(2L, b.framesDelayed, "two frames sat in the window before the third filled it") },
+                { assertEquals(3L, b.framesDelivered) },
+            )
+        }
+
+    private fun kotlinx.coroutines.test.TestScope.collectBytes(seam: FaultySeam): List<Int> {
+        val seen = mutableListOf<Int>()
+        backgroundScope.launch { seam.incoming.collect { seen += it.byteAt(0).toInt() } }
+        return seen
+    }
+
     // ── BufferCeiling ─────────────────────────────────────────────────────────
 
     @Test

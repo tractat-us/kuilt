@@ -310,12 +310,13 @@ either, and is otherwise **no difference**.
   a real `Accept` entry, present in its chooser's own copy the moment it is made. The baseline under
   `optimisticLocal = true` gets the same credit for what an optimistic screen would show. Accepts
   stay out of the final views in both designs, since `editsPreserved` compares edits only.
-- **One known fault in the test network.** The kuilt-test reorder fault (`ReorderWindow` in
-  `FaultySeam`) delivers held frames to the wrong peer and never counts them as delayed
-  (tractat-us/kuilt#2879). It touches one trace,
-  `AdversarialTraceTest.reorderedAndDuplicatedProposalKeepsBasis`: its reordered frames are also
-  misdelivered, which is extra adversity rather than less, and the copies still converge. The table
-  above runs on a healthy network and is not affected.
+- **One known fault in the test network, since fixed.** When these results were measured, the
+  kuilt-test reorder fault (`ReorderWindow` in `FaultySeam`) delivered held frames to the wrong peer
+  and never counted them as delayed (tractat-us/kuilt#2879). It touched one trace,
+  `AdversarialTraceTest.reorderedAndDuplicatedProposalKeepsBasis`: its reordered frames were also
+  misdelivered, which was extra adversity rather than less, and the copies still converged. The
+  table above ran on a healthy network and was not affected. tractat-us/kuilt#2881 fixed the fault:
+  held frames reach their own peers and count as delayed, and the trace still passes.
 
 ## Proposed changes to `HYPOTHESES.md` (not applied)
 
