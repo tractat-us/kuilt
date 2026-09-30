@@ -43,11 +43,15 @@ public data class Scenario(val name: String, val actors: List<ActorId>, val step
             when (it) {
                 is Step.Edit -> it.key to it.entry
                 is Step.ToolResult -> it.key to it.entry
-                else -> null
+                is Step.StartAgent, is Step.ReleaseAgent, is Step.Accept, is Step.Partition, is Step.Reconnect -> null
             }
         }
         inputs = created.toMap()
         require(inputs.size == created.size) { "$name: an input key is created twice: ${created.map { it.first }}" }
+        // A proposal is an agent's output, never a scripted input. This is what keeps BaselineBackend's
+        // scopeOf from ever seeing one.
+        val proposals = created.filter { it.second is WorkspaceEntry.AgentProposal }.map { it.first }
+        require(proposals.isEmpty()) { "$name: an Edit or ToolResult carries an AgentProposal: $proposals" }
         val stepActors = steps.mapNotNull {
             when (it) {
                 is Step.Edit -> it.actor
@@ -55,7 +59,7 @@ public data class Scenario(val name: String, val actors: List<ActorId>, val step
                 is Step.Accept -> it.actor
                 is Step.Partition -> it.actor
                 is Step.Reconnect -> it.actor
-                else -> null
+                is Step.ToolResult, is Step.ReleaseAgent -> null
             }
         }
         require(actors.containsAll(stepActors)) { "$name: a step names an actor outside $actors" }

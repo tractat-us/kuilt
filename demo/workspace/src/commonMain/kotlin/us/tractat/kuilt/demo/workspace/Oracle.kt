@@ -28,8 +28,11 @@ public object Relevance {
                 chosen == null ||
                     missing.budget < chosen.pricePerHead ||
                     Fixtures.venues.any { it.walkMinutes < chosen.walkMinutes && it.pricePerHead <= missing.budget }
-            // Exhaustive on purpose: a new WorkspaceEntry (AgentProposal, Task 6) must decide its own relevance.
+            // Exhaustive on purpose: a new WorkspaceEntry must decide its own relevance.
             is WorkspaceEntry.Note -> false
+            // A proposal is an agent's output, not an input it could have missed, so it is never a
+            // relevance input.
+            is WorkspaceEntry.AgentProposal -> false
         }
     }
 }
