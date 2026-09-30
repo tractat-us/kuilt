@@ -58,7 +58,7 @@ package us.tractat.kuilt.demo.workspace
  *
  * **Final views.** A connected actor's view is the server's entries. A partitioned actor's is its
  * last sync, plus its queued edits under `optimisticLocal`. `remote` is treated like any other
- * actor; it is never partitioned in S1–S6, so its view there is the server's entries.
+ * actor; it is never partitioned in S1–S7, so its view there is the server's entries.
  *
  * [run] is `suspend` only to match [WorkspaceBackend]: it is a plain sequential interpreter.
  */

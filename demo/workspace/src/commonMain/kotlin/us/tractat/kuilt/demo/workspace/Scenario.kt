@@ -62,7 +62,7 @@ public data class Scenario(val name: String, val actors: List<ActorId>, val step
     }
 }
 
-/** S1–S6 exactly as the step lists in `HYPOTHESES.md` give them. */
+/** S1–S7 exactly as the step lists in `HYPOTHESES.md` give them. */
 public object Scenarios {
     private val alex = ActorId("alex")
     private val sam = ActorId("sam")
@@ -131,17 +131,27 @@ public object Scenarios {
         ),
     )
 
-    /** S6: control. S3's steps with one human, who stays connected throughout. */
+    /** S6: S2 with no partition. Alex stays connected throughout, which isolates what S2's outage costs. */
     public val s6: Scenario = Scenario(
-        "S6", listOf(alex, remote),
+        "S6", listOf(alex, sam, remote),
         listOf(
             Step.StartAgent("r1", host = remote), // sees nothing → v1
-            Step.Edit(InputKey("closeV1"), alex, WorkspaceEntry.Report.Closed(alex, v1)),
-            Step.ReleaseAgent("r1"), // returns v1
+            Step.Edit(InputKey("budget30"), alex, WorkspaceEntry.PreferenceSet(alex, budget = 30)), // alex is connected
+            Step.ReleaseAgent("r1"), // returns v1 (40); truth is now v2
         ),
     )
 
-    public val all: List<Scenario> = listOf(s1, s2, s3, s4, s5, s6)
+    /** S7: a harmless note on v1 while the agent is out. Notes never change the pick, so v1 stays right. */
+    public val s7: Scenario = Scenario(
+        "S7", listOf(alex, sam, remote),
+        listOf(
+            Step.StartAgent("r1", host = remote), // sees nothing → v1
+            Step.Edit(InputKey("noteV1"), sam, WorkspaceEntry.Note(sam, v1, "Book the window table")),
+            Step.ReleaseAgent("r1"), // returns v1; truth is still v1
+        ),
+    )
+
+    public val all: List<Scenario> = listOf(s1, s2, s3, s4, s5, s6, s7)
 }
 
 /**
