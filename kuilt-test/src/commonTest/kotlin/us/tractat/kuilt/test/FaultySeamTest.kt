@@ -460,6 +460,53 @@ class FaultySeamTest {
         }
 
     /**
+     * A held `sendTo` frame whose peer left before the flush is dropped, and the flush carries on.
+     *
+     * Routing each held frame to its own peer (#2879) means the flush can address a peer that is
+     * gone, and `sendTo` throws [us.tractat.kuilt.core.PeerNotConnected] for that. The throw must not
+     * escape the unrelated call that filled the window. Here that call is a `broadcast`, which the
+     * `Seam` contract never lets throw for a missing peer. It must also not cut the burst short, so
+     * sam still gets both broadcasts, and the lost frame is counted as dropped.
+     *
+     * Seed 9 permutes a three-frame window to `[0, 2, 1]`, so alex's frame is flushed **first**: a
+     * flush that stopped at the throw would deliver nothing to sam.
+     */
+    @Test
+    fun `ReorderWindow drops a held sendTo whose peer left — and still flushes the rest`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val hub = factory.host(Pattern("Hub"))
+            val alex = factory.join(InMemoryTag("Hub"))
+            val sam = factory.join(InMemoryTag("Hub"))
+            val atSam = collectBytes(sam)
+            testScheduler.runCurrent()
+
+            hub.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 3, seed = 9L, direction = Direction.Outbound))
+            hub.sendTo(alex.selfId, byteArrayOf(10))
+            alex.close()
+            testScheduler.runCurrent()
+            val alexGone = alex.selfId !in hub.peers.value
+            hub.broadcast(byteArrayOf(1))
+            val escaped =
+                try {
+                    hub.broadcast(byteArrayOf(2))
+                    null
+                } catch (e: us.tractat.kuilt.core.PeerNotConnected) {
+                    e
+                }
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(alexGone, "precondition: alex has left the hub's roster before the flush") },
+                { assertEquals(null, escaped, "the broadcast that filled the window must not throw") },
+                { assertEquals(listOf(2, 1), atSam, "sam gets every frame that still has a peer, permuted") },
+                { assertEquals(1L, hub.framesDropped, "the frame for the departed alex is dropped") },
+                { assertEquals(2L, hub.framesDelayed) },
+                { assertEquals(2L, hub.framesDelivered) },
+            )
+        }
+
+    /**
      * An inbound frame held in the reorder window is delayed, not dropped (#2879). Before the fix the
      * held frames were counted in [FaultySeam.framesDropped] even though every one was delivered.
      */
