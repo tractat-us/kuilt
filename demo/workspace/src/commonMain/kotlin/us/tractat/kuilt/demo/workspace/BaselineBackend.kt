@@ -19,8 +19,8 @@ package us.tractat.kuilt.demo.workspace
  *
  * **An optimistic offline accept counts as served.** Under `optimisticLocal` a queued `Accept` is
  * counted in `outageActionsServed` because an optimistic client would show "you chose X" locally.
- * The domain has no accept entry, so nothing appears in the actor's final view: the credit is a
- * counting choice, not an observable effect. HYPOTHESES.md does not settle this; the choice favours
+ * This backend stores no accept entry (it counts accepts against `plan`), so nothing appears in the
+ * actor's final view: the credit is a counting choice, not an observable effect. HYPOTHESES.md does not settle this; the choice favours
  * the baseline.
  *
  * The version a queued write "last saw" includes the actor's own earlier queued writes to the same
@@ -80,6 +80,12 @@ private fun scopeOf(entry: WorkspaceEntry): Scope = when (entry) {
     is WorkspaceEntry.Report -> Scope.Venue(entry.venue)
     is WorkspaceEntry.Note -> Scope.Venue(entry.venue)
     is WorkspaceEntry.PreferenceSet -> Scope.Budget
+    // The baseline keeps its own proposals of record and never stores one on the server.
+    // Scenario's init rejects a proposal as an Edit or ToolResult input, so no valid scenario gets here.
+    is WorkspaceEntry.AgentProposal -> error("the baseline server never stores an AgentProposal: $entry")
+    // The baseline counts accepts against its `plan` version and stores no accept entry. Scenario's
+    // init rejects an accept as an Edit or ToolResult input, so this is unreachable too.
+    is WorkspaceEntry.Accept -> error("the baseline server never stores an Accept: $entry")
 }
 
 /** The scopes a recommendation depends on. Recommending nothing depends on everything. */
@@ -100,7 +106,7 @@ private class Capture(val host: ActorId, val seen: List<Pair<InputKey, Workspace
     val basedOn: Map<Scope, Int> = agentScopes.associateWith { s -> versionIn(s, seen.map { it.second }) }
 }
 
-private data class Proposal(
+private data class BaselineProposal(
     val request: String,
     val recommendation: Recommendation,
     val basis: Set<InputKey>,
@@ -119,7 +125,7 @@ private class Interpreter(private val scenario: Scenario, private val optimistic
     private val queues = mutableMapOf<ActorId, MutableList<Queued>>()
     private val created = mutableMapOf<ActorId, MutableSet<InputKey>>()
     private val captures = mutableMapOf<String, Capture>()
-    private val released = mutableMapOf<String, Proposal>()
+    private val released = mutableMapOf<String, BaselineProposal>()
     private val deferred = mutableMapOf<ActorId, MutableList<String>>()
     /** Requests each actor has been shown some version of. */
     private val shown = mutableMapOf<ActorId, MutableSet<String>>()
@@ -199,7 +205,7 @@ private class Interpreter(private val scenario: Scenario, private val optimistic
         val capture = captures.remove(request) ?: error("request $request released without a StartAgent")
         require(capture.host !in partitioned) { "release from a partitioned host is not modelled" }
         val inputs = capture.seen + capture.toolResults
-        val first = Proposal(
+        val first = BaselineProposal(
             request = request,
             recommendation = recommend(inputs),
             basis = inputs.map { it.first }.toSet(),
@@ -247,7 +253,7 @@ private class Interpreter(private val scenario: Scenario, private val optimistic
     }
 
     /** The version check. Returns [proposal] if its scopes are unmoved, else the rerun that replaces it. */
-    private fun versionCheck(proposal: Proposal): Proposal {
+    private fun versionCheck(proposal: BaselineProposal): BaselineProposal {
         val current = server.map { it.second }
         val moved = dependsOn(proposal.recommendation).any { versionIn(it, current) != proposal.basedOn.getValue(it) }
         if (!moved) return proposal
@@ -262,7 +268,7 @@ private class Interpreter(private val scenario: Scenario, private val optimistic
         )
     }
 
-    private fun present(actor: ActorId, proposal: Proposal) {
+    private fun present(actor: ActorId, proposal: BaselineProposal) {
         shown.getOrPut(actor) { mutableSetOf() } += proposal.request
         presentations += Presentation(
             actor = actor,

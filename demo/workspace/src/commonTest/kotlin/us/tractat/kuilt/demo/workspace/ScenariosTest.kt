@@ -3,6 +3,7 @@ package us.tractat.kuilt.demo.workspace
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /** Pins Scenarios.all to the step lists in HYPOTHESES.md, including the picks their comments predict. */
 class ScenariosTest {
@@ -75,4 +76,39 @@ class ScenariosTest {
         setOf(remote),
         Scenarios.all.flatMap { it.steps }.filterIsInstance<Step.StartAgent>().map { it.host }.toSet(),
     )
+
+    /** A proposal is an agent's output, never a scripted input: the baseline has no scope to store one in. */
+    @Test
+    fun aScenarioRejectsAnAgentProposalAsAnInput() {
+        val proposal = WorkspaceEntry.AgentProposal(remote, RequestId("r1"), listOf(emptyList()), Recommendation(null))
+        assertAll(
+            {
+                assertFailsWith<IllegalArgumentException> {
+                    Scenario("edit", listOf(alex), listOf(Step.Edit(InputKey("p"), alex, proposal)))
+                }
+            },
+            {
+                assertFailsWith<IllegalArgumentException> {
+                    Scenario(
+                        "tool", listOf(remote),
+                        listOf(Step.StartAgent("r1", remote), Step.ToolResult("r1", InputKey("p"), proposal)),
+                    )
+                }
+            },
+        )
+    }
+
+    /** An accept is a person's choice, recorded by an Accept step, never a scripted input. */
+    @Test
+    fun aScenarioRejectsAnAcceptAsAnInput() {
+        val accept = WorkspaceEntry.Accept(alex, RequestId("r1"))
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { Scenario("edit", listOf(alex), listOf(Step.Edit(InputKey("a"), alex, accept))) } },
+            {
+                assertFailsWith<IllegalArgumentException> {
+                    Scenario("tool", listOf(remote), listOf(Step.StartAgent("r1", remote), Step.ToolResult("r1", InputKey("a"), accept)))
+                }
+            },
+        )
+    }
 }

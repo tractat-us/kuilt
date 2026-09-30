@@ -46,4 +46,19 @@ class RelevanceTest {
         { assertFalse(Relevance.isRelevant(WorkspaceEntry.Note(sam, v1, "Quiet back room"), Recommendation(v1))) },
         { assertFalse(Relevance.isRelevant(WorkspaceEntry.Note(sam, v2, "Quiet back room"), Recommendation(null))) },
     )
+
+    @Test
+    fun agentProposalIsNeverRelevant() {
+        val proposal = WorkspaceEntry.AgentProposal(sam, RequestId("r1"), listOf(emptyList()), Recommendation(v2))
+        assertAll(
+            { assertFalse(Relevance.isRelevant(proposal, Recommendation(v1))) },
+            { assertFalse(Relevance.isRelevant(proposal, Recommendation(null))) },
+        )
+    }
+
+    @Test
+    fun acceptIsNeverRelevant() = assertAll(
+        { assertFalse(Relevance.isRelevant(WorkspaceEntry.Accept(sam, RequestId("r1")), Recommendation(v1))) },
+        { assertFalse(Relevance.isRelevant(WorkspaceEntry.Accept(sam, RequestId("r1")), Recommendation(null))) },
+    )
 }

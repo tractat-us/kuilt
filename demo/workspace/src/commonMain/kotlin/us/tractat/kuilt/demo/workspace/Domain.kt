@@ -2,6 +2,7 @@ package us.tractat.kuilt.demo.workspace
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.crdt.Dot
 
 @Serializable public data class ActorId(val value: String)
 @Serializable public data class VenueId(val value: String)
@@ -35,7 +36,25 @@ public sealed interface WorkspaceEntry {
 
     @Serializable @SerialName("budget") public data class PreferenceSet(override val by: ActorId, val budget: Int) : WorkspaceEntry
     @Serializable @SerialName("note") public data class Note(override val by: ActorId, val venue: VenueId, val text: String) : WorkspaceEntry
-    // AgentProposal is added in Task 6, once Proposal exists.
+
+    /**
+     * The wire form of a [Proposal]: [basis] holds the dots the agent received, one list per step,
+     * with step `i` at position `i`. It is an agent's output, never a scripted input, and it is
+     * turned back into a trusted [Proposal] only through [toProposal].
+     */
+    @Serializable @SerialName("proposal") public data class AgentProposal(
+        override val by: ActorId,
+        val request: RequestId,
+        val basis: List<List<Dot>>,
+        val recommendation: Recommendation,
+    ) : WorkspaceEntry
+
+    /**
+     * [by] accepts the proposal from [request]: a person's choice, appended like any other entry so
+     * that an offline accept shows on its chooser's own replica at once. Never a scripted input and
+     * never something an agent could have missed; `Scenario` rejects one in an `Edit` or `ToolResult`.
+     */
+    @Serializable @SerialName("accept") public data class Accept(override val by: ActorId, val request: RequestId) : WorkspaceEntry
 }
 
 public object ScriptedAgent {

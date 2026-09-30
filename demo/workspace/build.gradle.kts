@@ -19,6 +19,9 @@ kotlin {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.kotlinx.serialization.json)
+            // Decodes Quilter's wire frames, so an adversarial trace can see which frames carried a proposal.
+            implementation(libs.kotlinx.serialization.cbor)
         }
         jvmTest.dependencies { runtimeOnly(libs.logback) }
     }
