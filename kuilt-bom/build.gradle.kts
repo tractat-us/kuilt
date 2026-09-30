@@ -58,6 +58,7 @@ val deliberatelyUnpublished = setOf(
     ":demo-cli", // Patchwork demo terminal peer (plain kotlinJvm application, never published)
     ":demo-web", // Patchwork demo browser page (plain KMP wasmJs executable, never published)
     ":demo-tap", // Patchwork demo reach-in harness (plain kotlinJvm application, never published)
+    ":demo-workspace-state", // agent-workspace M1 state probe (plain KMP jvm, never published)
 ) + if (providers.gradleProperty("includeSpike").isPresent) {
     setOf(":spike") // Phase-0 kuilt-nw connectivity spike (#1403), opt-in via -PincludeSpike; throwaway
 } else {

@@ -136,6 +136,9 @@ include(":demo-web")
 project(":demo-web").projectDir = file("demo/web")
 include(":demo-tap")
 project(":demo-tap").projectDir = file("demo/tap")
+// Agent-workspace M1 shared-state semantics probe (#2869); unpublished, JVM only.
+include(":demo-workspace-state")
+project(":demo-workspace-state").projectDir = file("demo/workspace-state")
 
 // Phase-0 connectivity spike for kuilt-nw (#1403) — opt-in only, kept out of the
 // default build graph so a signing-less CI runner never builds it.
