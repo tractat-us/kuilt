@@ -107,4 +107,26 @@ object MergeProbe {
         val (s, hs) = base(m)
         return m.encodedSize(m.setPrice(s, editor, hs[0], 35))
     }
+
+    /**
+     * P5 against list size: the encoded delta of one price edit (on replica [a], to the first venue)
+     * on a shortlist of [venues] venues, all added on [a]. Answers whether a field edit's delta
+     * grows with the list.
+     */
+    fun <S> fieldEditSizeAt(m: DinnerModel<S>, venues: Int): Int {
+        var s = m.empty(a)
+        val hs = mutableListOf<VenueHandle>()
+        repeat(venues) { i ->
+            val (s2, h) = m.addVenue(s, a, "V$i", 20 + i)
+            s = s2
+            hs += h
+        }
+        return m.encodedSize(m.setPrice(s, a, hs[0], 35))
+    }
+
+    /** The P1b merged state (Due priced 22 on [a], Uno concurrently removed on [b]) and the base handles. */
+    fun <S> afterShift(m: DinnerModel<S>): Pair<S, List<VenueHandle>> {
+        val (s, hs) = base(m)
+        return bothOrders(m, m.setPrice(s, a, hs[1], 22), m.removeVenue(s, b, hs[0])) to hs
+    }
 }

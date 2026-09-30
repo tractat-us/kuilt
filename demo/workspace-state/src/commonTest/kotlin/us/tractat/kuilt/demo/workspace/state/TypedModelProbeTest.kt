@@ -58,9 +58,21 @@ class TypedModelProbeTest {
      */
     @Test fun concurrentFieldEditKeepsOneVenueAtTheGreaterRgaIdPrice() {
         val r = MergeProbe.concurrentFieldEdit(m)
+        val (s, hs) = MergeProbe.base(m)
+        val merged = m.merge(m.setPrice(s, MergeProbe.a, hs[0], 35), m.setPrice(s, MergeProbe.b, hs[0], 45))
+        val priceSets = merged.log.entries()
+            .mapNotNull { (id, e) -> (e as? Entry.PriceSet)?.let { Triple(id.lamport, id.replicaId, it.price) } }
+            .sortedBy { it.second.value }
         assertAll(
             { assertEquals(VenueView(r.base[0], "Uno", 45), r.byHandle(r.base[0]), "b's (4, b) beats a's (4, a)") },
             { assertEquals(listOf("Uno@45", "Due@25", "Tre@30"), r.rows, "merged shortlist") },
+            {
+                assertEquals(
+                    listOf(Triple(4L, MergeProbe.a, 35), Triple(4L, MergeProbe.b, 45)),
+                    priceSets,
+                    "both PriceSets stay in the log, both at Lamport 4",
+                )
+            },
         )
     }
 
@@ -88,5 +100,18 @@ class TypedModelProbeTest {
      */
     @Test fun fieldEditDeltaIs135Bytes() {
         assertEquals(135, MergeProbe.fieldEditSize(m))
+    }
+
+    /**
+     * P5 against list size: one price edit on a 1-venue and on a 10-venue shortlist. The delta is
+     * the one inserted `PriceSet`, whatever the log already holds, so the two sizes are equal.
+     */
+    @Test fun fieldEditDeltaDoesNotGrowWithTheList() {
+        val one = MergeProbe.fieldEditSizeAt(m, 1)
+        val ten = MergeProbe.fieldEditSizeAt(m, 10)
+        assertAll(
+            { assertEquals(one, ten, "typed delta at 1 venue equals the delta at 10") },
+            { assertEquals(135, one, "JVM CBOR bytes at 1 venue") },
+        )
     }
 }

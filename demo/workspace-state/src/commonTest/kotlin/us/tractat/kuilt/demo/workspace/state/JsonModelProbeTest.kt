@@ -80,6 +80,32 @@ class JsonModelProbeTest {
     }
 
     /**
+     * UNSUPPORTED, on the P1b merged state itself: after a's price edit on Due and b's concurrent
+     * removal of Uno merge, a UI on `b` still holding Due's base handle sets its price. a's edit
+     * replaced the handle's element, so `JsonModel.setPrice` throws the stale-handle refusal. The typed
+     * counterpart lands (`TypedModelProbeTest.actionThroughHandleAfterShiftLandsOnDue`).
+     */
+    @Test fun staleHandleActionOnTheShiftedMergeThrows() {
+        val (merged, hs) = MergeProbe.afterShift(m)
+        val refusal = assertFailsWith<IllegalStateException> { m.setPrice(merged, MergeProbe.b, hs[1], 20) }
+        assertAll(
+            {
+                assertEquals(
+                    listOf("Due@22", "Tre@30"),
+                    m.shortlist(merged).map { "${it.name}@${it.pricePerHead}" },
+                    "precondition: the P1b merge",
+                )
+            },
+            {
+                assertTrue(
+                    refusal.message.orEmpty().contains("is not visible (never added here, removed, or replaced by a setPrice)"),
+                    "stale-handle refusal, not some other failure: ${refusal.message}",
+                )
+            },
+        )
+    }
+
+    /**
      * P2: TWO Unos, at 45 then 35, each under a new dot; the original is gone.
      *
      * OBSERVED: each replica replaces Uno with its own element inserted after Uno — `(4, b, 1)` and
@@ -177,6 +203,20 @@ class JsonModelProbeTest {
                     "a non-author's delta still carries the whole shortlist Array",
                 )
             },
+        )
+    }
+
+    /**
+     * P5 against list size: the same price edit on a 1-venue and on a 10-venue shortlist. The delta
+     * carries the whole `shortlist` Array, so it grows with the list.
+     */
+    @Test fun fieldEditDeltaGrowsWithTheList() {
+        val one = MergeProbe.fieldEditSizeAt(m, 1)
+        val ten = MergeProbe.fieldEditSizeAt(m, 10)
+        assertAll(
+            { assertEquals(843, one, "JVM CBOR bytes at 1 venue") },
+            { assertEquals(3997, ten, "JVM CBOR bytes at 10 venues") },
+            { assertTrue(ten > one, "json delta at 10 venues ($ten) exceeds the delta at 1 ($one)") },
         )
     }
 
