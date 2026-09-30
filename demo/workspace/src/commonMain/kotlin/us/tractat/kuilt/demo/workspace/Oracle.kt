@@ -28,8 +28,8 @@ public object Relevance {
                 chosen == null ||
                     missing.budget < chosen.pricePerHead ||
                     Fixtures.venues.any { it.walkMinutes < chosen.walkMinutes && it.pricePerHead <= missing.budget }
-            // A Note is never relevant. Keep this arm: AgentProposal joins WorkspaceEntry in Task 6.
-            else -> false
+            // Exhaustive on purpose: a new WorkspaceEntry (AgentProposal, Task 6) must decide its own relevance.
+            is WorkspaceEntry.Note -> false
         }
     }
 }
@@ -42,13 +42,9 @@ public object Oracle {
      * No scenario creates two identical entries.
      */
     public fun score(scenario: Scenario, result: RunResult): Metrics {
-        val entries: Map<InputKey, WorkspaceEntry> = scenario.steps.mapNotNull {
-            when (it) {
-                is Step.Edit -> it.key to it.entry
-                is Step.ToolResult -> it.key to it.entry
-                else -> null
-            }
-        }.toMap()
+        val missingViews = scenario.actors.toSet() - result.finalViews.keys
+        require(missingViews.isEmpty()) { "${scenario.name}: no final view reported for $missingViews" }
+        val entries: Map<InputKey, WorkspaceEntry> = scenario.inputs
         // Ground truth: rerun the deterministic agent on basis ∪ what the presenter knew, in scenario order.
         val order: List<InputKey> = entries.keys.toList()
         fun truth(p: Presentation): Recommendation {
@@ -59,7 +55,7 @@ public object Oracle {
         val stale = result.presentations.count { p -> p.shownAsApplicable && truth(p) != p.recommendation }
         val falseInvalidations = result.presentations.count { p -> !p.shownAsApplicable && truth(p) == p.recommendation }
         val edits = scenario.steps.filterIsInstance<Step.Edit>()
-        val preserved = edits.count { e -> result.finalViews.values.all { view -> e.entry in view } }
+        val preserved = edits.count { e -> scenario.actors.all { actor -> e.entry in result.finalViews.getValue(actor) } }
         return Metrics(
             editsMade = edits.size, editsPreserved = preserved,
             agentRuns = result.agentRuns,
