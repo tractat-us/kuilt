@@ -60,9 +60,17 @@ public data class TypedState(val log: Rga<Entry>, val lastDelta: Rga<Entry>?)
  * `TwoLogProductTest`). The two logs also ran separate Lamport clocks. One log gives one dot space
  * and one clock.
  *
- * [shortlist] folds the log in `entries()` order, which is [RgaId] order `(lamport, replica)`:
- * the last [Entry.PriceSet] per target wins, and a target with any [Entry.Removed] is hidden,
- * together with every [Entry.PriceSet] aimed at it (remove wins).
+ * Last-writer-wins is explicit, by [RgaId] `(lamport, replica)`: the [Entry.PriceSet] with the
+ * greatest id per target wins, and so does the [Entry.BudgetSet] with the greatest id. A target
+ * with any [Entry.Removed] is hidden, together with every [Entry.PriceSet] aimed at it (remove
+ * wins).
+ *
+ * Why the model sorts explicitly: **`Rga` sequence order (`entries()`) is NOT [RgaId] order.** The
+ * sequence is a depth-first walk of the insert-after tree with siblings in *descending* id order,
+ * so when `a` and `b` both append after the same element, `entries()` yields the higher id first
+ * and the lower id last — "last in `entries()`" would pick the lower id (pinned by
+ * `TypedModelOrderTest`). [RgaId] order still respects causality: an insert made after seeing
+ * another has a higher Lamport stamp.
  */
 public object TypedModel : DinnerModel<TypedState> {
     override val name: String = "typed"
@@ -98,15 +106,12 @@ public object TypedModel : DinnerModel<TypedState> {
 
     override fun shortlist(s: TypedState): List<VenueView> {
         val entries = s.log.entries()
-        val prices = mutableMapOf<Dot, Int>()
-        val removed = mutableSetOf<Dot>()
-        for ((_, entry) in entries) {
-            when (entry) {
-                is Entry.PriceSet -> prices[entry.target] = entry.price
-                is Entry.Removed -> removed += entry.target
-                is Entry.VenueAdded, is Entry.BudgetSet -> Unit
-            }
-        }
+        // Sorted by RgaId, not taken in entries() order: sequence order is not RgaId order.
+        val prices = entries
+            .mapNotNull { (id, entry) -> (entry as? Entry.PriceSet)?.let { id to it } }
+            .sortedBy { (id, _) -> id }
+            .associate { (_, set) -> set.target to set.price }
+        val removed = entries.mapNotNull { (_, entry) -> (entry as? Entry.Removed)?.target }.toSet()
         return entries.mapNotNull { (id, entry) ->
             (entry as? Entry.VenueAdded)
                 ?.takeIf { id.dot !in removed }
@@ -115,8 +120,9 @@ public object TypedModel : DinnerModel<TypedState> {
     }
 
     /**
-     * The effective [Entry.BudgetSet] followed by every other [Entry.BudgetSet] its author is not
-     * proven to have seen, in log `entries()` order.
+     * The effective budget ([effectiveBudget], the greatest [RgaId]) FIRST, then every other
+     * [Entry.BudgetSet] its author is not proven to have seen, in descending [RgaId] order — so
+     * the list reads "the winner, then the losers from most to least recent".
      *
      * "Proven seen" is what the [Rga] log honestly records: the causal past of the effective
      * insert is the transitive closure of its `after` predecessor link (`Rga.positionsFor`) — the
@@ -131,24 +137,26 @@ public object TypedModel : DinnerModel<TypedState> {
      * records only the one predecessor, so this is an over-approximation of concurrency.
      */
     override fun budgetCandidates(s: TypedState): List<Int> {
-        val entries = s.log.entries()
-        val budgets = entries.filter { (_, entry) -> entry is Entry.BudgetSet }
-        val effective = budgets.lastOrNull() ?: return emptyList()
-        val afterOf = s.log.positionsFor(entries.map { it.first }.toSet())
-        val seen = causalPast(effective.first, afterOf, entries.map { it.first })
+        val ids = s.log.entries().map { it.first }
+        val budgets = budgetsNewestFirst(s)
+        val (effectiveId, _) = budgets.firstOrNull() ?: return emptyList()
+        val seen = causalPast(effectiveId, s.log.positionsFor(ids.toSet()), ids)
         return budgets
-            .filter { (id, _) -> id == effective.first || id !in seen }
-            .map { (_, entry) -> (entry as Entry.BudgetSet).budget }
+            .filter { (id, _) -> id == effectiveId || id !in seen }
+            .map { (_, budget) -> budget }
     }
 
     /**
-     * The last [Entry.BudgetSet] in log `entries()` order, i.e. the greatest [RgaId]
-     * `(lamport, replica)`. A deterministic last-writer-wins answer; [budgetCandidates] is where
-     * a concurrent loser stays visible.
+     * The [Entry.BudgetSet] with the greatest [RgaId] `(lamport, replica)` — explicit
+     * last-writer-wins by id, NOT the last one in `entries()` order (see the class KDoc).
+     * [budgetCandidates] is where a concurrent loser stays visible.
      */
-    override fun effectiveBudget(s: TypedState): Int? = s.log.entries()
-        .mapNotNull { (_, entry) -> (entry as? Entry.BudgetSet)?.budget }
-        .lastOrNull()
+    override fun effectiveBudget(s: TypedState): Int? = budgetsNewestFirst(s).firstOrNull()?.second
+
+    /** Every [Entry.BudgetSet] with its id, greatest [RgaId] first. */
+    private fun budgetsNewestFirst(s: TypedState): List<Pair<RgaId, Int>> = s.log.entries()
+        .mapNotNull { (id, entry) -> (entry as? Entry.BudgetSet)?.let { id to it.budget } }
+        .sortedByDescending { (id, _) -> id }
 
     /** The log's own `causalDots()`: one dot per input, all in one dot space. */
     override fun causalDots(s: TypedState): Set<Dot> = s.log.causalDots()

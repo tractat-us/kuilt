@@ -27,9 +27,12 @@ class IdentityTest {
 
     /** The expected finding: a `JsonNode.Leaf` write mints no dot the document exposes (Review Focus 4). */
     @Test fun jsonModelBudgetLeafHasNoDot() {
-        val (s1, _) = JsonModel.addVenue(JsonModel.empty(a), a, "Uno", 40)
+        val (s1, handle) = JsonModel.addVenue(JsonModel.empty(a), a, "Uno", 40)
         val before = JsonModel.causalDots(s1)
         val after = JsonModel.causalDots(JsonModel.setBudget(s1, a, 30))
-        assertEquals(before, after, "Leaf budget contributes no dot (Review Focus 4)")
+        assertAll(
+            { assertTrue(handle.dot in before, "json: venue has an identity") },
+            { assertEquals(before, after, "Leaf budget contributes no dot (Review Focus 4)") },
+        )
     }
 }
