@@ -73,6 +73,16 @@ public sealed interface FaultProfile {
      * controls which message stream is reordered.
      *
      * [seed] guarantees determinism across test runs.
+     *
+     * Each held outbound frame is flushed to its own destination: a `sendTo` frame to its peer, a
+     * `broadcast` frame to everyone. A held `sendTo` whose peer has left by the flush is dropped.
+     * Every held frame counts in [FaultySeam.framesDelayed] when it enters the window.
+     *
+     * **A partial window is never flushed.** Frames still in a window that never fills — because the
+     * test ends, or the profile is swapped or healed — are never delivered. They were counted as
+     * delayed, not dropped, so `framesDropped == 0` does **not** mean nothing was lost under this
+     * profile: compare [FaultySeam.framesDelivered] with what was sent. Flushing on a profile change
+     * is tracked by #2882.
      */
     public data class ReorderWindow(
         val windowSize: Int,
