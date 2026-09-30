@@ -4,8 +4,11 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class AssessmentTest {
     private val host = ReplicaId("remote")
@@ -63,6 +66,24 @@ class AssessmentTest {
         val p = InputCapture.capture(RequestId("r1"), hostLog).complete(Recommendation(v1))
         val removed = hostLog.apply(RgaOp.Remove(budget))
         assertEquals(Verdict.Applicable, Assessment.assess(p, removed))
+    }
+
+    /**
+     * The floor half of the delivery rule. `dropWindow` folds the author's own dropped dot into
+     * `causalFloor()` and takes it out of `causalDots()`, so only the floor still says it was
+     * delivered. No backend run reaches this state: the compaction coordinator records a `Compact`
+     * instead, which keeps the dot in `causalDots()`.
+     */
+    @Test
+    fun flooredBasisEntryIsStillDelivered() {
+        val (hostLog, budget) = Rga.empty<WorkspaceEntry>().append(host, WorkspaceEntry.PreferenceSet(sam, 50))
+        val p = InputCapture.capture(RequestId("r1"), hostLog).complete(Recommendation(v1))
+        val floored = checkNotNull(hostLog.dropWindow(host, setOf(budget))).first
+        assertAll(
+            { assertTrue(floored.causalFloor().contains(budget.dot), "the floor carries the dot") },
+            { assertFalse(budget.dot in floored.causalDots(), "the dot left causalDots") },
+            { assertEquals(Verdict.Applicable, Assessment.assess(p, floored)) },
+        )
     }
 
     /** Another agent's proposal, and a person's accept, are outputs and choices, never missing inputs. */

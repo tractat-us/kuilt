@@ -24,12 +24,10 @@ import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
-import us.tractat.kuilt.quilter.RgaGcCoordinator
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import us.tractat.kuilt.test.drainAntiEntropyUntil
-import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -41,9 +39,8 @@ import kotlin.test.assertTrue
  * rig fired, since a fault that never reached the system under test passes by absence.
  *
  * Two traces need something [KuiltBackend]'s scenario vocabulary does not have: removing an entry
- * (compaction) and choosing how a result is stamped (the leaky stamp). Those run on a [Mesh], the
- * backend's own wiring rebuilt in the test: one `Quilter<Rga<WorkspaceEntry>>` with an
- * [RgaGcCoordinator] per actor, the same wire serializer, config and per-actor seed.
+ * (compaction) and choosing how a result is stamped (the leaky stamp). Those run on a [Mesh] whose
+ * replicas come from [wireReplica], the factory the backend itself uses.
  */
 class AdversarialTraceTest {
     private val alex = ActorId("alex")
@@ -236,6 +233,53 @@ class AdversarialTraceTest {
         )
     }
 
+    /**
+     * The same fact under two identities is two receipts. Alex reports v1 reopened, the agent
+     * captures that and picks v1, then sam reports v1 reopened too. Sam's report is the same fact
+     * as one in the basis and changes nothing about the state, yet the agent never received it, and
+     * a reopening is always relevant, so every replica flags the proposal for sam's dot alone.
+     *
+     * The plan's first form (two closures of v1) expected the same flag, but there the agent picks
+     * v2 and the relevance policy ignores a closure of another venue: the policy decides that
+     * verdict, not the causal record.
+     */
+    @Test
+    fun sameFactTwoIdentities() = runTest(UnconfinedTestDispatcher()) {
+        val scenario = Scenario(
+            "same-fact", actors,
+            listOf(
+                Step.Edit(InputKey("reopenA"), alex, WorkspaceEntry.Report.Reopened(alex, v1)),
+                Step.StartAgent("r1", host = remote),
+                Step.Edit(InputKey("reopenS"), sam, WorkspaceEntry.Report.Reopened(sam, v1)),
+                Step.ReleaseAgent("r1"),
+            ),
+        )
+        val recorder = StepRecorder()
+        val r = KuiltBackend(
+            scope = backgroundScope,
+            advance = { drainAntiEntropy(KuiltBackend.antiEntropyInterval, rounds = 10) },
+            network = { scope -> FaultyNetwork(scope) },
+            observer = recorder,
+        ).run(scenario)
+        val captured = recorder.released.single()
+        val beforeRelease = recorder.logsBefore.getValue(scenario.steps.last())
+        val log = beforeRelease.getValue(sam).entries()
+        val alexDot = log.single { it.second.by == alex }.first.dot
+        val samDot = log.single { it.second.by == sam }.first.dot
+        assertAll(
+            { assertTrue(alexDot != samDot, "two identities") },
+            { assertEquals(setOf(alexDot), captured.basis.allDots) },
+            { assertEquals(Recommendation(v1), captured.recommendation) },
+            {
+                for (actor in actors) {
+                    assertEquals(Verdict.NeedsReview(setOf(samDot)), Assessment.assess(captured, beforeRelease.getValue(actor)), actor.value)
+                }
+            },
+            { assertEquals(3, r.presentations.size) },
+            { assertTrue(r.presentations.none { it.shownAsApplicable || it.unknown }) },
+        )
+    }
+
     // ── The leaky stamp, over the wire ────────────────────────────────────────────────────────
 
     /**
@@ -264,6 +308,9 @@ class AdversarialTraceTest {
 
     private sealed interface WireOutcome {
         data object NeverArrived : WireOutcome
+
+        /** Arrived, but `toProposal` refused its shape: a different failure from a basis that differs. */
+        data object Rejected : WireOutcome
         data class Arrived(val basisKept: Boolean) : WireOutcome
     }
 
@@ -300,13 +347,11 @@ class AdversarialTraceTest {
                     .filterIsInstance<WorkspaceEntry.AgentProposal>().singleOrNull { it.request == request }
                 when (arrived) {
                     null -> WireOutcome.NeverArrived
-                    else -> WireOutcome.Arrived(
-                        basisKept = try {
-                            arrived.toProposal().basis == proposal.basis
-                        } catch (_: IllegalArgumentException) {
-                            false
-                        },
-                    )
+                    else -> try {
+                        WireOutcome.Arrived(basisKept = arrived.toProposal().basis == proposal.basis)
+                    } catch (_: IllegalArgumentException) {
+                        WireOutcome.Rejected
+                    }
                 }
             }
         }
@@ -418,8 +463,8 @@ private class TracingNetwork(private val inner: WorkspaceNetwork, private val du
 }
 
 /**
- * [KuiltBackend]'s replicas, rebuilt in the test for the traces its scenario steps cannot express.
- * Wired exactly as `KuiltRun.wire` wires them: same wire serializer, same config, `Random(index)`.
+ * [KuiltBackend]'s replicas, for the traces its scenario steps cannot express: each one comes from
+ * [wireReplica], the factory the backend itself uses.
  */
 private class Mesh(private val scope: CoroutineScope, private val actors: List<ActorId>) {
     private val network = FaultyNetwork(scope)
@@ -427,25 +472,8 @@ private class Mesh(private val scope: CoroutineScope, private val actors: List<A
 
     suspend fun wire() {
         actors.forEachIndexed { index, actor ->
-            val seam = network.weave(actor)
-            val id = ReplicaId(seam.selfId.value)
-            val quilter = Quilter(
-                replica = id,
-                seam = seam,
-                initial = Rga.empty(),
-                messageSerializer = wire,
-                scope = scope,
-                config = KuiltBackend.config,
-                random = Random(index),
-            )
-            RgaGcCoordinator(
-                state = quilter.state,
-                cutFrontier = quilter.cutFrontier,
-                delivered = quilter.deliveredLocal,
-                applyCompaction = { patch -> quilter.apply(patch) },
-                scope = scope,
-            )
-            replicas[actor] = id to quilter
+            val quilter = wireReplica(network.weave(actor), index, scope)
+            replicas[actor] = quilter.replica to quilter
         }
     }
 

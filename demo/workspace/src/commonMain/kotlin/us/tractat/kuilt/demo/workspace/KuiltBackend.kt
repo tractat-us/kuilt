@@ -138,6 +138,33 @@ public class KuiltBackend(
 
 private val messageSerializer = QuiltMessage.serializer(Rga.wireSerializer(WorkspaceEntry.serializer()))
 
+/**
+ * One actor's replica on [seam]: a [Quilter] over an empty `Rga<WorkspaceEntry>`, with an
+ * [RgaGcCoordinator] for compaction, wired as `RgaGcCoordinator3PeerIntegrationTest` wires them.
+ * The replicator uses [KuiltBackend.config] and a `Random([index])` seed, so anti-entropy's peer
+ * choice is the same on every run. The one wiring every [KuiltBackend] run and every test built on
+ * the same replicas share.
+ */
+internal fun wireReplica(seam: Seam, index: Int, scope: CoroutineScope): Quilter<Rga<WorkspaceEntry>> {
+    val quilter = Quilter(
+        replica = ReplicaId(seam.selfId.value),
+        seam = seam,
+        initial = Rga.empty(),
+        messageSerializer = messageSerializer,
+        scope = scope,
+        config = KuiltBackend.config,
+        random = Random(index),
+    )
+    RgaGcCoordinator(
+        state = quilter.state,
+        cutFrontier = quilter.cutFrontier,
+        delivered = quilter.deliveredLocal,
+        applyCompaction = { patch -> quilter.apply(patch) },
+        scope = scope,
+    )
+    return quilter
+}
+
 /** True for an input an agent can receive; false for an agent's output or a person's accept. */
 private fun isInput(entry: WorkspaceEntry): Boolean = when (entry) {
     is WorkspaceEntry.Report, is WorkspaceEntry.PreferenceSet, is WorkspaceEntry.Note -> true
@@ -226,29 +253,11 @@ private class KuiltRun(
         )
     }
 
-    /** One replicator and compaction coordinator per actor, as `RgaGcCoordinator3PeerIntegrationTest` wires them. */
+    /** One replica per actor, through [wireReplica]. */
     private suspend fun wire() {
         scenario.actors.forEachIndexed { index, actor ->
-            val seam = network.weave(actor)
-            val id = ReplicaId(seam.selfId.value)
-            val quilter = Quilter(
-                replica = id,
-                seam = seam,
-                initial = Rga.empty(),
-                messageSerializer = messageSerializer,
-                scope = scope,
-                config = KuiltBackend.config,
-                // Seeded per actor so anti-entropy's peer choice is the same on every run.
-                random = Random(index),
-            )
-            RgaGcCoordinator(
-                state = quilter.state,
-                cutFrontier = quilter.cutFrontier,
-                delivered = quilter.deliveredLocal,
-                applyCompaction = { patch -> quilter.apply(patch) },
-                scope = scope,
-            )
-            replicas[actor] = Replica(id, quilter)
+            val quilter = wireReplica(network.weave(actor), index, scope)
+            replicas[actor] = Replica(quilter.replica, quilter)
         }
     }
 
