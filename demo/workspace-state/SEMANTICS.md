@@ -7,17 +7,17 @@ the restaurant gone, back, or listed twice? Nobody is wrong, and nobody is in ch
 app needs a rule it can apply the same way on both phones, whichever message arrives first.
 
 This page records the rule each candidate design actually produced, and which design the
-next prototype (M2) builds on. Every result below comes from a test that ran the merge. None
-of it is read off the library's source.
+next prototype (M2) builds on. Every result below comes from a test that ran the merge. Source
+lines appear only to explain a pinned result, never to supply one.
 
 ## The short answer
 
 Build M2 on the **typed single-log model**: one shared log of small typed entries ("venue
 added", "price set", "venue removed", "budget set"). It keeps a restaurant's identity through
 every edit, gives every input an identity of its own, and sends under a tenth of the JSON
-model's bytes per edit. The JSON-document model loses a restaurant's identity the moment someone edits its
-price, and its budget has no identity at all. The full recommendation, with its costs, is at
-the end.
+model's bytes per edit. The JSON-document model loses a restaurant's identity the moment
+someone edits its price, and its budget has no identity at all. The full recommendation, with
+its costs, is at the end.
 
 ## The two candidates
 
