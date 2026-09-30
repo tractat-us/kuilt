@@ -140,6 +140,10 @@ project(":demo-tap").projectDir = file("demo/tap")
 include(":demo-workspace-state")
 project(":demo-workspace-state").projectDir = file("demo/workspace-state")
 
+// Agent-workspace spike (epic #2869) — unpublished, JVM only.
+include(":demo-workspace")
+project(":demo-workspace").projectDir = file("demo/workspace")
+
 // Phase-0 connectivity spike for kuilt-nw (#1403) — opt-in only, kept out of the
 // default build graph so a signing-less CI runner never builds it.
 // Enable with `-PincludeSpike`.
