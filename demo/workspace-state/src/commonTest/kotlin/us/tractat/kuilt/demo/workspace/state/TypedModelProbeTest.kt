@@ -3,6 +3,7 @@ package us.tractat.kuilt.demo.workspace.state
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * The five merge probes against [TypedModel] (one `Rga<Entry>` log, explicit last-writer-wins by
@@ -39,11 +40,10 @@ class TypedModelProbeTest {
      * Review Focus 1 as an action: after the P1b merge (Uno removed on `b`, Due priced 22 on `a`),
      * a UI on `b` still holding Due's base handle sets its price, and the edit lands on Due. The
      * handle is the venue's insert dot, which a `PriceSet` never replaces. JSON's counterpart throws
-     * (`JsonModelProbeTest.staleHandleActionAfterMergeThrows`).
+     * (`JsonModelProbeTest.staleHandleActionOnTheShiftedMergeThrows`).
      */
     @Test fun actionThroughHandleAfterShiftLandsOnDue() {
-        val (s, hs) = MergeProbe.base(m)
-        val merged = m.merge(m.setPrice(s, MergeProbe.a, hs[1], 22), m.removeVenue(s, MergeProbe.b, hs[0]))
+        val (merged, hs) = MergeProbe.afterShift(m)
         val acted = m.setPrice(merged, MergeProbe.b, hs[1], 20)
         assertAll(
             { assertEquals(0, m.shortlist(merged).indexOfFirst { it.handle == hs[1] }, "precondition: Due moved to 0") },
@@ -96,22 +96,30 @@ class TypedModelProbeTest {
      * predecessor's (`a`), each a lamport/replica/seq triple — whose value (`v`) is
      * `PriceSet(target = Dot(a, 1), price = 35)` under the short discriminator `"price"`, inside the
      * `Rga` envelope (`ops`, `compactedBelow`). CBOR spells every field name as a text key, so most of
-     * the 135 is names, and the size does not grow with the shortlist.
+     * the 135 is names. The delta never carries the list; only its two ids' integers widen as the
+     * log's history grows (a byte per field past 23 entries, and history counts every edit, not
+     * just venues) — see [fieldEditDeltaCarriesOnlyItsIdsWidening].
      */
     @Test fun fieldEditDeltaIs135Bytes() {
         assertEquals(135, MergeProbe.fieldEditSize(m))
     }
 
     /**
-     * P5 against list size: one price edit on a 1-venue and on a 10-venue shortlist. The delta is
-     * the one inserted `PriceSet`, whatever the log already holds, so the two sizes are equal.
+     * P5 against log size: one price edit on a 1-, 10- and 30-venue shortlist. The delta never
+     * carries the list; only its two ids' integers widen as the log's history grows (a byte per
+     * field past 23 entries, and history counts every edit, not just venues). CBOR writes an
+     * integer 0–23 in one byte and 24–255 in two, so 1 and 10 venues are equal by construction
+     * (every lamport and seq is at most 11), and the 30-venue arm is what shows the widening.
      */
-    @Test fun fieldEditDeltaDoesNotGrowWithTheList() {
+    @Test fun fieldEditDeltaCarriesOnlyItsIdsWidening() {
         val one = MergeProbe.fieldEditSizeAt(m, 1)
         val ten = MergeProbe.fieldEditSizeAt(m, 10)
+        val thirty = MergeProbe.fieldEditSizeAt(m, 30)
         assertAll(
-            { assertEquals(one, ten, "typed delta at 1 venue equals the delta at 10") },
             { assertEquals(135, one, "JVM CBOR bytes at 1 venue") },
+            { assertEquals(135, ten, "JVM CBOR bytes at 10 venues: every id integer still fits one byte") },
+            { assertEquals(139, thirty, "JVM CBOR bytes at 30 venues: the id integers widen") },
+            { assertTrue(thirty - one in 1 until 10, "growth from 1 to 30 venues is small and bounded: ${thirty - one} B") },
         )
     }
 }

@@ -207,15 +207,17 @@ class JsonModelProbeTest {
     }
 
     /**
-     * P5 against list size: the same price edit on a 1-venue and on a 10-venue shortlist. The delta
+     * P5 against list size: the same price edit on a 1-, 10- and 30-venue shortlist. The delta
      * carries the whole `shortlist` Array, so it grows with the list.
      */
     @Test fun fieldEditDeltaGrowsWithTheList() {
         val one = MergeProbe.fieldEditSizeAt(m, 1)
         val ten = MergeProbe.fieldEditSizeAt(m, 10)
+        val thirty = MergeProbe.fieldEditSizeAt(m, 30)
         assertAll(
             { assertEquals(843, one, "JVM CBOR bytes at 1 venue") },
             { assertEquals(3997, ten, "JVM CBOR bytes at 10 venues") },
+            { assertEquals(10988, thirty, "JVM CBOR bytes at 30 venues") },
             { assertTrue(ten > one, "json delta at 10 venues ($ten) exceeds the delta at 1 ($one)") },
         )
     }
