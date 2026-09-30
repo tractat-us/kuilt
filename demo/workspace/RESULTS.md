@@ -316,6 +316,8 @@ either, and is otherwise **no difference**.
   `AdversarialTraceTest.reorderedAndDuplicatedProposalKeepsBasis`: its reordered frames are also
   misdelivered, which is extra adversity rather than less, and the copies still converge. The table
   above runs on a healthy network and is not affected.
+  Since fixed by tractat-us/kuilt#2881: held frames now reach their own peers and count as delayed,
+  and the trace still passes.
 
 ## Proposed changes to `HYPOTHESES.md` (not applied)
 
