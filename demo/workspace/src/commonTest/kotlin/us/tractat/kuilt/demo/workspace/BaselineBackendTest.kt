@@ -92,9 +92,14 @@ class BaselineBackendTest {
         )
     }
 
-    /** Ruling K: both offline accepts are outage actions; served only under optimistic local display. */
+    /**
+     * Ruling K: both offline accepts are outage actions. Ruling N: under optimistic local display each
+     * counts as served, because an optimistic client would show "you chose X" locally. No accept entry
+     * exists, so this credit is declared by the ruling, not observable in a final view; HYPOTHESES.md
+     * Q2 is where Iain decides whether it stands.
+     */
     @Test
-    fun offlineAcceptsAreOutageActionsServedOnlyOptimistically() = runTest {
+    fun offlineAcceptsAreOutageActionsAndServedOptimisticallyByRulingN() = runTest {
         val strict = run("S4")
         val optimistic = run("S4", optimisticLocal = true)
         assertAll(
@@ -117,12 +122,12 @@ class BaselineBackendTest {
 
     @Test
     fun everyScenarioReportsAFinalViewForEveryActor() = runTest {
-        for (optimistic in listOf(false, true)) {
-            for (s in Scenarios.all) {
-                val r = BaselineBackend(optimistic).run(s)
-                assertEquals(s.actors.toSet(), r.finalViews.keys, "${s.name} optimisticLocal=$optimistic")
-            }
+        val checks = listOf(false, true).flatMap { optimistic ->
+            Scenarios.all.map { s -> Triple(s, optimistic, BaselineBackend(optimistic).run(s)) }
+        }.map { (s, optimistic, r) ->
+            { assertEquals(s.actors.toSet(), r.finalViews.keys, "${s.name} optimisticLocal=$optimistic") }
         }
+        assertAll(*checks.toTypedArray())
     }
 
     /** A partitioned edit is not served: until reconnect it is in nobody's view, not even its author's. */
@@ -196,6 +201,34 @@ class BaselineBackendTest {
         val r = BaselineBackend().run(s)
         assertAll(
             { assertEquals(listOf(Recommendation(v1) to Recommendation(v2)), r.reruns) },
+            { assertEquals(0, Oracle.score(s, r).staleTreatedAsCurrent) },
+        )
+    }
+
+    /**
+     * Sam saw r1's v1 and went offline; Alex's flushed budget then replaced r1 with v2. Sam must get the
+     * replacement when he reconnects, not keep v1 as his last word on r1.
+     */
+    @Test
+    fun rerunReplacementReachesAnOfflineActorWhoSawTheOriginal() = runTest {
+        val s = Scenario(
+            "replacement-offline", listOf(alex, sam, remote),
+            listOf(
+                Step.Partition(alex),
+                Step.StartAgent("r1", host = remote),
+                Step.ReleaseAgent("r1"),
+                Step.Partition(sam),
+                Step.Edit(InputKey("budget30"), alex, WorkspaceEntry.PreferenceSet(alex, budget = 30)),
+                Step.Reconnect(alex),
+                Step.Reconnect(sam),
+            ),
+        )
+        val r = BaselineBackend().run(s)
+        val toSam = r.presentations.filter { it.actor == sam }
+        assertAll(
+            { assertEquals(listOf(Recommendation(v1), Recommendation(v2)), toSam.map { it.recommendation }) },
+            { assertTrue(InputKey("budget30") in toSam.last().known) },
+            { assertEquals(1, r.reruns.size) },
             { assertEquals(0, Oracle.score(s, r).staleTreatedAsCurrent) },
         )
     }
