@@ -22,7 +22,7 @@ It makes no claim about any other target.
 | **Capture.** The prototype's own `InputCapture.capture` and `Proposal.Pending`: one read of an immutable `Rga` value fixes the basis. | **Rejected for now.** The generic core is one line (`entries().map { it.first.dot }`); the rest is shaped by this app's entry types. One consumer is too few to name the API. | Which inputs an agent is shown (`selectExcluding`), and which step a tool result joins. |
 | | | **Relevance.** Which missing inputs matter to an answer: clauses (a) to (d) of `HYPOTHESES.md`. A note never matters. |
 | | | **Authority.** Who settles a conflict between two accepts. The prototype counts one prompt per conflicting pair and does not decide who is asked. An agent's host is never asked. |
-| | | **Presentation.** When an answer is shown: once per phone, at first delivery, never re-checked. An unknown verdict is shown flagged for review, like a needs-review one. Accepts and proposals stay out of the final views. |
+| | **Re-assess on delivery: confirm or reject in M2**, beside `Quilted.delivered(dot)`. Notify when a newly delivered dot is relevant to an answer already shown, so a phone can re-judge it. The prototype has no such hook, which is why an answer is judged only once. | **Presentation.** When an answer is shown: once per phone, at first delivery, never re-checked. An unknown verdict is shown flagged for review, like a needs-review one. Accepts and proposals stay out of the final views. |
 
 ## `Quilted.delivered(dot)`: confirmed
 
@@ -127,7 +127,9 @@ look as if it received newer reports.** Here is what holds it up, and what does 
   widening the basis silently. Only the backend test above catches it.
 - **An answer is judged once, at first delivery.** Relevant news that reaches a phone after it was
   shown an answer is never re-checked, and no metric sees it. On S2, Sam and the remote machine keep
-  showing the first answer as fitting after Alex's budget reaches them.
+  showing the first answer as fitting after Alex's budget reaches them. The baseline does not
+  re-check an answer it has already shown either; it re-checks only when it delivers a deferred
+  presentation to a phone that was offline, which S2 happens to give it.
 - **Catch-up waits for anti-entropy.** Healing a link starts no sync, so a returning phone's view is
   stale for up to one anti-entropy interval.
 - **Identical entries are one entry to the oracle and to `selectExcluding`.** Both match by value.

@@ -149,7 +149,8 @@ verdict works. As in the baseline, `editsPreserved` equals `editsMade` in every 
 - `humanPrompts` 1: when Alex reconnects, his copy receives the answer. He holds a budget the agent
   never saw, and 30 is below Trattoria Uno's 40, so the answer is flagged and Alex is asked. The
   truth for him is Due Fratelli, so the flag is earned, not a false invalidation. Sam and the remote
-  machine saw the answer earlier, before the budget reached them, and it fitted what they knew.
+  machine saw the answer earlier, before the budget reached them, and it fitted what they knew,
+  and it is never re-checked.
 
 **S3: a closure reported during inference.**
 - `agentRuns` 1, `humanPrompts` 2: every copy holds Sam's closure of Trattoria Uno when the answer
@@ -196,7 +197,8 @@ all three in every scenario. Counts over scripted actors, JVM only.
 | S7 | 1 / 2 / 2 | 0 / 1 / 1 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0/0 · 0/0 · 0/0 |
 
 The shape in one sentence: where the baseline quietly reruns the agent (S2, S3, S6, S7) or shows a
-stale answer (S5), kuilt runs the agent once and asks a person when the answer is in doubt. That is
+stale answer (S5), kuilt runs the agent once and asks a person when the answer is in doubt on arrival;
+news that arrives after an answer was shown is never re-checked (S2). That is
 a trade, not a free win. On S2, S3, S5 and S6 kuilt asks people once or twice where the baseline
 asks nobody. The hypotheses weigh that on purpose outside the verdicts (H4 compares prompts only
 where neither design reruns or goes stale), so it shows up here instead.
@@ -209,14 +211,14 @@ either, and is otherwise **no difference**.
 
 | id | vs `optimisticLocal = false` | vs `optimisticLocal = true` | combined |
 |---|---|---|---|
-| H1 | pass | pass | **pass** |
+| H1 | pass (per-presentation scoring; stops under end-of-run scoring, see *How firm*) | pass (per-presentation scoring; stops under end-of-run scoring, see *How firm*) | **pass (per-presentation scoring; stops under end-of-run scoring, see *How firm*)** |
 | H1b | pass (no baseline comparison) | pass (no baseline comparison) | **pass** |
 | H2 | pass | pass | **pass** |
 | H3 | pass | no difference (S2 and S4) | **no difference** |
 | H4 | pass (no difference on S1 and S4) | pass (no difference on S1 and S4) | **pass** |
 | H0 | does not match | does not match (matches on H3 only) | **not triggered** |
 
-- **H1, pass.** kuilt has `staleTreatedAsCurrent` 0 on each of S2, S3 and S5. On each of them both
+- **H1, pass (per-presentation scoring; stops under end-of-run scoring, see *How firm*).** kuilt has `staleTreatedAsCurrent` 0 on each of S2, S3 and S5. On each of them both
   variants either reran (`agentRuns` 2 against one `StartAgent` on S2 and S3) or went stale (3 on
   S5), so no scenario is *no difference* for either variant.
 - **H1b, pass.** kuilt's `falseInvalidations` total across S1 to S7 is 0, within the budget of 1:
@@ -255,9 +257,10 @@ either, and is otherwise **no difference**.
   detection is disabled (0 prompts) or its de-duplication is dropped (4 prompts).
 - **H1 on S2 holds only because answers are scored when first shown.** In kuilt, Sam and the
   remote machine are shown `r1` (Trattoria Uno) as fitting before Alex's budget reaches them, and it
-  stays standing after the budget arrives; the baseline replaces it with its rerun. Scored at first
-  delivery, kuilt's S2 staleness is 0. Scored on each phone's standing view at the end of the run,
-  it would be 2, which meets H1's stop condition. S3 and S5 are unaffected, since every copy holds
+  stays standing after the budget arrives; the baseline replaces it with the rerun its deferred
+  re-check produced. Scored at first delivery, kuilt's S2 staleness is 0. Scored on each phone's
+  standing answer at the end of the run (the latest proposal it has been shown), it is 2, which
+  meets H1's stop condition. S3 and S5 are unaffected, since every copy holds
   the missing input before the answer arrives there. H0 is unaffected too: it does not fire because
   the baseline goes stale on S5 (and reruns needlessly on S7), not because of S2.
 - **H2 cannot fail for kuilt as registered.** kuilt never reruns, so its `unnecessaryReruns` is 0 on
@@ -280,9 +283,13 @@ either, and is otherwise **no difference**.
 
 - **An answer is judged once, when a phone first receives it.** A later arrival is not re-checked.
   On S2 this matters: after Alex reconnects, Sam's and the remote machine's copies hold his budget,
-  but the answer they were shown earlier as fitting is not re-examined. The baseline, by contrast,
-  pushes its rerun to every connected phone. The metrics score each presentation at the moment it
-  is made, so neither `staleTreatedAsCurrent` nor `humanPrompts` sees this.
+  but the answer they were shown earlier as fitting is not re-examined.
+  The baseline never re-checks an answer it has already shown either. It re-checks only when it
+  delivers a *deferred* presentation, to a phone that was offline at release; on S2 that is Alex's,
+  and the rerun it triggers is pushed to everyone connected. That is why S2 looks one-sided: the
+  baseline has a deferred delivery to hang the re-check on, and kuilt's re-check-free rule does not.
+  The metrics score each presentation at the moment it is made, so neither
+  `staleTreatedAsCurrent` nor `humanPrompts` sees this.
 - **Catching up after a reconnect waits for the background sync.** Healing a link starts no sync of
   its own. A returning phone catches up on the replicas' next anti-entropy round, so how soon it
   sees news is bounded by that interval, not by the moment it reconnects. The tests drive ten rounds
@@ -324,7 +331,14 @@ verdict is scored as merged.
   beside it as its own row.
 - **Score what each phone shows at the end, too.** Because an answer is judged only when it first
   arrives, relevant news that reaches a phone afterwards (S2, for Sam and the remote machine) is
-  invisible to every metric. Proposal: also score each actor's standing view at the end of the run.
-  Adopted as it stands, this would give kuilt 2 stale presentations on S2 (Sam and the remote
-  machine) and **stop** H1. S3, S5 and H0 would be unaffected.
+  invisible to every metric. Proposal: also score each actor's standing answer at the end of the
+  run, where an actor's standing answer is the latest proposal it has been shown (so once `r2`
+  supersedes `r1`, `r2` stands). Measured with a scratch probe, not committed: kuilt scores 2 on S2
+  (Sam and the remote machine) against 0 for both baseline variants, which **stops** H1. S4 scores 0
+  in all three designs, because everyone's standing answer is `r2`, which fits; S3, S5, S7 and H0
+  are unchanged.
+  The definition matters. If instead every proposal ever shown were re-scored at the end, a
+  superseded `r1` would count too: S4 would score 3 in all three designs, so S4 would drop out of
+  H4 as not like with like and leave H4 scored on S1 alone, and S2 would score 2 in all three
+  designs, which still stops H1 for kuilt. The follow-up PR has to pick one.
 
