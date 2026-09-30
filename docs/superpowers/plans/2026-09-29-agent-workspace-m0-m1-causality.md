@@ -38,7 +38,7 @@ Each is pinned by a named test in Task 7 or Task 8.
 
 ### Task 1: Hypotheses, metrics and scenario script (the pre-registration)
 
-> Iain's rulings (2026-09-29) amended this task; `demo/workspace/HYPOTHESES.md` § Rulings is authoritative where the list below differs.
+> Iain's rulings (2026-09-29) amended this task; `demo/workspace/HYPOTHESES.md` as merged is authoritative over this task's text.
 
 This is the M0 gate. Pass/stop criteria are fixed **before** any measurement. The PR is **held for Iain's approval**. Do not arm auto-merge. When it is open, set the peer session to `blocked` with the PR link, and go on to Tasks 2–4, which do not depend on its wording. Task 5 must not start until this PR merges.
 
@@ -632,7 +632,7 @@ Each test **asserts that its rig fired**. For example, `seam.framesDelayed > 0` 
 - Create: `demo/workspace/CONTRACTS.md`
 
 - [ ] **Step 1: Write the golden kuilt metrics** for S1–S7. Explain every cell before recording it.
-- [ ] **Step 2: Fill `RESULTS.md`'s kuilt section.** Put the side-by-side table in, then score H0–H4 **against the criteria as merged in Task 1, unedited**. For each hypothesis write pass, fail, or stop, with one sentence each.
+- [ ] **Step 2: Fill `RESULTS.md`'s kuilt section.** Put the side-by-side table in, then score H0–H4 **against the criteria as merged in Task 1, unedited**. For each hypothesis write pass, stop, or no difference, with one sentence each.
 - [ ] **Step 3: Write `CONTRACTS.md`** in three columns:
   - *existing primitive used*: `Rga.entries`, `RgaId.dot`, `causalDots`/`causalFloor`, `Quilter`, `RgaGcCoordinator`, `FaultyLoom`.
   - *missing canonical API*: anything hand-rolled here that a kuilt module should own. Candidates to confirm or reject include a public `Quilted.delivered(dot)` helper, since the spike spells the union by hand.

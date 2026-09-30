@@ -4,7 +4,7 @@ Alex, Sam and a remote agent plan dinner through seven small scripted stories, a
 happens: whose edits survive, how often the agent has to think again, when someone is asked to
 choose, and whether an old answer is shown as if it were still right. This page records those
 counts for the simple design first, a server that owns the shared state. The kuilt design joins it
-in M1. The stories, the counts and the rules for judging them are fixed in `HYPOTHESES.md`, written
+in the next milestone. The stories, the counts and the rules for judging them are fixed in `HYPOTHESES.md`, written
 before any number here existed.
 
 These are **counts over scripted actors, not a user study**. Nobody tapped a screen: each number is
@@ -23,7 +23,8 @@ that answer depends on has changed, and quietly reruns the agent if so. It runs 
 `optimisticLocal = false`, where nothing a person does offline shows until reconnect, and
 `optimisticLocal = true`, where a queued action shows on their own screen at once.
 
-The table is pinned by `BaselineMeasurementTest`, so a change to either side fails the build.
+The table is pinned by `BaselineMeasurementTest`: a change to the baseline's numbers fails the
+build. This page is kept in step by hand.
 
 | Scenario | optimisticLocal | editsMade | editsPreserved | agentRuns | unnecessaryReruns | staleTreatedAsCurrent | falseInvalidations | humanPrompts | outageActions | outageActionsServed |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -42,10 +43,10 @@ The table is pinned by `BaselineMeasurementTest`, so a change to either side fai
 | S7 | false | 1 | 1 | 2 | 1 | 0 | 0 | 0 | 0 | 0 |
 | S7 | true | 1 | 1 | 2 | 1 | 0 | 0 | 0 | 0 | 0 |
 
-Two columns are zero everywhere, and for reasons of design rather than luck. `falseInvalidations`
-counts answers flagged for review, and the baseline never flags anything: it either reruns or shows
-the answer as current. And every edit survives in every scenario, because the server keeps every
-entry and every actor is back online by the end.
+One column is zero everywhere, by design rather than luck. `falseInvalidations` counts answers
+flagged for review, and the baseline never flags anything: it either reruns or shows the answer as
+current. One pair always matches: `editsPreserved` equals `editsMade` in every row, because the
+server keeps every entry and every actor is back online by the end.
 
 ## Why each number is what it is
 
@@ -74,9 +75,12 @@ Where a line covers both variants, the two rows are identical.
 - `humanPrompts` 1: Alex's offline accept replays first and applies. Sam's replays second, finds
   the plan has moved since Sam last saw it, and Sam is asked to choose.
 - `outageActions` 2: the two accepts, each made offline.
-- `outageActionsServed` 0 (false) or 2 (true): with optimistic display each person's screen shows
-  "you chose this" at once. No entry records an accept, so this credit follows the counting rule
-  for optimistic accepts rather than anything visible in a final view.
+- `outageActionsServed` 0 (false) or 2 (true): with optimistic display each person's screen would
+  show "you chose this" at once. No entry records an accept, so nothing visible in a final view
+  earns this credit. It comes from Controller Ruling N, recorded in `BaselineBackend`'s KDoc and
+  **not yet ruled on by Iain**. Its effect: it lifts S4's ratio to 1.0, so the optimistic variant
+  scores 1.0 on H3 for both S2 (whose served edit really is visible) and S4. It is pending Iain's
+  ruling, and will be raised in the M0 exit comment on #2869.
 
 **S5: a report corrected later.**
 - `editsMade` 2, `editsPreserved` 2: the closure and the reopening.
@@ -89,7 +93,8 @@ Where a line covers both variants, the two rows are identical.
 - `editsMade` 1, `editsPreserved` 1: Alex's budget of 30.
 - `agentRuns` 2: the budget reaches the server before the answer, so the check reruns the agent
   there and then, and it picks Due Fratelli. Compared with S2 the outage changes when the rerun
-  happens and adds the one outage action, and nothing else in this table.
+  happens and adds the one outage action. Under `optimisticLocal = true` it also changes
+  `outageActionsServed` (1 in S2, 0 here). Nothing else in this table differs.
 
 **S7: a harmless note while the agent is out.**
 - `editsMade` 1, `editsPreserved` 1: Sam's note about Trattoria Uno.

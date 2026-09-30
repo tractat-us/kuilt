@@ -135,8 +135,8 @@ class BaselineBackendTest {
     /**
      * Ruling K: both offline accepts are outage actions. Ruling N: under optimistic local display each
      * counts as served, because an optimistic client would show "you chose X" locally. No accept entry
-     * exists, so this credit is declared by the ruling, not observable in a final view; HYPOTHESES.md
-     * Q2 is where Iain decides whether it stands.
+     * exists, so this credit is declared by the ruling, not observable in a final view. It is pending
+     * Iain's ruling, to be raised in the M0 exit comment on #2869.
      */
     @Test
     fun offlineAcceptsAreOutageActionsAndServedOptimisticallyByRulingN() = runTest {
