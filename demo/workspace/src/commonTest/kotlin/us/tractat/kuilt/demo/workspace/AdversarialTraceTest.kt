@@ -103,9 +103,10 @@ class AdversarialTraceTest {
         val settled = recorder.logsBefore.getValue(scenario.steps.last())
 
         // Rig 1, reorder: the frames alex received from remote are not in the order remote sent them.
-        // Compared against everything remote sent, whatever its address: FaultySeam flushes a reorder
-        // window through the send call that filled it, so a frame remote addressed to sam can reach
-        // alex. Without reordering, alex's arrivals would still be in remote's send order.
+        // Compared against everything remote sent, whatever its address: alex's arrivals are a subset
+        // of that stream, so without reordering they would still be a subsequence of remote's send
+        // order. (FaultySeam.framesDelayed would also witness the window, but this harness keeps its
+        // seams private.)
         val remotePeer = net.seam(remote).selfId
         val sentByRemote = net.seam(remote).sent.map { it.bytes }
         val arrivedAtAlex = net.seam(alex).received.filter { it.sender == remotePeer }.map { it.bytes }
