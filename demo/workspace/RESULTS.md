@@ -4,8 +4,8 @@ Alex, Sam and a remote agent plan dinner through seven small scripted stories, a
 happens: whose edits survive, how often the agent has to think again, when someone is asked to
 choose, and whether an old answer is shown as if it were still right. This page records those
 counts for the simple design first, a server that owns the shared state. The kuilt design joins it
-in the next milestone. The stories, the counts and the rules for judging them are fixed in `HYPOTHESES.md`, written
-before any number here existed.
+in the next milestone. The stories, the counts and the rules for judging them are fixed in
+`HYPOTHESES.md`, written before any number here existed.
 
 These are **counts over scripted actors, not a user study**. Nobody tapped a screen: each number is
 what one deterministic run of one scenario produced. They are also **JVM-only**, and make no claim

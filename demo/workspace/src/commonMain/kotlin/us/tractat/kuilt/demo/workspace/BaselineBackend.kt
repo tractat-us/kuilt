@@ -20,8 +20,9 @@ package us.tractat.kuilt.demo.workspace
  * a queued `Accept` is counted in `outageActionsServed` because an optimistic client would show
  * "you chose X" locally. The domain has no accept entry, so nothing appears in the actor's final
  * view: the credit is declared by this ruling, not produced by an observable effect. It is pending
- * Iain's ruling and will be raised in the M0 exit comment on #2869. (HYPOTHESES.md's Q2 ruling is
- * a different question: a hypothesis passes only if it passes against both variants.)
+ * Iain's ruling and will be raised in the M0 exit comment on #2869. (HYPOTHESES.md § Rulings, on
+ * both baseline variants, is a different question: a hypothesis passes only if it passes against
+ * both.)
  *
  * The version a queued write "last saw" includes the actor's own earlier queued writes to the same
  * scope, so two offline edits by one person never conflict with each other.
