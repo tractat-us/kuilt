@@ -13,6 +13,15 @@ import kotlin.test.assertTrue
  *
  * Line numbers below are `kuilt-crdt/src/commonMain/kotlin/us/tractat/kuilt/crdt/` at the commit
  * this test landed on.
+ *
+ * How two concurrent shortlist writes meet (the chain behind P1, P1b, P2 and P3). Every venue
+ * change rewrites the one top-level `shortlist` key. `x` (replica `a`) supersedes `a`'s own earlier
+ * tag on it and `y` (replica `b`) mints a fresh one, so after the merge the key holds both
+ * contributions, because neither side's context has seen the other's tag (`ORMapEntry.join`,
+ * ORMap.kt:52-69). The key's value joins them (`ORMapEntry.value`, ORMap.kt:43-50), which for two
+ * Arrays is `Array(rga.piece(other.rga))` (JsonNode.kt:92). Only then do the `Rga` rules apply:
+ * tombstones union (Rga.kt:1042), and siblings after one predecessor walk in descending `RgaId`
+ * (Rga.kt:1190).
  */
 class JsonModelProbeTest {
     private val m = JsonModel
@@ -22,13 +31,15 @@ class JsonModelProbeTest {
      *
      * OBSERVED: `byHandle(Due)` is null, because `JsonModel.setPrice` inserts a rebuilt element after
      * Due (id `(4, a, 4)`, so a new dot) and removes the old one; `Rga.piece` unions tombstones
-     * (Rga.kt:1042), so the old dot is hidden on every replica. A handle survives a concurrent
-     * insert, but not an edit of its own venue.
+     * (Rga.kt:1042), so the old dot is hidden on every replica (see the class KDoc for the chain). The
+     * untouched venues' handles survive the concurrent insert; the edited venue's handle does not.
      */
     @Test fun listIdentityEditLandsButTheHandleNoLongerResolves() {
         val r = MergeProbe.listIdentity(m)
         assertAll(
             { assertEquals(null, r.byHandle(r.base[1]), "the pre-edit handle no longer resolves") },
+            { assertEquals(VenueView(r.base[0], "Uno", 40), r.byHandle(r.base[0]), "Uno's handle survives") },
+            { assertEquals(VenueView(r.base[2], "Tre", 30), r.byHandle(r.base[2]), "Tre's handle survives") },
             { assertEquals(listOf("Uno@40", "Due@22", "Tre@30", "Zero@10"), r.rows, "merged shortlist") },
             { assertEquals(VenueHandle(Dot(MergeProbe.a, 4)), r.shortlist[1].handle, "Due's new identity") },
         )
@@ -48,17 +59,23 @@ class JsonModelProbeTest {
     }
 
     /**
-     * UNSUPPORTED: a UI still holding Due's pre-edit handle cannot act on Due after merging a
-     * concurrent price edit. The handle's element is tombstoned (P1), so `JsonModel.setPrice` finds no
-     * visible element for it and throws.
+     * UNSUPPORTED: a UI still holding Due's pre-edit handle cannot act on Due after merging a remote
+     * price edit. The handle's element is tombstoned (P1), so `JsonModel.setPrice` finds no visible
+     * element for it and throws the stale-handle refusal.
      */
     @Test fun staleHandleActionAfterMergeThrows() {
         val (s, hs) = MergeProbe.base(m)
         val edited = m.setPrice(s, MergeProbe.a, hs[1], 22)
         val merged = m.merge(s, edited)
+        val refusal = assertFailsWith<IllegalStateException> { m.setPrice(merged, MergeProbe.b, hs[1], 20) }
         assertAll(
             { assertEquals(22, m.shortlist(merged).single { it.name == "Due" }.pricePerHead, "precondition: edit merged") },
-            { assertFailsWith<IllegalStateException> { m.setPrice(merged, MergeProbe.b, hs[1], 20) } },
+            {
+                assertTrue(
+                    refusal.message.orEmpty().contains("is not visible (never added here, removed, or replaced by a setPrice)"),
+                    "stale-handle refusal, not some other failure: ${refusal.message}",
+                )
+            },
         )
     }
 
@@ -117,13 +134,48 @@ class JsonModelProbeTest {
 
     /**
      * P5: 1572 bytes, JVM CBOR (the codec `Quilter` defaults to), of the `Patch.delta` from
-     * `JsonCrdt.set("shortlist", …)`. `ORMap.put` ships the node it was given (ORMap.kt:206-212), and
-     * `JsonModel.setPrice` gives it the whole rebuilt `shortlist` Array: four inserts (three venues plus
-     * the replacement) and one remove, each inserted element an `Object` whose `ORMap` holds two
-     * `MVRegister` leaves. This is the #2469 whole-subtree write, so it grows with the shortlist.
+     * `JsonCrdt.set("shortlist", …)`: the whole `shortlist` Array, four inserts (three venues plus the
+     * replacement) and one remove, each inserted element an `Object` whose `ORMap` holds two
+     * `MVRegister` leaves. Two causes both produce that here, and this arm cannot separate them:
+     * - the model: `JsonModel.setPrice` rebuilds the whole Array and passes it to `set` (the #2469
+     *   whole-subtree write);
+     * - the map: `ORMap.put` ships `foldOwn(existing, replica, value)`, the given node joined with
+     *   everything this replica already contributed to the key (ORMap.kt:137-145, 210, 226-228), and
+     *   replica `a` authored all three venues.
+     * [fieldEditDeltaByANonAuthor] takes the second cause away.
      */
     @Test fun fieldEditDeltaIs1572Bytes() {
         assertEquals(1572, MergeProbe.fieldEditSize(m))
+    }
+
+    /**
+     * P5 again, with the edit made by replica `b`, which has contributed nothing to `shortlist`, off
+     * the same base. `foldOwn` then has nothing of `b`'s to fold in, so the delta carries only the node
+     * `JsonModel.setPrice` passed. What this arm isolates is the model's rebuild.
+     *
+     * OBSERVED: 1656 bytes, JVM CBOR, and the delta's `shortlist` is still the whole Array (the
+     * structural pin below). So the whole-subtree size is the MODEL's rebuild. `foldOwn` adds no ops
+     * for `a` either: `a`'s earlier contribution is the base Array, whose ops are a subset of the
+     * rebuilt Array's, and `Rga.piece` is an op union. `b`'s delta is 84 bytes LARGER, not smaller, for
+     * a reason inside the replacement element. `JsonModel.setPrice` puts the new price leaf into the
+     * element's own `ORMap` as `b`, and `put` supersedes only the caller's own tags (ORMap.kt:209). So
+     * `a`'s original price contribution stays beside `b`'s, and the element encodes 115 bytes larger
+     * (395 against 280, measured once, not pinned). The top-level context names one dot instead of
+     * two, which takes back 31.
+     */
+    @Test fun fieldEditDeltaByANonAuthor() {
+        val (s, hs) = MergeProbe.base(m)
+        val edited = m.setPrice(s, MergeProbe.b, hs[0], 35)
+        assertAll(
+            { assertEquals(1656, MergeProbe.fieldEditSizeBy(m, MergeProbe.b), "JVM CBOR bytes") },
+            {
+                assertEquals(
+                    edited.doc["shortlist"],
+                    edited.lastDelta?.get("shortlist"),
+                    "a non-author's delta still carries the whole shortlist Array",
+                )
+            },
+        )
     }
 
     /** The direction Task 3 cites: one field edit costs more in the JSON model than in the typed one. */

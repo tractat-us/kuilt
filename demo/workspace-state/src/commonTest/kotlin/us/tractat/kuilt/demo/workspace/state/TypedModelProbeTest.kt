@@ -36,6 +36,22 @@ class TypedModelProbeTest {
     }
 
     /**
+     * Review Focus 1 as an action: after the P1b merge (Uno removed on `b`, Due priced 22 on `a`),
+     * a UI on `b` still holding Due's base handle sets its price, and the edit lands on Due. The
+     * handle is the venue's insert dot, which a `PriceSet` never replaces. JSON's counterpart throws
+     * (`JsonModelProbeTest.staleHandleActionAfterMergeThrows`).
+     */
+    @Test fun actionThroughHandleAfterShiftLandsOnDue() {
+        val (s, hs) = MergeProbe.base(m)
+        val merged = m.merge(m.setPrice(s, MergeProbe.a, hs[1], 22), m.removeVenue(s, MergeProbe.b, hs[0]))
+        val acted = m.setPrice(merged, MergeProbe.b, hs[1], 20)
+        assertAll(
+            { assertEquals(0, m.shortlist(merged).indexOfFirst { it.handle == hs[1] }, "precondition: Due moved to 0") },
+            { assertEquals(listOf(VenueView(hs[1], "Due", 20), VenueView(hs[2], "Tre", 30)), m.shortlist(acted)) },
+        )
+    }
+
+    /**
      * P2: one Uno, at b's price. Both `PriceSet`s get Lamport 4, so the ids are `(4, a)` < `(4, b)`
      * and `TypedModel.shortlist` keeps the greater (`RgaId.compareTo`, lamport then replica). The
      * loser's `PriceSet` stays in the log, but `shortlist` exposes no trace of it.

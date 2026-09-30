@@ -96,8 +96,15 @@ object MergeProbe {
      * P5 delta cost of one field edit on a 3-venue list: the encoded size of the delta that
      * `setPrice` produced (each model's state carries its last mutation's delta), not of the state.
      */
-    fun <S> fieldEditSize(m: DinnerModel<S>): Int {
+    fun <S> fieldEditSize(m: DinnerModel<S>): Int = fieldEditSizeBy(m, a)
+
+    /**
+     * P5 with the edit made by [editor] off the same base. With [b], the editor has contributed
+     * nothing yet (the base is all [a]'s), which separates the model's own delta from the editor's
+     * history.
+     */
+    fun <S> fieldEditSizeBy(m: DinnerModel<S>, editor: ReplicaId): Int {
         val (s, hs) = base(m)
-        return m.encodedSize(m.setPrice(s, a, hs[0], 35))
+        return m.encodedSize(m.setPrice(s, editor, hs[0], 35))
     }
 }
