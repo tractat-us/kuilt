@@ -80,6 +80,43 @@ class BaselineBackendTest {
         )
     }
 
+    /**
+     * S6 is S2 with Alex connected: `budget30` reaches the server before r1 returns, so the release-time
+     * check sees `budget` moved and reruns r1 (v1 → v2). Every actor is connected at release, so all
+     * three get the rerun at once, and nothing is queued or prompted.
+     */
+    @Test
+    fun budgetChangedWhileConnectedForcesRerunAtRelease() = runTest {
+        val r = run("S6")
+        val m = Oracle.score(scenario("S6"), r)
+        assertAll(
+            { assertEquals(2, r.agentRuns) },
+            { assertEquals(listOf(Recommendation(v1) to Recommendation(v2)), r.reruns) },
+            { assertEquals(listOf(alex, sam, remote), r.presentations.map { it.actor }) },
+            { assertTrue(r.presentations.all { it.recommendation == Recommendation(v2) }) },
+            { assertEquals(0, m.staleTreatedAsCurrent) },
+            { assertEquals(0, r.outageActions) },
+            { assertEquals(0, r.humanPrompts) },
+        )
+    }
+
+    /**
+     * S7: Sam's note bumps `venue:v1`, which is in r1's scopes {budget, venue:v1}. The check cannot tell a
+     * note from a closure, so it reruns, and the rerun returns the same v1: one unnecessary rerun.
+     */
+    @Test
+    fun harmlessNoteOnTheRecommendedVenueCostsAnUnnecessaryRerun() = runTest {
+        val r = run("S7")
+        val m = Oracle.score(scenario("S7"), r)
+        assertAll(
+            { assertEquals(2, r.agentRuns) },
+            { assertEquals(listOf(Recommendation(v1) to Recommendation(v1)), r.reruns) },
+            { assertEquals(1, m.unnecessaryReruns) },
+            { assertEquals(0, m.staleTreatedAsCurrent) },
+            { assertEquals(0, r.humanPrompts) },
+        )
+    }
+
     /** S5: the reopening touches `venue:v1`, outside r1's scopes {budget, venue:v2}. The check cannot see it. */
     @Test
     fun reopeningAnotherVenueSlipsPastTheVersionCheck() = runTest {

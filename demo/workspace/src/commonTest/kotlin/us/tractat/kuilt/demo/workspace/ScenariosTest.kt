@@ -28,13 +28,29 @@ class ScenariosTest {
     }
 
     @Test
-    fun scenariosAreS1ToS6() =
-        assertEquals(listOf("S1", "S2", "S3", "S4", "S5", "S6"), Scenarios.all.map { it.name })
+    fun scenariosAreS1ToS7() =
+        assertEquals(listOf("S1", "S2", "S3", "S4", "S5", "S6", "S7"), Scenarios.all.map { it.name })
 
     @Test
-    fun actorsMatchThePreRegistration() = assertAll(
-        { assertEquals(listOf(alex, remote), scenario("S6").actors) },
-        { listOf("S1", "S2", "S3", "S4", "S5").forEach { assertEquals(listOf(alex, sam, remote), scenario(it).actors) } },
+    fun actorsMatchThePreRegistration() =
+        Scenarios.all.forEach { assertEquals(listOf(alex, sam, remote), it.actors, it.name) }
+
+    /** Ruling Q3: S6 is S2 with no partition, so the only difference between them is the outage. */
+    @Test
+    fun s6IsS2WithoutThePartition() = assertEquals(
+        scenario("S2").steps.filterNot { it is Step.Partition || it is Step.Reconnect },
+        scenario("S6").steps,
+    )
+
+    /** Ruling Q1: S7 is a harmless note on the recommended venue while r1 is out. */
+    @Test
+    fun s7IsAHarmlessNoteWhileR1IsOut() = assertEquals(
+        listOf(
+            Step.StartAgent("r1", host = remote),
+            Step.Edit(InputKey("noteV1"), sam, WorkspaceEntry.Note(sam, VenueId("v1"), "Book the window table")),
+            Step.ReleaseAgent("r1"),
+        ),
+        scenario("S7").steps,
     )
 
     @Test
@@ -44,6 +60,7 @@ class ScenariosTest {
         { assertEquals(mapOf("r1" to Recommendation(VenueId("v1")), "r2" to Recommendation(VenueId("v2"))), picksAtStart(scenario("S4"))) },
         { assertEquals(mapOf("r1" to Recommendation(VenueId("v2"))), picksAtStart(scenario("S5"))) },
         { assertEquals(mapOf("r1" to Recommendation(VenueId("v1"))), picksAtStart(scenario("S6"))) },
+        { assertEquals(mapOf("r1" to Recommendation(VenueId("v1"))), picksAtStart(scenario("S7"))) },
     )
 
     @Test
