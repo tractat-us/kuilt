@@ -10,7 +10,9 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class KuiltBackendTest {
@@ -25,9 +27,10 @@ class KuiltBackendTest {
      * timers live on `backgroundScope`, which `advanceUntilIdle` does not wait for, and a replica
      * that reconnects with nothing new to send converges only through anti-entropy.
      */
-    private fun TestScope.backend(observer: KuiltRunObserver = KuiltRunObserver.None) = KuiltBackend(
+    private fun TestScope.backend(observer: KuiltRunObserver = KuiltRunObserver.None, rounds: Int = 10) = KuiltBackend(
         scope = backgroundScope,
-        advance = { drainAntiEntropy(KuiltBackend.antiEntropyInterval, rounds = 10) },
+        advance = { drainAntiEntropy(KuiltBackend.antiEntropyInterval, rounds = rounds) },
+        network = { scope -> FaultyNetwork(scope) },
         observer = observer,
     )
 
@@ -192,11 +195,24 @@ class KuiltBackendTest {
             backend(recorder).run(scenario)
             val proposal = recorder.released.single()
             val expected = recorder.atStart.getValue("r1")
+            // S3's host starts empty, so only S5 and `excluding` prove a non-empty basis survives intact.
+            if (scenario !== Scenarios.s3) assertTrue(expected.isNotEmpty(), "${scenario.name}: the host held inputs at StartAgent")
             assertAll(
                 { assertEquals(expected, proposal.basis.basisThrough(0), "${scenario.name}: step-0 basis") },
                 { assertEquals(expected, proposal.basis.allDots, "${scenario.name}: whole basis") },
             )
         }
+    }
+
+    /**
+     * A drain too short for a reconnect to converge must fail the run, not score it low. With no
+     * anti-entropy rounds S2's reconnected Alex never catches up: before the convergence check this
+     * run returned with 0 edits preserved and 0 prompts, and H4 on S4 would have passed vacuously.
+     */
+    @Test
+    fun tooFewRoundsThrowsInsteadOfScoringLow() = runTest(UnconfinedTestDispatcher()) {
+        val failure = assertFailsWith<IllegalStateException> { backend(rounds = 0).run(Scenarios.s2) }
+        assertContains(failure.message.orEmpty(), "did not converge after Reconnect(alex)")
     }
 
     /** A tool result is an input with a dot of its own: it joins the basis as step 1, and only there. */

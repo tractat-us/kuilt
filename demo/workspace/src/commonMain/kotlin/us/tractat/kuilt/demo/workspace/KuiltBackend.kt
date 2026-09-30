@@ -4,9 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.plus
-import us.tractat.kuilt.core.InMemoryLoom
-import us.tractat.kuilt.core.InMemoryTag
-import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
@@ -16,9 +14,6 @@ import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.quilter.RgaGcCoordinator
-import us.tractat.kuilt.test.FaultProfile
-import us.tractat.kuilt.test.FaultyLoom
-import us.tractat.kuilt.test.FaultySeam
 import kotlin.random.Random
 import kotlin.time.Duration
 
@@ -38,21 +33,44 @@ public interface KuiltRunObserver {
     }
 }
 
+/** Switches one actor's network link off and on. What "off" drops, and what "on" restores, is the implementation's. */
+public interface ActorLinks {
+    /** [actor] drops off the network: nothing reaches it and nothing it sends gets out. */
+    public fun cut(actor: ActorId)
+
+    /** [actor] comes back, on whatever terms its link had before [cut]. */
+    public fun restore(actor: ActorId)
+}
+
+/**
+ * One run's network: a seam per actor, all in one session, plus the switch that cuts and restores
+ * each actor's link. The seam and its switch come from one object because only the fabric knows
+ * which link belongs to which actor.
+ */
+public interface WorkspaceNetwork : ActorLinks {
+    /** Joins [actor] to the session and returns its seam. Called once per actor, in scenario actor order. */
+    public suspend fun weave(actor: ActorId): Seam
+}
+
 /**
  * The kuilt design: no server. Every actor keeps its own replica of one shared log, an
  * `Rga<WorkspaceEntry>` replicated by a [Quilter] (with an [RgaGcCoordinator] for compaction) over
- * `FaultyLoom(InMemoryLoom())`. Every input, every agent proposal and every accept is an element of
- * that log, so what a replica has received is exactly its delivered dots.
+ * the seams a [WorkspaceNetwork] provides. Every input, every agent proposal and every accept is an
+ * element of that log, so what a replica has received is exactly its delivered dots.
  *
  * **Edits and accepts.** An `Edit` or `Accept` is appended to its actor's own replica at once,
  * connected or not. While the actor is partitioned it counts as one `outageAction`, and as served
- * when the entry is then visible in that actor's own replica, which is checked rather than assumed.
- * An accept is a real [WorkspaceEntry.Accept] entry, so an offline choice shows on its chooser's
- * phone the way an offline edit does.
+ * **by construction**: apply is local-first, so the entry is in the actor's own replica the moment
+ * it is made, and that is what "served" means here. An accept is a real [WorkspaceEntry.Accept]
+ * entry, so an offline choice shows on its chooser's phone the way an offline edit does.
  *
- * **Partitions.** `Partition(actor)` drops every frame in and out of that actor's seam;
- * `Reconnect(actor)` restores the actor's own fault profile from [faults] (`Healthy` unless a test
- * says otherwise), rather than forcing `Healthy`, so a lossy link stays lossy after an outage.
+ * **Partitions.** `Partition(actor)` calls [ActorLinks.cut] and `Reconnect(actor)` calls
+ * [ActorLinks.restore] on the run's network.
+ *
+ * **Convergence is checked, not assumed.** After every `Reconnect` and at the end of the run,
+ * every connected replica must have delivered the same dots; otherwise [run] throws
+ * [IllegalStateException]. A shortfall in [advance] would otherwise show up only as fewer
+ * presentations, fewer conflicts and fewer prompts, scoring low instead of failing.
  *
  * **Agents.** `StartAgent` captures the host's replica through [InputCapture.capture], minus the
  * inputs `selectExcluding` names (matched by value, as the oracle matches entries) and minus
@@ -83,35 +101,38 @@ public interface KuiltRunObserver {
  * requests, those two accepts conflict. Each conflicting pair costs one `humanPrompt`, counted once
  * across the run however many replicas see it, the same accounting as the baseline's single prompt.
  *
- * **Final views** are each replica's entries minus proposals and accepts, so they compare with the
- * baseline's entry-only views.
+ * **Final views** are each replica's entries minus proposals and accepts: the oracle compares Edit
+ * entries, and this keeps the views comparable with the baseline's.
  *
- * [advance] moves the replicas forward after each step. A test passes something that drives virtual
- * time, which keeps this class free of test-scheduler types; the replicas run on [scope].
+ * [network] builds a fresh [WorkspaceNetwork] for each run on the run's scope. [advance] moves the
+ * replicas forward after each step; a test passes something that drives virtual time, which keeps
+ * this class free of test-scheduler types. The replicas run on [scope].
  */
 public class KuiltBackend(
     private val scope: CoroutineScope,
     private val advance: () -> Unit,
-    private val faults: (ActorId) -> FaultProfile = { FaultProfile.Healthy },
+    private val network: (CoroutineScope) -> WorkspaceNetwork,
     private val observer: KuiltRunObserver = KuiltRunObserver.None,
 ) : WorkspaceBackend {
     override suspend fun run(scenario: Scenario): RunResult {
         // One child job per run, so a run's replicas stop when it returns instead of outliving it.
         val job = SupervisorJob(scope.coroutineContext[Job])
+        val runScope = scope + job
         try {
-            return KuiltRun(scenario, scope + job, advance, faults, observer).execute()
+            return KuiltRun(scenario, runScope, network(runScope), advance, observer).execute()
         } finally {
             job.cancel()
         }
     }
 
     public companion object {
-        /** The replicas' anti-entropy cadence, so a test can drive enough rounds for a reconnect to converge. */
-        public val antiEntropyInterval: Duration = QuilterConfig().antiEntropyInterval
+        internal val config = QuilterConfig(expectVirtualTime = true)
+
+        /** The replicas' own anti-entropy cadence, so a test can drive enough rounds for a reconnect to converge. */
+        public val antiEntropyInterval: Duration = config.antiEntropyInterval
     }
 }
 
-private val config = QuilterConfig(expectVirtualTime = true)
 private val messageSerializer = QuiltMessage.serializer(Rga.wireSerializer(WorkspaceEntry.serializer()))
 
 /** True for an input an agent can receive; false for an agent's output or a person's accept. */
@@ -120,7 +141,19 @@ private fun isInput(entry: WorkspaceEntry): Boolean = when (entry) {
     is WorkspaceEntry.AgentProposal, is WorkspaceEntry.Accept -> false
 }
 
-private class Replica(val id: ReplicaId, val seam: FaultySeam, val quilter: Quilter<Rga<WorkspaceEntry>>) {
+/** The one delivery rule: a dot is delivered when it is in the log's dots or under its floor. */
+private fun Rga<WorkspaceEntry>.delivers(dot: Dot): Boolean = dot in causalDots() || causalFloor().contains(dot)
+
+/** Every dot [this] has delivered is delivered by [other] too, whether held as a dot or under the floor. */
+private fun Rga<WorkspaceEntry>.deliveredWithin(other: Rga<WorkspaceEntry>): Boolean {
+    val otherDots = other.causalDots()
+    val otherFloor = other.causalFloor()
+    fun delivered(dot: Dot) = dot in otherDots || otherFloor.contains(dot)
+    return causalDots().all(::delivered) &&
+        causalFloor().entries.all { (author, seq) -> (1L..seq).all { delivered(Dot(author, it)) } }
+}
+
+private class Replica(val id: ReplicaId, val quilter: Quilter<Rga<WorkspaceEntry>>) {
     val log: Rga<WorkspaceEntry> get() = quilter.state.value
 
     /** Appends [entry] at the end of this replica's log, under the replicator's lock, and returns its id. */
@@ -133,8 +166,6 @@ private class Replica(val id: ReplicaId, val seam: FaultySeam, val quilter: Quil
         }
         return checkNotNull(minted) { "mutate ran no transform" }
     }
-
-    fun holds(id: RgaId): Boolean = log.entries().any { it.first == id }
 }
 
 private class OpenRun(val host: ActorId, val pending: Proposal.Pending)
@@ -142,8 +173,8 @@ private class OpenRun(val host: ActorId, val pending: Proposal.Pending)
 private class KuiltRun(
     private val scenario: Scenario,
     private val scope: CoroutineScope,
+    private val network: WorkspaceNetwork,
     private val advance: () -> Unit,
-    private val faults: (ActorId) -> FaultProfile,
     private val observer: KuiltRunObserver,
 ) {
     private val order: List<InputKey> = scenario.inputs.keys.toList()
@@ -173,9 +204,11 @@ private class KuiltRun(
             observer.beforeStep(step, replicas.mapValues { it.value.log })
             step(step)
             advance()
+            if (step is Step.Reconnect) checkConverged("after Reconnect(${step.actor.value})")
             presentNew()
             countConflicts()
         }
+        checkConverged("at the end of the run")
         return RunResult(
             presentations = presentations.toList(),
             finalViews = scenario.actors.associateWith { actor -> replica(actor).log.entries().map { it.second }.filter(::isInput) },
@@ -190,10 +223,8 @@ private class KuiltRun(
 
     /** One replicator and compaction coordinator per actor, as `RgaGcCoordinator3PeerIntegrationTest` wires them. */
     private suspend fun wire() {
-        val loom = FaultyLoom(InMemoryLoom(), scope)
         scenario.actors.forEachIndexed { index, actor ->
-            val seam = if (index == 0) loom.host(Pattern("workspace-${scenario.name}")) else loom.join(InMemoryTag(actor.value))
-            seam.setFaultProfile(faults(actor))
+            val seam = network.weave(actor)
             val id = ReplicaId(seam.selfId.value)
             val quilter = Quilter(
                 replica = id,
@@ -201,7 +232,7 @@ private class KuiltRun(
                 initial = Rga.empty(),
                 messageSerializer = messageSerializer,
                 scope = scope,
-                config = config,
+                config = KuiltBackend.config,
                 // Seeded per actor so anti-entropy's peer choice is the same on every run.
                 random = Random(index),
             )
@@ -212,11 +243,25 @@ private class KuiltRun(
                 applyCompaction = { patch -> quilter.apply(patch) },
                 scope = scope,
             )
-            replicas[actor] = Replica(id, seam, quilter)
+            replicas[actor] = Replica(id, quilter)
         }
     }
 
     private fun replica(actor: ActorId): Replica = replicas.getValue(actor)
+
+    /** Every connected replica has delivered the same dots, or the run fails here rather than scoring low. */
+    private fun checkConverged(where: String) {
+        val connected = replicas.filterKeys { it !in partitioned }
+        val (first, reference) = connected.entries.firstOrNull()?.let { it.key to it.value.log } ?: return
+        for ((actor, replica) in connected) {
+            val log = replica.log
+            check(log.deliveredWithin(reference) && reference.deliveredWithin(log)) {
+                "${scenario.name}: connected replicas did not converge $where: ${actor.value} and ${first.value} " +
+                    "hold different dots (${log.causalDots()} / ${log.causalFloor()} vs " +
+                    "${reference.causalDots()} / ${reference.causalFloor()}). The advance step drove too few rounds."
+            }
+        }
+    }
 
     private fun step(step: Step) {
         when (step) {
@@ -224,14 +269,15 @@ private class KuiltRun(
                 val id = replica(step.actor).append(step.entry)
                 inputKeys[id.dot] = step.key
                 created.getOrPut(step.actor) { mutableSetOf() } += step.key
-                outageAction(step.actor, id)
+                outageAction(step.actor)
             }
             is Step.Accept -> {
                 val chooser = replica(step.actor)
                 require(chooser.log.entries().any { (_, e) -> e is WorkspaceEntry.AgentProposal && e.request.value == step.request }) {
                     "${step.actor} accepts ${step.request}, which its replica does not hold"
                 }
-                outageAction(step.actor, chooser.append(WorkspaceEntry.Accept(step.actor, RequestId(step.request))))
+                chooser.append(WorkspaceEntry.Accept(step.actor, RequestId(step.request)))
+                outageAction(step.actor)
             }
             is Step.StartAgent -> start(step)
             is Step.ToolResult -> {
@@ -244,19 +290,20 @@ private class KuiltRun(
             is Step.ReleaseAgent -> release(step.request)
             is Step.Partition -> {
                 require(partitioned.add(step.actor)) { "${step.actor} is already partitioned" }
-                replica(step.actor).seam.partition()
+                network.cut(step.actor)
             }
             is Step.Reconnect -> {
                 require(partitioned.remove(step.actor)) { "${step.actor} reconnects without having been partitioned" }
-                replica(step.actor).seam.setFaultProfile(faults(step.actor))
+                network.restore(step.actor)
             }
         }
     }
 
-    private fun outageAction(actor: ActorId, id: RgaId) {
+    /** Served by construction: the entry was just applied to the actor's own replica, locally first. */
+    private fun outageAction(actor: ActorId) {
         if (actor !in partitioned) return
         outageActions += 1
-        if (replica(actor).holds(id)) outageActionsServed += 1
+        outageActionsServed += 1
     }
 
     private fun start(step: Step.StartAgent) {
@@ -275,8 +322,7 @@ private class KuiltRun(
             rejectedReplies += 1
             return
         }
-        // Complete on an empty recommendation first, only to read the finished basis back.
-        val basisKeys = keysOf(run.pending.complete(Recommendation(null)).basis.allDots)
+        val basisKeys = keysOf(run.pending.basis.allDots)
         val recommendation = ScriptedAgent.recommend(order.filter { it in basisKeys }.map { scenario.inputs.getValue(it) })
         val proposal = run.pending.complete(recommendation)
         observer.released(proposal)
@@ -309,12 +355,9 @@ private class KuiltRun(
         }
     }
 
-    /** Every scenario input [log] has delivered, by the one delivery rule: in its dots or under its floor. */
-    private fun deliveredInputs(log: Rga<WorkspaceEntry>): Set<InputKey> {
-        val dots = log.causalDots()
-        val floor = log.causalFloor()
-        return inputKeys.filterKeys { it in dots || floor.contains(it) }.values.toSet()
-    }
+    /** Every scenario input [log] has delivered. */
+    private fun deliveredInputs(log: Rga<WorkspaceEntry>): Set<InputKey> =
+        inputKeys.filterKeys { log.delivers(it) }.values.toSet()
 
     /** One prompt per pair of accepts, by different people for different requests, that a person's replica holds. */
     private fun countConflicts() {

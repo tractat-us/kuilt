@@ -88,6 +88,9 @@ public class Proposal private constructor(
         private val steps: List<StepBasis>,
         private val shown: List<Pair<Int, Recommendation>>,
     ) {
+        /** The inputs recorded so far, read-only: exactly the basis [complete] would stamp now. */
+        public val basis: InputRecord get() = InputRecord(request, steps)
+
         /**
          * Records a tool result: a new step holding only [newIds]' dots. Every id must be an element of
          * [log], and none may already be in the basis.
