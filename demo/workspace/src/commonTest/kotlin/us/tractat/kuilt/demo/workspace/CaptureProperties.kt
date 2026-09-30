@@ -23,6 +23,12 @@ object LeakyStamp {
  * land between capture and stamping. [stamp] receives the finished proposal and the live log as it
  * stands when the result is sent.
  *
+ * A property of the **stamp and its codec** only. Both sides come from one proposal that this
+ * function captured itself, at the right moment, so a backend that calls `InputCapture.capture`
+ * late (at release, say) or passes later host updates off through `withToolResult` stays green here.
+ * Capture timing is the backend's obligation; `KuiltBackendTest.capturedBasisIsTheHostStateAtStart`
+ * pins it for [KuiltBackend].
+ *
  * Walks a fixed grid: 0–3 inputs before capture, an optional excluded note, an optional tool result,
  * and 1–3 host updates after capture. Every cell has at least one later update, so a stamp that
  * reads the live log is caught in every cell, not just some. A stamp whose wire form `toProposal`

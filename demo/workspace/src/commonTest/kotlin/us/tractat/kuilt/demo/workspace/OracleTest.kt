@@ -80,4 +80,23 @@ class OracleTest {
         val p = Presentation(a, "r1", Recommendation(VenueId("v1")), basis = emptySet(), known = setOf(InputKey("nope")), shownAsApplicable = true)
         assertFailsWith<IllegalArgumentException> { Oracle.score(s3, result(s3, p)) }
     }
+
+    /**
+     * An Unknown verdict is shown for review like any flag, so when the rerun agrees it is a false
+     * invalidation: HYPOTHESES.md defines that metric over every flagged presentation.
+     * `unknownPresentations` is only a breakdown and moves no other count.
+     */
+    @Test
+    fun unknownPresentationIsCountedAndStillAFalseInvalidation() {
+        val p = Presentation(
+            a, "r1", Recommendation(VenueId("v1")), basis = emptySet(), known = setOf(InputKey("noteV2")),
+            shownAsApplicable = false, unknown = true,
+        )
+        val m = Oracle.score(s1, result(s1, p))
+        assertAll(
+            { assertEquals(1, m.unknownPresentations) },
+            { assertEquals(1, m.falseInvalidations) },
+            { assertEquals(0, m.staleTreatedAsCurrent) },
+        )
+    }
 }

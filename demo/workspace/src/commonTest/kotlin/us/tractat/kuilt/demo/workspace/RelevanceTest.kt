@@ -55,4 +55,10 @@ class RelevanceTest {
             { assertFalse(Relevance.isRelevant(proposal, Recommendation(null))) },
         )
     }
+
+    @Test
+    fun acceptIsNeverRelevant() = assertAll(
+        { assertFalse(Relevance.isRelevant(WorkspaceEntry.Accept(sam, RequestId("r1")), Recommendation(v1))) },
+        { assertFalse(Relevance.isRelevant(WorkspaceEntry.Accept(sam, RequestId("r1")), Recommendation(null))) },
+    )
 }
