@@ -114,6 +114,9 @@ class BaselineBackendTest {
             { assertEquals(1, m.unnecessaryReruns) },
             { assertEquals(0, m.staleTreatedAsCurrent) },
             { assertEquals(0, r.humanPrompts) },
+            { assertEquals(0, r.outageActions) },
+            { assertEquals(3, r.presentations.size) },
+            { assertTrue(r.presentations.all { it.recommendation == Recommendation(v1) }) },
         )
     }
 
