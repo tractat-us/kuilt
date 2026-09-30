@@ -6,70 +6,70 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Dot
-import us.tractat.kuilt.crdt.LatticeProduct
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 
-/** One shortlisted venue as first added. Its [Rga] insert dot is the venue's handle. */
-@Serializable
-public data class VenueAdded(val name: String, val price: Int)
-
 /**
- * One edit in the typed model's edit log. Every edit is an [Rga] insert, so every edit has a dot.
+ * One input in the typed model's single log. Every input is an [Rga] insert, so every input has a
+ * dot, and all of them share one dot space and one Lamport clock.
  *
  * Short [SerialName]s keep the polymorphic discriminator from dominating [TypedModel.encodedSize]:
  * the default is the fully-qualified class name, which no real consumer would ship.
  */
 @Serializable
-public sealed interface Edit {
+public sealed interface Entry {
+    /** A shortlisted venue as first added. Its insert dot is the venue's handle. */
+    @Serializable
+    @SerialName("venue")
+    public data class VenueAdded(val name: String, val price: Int) : Entry
+
     @Serializable
     @SerialName("price")
-    public data class PriceSet(val target: Dot, val price: Int) : Edit
+    public data class PriceSet(val target: Dot, val price: Int) : Entry
 
     @Serializable
     @SerialName("removed")
-    public data class Removed(val target: Dot) : Edit
+    public data class Removed(val target: Dot) : Entry
 
     @Serializable
     @SerialName("budget")
-    public data class BudgetSet(val budget: Int) : Edit
+    public data class BudgetSet(val budget: Int) : Entry
 }
 
-public typealias TypedLattice = LatticeProduct<Rga<VenueAdded>, Rga<Edit>>
-
 /**
- * The typed model's state: the replicated lattice value plus the delta of the mutation that
- * produced it.
+ * The typed model's state: the replicated log plus the delta of the mutation that produced it.
  *
  * [lastDelta] exists only so [TypedModel.encodedSize] can measure what one mutation would put on
- * the wire; it is not replicated. It is a [LatticeProduct] whose touched component holds just the
- * one insert (`Rga.empty().apply(op)`, the single-op delta idiom `RgaGcCoordinator` uses) and whose
- * other component is empty. [TypedModel.merge] produces a state with no last delta.
+ * the wire; it is not replicated. It is the one-insert log `Rga.empty().apply(op)`, the single-op
+ * delta idiom `RgaGcCoordinator` uses. [TypedModel.merge] produces a state with no last delta.
  */
-public data class TypedState(val lattice: TypedLattice, val lastDelta: TypedLattice?)
+public data class TypedState(val log: Rga<Entry>, val lastDelta: Rga<Entry>?)
 
 /**
- * The typed dinner model: `LatticeProduct<Rga<VenueAdded>, Rga<Edit>>`.
+ * The typed dinner model: ONE log, `Rga<Entry>`.
  *
- * Every mutation is `insertAt(replica, size, value)` on the right log — venues on the first, every
- * edit on the second — so every input is an [Rga] element and carries a dot. Nothing is ever
- * removed from either log at the [Rga] level: a removal is itself an [Edit.Removed] insert.
+ * Every mutation is `insertAt(replica, size, entry)` on that log, so every input is an [Rga]
+ * element and carries a dot. Nothing is ever removed at the [Rga] level: a removal is itself an
+ * [Entry.Removed] insert.
  *
- * [shortlist] folds the edit log in `entries()` order, which is [RgaId] order
- * `(lamport, replica)`: the last [Edit.PriceSet] per target wins, and a target with any
- * [Edit.Removed] is hidden, together with every [Edit.PriceSet] aimed at it (remove wins).
+ * Why one log. The plan named `LatticeProduct<Rga<VenueAdded>, Rga<Edit>>`; the controller ruled
+ * it out. Each [Rga] mints its `seq` per replica from its *own* high-water, so two logs in a
+ * product are two independent dot spaces: a replica's first venue and its first edit were both
+ * `Dot(a, 1)`, and the product's `causalDots()` union collapsed them into one identity (pinned by
+ * `TwoLogProductTest`). The two logs also ran separate Lamport clocks. One log gives one dot space
+ * and one clock.
+ *
+ * [shortlist] folds the log in `entries()` order, which is [RgaId] order `(lamport, replica)`:
+ * the last [Entry.PriceSet] per target wins, and a target with any [Entry.Removed] is hidden,
+ * together with every [Entry.PriceSet] aimed at it (remove wins).
  */
 public object TypedModel : DinnerModel<TypedState> {
     override val name: String = "typed"
 
-    private val deltaSerializer: KSerializer<TypedLattice> = LatticeProduct.serializer(
-        Rga.wireSerializer(VenueAdded.serializer()),
-        Rga.wireSerializer(Edit.serializer()),
-    )
+    private val deltaSerializer: KSerializer<Rga<Entry>> = Rga.wireSerializer(Entry.serializer())
 
-    override fun empty(replica: ReplicaId): TypedState =
-        TypedState(LatticeProduct(Rga.empty(), Rga.empty()), lastDelta = null)
+    override fun empty(replica: ReplicaId): TypedState = TypedState(Rga.empty(), lastDelta = null)
 
     override fun addVenue(
         s: TypedState,
@@ -77,49 +77,46 @@ public object TypedModel : DinnerModel<TypedState> {
         name: String,
         price: Int,
     ): Pair<TypedState, VenueHandle> {
-        val venues = s.lattice.first
-        val (next, op) = venues.insertAt(replica, venues.size, VenueAdded(name, price))
-        val state = TypedState(
-            lattice = LatticeProduct(next, s.lattice.second),
-            lastDelta = LatticeProduct(Rga.empty<VenueAdded>().apply(op), Rga.empty()),
-        )
-        return state to VenueHandle(op.id.dot)
+        val (state, id) = append(s, replica, Entry.VenueAdded(name, price))
+        return state to VenueHandle(id.dot)
     }
 
     override fun setPrice(s: TypedState, replica: ReplicaId, venue: VenueHandle, price: Int): TypedState {
         requireVisible(s, venue)
-        return appendEdit(s, replica, Edit.PriceSet(venue.dot, price))
+        return append(s, replica, Entry.PriceSet(venue.dot, price)).first
     }
 
     override fun removeVenue(s: TypedState, replica: ReplicaId, venue: VenueHandle): TypedState {
         requireVisible(s, venue)
-        return appendEdit(s, replica, Edit.Removed(venue.dot))
+        return append(s, replica, Entry.Removed(venue.dot)).first
     }
 
     override fun setBudget(s: TypedState, replica: ReplicaId, budget: Int): TypedState =
-        appendEdit(s, replica, Edit.BudgetSet(budget))
+        append(s, replica, Entry.BudgetSet(budget)).first
 
-    override fun merge(a: TypedState, b: TypedState): TypedState =
-        TypedState(a.lattice.piece(b.lattice), lastDelta = null)
+    override fun merge(a: TypedState, b: TypedState): TypedState = TypedState(a.log.piece(b.log), lastDelta = null)
 
     override fun shortlist(s: TypedState): List<VenueView> {
+        val entries = s.log.entries()
         val prices = mutableMapOf<Dot, Int>()
         val removed = mutableSetOf<Dot>()
-        for ((_, edit) in s.lattice.second.entries()) {
-            when (edit) {
-                is Edit.PriceSet -> prices[edit.target] = edit.price
-                is Edit.Removed -> removed += edit.target
-                is Edit.BudgetSet -> Unit
+        for ((_, entry) in entries) {
+            when (entry) {
+                is Entry.PriceSet -> prices[entry.target] = entry.price
+                is Entry.Removed -> removed += entry.target
+                is Entry.VenueAdded, is Entry.BudgetSet -> Unit
             }
         }
-        return s.lattice.first.entries()
-            .filter { (id, _) -> id.dot !in removed }
-            .map { (id, added) -> VenueView(VenueHandle(id.dot), added.name, prices[id.dot] ?: added.price) }
+        return entries.mapNotNull { (id, entry) ->
+            (entry as? Entry.VenueAdded)
+                ?.takeIf { id.dot !in removed }
+                ?.let { VenueView(VenueHandle(id.dot), it.name, prices[id.dot] ?: it.price) }
+        }
     }
 
     /**
-     * The effective [Edit.BudgetSet] followed by every other [Edit.BudgetSet] its author is not
-     * proven to have seen, in edit-log `entries()` order.
+     * The effective [Entry.BudgetSet] followed by every other [Entry.BudgetSet] its author is not
+     * proven to have seen, in log `entries()` order.
      *
      * "Proven seen" is what the [Rga] log honestly records: the causal past of the effective
      * insert is the transitive closure of its `after` predecessor link (`Rga.positionsFor`) — the
@@ -134,41 +131,29 @@ public object TypedModel : DinnerModel<TypedState> {
      * records only the one predecessor, so this is an over-approximation of concurrency.
      */
     override fun budgetCandidates(s: TypedState): List<Int> {
-        val edits = s.lattice.second
-        val entries = edits.entries()
-        val budgets = entries.filter { (_, edit) -> edit is Edit.BudgetSet }
+        val entries = s.log.entries()
+        val budgets = entries.filter { (_, entry) -> entry is Entry.BudgetSet }
         val effective = budgets.lastOrNull() ?: return emptyList()
-        val afterOf = edits.positionsFor(entries.map { it.first }.toSet())
+        val afterOf = s.log.positionsFor(entries.map { it.first }.toSet())
         val seen = causalPast(effective.first, afterOf, entries.map { it.first })
         return budgets
             .filter { (id, _) -> id == effective.first || id !in seen }
-            .map { (_, edit) -> (edit as Edit.BudgetSet).budget }
+            .map { (_, entry) -> (entry as Entry.BudgetSet).budget }
     }
 
     /**
-     * The last [Edit.BudgetSet] in edit-log `entries()` order, i.e. the greatest [RgaId]
+     * The last [Entry.BudgetSet] in log `entries()` order, i.e. the greatest [RgaId]
      * `(lamport, replica)`. A deterministic last-writer-wins answer; [budgetCandidates] is where
      * a concurrent loser stays visible.
      */
-    override fun effectiveBudget(s: TypedState): Int? = s.lattice.second.entries()
-        .mapNotNull { (_, edit) -> (edit as? Edit.BudgetSet)?.budget }
+    override fun effectiveBudget(s: TypedState): Int? = s.log.entries()
+        .mapNotNull { (_, entry) -> (entry as? Entry.BudgetSet)?.budget }
         .lastOrNull()
 
-    /**
-     * `LatticeProduct.causalDots()`: the union of the venue log's dots and the edit log's dots.
-     *
-     * FINDING: the union is lossy. Each [Rga] mints its `seq` per replica *per log*
-     * (`nextSeqFor` reads that log's own high-water), so a replica's first venue and its first
-     * edit are both `Dot(replica, 1)`. The product unions two independent dot spaces into one set,
-     * so the two inputs collapse into one identity: after `addVenue` then `setBudget` on replica
-     * `a` this returns `{(a, 1)}`, one dot for two inputs (`IdentityTest.typedModelGivesEveryInputADot`
-     * reds on exactly this). Each input still has a dot *within its own log* — a `PriceSet.target`
-     * is unambiguous because it always names the venue log — but the product's delivered frontier
-     * cannot tell "venue (a, 3) delivered" from "edit (a, 3) delivered".
-     */
-    override fun causalDots(s: TypedState): Set<Dot> = s.lattice.causalDots()
+    /** The log's own `causalDots()`: one dot per input, all in one dot space. */
+    override fun causalDots(s: TypedState): Set<Dot> = s.log.causalDots()
 
-    /** CBOR (the codec `Quilter` defaults to) over `LatticeProduct.serializer(Rga.wireSerializer(…), …)`. */
+    /** CBOR (the codec `Quilter` defaults to) over `Rga.wireSerializer(Entry.serializer())`. */
     @OptIn(ExperimentalSerializationApi::class)
     override fun encodedSize(s: TypedState): Int {
         val delta = checkNotNull(s.lastDelta) {
@@ -177,13 +162,9 @@ public object TypedModel : DinnerModel<TypedState> {
         return Cbor.encodeToByteArray(deltaSerializer, delta).size
     }
 
-    private fun appendEdit(s: TypedState, replica: ReplicaId, edit: Edit): TypedState {
-        val edits = s.lattice.second
-        val (next, op) = edits.insertAt(replica, edits.size, edit)
-        return TypedState(
-            lattice = LatticeProduct(s.lattice.first, next),
-            lastDelta = LatticeProduct(Rga.empty(), Rga.empty<Edit>().apply(op)),
-        )
+    private fun append(s: TypedState, replica: ReplicaId, entry: Entry): Pair<TypedState, RgaId> {
+        val (next, op) = s.log.insertAt(replica, s.log.size, entry)
+        return TypedState(next, lastDelta = Rga.empty<Entry>().apply(op)) to op.id
     }
 
     private fun requireVisible(s: TypedState, venue: VenueHandle) {
