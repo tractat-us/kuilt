@@ -11,7 +11,6 @@ import kotlinx.coroutines.plus
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -69,7 +68,10 @@ class AdversarialTraceTest {
      * the proposal without its basis, which [Assessment] judges Unknown. The backend never presents
      * that state because it checks, after every step and before presenting, that every connected
      * replica has delivered the same dots; a replica that holds the proposal therefore holds every
-     * dot the host held when it released it. So every presentation below has `unknown == false`.
+     * dot the host held when it released it. Reordering cannot open the gap either: Quilter applies
+     * each sender's deltas in that sender's order, and the gap needs one sender's frames held back
+     * while another's get through. So every presentation below has `unknown == false`, and
+     * [heldFramesLeaveTheProposalUnknown] is where an Unknown is reached end to end.
      */
     @Test
     fun reorderedAndDuplicatedProposalKeepsBasis() = runTest(UnconfinedTestDispatcher()) {
@@ -194,6 +196,61 @@ class AdversarialTraceTest {
                 { assertTrue(closure.dot in arrived.basis.allDots, "the basis still names the purged closure") },
                 // Nothing live is missing from the basis, and the purged closure is delivered, so: Applicable.
                 { assertEquals(Verdict.Applicable, verdict) },
+            )
+        }
+    }
+
+    // ── Review Focus 1: the agent saw more than the phone ─────────────────────────────────────
+
+    /**
+     * The one end-to-end Unknown. Sam's frames to alex are held back, so sam's closure of v1 reaches
+     * the host but not alex. The host captures it, the agent finishes, and the proposal replicates
+     * to alex straight away (deltas are eager; anti-entropy runs only on a timer, and no virtual time
+     * passes). Alex now holds an answer built from a report alex never received, and must say so:
+     * Unknown, naming the closure, never Applicable. Once the held frames go through, the verdict is
+     * definite.
+     *
+     * [KuiltBackend] cannot reach this state: it cuts whole actors and checks convergence before
+     * every presentation. So this runs on the [Mesh], and the backend's presentation rule is unchanged.
+     */
+    @Test
+    fun heldFramesLeaveTheProposalUnknown() = runTest(UnconfinedTestDispatcher()) {
+        lateinit var holder: HoldingSeam
+        var alexPeer: PeerId? = null
+        withMesh(decorate = { actor, seam ->
+            when (actor) {
+                alex -> seam.also { alexPeer = it.selfId }
+                sam -> HoldingSeam(seam) { checkNotNull(alexPeer) { "alex is woven before sam" } }.also { holder = it }
+                else -> seam
+            }
+        }) { mesh ->
+            holder.holding = true
+            val closure = mesh.append(sam, WorkspaceEntry.Report.Closed(sam, v1))
+            val hostLog = mesh.log(remote)
+            val captured = InputCapture.capture(RequestId("r1"), hostLog)
+                .complete(ScriptedAgent.recommend(hostLog.entries().map { it.second }))
+            mesh.append(remote, captured.toEntry(remote))
+
+            val alexBefore = mesh.log(alex)
+            val arrivedBefore = alexBefore.entries().map { it.second }.filterIsInstance<WorkspaceEntry.AgentProposal>().singleOrNull()
+            val heldCount = holder.held.size
+            val verdictBefore = arrivedBefore?.let { Assessment.assess(it.toProposal(), alexBefore) }
+
+            holder.release()
+            drain()
+            val alexAfter = mesh.log(alex)
+            val verdictAfter = Assessment.assess(captured, alexAfter)
+            assertAll(
+                // The rig: frames to alex were held, and the host did receive the closure.
+                { assertTrue(heldCount > 0, "sam's frames to alex were held ($heldCount)") },
+                { assertEquals(setOf(closure.dot), captured.basis.allDots, "the host captured sam's closure") },
+                { assertFalse(alexBefore.delivers(closure.dot), "alex had not received the closure") },
+                // The promise: alex holds the proposal, and cannot judge a basis it does not hold.
+                { assertTrue(arrivedBefore != null, "alex holds the proposal") },
+                { assertEquals(Verdict.Unknown(setOf(closure.dot)), verdictBefore) },
+                // Once the frames go through, the verdict is definite: the closure is in the basis, so nothing is missing.
+                { assertTrue(alexAfter.delivers(closure.dot), "alex received the closure after release") },
+                { assertEquals(Verdict.Applicable, verdictAfter) },
             )
         }
     }
@@ -362,11 +419,14 @@ class AdversarialTraceTest {
 
     private fun TestScope.drain() = drainAntiEntropy(KuiltBackend.antiEntropyInterval, rounds = 10)
 
-    /** Runs [block] on a fresh mesh whose replicas stop when it returns. */
-    private suspend fun <T> TestScope.withMesh(block: suspend (Mesh) -> T): T {
+    /** Runs [block] on a fresh mesh whose replicas stop when it returns. [decorate] may wrap an actor's seam. */
+    private suspend fun <T> TestScope.withMesh(
+        decorate: (ActorId, Seam) -> Seam = { _, seam -> seam },
+        block: suspend (Mesh) -> T,
+    ): T {
         val job = SupervisorJob(backgroundScope.coroutineContext[Job])
         try {
-            val mesh = Mesh(backgroundScope + job, actors)
+            val mesh = Mesh(backgroundScope + job, actors, decorate)
             mesh.wire()
             drain()
             return block(mesh)
@@ -395,15 +455,11 @@ class AdversarialTraceTest {
     }
 }
 
-private val wire = QuiltMessage.serializer(Rga.wireSerializer(WorkspaceEntry.serializer()))
+/** Decodes one replicator frame with the backend's own wire serializer. Every frame on these seams is one. */
+private fun decode(bytes: List<Byte>): QuiltMessage<Rga<WorkspaceEntry>> =
+    Cbor.decodeFromByteArray(messageSerializer, bytes.toByteArray())
 
-private fun decode(bytes: List<Byte>): QuiltMessage<Rga<WorkspaceEntry>>? = try {
-    Cbor.decodeFromByteArray(wire, bytes.toByteArray())
-} catch (_: SerializationException) {
-    null
-}
-
-private fun QuiltMessage<Rga<WorkspaceEntry>>?.isProposalDelta(): Boolean =
+private fun QuiltMessage<Rga<WorkspaceEntry>>.isProposalDelta(): Boolean =
     this is QuiltMessage.Delta && delta.entries().any { (_, e) -> e is WorkspaceEntry.AgentProposal }
 
 /** True when every element of this list appears in [other] in the same relative order. */
@@ -449,6 +505,30 @@ private class TracingSeam(private val delegate: Seam, private val duplicate: Boo
     }
 }
 
+/**
+ * A test-side decorator that turns every broadcast into one `sendTo` per peer, and while [holding]
+ * keeps (and counts) every frame addressed to [holdFor] instead of sending it. [release] sends the
+ * held frames on, in order, and stops holding.
+ */
+private class HoldingSeam(private val delegate: Seam, private val holdFor: () -> PeerId) : Seam by delegate {
+    var holding = false
+    val held = mutableListOf<ByteArray>()
+
+    override suspend fun broadcast(payload: ByteArray) {
+        for (peer in delegate.peers.value) if (peer != delegate.selfId) sendTo(peer, payload.copyOf())
+    }
+
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        if (holding && peer == holdFor()) held += payload.copyOf() else delegate.sendTo(peer, payload)
+    }
+
+    suspend fun release() {
+        holding = false
+        val target = holdFor()
+        for (frame in held) delegate.sendTo(target, frame)
+    }
+}
+
 /** Wraps each seam [inner] weaves in a [TracingSeam]; only [duplicateFrom]'s seam duplicates. */
 private class TracingNetwork(private val inner: WorkspaceNetwork, private val duplicateFrom: ActorId?) : WorkspaceNetwork {
     private val seams = linkedMapOf<ActorId, TracingSeam>()
@@ -466,13 +546,17 @@ private class TracingNetwork(private val inner: WorkspaceNetwork, private val du
  * [KuiltBackend]'s replicas, for the traces its scenario steps cannot express: each one comes from
  * [wireReplica], the factory the backend itself uses.
  */
-private class Mesh(private val scope: CoroutineScope, private val actors: List<ActorId>) {
+private class Mesh(
+    private val scope: CoroutineScope,
+    private val actors: List<ActorId>,
+    private val decorate: (ActorId, Seam) -> Seam,
+) {
     private val network = FaultyNetwork(scope)
     private val replicas = linkedMapOf<ActorId, Pair<ReplicaId, Quilter<Rga<WorkspaceEntry>>>>()
 
     suspend fun wire() {
         actors.forEachIndexed { index, actor ->
-            val quilter = wireReplica(network.weave(actor), index, scope)
+            val quilter = wireReplica(decorate(actor, network.weave(actor)), index, scope)
             replicas[actor] = quilter.replica to quilter
         }
     }

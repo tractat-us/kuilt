@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.Dot
+import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
@@ -15,6 +16,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -289,6 +291,32 @@ class KuiltBackendTest {
             // The agent received the closure but not the budget, so it picks v2 (25).
             { assertEquals(Recommendation(v2), proposal.recommendation) },
             { assertTrue(r.presentations.all { it.basis == setOf(InputKey("closeV1")) }) },
+        )
+    }
+
+    /**
+     * The backend's own delivery helpers read the floor, as [Assessment] does. `delivers` feeds each
+     * presentation's `known`, and `deliveredWithin` is the convergence check. No backend run raises a
+     * floor (the compaction coordinator records a `Compact` instead), so this pins them directly on a
+     * log whose one dot `dropWindow` folded into `causalFloor()`: the floored log and the unfloored one
+     * deliver the same dot, split differently, and must compare equal.
+     */
+    @Test
+    fun backendDeliveryHelpersReadTheFloor() {
+        val host = ReplicaId("remote")
+        val (log, op) = Rga.empty<WorkspaceEntry>().insertAt(host, 0, WorkspaceEntry.PreferenceSet(alex, budget = 50))
+        val dot = op.id.dot
+        val floored = checkNotNull(log.dropWindow(host, setOf(op.id))).first
+        val empty = Rga.empty<WorkspaceEntry>()
+        assertAll(
+            // The rig: only the floor carries the dot.
+            { assertTrue(floored.causalFloor().contains(dot)) },
+            { assertFalse(dot in floored.causalDots()) },
+            { assertTrue(floored.delivers(dot), "delivers reads the floor") },
+            { assertTrue(log.deliveredWithin(floored), "a dot under the other log's floor counts as delivered there") },
+            { assertTrue(floored.deliveredWithin(log), "a floored dot is compared, not skipped") },
+            // The control: the comparison can say no.
+            { assertFalse(floored.deliveredWithin(empty), "a floored dot the other log lacks is a difference") },
         )
     }
 }

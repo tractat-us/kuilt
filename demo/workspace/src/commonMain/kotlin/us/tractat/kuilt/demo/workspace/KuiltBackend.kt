@@ -96,6 +96,13 @@ public interface WorkspaceNetwork : ActorLinks {
  * that hosts an agent in the scenario (`remote`) is shown the flag and never counted as asked.
  * A proposal is presented at most once per actor, however many times its entry is delivered.
  *
+ * **This backend never presents an Unknown.** Links are cut whole-actor, Quilter orders deltas per
+ * sender, and the convergence check runs before every presentation, so a replica that holds a
+ * proposal has delivered every dot the host held when it released it. A zero
+ * `unknownPresentations` from this backend is therefore vacuous by construction, not evidence that
+ * the verdict works; the end-to-end Unknown is pinned on a test mesh instead
+ * (`AdversarialTraceTest.heldFramesLeaveTheProposalUnknown`).
+ *
  * `known` is every scenario input the presenter's replica has delivered, plus every input the actor
  * created itself (HYPOTHESES.md § Metrics). Proposals and accepts are never scenario inputs, so they
  * never appear in `known` or `basis`.
@@ -136,7 +143,7 @@ public class KuiltBackend(
     }
 }
 
-private val messageSerializer = QuiltMessage.serializer(Rga.wireSerializer(WorkspaceEntry.serializer()))
+internal val messageSerializer = QuiltMessage.serializer(Rga.wireSerializer(WorkspaceEntry.serializer()))
 
 /**
  * One actor's replica on [seam]: a [Quilter] over an empty `Rga<WorkspaceEntry>`, with an
@@ -172,10 +179,10 @@ private fun isInput(entry: WorkspaceEntry): Boolean = when (entry) {
 }
 
 /** The one delivery rule: a dot is delivered when it is in the log's dots or under its floor. */
-private fun Rga<WorkspaceEntry>.delivers(dot: Dot): Boolean = dot in causalDots() || causalFloor().contains(dot)
+internal fun Rga<WorkspaceEntry>.delivers(dot: Dot): Boolean = dot in causalDots() || causalFloor().contains(dot)
 
 /** Every dot [this] has delivered is delivered by [other] too, whether held as a dot or under the floor. */
-private fun Rga<WorkspaceEntry>.deliveredWithin(other: Rga<WorkspaceEntry>): Boolean {
+internal fun Rga<WorkspaceEntry>.deliveredWithin(other: Rga<WorkspaceEntry>): Boolean {
     val otherDots = other.causalDots()
     val otherFloor = other.causalFloor()
     fun delivered(dot: Dot) = dot in otherDots || otherFloor.contains(dot)
