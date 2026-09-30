@@ -35,15 +35,19 @@ public sealed interface Step {
 }
 
 public data class Scenario(val name: String, val actors: List<ActorId>, val steps: List<Step>) {
+    /** Every input the scenario creates, by the key of the step that created it, in scenario order. */
+    public val inputs: Map<InputKey, WorkspaceEntry>
+
     init {
-        val keys = steps.mapNotNull {
+        val created = steps.mapNotNull {
             when (it) {
-                is Step.Edit -> it.key
-                is Step.ToolResult -> it.key
+                is Step.Edit -> it.key to it.entry
+                is Step.ToolResult -> it.key to it.entry
                 else -> null
             }
         }
-        require(keys.size == keys.toSet().size) { "$name: an input key is created twice: $keys" }
+        inputs = created.toMap()
+        require(inputs.size == created.size) { "$name: an input key is created twice: ${created.map { it.first }}" }
         val stepActors = steps.mapNotNull {
             when (it) {
                 is Step.Edit -> it.actor
@@ -153,7 +157,12 @@ public data class Presentation(
     val shownAsApplicable: Boolean,
 )
 
-/** What a backend reports after replaying one [Scenario]. The [Oracle] scores it. */
+/**
+ * What a backend reports after replaying one [Scenario]. The [Oracle] scores it.
+ *
+ * [finalViews] must hold a view for **every** actor in [Scenario.actors], `remote` included; the
+ * oracle throws on a missing one rather than counting an edit as preserved in a view nobody reported.
+ */
 public data class RunResult(
     val presentations: List<Presentation>,
     val finalViews: Map<ActorId, List<WorkspaceEntry>>,
