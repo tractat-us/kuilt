@@ -15,6 +15,13 @@ package us.tractat.kuilt.demo.workspace
  * counts as one `outageAction`, an `Accept` exactly like an `Edit`. With `optimisticLocal = false`
  * it is **not served**: the server owns the model, so nothing shows even locally until reconnect.
  * With `optimisticLocal = true` the client shows it locally at once, and it is served.
+ *
+ * **Controller Ruling N: an optimistic offline accept counts as served.** Under `optimisticLocal`
+ * a queued `Accept` is counted in `outageActionsServed` because an optimistic client would show
+ * "you chose X" locally. The domain has no accept entry, so nothing appears in the actor's final
+ * view: the credit is declared by this ruling, not produced by an observable effect. Whether it
+ * stands is Iain's call under HYPOTHESES.md Q2.
+ *
  * The version a queued write "last saw" includes the actor's own earlier queued writes to the same
  * scope, so two offline edits by one person never conflict with each other.
  *
@@ -38,12 +45,20 @@ package us.tractat.kuilt.demo.workspace
  * **Presentation timing.** A released proposal is presented, as applicable, to every scenario actor
  * connected at release, `remote` included. A partitioned actor gets it when it reconnects, after its
  * queue replays: the check runs again against the server as it is then, and a rerun it triggers is
- * pushed to every connected actor, since the proposal they saw has been replaced. `known` for an
- * actor is what it has seen (the server's set if connected, its last sync if not) **plus every input
- * it created itself, served or not**.
+ * pushed to every connected actor, since the proposal they saw has been replaced. An actor that saw
+ * the replaced proposal but is partitioned now gets the replacement as a deferred presentation, on
+ * the same terms, when it reconnects.
  *
- * **Final views.** A connected actor's view, and always `remote`'s, is the server's entries. A still
- * partitioned actor's is its last sync, plus its queued edits under `optimisticLocal`.
+ * `known` for an actor is what it has seen (the server's set if connected, its last sync if not)
+ * **plus every input it created itself, served or not** (Ruling H). In this backend the own-inputs
+ * clause can never change `known`: presentations happen only to connected actors, and a reconnecting
+ * actor's queue has flushed into the server's set before its deferred presentations run. So a test
+ * that finds an actor's own offline edit in `known` here is an outcome test, not evidence for the
+ * clause.
+ *
+ * **Final views.** A connected actor's view is the server's entries. A partitioned actor's is its
+ * last sync, plus its queued edits under `optimisticLocal`. `remote` is treated like any other
+ * actor; it is never partitioned in S1–S6, so its view there is the server's entries.
  *
  * [run] is `suspend` only to match [WorkspaceBackend]: it is a plain sequential interpreter.
  */
@@ -104,6 +119,8 @@ private class Interpreter(private val scenario: Scenario, private val optimistic
     private val captures = mutableMapOf<String, Capture>()
     private val released = mutableMapOf<String, Proposal>()
     private val deferred = mutableMapOf<ActorId, MutableList<String>>()
+    /** Requests each actor has been shown some version of. */
+    private val shown = mutableMapOf<ActorId, MutableSet<String>>()
 
     private val presentations = mutableListOf<Presentation>()
     private var agentRuns = 0
@@ -215,7 +232,14 @@ private class Interpreter(private val scenario: Scenario, private val optimistic
             if (after === before) {
                 present(actor, after)
             } else {
-                scenario.actors.filter { it !in partitioned }.forEach { present(it, after) }
+                for (other in scenario.actors) {
+                    if (other !in partitioned) {
+                        present(other, after)
+                    } else if (request in shown[other].orEmpty()) {
+                        val pending = deferred.getOrPut(other) { mutableListOf() }
+                        if (request !in pending) pending += request
+                    }
+                }
             }
         }
     }
@@ -237,6 +261,7 @@ private class Interpreter(private val scenario: Scenario, private val optimistic
     }
 
     private fun present(actor: ActorId, proposal: Proposal) {
+        shown.getOrPut(actor) { mutableSetOf() } += proposal.request
         presentations += Presentation(
             actor = actor,
             request = proposal.request,
