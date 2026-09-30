@@ -129,8 +129,7 @@ public class FaultySeam(
     override val incoming: Flow<Swatch> = spool.incoming
 
     override suspend fun broadcast(payload: ByteArray) {
-        val decision = mutex.withLock { faultState.evaluateOutbound(payload) }
-        applyOutboundDecision(decision) { delegate.broadcast(it) }
+        dispatchOutbound(OutboundFrame(payload, Route.Broadcast))
     }
 
     override suspend fun sendTo(
@@ -142,8 +141,7 @@ public class FaultySeam(
         // the injected fault profile — a lossy link is allowed to lose frames, never to launder a
         // caller's programming error into one (#2428).
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
-        val decision = mutex.withLock { faultState.evaluateOutbound(payload) }
-        applyOutboundDecision(decision) { delegate.sendTo(peer, it) }
+        dispatchOutbound(OutboundFrame(payload, Route.To(peer)))
     }
 
     /**
@@ -173,30 +171,31 @@ public class FaultySeam(
 
     // ── Internal outbound dispatch ────────────────────────────────────────────
 
-    private suspend fun applyOutboundDecision(
-        decision: OutboundDecision,
-        send: suspend (ByteArray) -> Unit,
-    ) {
-        when (decision) {
+    private suspend fun dispatchOutbound(frame: OutboundFrame) {
+        when (val decision = mutex.withLock { faultState.evaluateOutbound(frame) }) {
             is OutboundDecision.Send -> {
-                send(decision.payload)
+                send(frame.route, decision.payload)
                 _framesDelivered.incrementAndGet()
             }
             is OutboundDecision.Delay -> {
                 _framesDelayed.incrementAndGet()
                 delay(decision.delay)
-                send(decision.payload)
+                send(frame.route, decision.payload)
                 _framesDelivered.incrementAndGet()
             }
             is OutboundDecision.Drop -> {
                 _framesDropped.incrementAndGet()
             }
             is OutboundDecision.Buffer -> {
-                // Frame is held in FaultState's reorder window; nothing to do here.
+                // Held in FaultState's reorder window until a later send fills it: delayed, and
+                // delivered (to its own route) by that later send's SendBurst.
+                _framesDelayed.incrementAndGet()
             }
             is OutboundDecision.SendBurst -> {
-                for (p in decision.payloads) {
-                    send(p)
+                // Each held frame goes where IT was addressed — not where the call that happened to
+                // fill the window was going (#2879).
+                for (held in decision.frames) {
+                    send(held.route, held.payload)
                     _framesDelivered.incrementAndGet()
                 }
             }
@@ -206,12 +205,28 @@ public class FaultySeam(
         }
     }
 
+    private suspend fun send(
+        route: Route,
+        payload: ByteArray,
+    ) {
+        when (route) {
+            is Route.Broadcast -> delegate.broadcast(payload)
+            is Route.To -> delegate.sendTo(route.peer, payload)
+        }
+    }
+
     // ── Internal inbound injection ────────────────────────────────────────────
 
     private suspend fun injectInbound(frame: Swatch) {
-        val toDeliver = mutex.withLock { faultState.evaluateInbound(frame) }
+        val outcome = mutex.withLock { faultState.evaluateInbound(frame) }
+        val toDeliver = outcome.frames
         val inboundDelay = faultState.inboundDelay(faultState.profile)
 
+        if (outcome.held) {
+            // In a reorder window, not lost: a later frame that fills the window delivers it (#2879).
+            _framesDelayed.incrementAndGet()
+            return
+        }
         if (toDeliver.isEmpty()) {
             _framesDropped.incrementAndGet()
             return
