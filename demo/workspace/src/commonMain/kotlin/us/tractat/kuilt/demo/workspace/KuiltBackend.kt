@@ -67,10 +67,13 @@ public interface WorkspaceNetwork : ActorLinks {
  * **Partitions.** `Partition(actor)` calls [ActorLinks.cut] and `Reconnect(actor)` calls
  * [ActorLinks.restore] on the run's network.
  *
- * **Convergence is checked, not assumed.** After every `Reconnect` and at the end of the run,
- * every connected replica must have delivered the same dots; otherwise [run] throws
- * [IllegalStateException]. A shortfall in [advance] would otherwise show up only as fewer
- * presentations, fewer conflicts and fewer prompts, scoring low instead of failing.
+ * **Convergence is checked, not assumed.** After every step's [advance], before anything is
+ * presented, and again at the end of the run, every connected (non-partitioned) replica must have
+ * delivered the same dots; otherwise [run] throws [IllegalStateException]. A shortfall in [advance]
+ * would otherwise show up as fewer presentations, fewer conflicts and fewer prompts, scoring low
+ * instead of failing. Checking only at a reconnect was not enough: a proposal presented to a
+ * connected replica that still lagged would be judged against that lag, and the oracle would score
+ * the same lagging `known`, while the end-of-run check still passed.
  *
  * **Agents.** `StartAgent` captures the host's replica through [InputCapture.capture], minus the
  * inputs `selectExcluding` names (matched by value, as the oracle matches entries) and minus
@@ -204,7 +207,9 @@ private class KuiltRun(
             observer.beforeStep(step, replicas.mapValues { it.value.log })
             step(step)
             advance()
-            if (step is Step.Reconnect) checkConverged("after Reconnect(${step.actor.value})")
+            // Before presenting: a presentation judged against a lagging replica would score that
+            // lag, and the oracle would read the same lagging `known`.
+            checkConverged("after ${describe(step)}")
             presentNew()
             countConflicts()
         }
@@ -248,6 +253,16 @@ private class KuiltRun(
     }
 
     private fun replica(actor: ActorId): Replica = replicas.getValue(actor)
+
+    private fun describe(step: Step): String = when (step) {
+        is Step.Reconnect -> "Reconnect(${step.actor.value})"
+        is Step.Partition -> "Partition(${step.actor.value})"
+        is Step.Edit -> "Edit(${step.key.value})"
+        is Step.Accept -> "Accept(${step.actor.value}, ${step.request})"
+        is Step.StartAgent -> "StartAgent(${step.request})"
+        is Step.ToolResult -> "ToolResult(${step.key.value})"
+        is Step.ReleaseAgent -> "ReleaseAgent(${step.request})"
+    }
 
     /** Every connected replica has delivered the same dots, or the run fails here rather than scoring low. */
     private fun checkConverged(where: String) {

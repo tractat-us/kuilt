@@ -7,6 +7,8 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.Rga
+import us.tractat.kuilt.test.Direction
+import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.drainAntiEntropy
 import kotlin.test.Test
@@ -14,6 +16,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 class KuiltBackendTest {
     private val alex = ActorId("alex")
@@ -27,10 +30,14 @@ class KuiltBackendTest {
      * timers live on `backgroundScope`, which `advanceUntilIdle` does not wait for, and a replica
      * that reconnects with nothing new to send converges only through anti-entropy.
      */
-    private fun TestScope.backend(observer: KuiltRunObserver = KuiltRunObserver.None, rounds: Int = 10) = KuiltBackend(
+    private fun TestScope.backend(
+        observer: KuiltRunObserver = KuiltRunObserver.None,
+        rounds: Int = 10,
+        faults: (ActorId) -> FaultProfile = { FaultProfile.Healthy },
+    ) = KuiltBackend(
         scope = backgroundScope,
         advance = { drainAntiEntropy(KuiltBackend.antiEntropyInterval, rounds = rounds) },
-        network = { scope -> FaultyNetwork(scope) },
+        network = { scope -> FaultyNetwork(scope, faults) },
         observer = observer,
     )
 
@@ -215,26 +222,73 @@ class KuiltBackendTest {
         assertContains(failure.message.orEmpty(), "did not converge after Reconnect(alex)")
     }
 
-    /** A tool result is an input with a dot of its own: it joins the basis as step 1, and only there. */
+    /**
+     * A connected replica that still lags when a step settles fails the run there, before anything
+     * is presented. Sam's link delays every frame he sends by 150 s against one 60 s round per step, so his
+     * closure reaches the others two steps late. Checked only at reconnects and at the end, this
+     * run used to return: r1 was presented to alex and remote while they lacked the closure, as
+     * applicable, and the closure had arrived by the end-of-run check.
+     */
+    @Test
+    fun laggingConnectedReplicaThrowsBeforeAnyPresentation() = runTest(UnconfinedTestDispatcher()) {
+        val scenario = Scenario(
+            "lag", listOf(alex, sam, remote),
+            listOf(
+                Step.StartAgent("r1", host = remote),
+                Step.Edit(InputKey("closeV1"), sam, WorkspaceEntry.Report.Closed(sam, v1)),
+                Step.ReleaseAgent("r1"),
+                Step.Edit(InputKey("noteV2"), alex, WorkspaceEntry.Note(alex, v2, "Quiet back room")),
+            ),
+        )
+        val slowSam = { actor: ActorId -> if (actor == sam) FaultProfile.DelayAll(150.seconds, Direction.Outbound) else FaultProfile.Healthy }
+        val failure = assertFailsWith<IllegalStateException> { backend(rounds = 1, faults = slowSam).run(scenario) }
+        assertContains(failure.message.orEmpty(), "did not converge after Edit(closeV1)")
+    }
+
+    /**
+     * A tool result is an input with a dot of its own: it joins the basis as step 1, and only there.
+     *
+     * Alex's budget edit lands on the host between StartAgent and the tool result, so the host holds
+     * an input the agent never received when the tool result is recorded. A backend that recorded
+     * "every host input not yet in the basis" as the tool result's step, instead of the tool result
+     * alone, would put the budget into step 1 here; without that edit the two readings coincide and
+     * the test could not tell them apart.
+     */
     @Test
     fun toolResultJoinsTheBasisAsItsOwnStep() = runTest(UnconfinedTestDispatcher()) {
         val scenario = Scenario(
             "tool", listOf(alex, sam, remote),
             listOf(
                 Step.StartAgent("r1", host = remote),
+                Step.Edit(InputKey("budget30"), alex, WorkspaceEntry.PreferenceSet(alex, budget = 30)),
                 Step.ToolResult("r1", InputKey("closeV1"), WorkspaceEntry.Report.Closed(remote, v1)),
                 Step.ReleaseAgent("r1"),
             ),
         )
-        val recorder = Recorder(scenario)
+        val logs = mutableMapOf<Step, Rga<WorkspaceEntry>>()
+        val recorder = object : KuiltRunObserver {
+            val released = mutableListOf<Proposal>()
+            override fun beforeStep(step: Step, replicas: Map<ActorId, Rga<WorkspaceEntry>>) {
+                logs[step] = replicas.getValue(remote)
+            }
+            override fun released(proposal: Proposal) {
+                released += proposal
+            }
+        }
         val r = backend(recorder).run(scenario)
         val proposal = recorder.released.single()
+        // The host's log just before release holds both inputs; find each one's dot by its value.
+        val hostLog = logs.getValue(scenario.steps.last()).entries()
+        val budgetDot = hostLog.single { it.second is WorkspaceEntry.PreferenceSet }.first.dot
+        val toolDot = hostLog.single { it.second is WorkspaceEntry.Report.Closed }.first.dot
         assertAll(
+            { assertEquals(2, proposal.basis.steps.size) },
             { assertEquals(emptySet(), proposal.basis.basisThrough(0)) },
-            { assertEquals(1, proposal.basis.allDots.size) },
-            // The agent received the closure, so it picks v2, and every presentation names the tool result.
+            { assertEquals(setOf(toolDot), proposal.basis.steps[1].dots, "step 1 is the tool result alone") },
+            { assertTrue(proposal.basis.steps.none { budgetDot in it.dots }, "the budget edit is in no step") },
+            // The agent received the closure but not the budget, so it picks v2 (25).
             { assertEquals(Recommendation(v2), proposal.recommendation) },
-            { assertTrue(r.presentations.all { it.basis == setOf(InputKey("closeV1")) && it.shownAsApplicable }) },
+            { assertTrue(r.presentations.all { it.basis == setOf(InputKey("closeV1")) }) },
         )
     }
 }
