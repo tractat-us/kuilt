@@ -52,7 +52,11 @@ class BaselineBackendTest {
         )
     }
 
-    /** Ruling H: what Alex knows when r1 reaches him after reconnect includes the budget he typed offline. */
+    /**
+     * HYPOTHESES.md § Metrics: an actor knows every input it created itself. What Alex knows when r1
+     * reaches him after reconnect includes the budget he typed offline.
+     * An outcome test, not evidence for the own-inputs clause: his queue has reached the server by then.
+     */
     @Test
     fun presentationToReconnectedAlexKnowsHisOwnOfflineBudget() = runTest {
         val r = run("S2")
@@ -133,13 +137,13 @@ class BaselineBackendTest {
     }
 
     /**
-     * Ruling K: both offline accepts are outage actions. Ruling N: under optimistic local display each
-     * counts as served, because an optimistic client would show "you chose X" locally. No accept entry
-     * exists, so this credit is declared by the ruling, not observable in a final view. It is pending
-     * Iain's ruling, to be raised in the M0 exit comment on #2869.
+     * HYPOTHESES.md § Rulings: both offline accepts are outage actions. Under optimistic local display
+     * this backend also counts each as served, because an optimistic client would show "you chose X"
+     * locally. No accept entry exists, so the credit is a counting choice, not observable in a final
+     * view. HYPOTHESES.md does not settle it; the choice favours the baseline.
      */
     @Test
-    fun offlineAcceptsAreOutageActionsAndServedOptimisticallyByRulingN() = runTest {
+    fun offlineAcceptsAreOutageActionsAndServedOptimistically() = runTest {
         val strict = run("S4")
         val optimistic = run("S4", optimisticLocal = true)
         assertAll(
@@ -269,6 +273,39 @@ class BaselineBackendTest {
             { assertEquals(listOf(Recommendation(v1), Recommendation(v2)), toSam.map { it.recommendation }) },
             { assertTrue(InputKey("budget30") in toSam.last().known) },
             { assertEquals(1, r.reruns.size) },
+            { assertEquals(0, Oracle.score(s, r).staleTreatedAsCurrent) },
+        )
+    }
+
+    /**
+     * A `ToolResult` joins the agent's basis only: it is not a workspace edit, and `basedOn` counts
+     * what the agent received from the host, not what its tools returned. A budget of 10 affords
+     * nothing, so r1 recommends nothing and depends on every scope, `venue:v3` included. Had the
+     * tool's report about v3 moved `basedOn`, the server's `venue:v3` (still 0) would differ and
+     * force a rerun. The report is about a venue other than the one recommended (none), so the
+     * ground truth on basis ∪ known is still nothing: 0 stale.
+     */
+    @Test
+    fun toolResultJoinsTheBasisWithoutMovingBasedOn() = runTest {
+        val toolKey = InputKey("toolFullV3")
+        val s = Scenario(
+            "tool", listOf(alex, sam, remote),
+            listOf(
+                Step.Edit(InputKey("budget10"), alex, WorkspaceEntry.PreferenceSet(alex, budget = 10)),
+                Step.StartAgent("r1", host = remote),
+                Step.ToolResult("r1", toolKey, WorkspaceEntry.Report.Full(remote, VenueId("v3"))),
+                Step.ReleaseAgent("r1"),
+            ),
+        )
+        val r = BaselineBackend().run(s)
+        assertAll(
+            { assertEquals(1, r.agentRuns) },
+            { assertEquals(emptyList(), r.reruns) },
+            { assertEquals(3, r.presentations.size) },
+            { assertTrue(r.presentations.all { it.recommendation == Recommendation(null) }) },
+            { assertTrue(r.presentations.all { it.basis == setOf(InputKey("budget10"), toolKey) }) },
+            { assertTrue(r.presentations.none { toolKey in it.known }) },
+            { assertTrue(r.finalViews.values.none { view -> view.any { it is WorkspaceEntry.Report } }) },
             { assertEquals(0, Oracle.score(s, r).staleTreatedAsCurrent) },
         )
     }

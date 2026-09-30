@@ -12,17 +12,16 @@ package us.tractat.kuilt.demo.workspace
  *
  * **Edits and accepts.** A connected client's `Edit` or `Accept` applies at once and bumps its
  * scope. A partitioned client's goes into its offline queue with the scope version it last saw and
- * counts as one `outageAction`, an `Accept` exactly like an `Edit`. With `optimisticLocal = false`
+ * counts as one `outageAction`, an `Accept` exactly like an `Edit` (HYPOTHESES.md § Rulings: an
+ * offline `Accept` counts toward `outageActions`). With `optimisticLocal = false`
  * it is **not served**: the server owns the model, so nothing shows even locally until reconnect.
  * With `optimisticLocal = true` the client shows it locally at once, and it is served.
  *
- * **Controller Ruling N: an optimistic offline accept counts as served.** Under `optimisticLocal`
- * a queued `Accept` is counted in `outageActionsServed` because an optimistic client would show
- * "you chose X" locally. The domain has no accept entry, so nothing appears in the actor's final
- * view: the credit is declared by this ruling, not produced by an observable effect. It is pending
- * Iain's ruling and will be raised in the M0 exit comment on #2869. (HYPOTHESES.md § Rulings, on
- * both baseline variants, is a different question: a hypothesis passes only if it passes against
- * both.)
+ * **An optimistic offline accept counts as served.** Under `optimisticLocal` a queued `Accept` is
+ * counted in `outageActionsServed` because an optimistic client would show "you chose X" locally.
+ * The domain has no accept entry, so nothing appears in the actor's final view: the credit is a
+ * counting choice, not an observable effect. HYPOTHESES.md does not settle this; the choice favours
+ * the baseline.
  *
  * The version a queued write "last saw" includes the actor's own earlier queued writes to the same
  * scope, so two offline edits by one person never conflict with each other.
@@ -52,7 +51,8 @@ package us.tractat.kuilt.demo.workspace
  * the same terms, when it reconnects.
  *
  * `known` for an actor is what it has seen (the server's set if connected, its last sync if not)
- * **plus every input it created itself, served or not** (Ruling H). In this backend the own-inputs
+ * **plus every input it created itself, served or not** (HYPOTHESES.md § Metrics, under
+ * `staleTreatedAsCurrent`). In this backend the own-inputs
  * clause can never change `known`: presentations happen only to connected actors, and a reconnecting
  * actor's queue has flushed into the server's set before its deferred presentations run. So a test
  * that finds an actor's own offline edit in `known` here is an outcome test, not evidence for the

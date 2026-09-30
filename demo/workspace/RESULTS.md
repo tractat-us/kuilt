@@ -77,10 +77,11 @@ Where a line covers both variants, the two rows are identical.
 - `outageActions` 2: the two accepts, each made offline.
 - `outageActionsServed` 0 (false) or 2 (true): with optimistic display each person's screen would
   show "you chose this" at once. No entry records an accept, so nothing visible in a final view
-  earns this credit. It comes from Controller Ruling N, recorded in `BaselineBackend`'s KDoc and
-  **not yet ruled on by Iain**. Its effect: it lifts S4's ratio to 1.0, so the optimistic variant
-  scores 1.0 on H3 for both S2 (whose served edit really is visible) and S4. It is pending Iain's
-  ruling, and will be raised in the M0 exit comment on #2869.
+  earns this credit. It is a counting choice made in the baseline's favour; `HYPOTHESES.md` does
+  not settle it. It cannot change H3's verdict: under `optimisticLocal = true` S2's ratio is already
+  1.0, from an edit that really shows, and that settles the S2 comparison whichever way S4 falls.
+  It decides only whether that variant can *match* on H3, one of the three matches H0 needs
+  alongside H1 and H2.
 
 **S5: a report corrected later.**
 - `editsMade` 2, `editsPreserved` 2: the closure and the reopening.

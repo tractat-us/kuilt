@@ -32,17 +32,18 @@ class ScenariosTest {
         assertEquals(listOf("S1", "S2", "S3", "S4", "S5", "S6", "S7"), Scenarios.all.map { it.name })
 
     @Test
-    fun actorsMatchThePreRegistration() =
-        Scenarios.all.forEach { assertEquals(listOf(alex, sam, remote), it.actors, it.name) }
+    fun actorsMatchThePreRegistration() = assertAll(
+        *Scenarios.all.map { s -> { assertEquals(listOf(alex, sam, remote), s.actors, s.name) } }.toTypedArray(),
+    )
 
-    /** Ruling Q3: S6 is S2 with no partition, so the only difference between them is the outage. */
+    /** HYPOTHESES.md § Rulings, S6 as S2 without the outage: S6 is S2 with no partition, so the only difference between them is the outage. */
     @Test
     fun s6IsS2WithoutThePartition() = assertEquals(
         scenario("S2").steps.filterNot { it is Step.Partition || it is Step.Reconnect },
         scenario("S6").steps,
     )
 
-    /** Ruling Q1: S7 is a harmless note on the recommended venue while r1 is out. */
+    /** HYPOTHESES.md § Rulings, S7 added: S7 is a harmless note on the recommended venue while r1 is out. */
     @Test
     fun s7IsAHarmlessNoteWhileR1IsOut() = assertEquals(
         listOf(
