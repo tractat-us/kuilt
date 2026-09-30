@@ -12,6 +12,9 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":kuilt-quilter")) // api-exposes :kuilt-core + :kuilt-crdt
+            // KuiltBackend runs its replicas over FaultyLoom and takes a FaultProfile per actor: the
+            // fault-injecting fabric is part of what this headless spike measures, not a test helper.
+            implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)
         }

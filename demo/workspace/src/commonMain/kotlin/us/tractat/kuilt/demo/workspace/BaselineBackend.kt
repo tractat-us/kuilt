@@ -19,8 +19,8 @@ package us.tractat.kuilt.demo.workspace
  *
  * **An optimistic offline accept counts as served.** Under `optimisticLocal` a queued `Accept` is
  * counted in `outageActionsServed` because an optimistic client would show "you chose X" locally.
- * The domain has no accept entry, so nothing appears in the actor's final view: the credit is a
- * counting choice, not an observable effect. HYPOTHESES.md does not settle this; the choice favours
+ * This backend stores no accept entry (it counts accepts against `plan`), so nothing appears in the
+ * actor's final view: the credit is a counting choice, not an observable effect. HYPOTHESES.md does not settle this; the choice favours
  * the baseline.
  *
  * The version a queued write "last saw" includes the actor's own earlier queued writes to the same
@@ -83,6 +83,9 @@ private fun scopeOf(entry: WorkspaceEntry): Scope = when (entry) {
     // The baseline keeps its own proposals of record and never stores one on the server.
     // Scenario's init rejects a proposal as an Edit or ToolResult input, so no valid scenario gets here.
     is WorkspaceEntry.AgentProposal -> error("the baseline server never stores an AgentProposal: $entry")
+    // The baseline counts accepts against its `plan` version and stores no accept entry. Scenario's
+    // init rejects an accept as an Edit or ToolResult input, so this is unreachable too.
+    is WorkspaceEntry.Accept -> error("the baseline server never stores an Accept: $entry")
 }
 
 /** The scopes a recommendation depends on. Recommending nothing depends on everything. */

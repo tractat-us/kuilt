@@ -48,6 +48,13 @@ public sealed interface WorkspaceEntry {
         val basis: List<List<Dot>>,
         val recommendation: Recommendation,
     ) : WorkspaceEntry
+
+    /**
+     * [by] accepts the proposal from [request]: a person's choice, appended like any other entry so
+     * that an offline accept shows on its chooser's own replica at once. Never a scripted input and
+     * never something an agent could have missed; `Scenario` rejects one in an `Edit` or `ToolResult`.
+     */
+    @Serializable @SerialName("accept") public data class Accept(override val by: ActorId, val request: RequestId) : WorkspaceEntry
 }
 
 public object ScriptedAgent {

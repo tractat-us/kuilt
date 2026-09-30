@@ -48,10 +48,10 @@ public data class Scenario(val name: String, val actors: List<ActorId>, val step
         }
         inputs = created.toMap()
         require(inputs.size == created.size) { "$name: an input key is created twice: ${created.map { it.first }}" }
-        // A proposal is an agent's output, never a scripted input. This is what keeps BaselineBackend's
-        // scopeOf from ever seeing one.
-        val proposals = created.filter { it.second is WorkspaceEntry.AgentProposal }.map { it.first }
-        require(proposals.isEmpty()) { "$name: an Edit or ToolResult carries an AgentProposal: $proposals" }
+        // A proposal is an agent's output and an accept is a person's choice (an Accept step); neither
+        // is a scripted input. This is what keeps BaselineBackend's scopeOf from ever seeing one.
+        val notInputs = created.filter { it.second is WorkspaceEntry.AgentProposal || it.second is WorkspaceEntry.Accept }.map { it.first }
+        require(notInputs.isEmpty()) { "$name: an Edit or ToolResult carries an AgentProposal or Accept: $notInputs" }
         val stepActors = steps.mapNotNull {
             when (it) {
                 is Step.Edit -> it.actor
@@ -169,7 +169,16 @@ public data class Presentation(
     val basis: Set<InputKey>,
     val known: Set<InputKey>,
     val shownAsApplicable: Boolean,
-)
+    /**
+     * The presenter had not received every input in [basis], so it could not judge the proposal
+     * and flagged it for review. Implies `!shownAsApplicable`. The baseline never sets it.
+     */
+    val unknown: Boolean = false,
+) {
+    init {
+        require(!(unknown && shownAsApplicable)) { "an unknown verdict is never shown as applicable" }
+    }
+}
 
 /**
  * What a backend reports after replaying one [Scenario]. The [Oracle] scores it.
@@ -186,6 +195,8 @@ public data class RunResult(
     val humanPrompts: Int,
     val outageActions: Int,
     val outageActionsServed: Int,
+    /** Agent replies refused because their request had no run open on the host: never started, or already returned. */
+    val rejectedReplies: Int = 0,
 )
 
 /** A way of keeping shared state. The baseline and the kuilt backend both implement it. */

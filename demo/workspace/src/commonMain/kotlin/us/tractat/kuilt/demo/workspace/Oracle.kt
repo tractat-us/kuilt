@@ -15,6 +15,12 @@ public data class Metrics(
     val humanPrompts: Int,
     val outageActions: Int,
     val outageActionsServed: Int,
+    /**
+     * A breakdown, not a separate outcome: how many presentations carried an unknown verdict (the
+     * presenter had not received the whole basis). Each is still a flagged presentation and is
+     * scored as one in [falseInvalidations]; this count changes no other field.
+     */
+    val unknownPresentations: Int = 0,
 )
 
 /** The cheap relevance POLICY (HYPOTHESES.md §4). The Oracle never uses it; it scores ground truth. */
@@ -33,6 +39,8 @@ public object Relevance {
             // A proposal is an agent's output, not an input it could have missed, so it is never a
             // relevance input.
             is WorkspaceEntry.AgentProposal -> false
+            // An accept is a person's choice about a proposal, not a fact about a venue.
+            is WorkspaceEntry.Accept -> false
         }
     }
 }
@@ -65,6 +73,7 @@ public object Oracle {
             unnecessaryReruns = result.reruns.count { (before, after) -> before == after },
             staleTreatedAsCurrent = stale, falseInvalidations = falseInvalidations, humanPrompts = result.humanPrompts,
             outageActions = result.outageActions, outageActionsServed = result.outageActionsServed,
+            unknownPresentations = result.presentations.count { it.unknown },
         )
     }
 }
