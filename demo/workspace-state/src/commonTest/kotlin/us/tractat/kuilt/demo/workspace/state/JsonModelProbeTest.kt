@@ -158,7 +158,9 @@ class JsonModelProbeTest {
      * for `a` either: `a`'s earlier contribution is the base Array, whose ops are a subset of the
      * rebuilt Array's, and `Rga.piece` is an op union. `b`'s delta is 84 bytes LARGER, not smaller, for
      * a reason inside the replacement element. `JsonModel.setPrice` puts the new price leaf into the
-     * element's own `ORMap` as `b`, and `put` supersedes only the caller's own tags (ORMap.kt:209). So
+     * element's own `ORMap` as `b`, and `put` supersedes only the caller's own tags (ORMap.kt:209).
+     * The model is the co-cause: `old.map.piece { put }` (this module's JsonModel.kt:79) keeps every
+     * tag of the old element's map. So
      * `a`'s original price contribution stays beside `b`'s, and the element encodes 115 bytes larger
      * (395 against 280, measured once, not pinned). The top-level context names one dot instead of
      * two, which takes back 31.
