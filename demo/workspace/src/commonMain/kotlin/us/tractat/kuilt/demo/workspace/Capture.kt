@@ -40,14 +40,17 @@ public data class InputRecord(val request: RequestId, val steps: List<StepBasis>
 /**
  * An agent's result together with exactly the inputs it was computed from.
  *
- * **The constructor is private, so a basis cannot be stamped late.** There are two ways to get a
- * `Proposal`, and neither takes a basis from the caller:
+ * **The constructor is private, so on the [Pending] path a basis cannot be stamped late.** There are
+ * two ways to get a `Proposal`:
  * - [Pending.complete], at the end of a run that began with [InputCapture.capture]. The basis was
- *   fixed when the snapshot was read and grows only by the tool results the run recorded.
- * - [toProposal], from the wire form, which validates what it can.
+ *   fixed when the snapshot was read and grows only by the tool results the run recorded. Nothing
+ *   that happens to the live log afterwards can reach [basis], so merging a late result never makes
+ *   it look as if it saw reports it did not.
+ * - [toProposal], from the wire form. It checks shape only and accepts whatever basis it is given,
+ *   by design: it is the boundary where a later adapter must bring its own reason to trust the basis.
  *
- * Nothing that happens to the live log after capture can reach [basis], so merging a late result
- * never makes it look as if it saw reports it did not.
+ * One hole on the [Pending] path too: [Pending.withToolResult] checks only that the ids are in the
+ * log, so a caller could pass later host updates off as a tool result.
  *
  * A plain class rather than a `data class` on purpose: a data class's `copy` would be a third
  * constructor path, one that takes a basis from the caller.

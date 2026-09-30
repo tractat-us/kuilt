@@ -19,6 +19,7 @@ kotlin {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.kotlinx.serialization.json)
         }
         jvmTest.dependencies { runtimeOnly(libs.logback) }
     }

@@ -82,7 +82,7 @@ private fun scopeOf(entry: WorkspaceEntry): Scope = when (entry) {
     is WorkspaceEntry.PreferenceSet -> Scope.Budget
     // The baseline keeps its own proposals of record and never stores one on the server.
     // Scenario's init rejects a proposal as an Edit or ToolResult input, so no valid scenario gets here.
-    is WorkspaceEntry.AgentProposal -> throw IllegalStateException("the baseline server never stores an AgentProposal: $entry")
+    is WorkspaceEntry.AgentProposal -> error("the baseline server never stores an AgentProposal: $entry")
 }
 
 /** The scopes a recommendation depends on. Recommending nothing depends on everything. */

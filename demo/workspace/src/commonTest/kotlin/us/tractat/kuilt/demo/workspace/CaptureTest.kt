@@ -1,11 +1,13 @@
 package us.tractat.kuilt.demo.workspace
 
+import kotlinx.serialization.json.Json
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -68,16 +70,34 @@ class CaptureTest {
     fun toolResultIdMustBeInTheGivenLog() {
         val (s0, _) = Rga.empty<WorkspaceEntry>().append(WorkspaceEntry.PreferenceSet(alex, 50))
         val pending = InputCapture.capture(RequestId("r1"), s0)
-        // The tool result lands in a log the capture was never shown.
-        val (_, stray) = Rga.empty<WorkspaceEntry>().append(WorkspaceEntry.Report.Full(alex, VenueId("v1")))
-        assertFailsWith<IllegalArgumentException> { pending.withToolResult(s0, setOf(stray)) }
+        // The tool result lands in a log the capture was never shown. A different replica, so the
+        // stray id cannot coincide with the captured budget's id and trip the repeat check instead.
+        val (_, op) = Rga.empty<WorkspaceEntry>().insertAt(ReplicaId("elsewhere"), 0, WorkspaceEntry.Report.Full(alex, VenueId("v1")))
+        val failure = assertFailsWith<IllegalArgumentException> { pending.withToolResult(s0, setOf(op.id)) }
+        assertContains(failure.message.orEmpty(), "not in the log")
     }
 
     @Test
     fun toolResultCannotReRecordACapturedDot() {
         val (s0, budget) = Rga.empty<WorkspaceEntry>().append(WorkspaceEntry.PreferenceSet(alex, 50))
         val pending = InputCapture.capture(RequestId("r1"), s0)
-        assertFailsWith<IllegalArgumentException> { pending.withToolResult(s0, setOf(budget)) }
+        val failure = assertFailsWith<IllegalArgumentException> { pending.withToolResult(s0, setOf(budget)) }
+        assertContains(failure.message.orEmpty(), "repeats a captured input")
+    }
+
+    @Test
+    fun agentProposalJsonPinsItsSerialNameAndNesting() {
+        val wire: WorkspaceEntry = WorkspaceEntry.AgentProposal(
+            alex, RequestId("r1"), listOf(listOf(Dot(r, 1), Dot(r, 2)), listOf(Dot(ReplicaId("tool"), 1))), Recommendation(VenueId("v2")),
+        )
+        val json = Json.encodeToString(WorkspaceEntry.serializer(), wire)
+        val expected = """{"type":"proposal","by":{"value":"alex"},"request":{"value":"r1"},""" +
+            """"basis":[[{"replica":"remote","seq":1},{"replica":"remote","seq":2}],[{"replica":"tool","seq":1}]],""" +
+            """"recommendation":{"venue":{"value":"v2"}}}"""
+        assertAll(
+            { assertEquals(expected, json) },
+            { assertEquals(wire, Json.decodeFromString(WorkspaceEntry.serializer(), json)) },
+        )
     }
 
     @Test
