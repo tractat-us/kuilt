@@ -109,7 +109,10 @@ public interface WorkspaceNetwork : ActorLinks {
  *
  * **Accept conflicts.** When a person's replica holds accepts by different people for different
  * requests, those two accepts conflict. Each conflicting pair costs one `humanPrompt`, counted once
- * across the run however many replicas see it, the same accounting as the baseline's single prompt.
+ * across the run however many replicas see it. That coincides with the baseline's count on S4 but
+ * is a different rule: the baseline prompts once per replayed accept whose plan version moved, so
+ * the two can differ at three accepts. The prompt goes to no specific person; who settles the
+ * conflict is application policy.
  *
  * **Final views** are each replica's entries minus proposals and accepts: the oracle compares Edit
  * entries, and this keeps the views comparable with the baseline's.

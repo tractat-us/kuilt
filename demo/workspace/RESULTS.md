@@ -221,9 +221,12 @@ either, and is otherwise **no difference**.
   S5), so no scenario is *no difference* for either variant.
 - **H1b, pass.** kuilt's `falseInvalidations` total across S1 to S7 is 0, within the budget of 1:
   every answer kuilt flagged would really have come out differently.
-- **H2, pass.** On S7 kuilt's `unnecessaryReruns` is 0 against 1 for both variants, because the
-  relevance policy ignores a note where a version number cannot.
-- **H3, no difference.** kuilt's ratio is 1.0 on S2 (1/1) and S4 (2/2). Against `false` the
+- **H2, pass.** On S7 kuilt's `unnecessaryReruns` is 0 against 1 for both variants. kuilt's 0 is
+  structural: it never reruns an agent at all. The evidence that the note was rightly ignored is
+  elsewhere in S7's row: 0 prompts and 0 false invalidations.
+- **H3, no difference.** kuilt's ratio is 1.0 on S2 (1/1) and S4 (2/2). That served count holds
+  by construction of local-first apply (an entry is in its author's copy the moment it is made),
+  and the backend does not check it separately. Against `false` the
   baseline's is 0 on both, a pass. Against `true` it is 1.0 on both, *no difference* on S2 and S4,
   so the combined verdict is *no difference*, naming S2 and S4 under `optimisticLocal = true`.
 - **H4, pass.** Neither design reruns or goes stale on S1 or S4, so both stay in. `humanPrompts` is
@@ -243,11 +246,24 @@ either, and is otherwise **no difference**.
   ratio drops to 0: H3 against `true` becomes a pass on S4 but stays *no difference* on S2, so H3
   stays *no difference*. H0 still does not fire, because H1 and H2 do not match.
 - **H4 on S4 rests on how a conflict is counted.** kuilt counts one prompt per conflicting pair of
-  accepts, once across the run, which matches the baseline's single prompt to Sam. Both Alex's and
-  Sam's copies hold the conflict, and which of them settles it is application policy that this
-  backend does not decide. A design that asks both people would score 2 on S4 and **stop** H4. The
+  accepts, once across the run. That coincides with the baseline's count on S4, but the rules
+  differ: the baseline prompts once per replayed accept whose plan version moved, so the two agree
+  at two accepts and can differ at three. kuilt's prompt also goes to no specific person. Both
+  Alex's and Sam's copies hold the conflict, and which of them settles it is application policy
+  that this backend does not decide. A design that asks both people would score 2 on S4 and **stop** H4. The
   count is not vacuous: `KuiltBackendTest.s4AcceptConflictIsSurfacedOnce` goes red if conflict
   detection is disabled (0 prompts) or its de-duplication is dropped (4 prompts).
+- **H1 on S2 holds only because answers are scored when first shown.** In kuilt, Sam and the
+  remote machine are shown `r1` (Trattoria Uno) as fitting before Alex's budget reaches them, and it
+  stays standing after the budget arrives; the baseline replaces it with its rerun. Scored at first
+  delivery, kuilt's S2 staleness is 0. Scored on each phone's standing view at the end of the run,
+  it would be 2, which meets H1's stop condition. S3 and S5 are unaffected, since every copy holds
+  the missing input before the answer arrives there. H0 is unaffected too: it does not fire because
+  the baseline goes stale on S5 (and reruns needlessly on S7), not because of S2.
+- **H2 cannot fail for kuilt as registered.** kuilt never reruns, so its `unnecessaryReruns` is 0 on
+  every scenario by construction. H2's pass says the baseline pays for reruns kuilt does not make;
+  whether kuilt judged the note correctly rests on S7's 0 prompts and 0 false invalidations, which
+  H1b and H4 look at, not H2.
 - **H1 on S2 and S3 is a flag, not a fix.** kuilt shows no stale answer as current, but it gets
   there by asking. The baseline gets there by rerunning, with nobody asked and a fresh answer on
   screen. H1 as registered counts both as avoiding staleness. The prompt cost is the side-by-side
@@ -309,4 +325,6 @@ verdict is scored as merged.
 - **Score what each phone shows at the end, too.** Because an answer is judged only when it first
   arrives, relevant news that reaches a phone afterwards (S2, for Sam and the remote machine) is
   invisible to every metric. Proposal: also score each actor's standing view at the end of the run.
+  Adopted as it stands, this would give kuilt 2 stale presentations on S2 (Sam and the remote
+  machine) and **stop** H1. S3, S5 and H0 would be unaffected.
 

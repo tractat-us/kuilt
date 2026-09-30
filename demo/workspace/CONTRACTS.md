@@ -36,14 +36,16 @@ spells it out by hand in four places:
 - `KuiltBackend`'s `deliveredWithin`, twice: once as a per-dot test, once to expand the floor back
   into dots so two copies can be compared.
 
-Every tempting shortcut is wrong, and the tests prove it:
+Every tempting shortcut is wrong, and mutation runs show it. The first was re-run for this page;
+the other two are Task 8's recorded evidence, not re-run here:
 
 - **`causalDots()` alone** misses a dot folded into the floor. Dropping the floor arm reds
-  `AssessmentTest.flooredBasisEntryIsStillDelivered` and
-  `KuiltBackendTest.backendDeliveryHelpersReadTheFloor`.
+  `AssessmentTest.flooredBasisEntryIsStillDelivered` (Task 8) and
+  `KuiltBackendTest.backendDeliveryHelpersReadTheFloor` (re-run here, each arm alone).
 - **The floor alone** misses every dot above it. Delivery by floor only reds
-  `compactedReportLeavesBasisReadable` and the reorder trace.
-- **Live entries** miss anything removed and compacted. That reds `compactedReportLeavesBasisReadable`.
+  `compactedReportLeavesBasisReadable` and the reorder trace (Task 8's evidence).
+- **Live entries** miss anything removed and compacted. That reds `compactedReportLeavesBasisReadable`
+  (Task 8's evidence).
 - **A contiguous frontier** (`Quilter.deliveredLocal`, `VersionVector.contiguous`) is the highest
   gap-free sequence per author, so by definition it calls a dot delivered above a gap undelivered.
   That case is inferred from the definition, not measured here.
