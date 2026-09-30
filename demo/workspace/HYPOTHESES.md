@@ -177,10 +177,10 @@ question Q2; until Iain rules, each is scored against both and reported per vari
 |---|---|---|---|---|
 | H1 | kuilt never treats a stale proposal as current where the baseline does or must rerun to avoid it | `staleTreatedAsCurrent`, `agentRuns` | kuilt has `staleTreatedAsCurrent == 0` on each of S2, S3 and S5, **and** on each of them the baseline has `staleTreatedAsCurrent ≥ 1` or `agentRuns` greater than the scenario's number of `StartAgent` steps | kuilt has `staleTreatedAsCurrent ≥ 1` on any of S2, S3 or S5 |
 | H1b | the relevance policy does not ask people too often | `falseInvalidations` | kuilt's total across S1–S6 is ≤ 1 | kuilt's total across S1–S6 is > 1 |
-| H2 | kuilt spends fewer agent runs on changes that do not matter | `unnecessaryReruns` | kuilt's value is lower than the baseline's on S1 and on S5 | kuilt's value is ≥ the baseline's on S1 or S5. **Unscorable as the step lists stand: see Q1** |
+| H2 | kuilt spends fewer agent runs on changes that do not matter | `unnecessaryReruns` | kuilt's value is lower than the baseline's on S1 and on S5 | kuilt's value is > the baseline's on S1 or S5. **Unscorable as the step lists stand: see Q1** |
 | H3 | kuilt serves every offline action locally, and the baseline does not | `outageActionsServed / outageActions` | on S2 and S4, kuilt's ratio is 1.0 and the baseline's is below 1.0 | kuilt's ratio is below 1.0 on S2 or S4 |
 | H4 | kuilt asks people no more often | `humanPrompts` | kuilt's value is ≤ the baseline's on each of S1–S6 | kuilt's value is > the baseline's on any of S1–S6 |
-| H0 | the simpler design suffices | H1–H3 | not applicable: H0 is a stop rule | the baseline **matches** kuilt (defined below) on H1 and H3, and on H2 once Q1 is ruled. Then record that the simpler design suffices, and recommend narrowing the epic |
+| H0 | the simpler design suffices | H1–H3 | not applicable: H0 is a stop rule | the baseline **matches** kuilt (defined below) on H1 and H3, and on H2 once Q1 is ruled. Until Q2 is ruled, H0 is evaluated per baseline variant and reported for each. Then record that the simpler design suffices, and recommend narrowing the epic |
 
 ### Three verdicts, and what "matches" means
 
@@ -198,8 +198,8 @@ it is recorded for H0. A verdict names the scenarios it rests on.
   when every H2 scenario is *no difference*.
 - **H3.** *No difference* on a scenario: both kuilt's and the baseline's ratios are 1.0. If kuilt
   is at 1.0 on both S2 and S4 but either is *no difference*, H3's verdict is *no difference*,
-  naming it. The baseline **matches on H3** when both S2 and S4 are *no difference*. Under `optimisticLocal =
-  true` this is the expected result on S2 (see Q2).
+  naming it. The baseline **matches on H3** when both S2 and S4 are *no difference*. Under
+  `optimisticLocal = true` this is the expected result on S2 (see Q2).
 - **H4.** *No difference* on a scenario: equal `humanPrompts`. This is a pass for H4 as written,
   since the claim is "no more often", and H4 does not feed H0.
 - **H1b** has no comparison with the baseline, so it is only pass or stop.
@@ -218,7 +218,8 @@ different currencies:
   H1 counts against it. kuilt flags the reopening under clause (b).
 - On **S2** the budget scope is unchanged on the server when `r1` returns, because Alex's edit is
   still queued, so the baseline asks nobody. kuilt flags `r1` for Alex under clause (c) once Alex
-  reconnects.
+  reconnects. This assumes the baseline neither reruns nor prompts when the queued edit flushes on
+  reconnect; that ordering belongs to the baseline's reconnect design (Task 4, and see Q4).
 
 In each case kuilt's prompt is the price of not rerunning, or of not showing a stale answer. What
 **would** count against kuilt on H4: any prompt on S1, where nothing an agent said is in doubt;
@@ -261,9 +262,9 @@ a ruling before measurement.
 **Q2. Which baseline variant is the comparator?** With `optimisticLocal = true` the baseline shows
 an offline edit locally, so on S2 its ratio is 1.0: H3 cannot pass against that variant, and S2 is
 *no difference*. Whether the baseline then matches on H3 turns on S4, where it depends on whether
-the optimistic variant also shows an offline accept. This page proposes that a hypothesis passes only if it holds against **both**
-variants, so the baseline gets credit wherever it solves a problem. That is a stricter test than
-the default variant alone, and it is Iain's call.
+the optimistic variant also shows an offline accept. This page proposes that a hypothesis passes
+only if it holds against **both** variants, so the baseline gets credit wherever it solves a
+problem. That is a stricter test than the default variant alone, and it is Iain's call.
 
 **Q3. S6 "with no partition" changes nothing.** S3 already has no partition: Sam is on the network
 throughout. So S6 differs from S3 only in having one human instead of two. If the control was meant
