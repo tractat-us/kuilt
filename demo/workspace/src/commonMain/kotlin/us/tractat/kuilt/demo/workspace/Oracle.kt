@@ -97,16 +97,14 @@ public object Oracle {
     public fun standingAnswers(scenario: Scenario, result: RunResult): Map<ActorId, Presentation> {
         val released = mutableMapOf<String, Int>()
         scenario.steps.forEachIndexed { i, step -> if (step is Step.ReleaseAgent) released.getOrPut(step.request) { i } }
+        val unreleased = result.presentations.filter { it.request !in released }
+        require(unreleased.isEmpty()) {
+            "${scenario.name}: presentations of requests no ReleaseAgent step returns: ${unreleased.map { it.actor.value to it.request }}"
+        }
         return result.presentations.withIndex()
             .groupBy { it.value.actor }
-            .mapValues { (actor, shown) ->
-                shown.maxWith(
-                    compareBy<IndexedValue<Presentation>> { (_, p) ->
-                        requireNotNull(released[p.request]) {
-                            "${scenario.name}: ${actor.value} was shown ${p.request}, which no ReleaseAgent step returns"
-                        }
-                    }.thenBy { it.index },
-                ).value
+            .mapValues { (_, shown) ->
+                shown.maxWith(compareBy<IndexedValue<Presentation>> { released.getValue(it.value.request) }.thenBy { it.index }).value
             }
     }
 
