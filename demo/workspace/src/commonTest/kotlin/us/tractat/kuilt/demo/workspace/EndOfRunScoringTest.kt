@@ -117,6 +117,25 @@ class EndOfRunScoringTest {
         )
     }
 
+    /**
+     * The verdict that stands is the one the proposal was **last shown with**, not the first and not
+     * a fresh re-assessment. A re-check that later shows Sam the same r1 flagged adds a row, and that
+     * row stands, so the stale count drops to 0. The one-row arm is the control: shown once as
+     * fitting, the same r1 counts. Re-assessing at the end instead would score what a screen would
+     * say, and pass without any re-check.
+     */
+    @Test
+    fun laterFlaggedRowForTheSameProposalStands() {
+        val fits = shown(sam, "r1", v1, basis = emptySet())
+        val flaggedLater = Presentation(sam, "r1", v1, basis = emptySet(), known = setOf(budget30), shownAsApplicable = false)
+        val rechecked = result(Scenarios.s2, fits, flaggedLater)
+        assertAll(
+            { assertEquals(flaggedLater, Oracle.standingAnswers(Scenarios.s2, rechecked).getValue(sam)) },
+            { assertEquals(0, Oracle.score(Scenarios.s2, rechecked).staleAtEnd) },
+            { assertEquals(1, Oracle.score(Scenarios.s2, result(Scenarios.s2, fits)).staleAtEnd) },
+        )
+    }
+
     @Test
     fun presentationOfAnUnreleasedRequestThrows() {
         assertFailsWith<IllegalArgumentException> {

@@ -93,6 +93,11 @@ public object Oracle {
      * reached the actor. Among presentations of the one request (a baseline rerun replaces its
      * proposal under the same request), the last one shown stands. An actor shown nothing has no
      * standing answer and no entry here.
+     *
+     * The returned row carries the verdict the answer was **last shown with**. That is deliberate:
+     * the end-of-run score judges it against the final state, so a later row that re-shows the same
+     * proposal flagged (a re-check) is what moves the count. Re-assessing the answer afresh at the
+     * end would score what a screen would say, and would pass with no re-check at all.
      */
     public fun standingAnswers(scenario: Scenario, result: RunResult): Map<ActorId, Presentation> {
         val released = mutableMapOf<String, Int>()
