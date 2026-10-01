@@ -65,6 +65,8 @@ public object Oracle {
     public fun score(scenario: Scenario, result: RunResult): Metrics {
         val missingViews = scenario.actors.toSet() - result.finalViews.keys
         require(missingViews.isEmpty()) { "${scenario.name}: no final view reported for $missingViews" }
+        // Every presentation is checked against the scenario's inputs, whichever count it lands in.
+        result.presentations.forEach { truth(scenario, it.basis, it.known) }
         val stale = result.presentations.count { p -> p.shownAsApplicable && truth(scenario, p.basis, p.known) != p.recommendation }
         val falseInvalidations = result.presentations.count { p ->
             !p.shownAsApplicable && !p.unknown && truth(scenario, p.basis, p.known) == p.recommendation
