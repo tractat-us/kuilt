@@ -1,14 +1,14 @@
 package us.tractat.kuilt.test
 
 import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.InMemoryLoom
@@ -56,12 +56,16 @@ public class FaultySeam(
     initialTeardownFault: TeardownFault = TeardownFault.None,
 ) : Seam {
     private val faultState = FaultState(initialProfile)
-    private val mutex = Mutex()
+
+    // A lock, not a coroutine Mutex: evaluating a profile never suspends, and [setFaultProfile] —
+    // which cannot suspend — has to swap the profile and empty the reorder windows as one step, or
+    // a frame evaluated between the two would land in a window nobody will ever drain (#2882).
+    private val lock = reentrantLock()
 
     // An AtomicRef rather than a plain `var`: [close] is reachable from any thread (a teardown path,
     // a best-effort cleanup loop, a test's own scope) while a test swaps the arm from another, and
     // this type must be correct under a multi-threaded dispatcher. `FaultState.profile` is a plain
-    // `var` guarded by [mutex] on every read; a teardown has no such critical section to join, so it
+    // `var` guarded by [lock] on every read; a teardown has no such critical section to join, so it
     // gets its own primitive rather than inheriting a lock it does not need.
     private val _teardownFault = atomic<TeardownFault>(initialTeardownFault)
 
@@ -94,13 +98,28 @@ public class FaultySeam(
         // Pipe from the delegate's incoming flow through fault injection.
         scope.launch {
             delegate.incoming.collect { frame -> injectInbound(frame) }
+            // The link has ended: anything still in a reorder window can never be delivered.
+            discardHeld()
             spool.close()
         }
     }
 
-    /** Replace the active [FaultProfile] atomically. */
+    /**
+     * Replace the active [FaultProfile] atomically.
+     *
+     * Frames held in a [FaultProfile.ReorderWindow] are released by the swap rather than stranded in
+     * a window the new profile will never fill (#2882): each outbound frame goes to its own route,
+     * each inbound frame to [incoming], in the order they arrived. This function cannot suspend, so
+     * the release runs in the seam's scope — a frame sent straight after the swap can overtake it. A
+     * released frame that finds the link already closed counts in [framesDropped].
+     */
     public fun setFaultProfile(profile: FaultProfile) {
-        faultState.profile = profile
+        val held =
+            lock.withLock {
+                faultState.profile = profile
+                faultState.drainHeld()
+            }
+        if (held.size > 0) scope.launch { release(held) }
     }
 
     /** Shorthand for [setFaultProfile] with [FaultProfile.Healthy]. */
@@ -153,6 +172,9 @@ public class FaultySeam(
      * unconditional passthrough it has always been.
      */
     override suspend fun close(reason: CloseReason) {
+        // Frames still in a reorder window are lost with the link (#2882). Counted before the
+        // teardown arm runs, so a Slow or Fails close cannot leave them uncounted.
+        discardHeld()
         when (val fault = _teardownFault.value) {
             is TeardownFault.None -> delegate.close(reason)
             is TeardownFault.Slow -> {
@@ -173,7 +195,7 @@ public class FaultySeam(
     // ── Internal outbound dispatch ────────────────────────────────────────────
 
     private suspend fun dispatchOutbound(frame: OutboundFrame) {
-        when (val decision = mutex.withLock { faultState.evaluateOutbound(frame) }) {
+        when (val decision = lock.withLock { faultState.evaluateOutbound(frame) }) {
             is OutboundDecision.Send -> {
                 send(frame.route, decision.payload)
                 _framesDelivered.incrementAndGet()
@@ -188,8 +210,9 @@ public class FaultySeam(
                 _framesDropped.incrementAndGet()
             }
             is OutboundDecision.Buffer -> {
-                // Held in FaultState's reorder window until a later send fills it: delayed, and
-                // delivered (to its own route) by that later send's SendBurst.
+                // Held in FaultState's reorder window until a later send fills it or the profile
+                // changes: delayed, and delivered (to its own route) by whichever comes first. If the
+                // seam closes first, discardHeld counts it as dropped (#2882).
                 _framesDelayed.incrementAndGet()
             }
             is OutboundDecision.SendBurst -> {
@@ -202,20 +225,55 @@ public class FaultySeam(
                 // throws for a missing peer — so the frame is dropped and the rest of the burst still
                 // goes out. Narrow on purpose: PeerNotConnected is not a supertype of
                 // CancellationException, so cancellation still propagates.
-                for (held in decision.frames) {
-                    try {
-                        send(held.route, held.payload)
-                    } catch (_: PeerNotConnected) {
-                        _framesDropped.incrementAndGet()
-                        continue
-                    }
-                    _framesDelivered.incrementAndGet()
-                }
+                for (held in decision.frames) sendHeld(held)
             }
             is OutboundDecision.CloseLink -> {
+                discardHeld()
                 delegate.close(decision.reason)
             }
         }
+    }
+
+    /** Send one frame out of a reorder window to its own route, counting it delivered or dropped. */
+    private suspend fun sendHeld(held: OutboundFrame) {
+        try {
+            send(held.route, held.payload)
+        } catch (_: PeerNotConnected) {
+            _framesDropped.incrementAndGet()
+            return
+        }
+        _framesDelivered.incrementAndGet()
+    }
+
+    /**
+     * Deliver frames a profile swap drained out of the reorder windows (#2882).
+     *
+     * Runs after [setFaultProfile] has returned, so the link may have closed in between; a frame that
+     * finds it closed is dropped rather than handed to a delegate that would refuse it with a throw
+     * nobody is waiting for.
+     */
+    private suspend fun release(held: HeldFrames) {
+        for (frame in held.outbound) {
+            if (delegate.state.value is SeamState.Torn) {
+                _framesDropped.incrementAndGet()
+            } else {
+                sendHeld(frame)
+            }
+        }
+        for (frame in held.inbound) {
+            if (delegate.state.value is SeamState.Torn) {
+                _framesDropped.incrementAndGet()
+            } else {
+                spool.deliver(frame)
+                _framesDelivered.incrementAndGet()
+            }
+        }
+    }
+
+    /** Empty both reorder windows and count what they held as dropped: it will never be delivered. */
+    private fun discardHeld() {
+        val held = lock.withLock { faultState.drainHeld() }
+        if (held.size > 0) _framesDropped.addAndGet(held.size.toLong())
     }
 
     private suspend fun send(
@@ -231,12 +289,13 @@ public class FaultySeam(
     // ── Internal inbound injection ────────────────────────────────────────────
 
     private suspend fun injectInbound(frame: Swatch) {
-        val outcome = mutex.withLock { faultState.evaluateInbound(frame) }
+        val outcome = lock.withLock { faultState.evaluateInbound(frame) }
         val toDeliver = outcome.frames
         val inboundDelay = faultState.inboundDelay(faultState.profile)
 
         if (outcome.held) {
-            // In a reorder window, not lost: a later frame that fills the window delivers it (#2879).
+            // In a reorder window, not lost: a later frame that fills the window, or a profile swap,
+            // delivers it (#2879, #2882).
             _framesDelayed.incrementAndGet()
             return
         }
