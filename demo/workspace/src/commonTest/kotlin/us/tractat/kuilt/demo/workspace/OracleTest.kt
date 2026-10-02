@@ -11,6 +11,13 @@ class OracleTest {
     private val s1 = Scenarios.all.first { it.name == "S1" }
     private val s3 = Scenarios.all.first { it.name == "S3" }
 
+    /**
+     * A presentation needs a request the scenario releases (the standing-answer order depends on it),
+     * so the note cases use S7's note on v1, which never changes the pick, rather than S1, which runs
+     * no agent.
+     */
+    private val s7 = Scenarios.all.first { it.name == "S7" }
+
     /** Every actor's final view holds every input the scenario created. */
     private fun fullViews(s: Scenario): Map<ActorId, List<WorkspaceEntry>> =
         s.actors.associateWith { s.inputs.values.toList() }
@@ -46,15 +53,15 @@ class OracleTest {
 
     @Test
     fun flaggingAProposalTruthKeepsIsAFalseInvalidation() {
-        val p = Presentation(a, "r1", Recommendation(VenueId("v1")), basis = emptySet(), known = setOf(InputKey("noteV2")), shownAsApplicable = false)
-        assertEquals(1, Oracle.score(s1, result(s1, p)).falseInvalidations)
+        val p = Presentation(a, "r1", Recommendation(VenueId("v1")), basis = emptySet(), known = setOf(InputKey("noteV1")), shownAsApplicable = false)
+        assertEquals(1, Oracle.score(s7, result(s7, p)).falseInvalidations)
     }
 
     @Test
     fun irrelevantMissingInputIsNotStale() {
-        val note = InputKey("noteV2")
+        val note = InputKey("noteV1")
         val p = Presentation(a, "r1", Recommendation(VenueId("v1")), basis = emptySet(), known = setOf(note), shownAsApplicable = true)
-        assertEquals(0, Oracle.score(s1, result(s1, p)).staleTreatedAsCurrent)
+        assertEquals(0, Oracle.score(s7, result(s7, p)).staleTreatedAsCurrent)
     }
 
     @Test
@@ -82,21 +89,25 @@ class OracleTest {
     }
 
     /**
-     * An Unknown verdict is shown for review like any flag, so when the rerun agrees it is a false
-     * invalidation: HYPOTHESES.md defines that metric over every flagged presentation.
-     * `unknownPresentations` is only a breakdown and moves no other count.
+     * H1b scores needs-review flags only (HYPOTHESES.md, amended 2026-10-01). An Unknown verdict is
+     * network lag, not a relevance call, so a flagged Unknown whose rerun agrees is reported in
+     * `unknownPresentations` and is **not** a false invalidation. The needs-review twin beside it is
+     * the control: the same presentation without `unknown` still counts.
      */
     @Test
-    fun unknownPresentationIsCountedAndStillAFalseInvalidation() {
-        val p = Presentation(
-            a, "r1", Recommendation(VenueId("v1")), basis = emptySet(), known = setOf(InputKey("noteV2")),
-            shownAsApplicable = false, unknown = true,
+    fun unknownPresentationIsReportedButIsNotAFalseInvalidation() {
+        fun flagged(unknown: Boolean) = Presentation(
+            a, "r1", Recommendation(VenueId("v1")), basis = emptySet(), known = setOf(InputKey("noteV1")),
+            shownAsApplicable = false, unknown = unknown,
         )
-        val m = Oracle.score(s1, result(s1, p))
+        val asUnknown = Oracle.score(s7, result(s7, flagged(unknown = true)))
+        val asNeedsReview = Oracle.score(s7, result(s7, flagged(unknown = false)))
         assertAll(
-            { assertEquals(1, m.unknownPresentations) },
-            { assertEquals(1, m.falseInvalidations) },
-            { assertEquals(0, m.staleTreatedAsCurrent) },
+            { assertEquals(1, asUnknown.unknownPresentations) },
+            { assertEquals(0, asUnknown.falseInvalidations) },
+            { assertEquals(0, asUnknown.staleTreatedAsCurrent) },
+            { assertEquals(0, asNeedsReview.unknownPresentations) },
+            { assertEquals(1, asNeedsReview.falseInvalidations) },
         )
     }
 }

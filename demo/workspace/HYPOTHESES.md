@@ -3,7 +3,8 @@
 Before anyone measures anything, this page sets down what we will count and which results would
 change our minds. The numbers come later, in `RESULTS.md`, and are scored against this page as
 merged, unedited. If a criterion turns out wrong, the fix is a new PR here that says so, never a
-quiet edit after the numbers arrive. (This is the M0 pre-registration for #2869.)
+quiet edit after the numbers arrive. (This is the M0 pre-registration for #2869.) One such change
+was made after M1; *Amendment (2026-10-01)* at the end of this page says what changed and why.
 
 ## The story in one paragraph
 
@@ -154,8 +155,22 @@ Every metric is a count over scripted actors in one run of one scenario. None is
   returns a different recommendation. The rerun takes inputs in scenario order. An actor knows every
   input shown to it **and every input it created itself**, served or not. Since the agent is
   deterministic, the oracle computes this exactly.
-- **`falseInvalidations`**: the presentations flagged for review where that same rerun returns the
-  *same* recommendation. Each one is human attention spent for nothing.
+- **`staleAtEnd`** (end-of-run scoring, added 2026-10-01): the actors whose **standing answer** is
+  stale treated as current when the run ends. An actor's standing answer is the latest proposal it
+  has been shown, latest by the order the proposals were returned: once `r2` is shown, `r2` stands
+  over `r1`. It carries **the verdict it was last shown with**, meaning the last presentation of
+  that proposal to that actor. It counts when that verdict was "applicable" and rerunning the
+  scripted agent on *basis ∪ every input the actor knows at the end of the run* returns a different
+  recommendation. "Knows" has the same meaning as above, read from the actor's final view. The
+  verdict is never re-assessed at the end: that would score what a screen *would* say, not what it
+  showed. A later presentation of the same proposal, flagged by a re-check, replaces the earlier
+  verdict and is what clears the count.
+- **`falseInvalidations`**: the presentations flagged **needs review** where that same rerun returns
+  the *same* recommendation. Each one is human attention spent for nothing. An *unknown* verdict
+  (the presenter had not received the whole basis) is not counted here (amended 2026-10-01): it
+  reports network lag, not a relevance call.
+- **`unknownPresentations`** (reported from 2026-10-01): presentations whose verdict was *unknown*.
+  Reported beside H1b as its own row, and not scored.
 - **`missedInvalidations`**: presentations the backend's own relevance policy called applicable that
   ground truth calls stale. In M0 it equals `staleTreatedAsCurrent` for **both** backends: the
   kuilt backend shows as applicable exactly what its policy passes, and the baseline has no
@@ -195,8 +210,8 @@ both, so the baseline gets credit wherever either variant solves the problem.
 
 | id | claim | metric | pass if | stop if |
 |---|---|---|---|---|
-| H1 | kuilt never treats a stale proposal as current where the baseline does or must rerun to avoid it | `staleTreatedAsCurrent`, `agentRuns` | kuilt has `staleTreatedAsCurrent == 0` on each of S2, S3 and S5, **and** on each of them the baseline has `staleTreatedAsCurrent ≥ 1` or `agentRuns` greater than the scenario's number of `StartAgent` steps | kuilt has `staleTreatedAsCurrent ≥ 1` on any of S2, S3 or S5 |
-| H1b | the relevance policy does not ask people too often | `falseInvalidations` | kuilt's total across S1–S7 is ≤ 1 | kuilt's total across S1–S7 is > 1 |
+| H1 | kuilt never treats a stale proposal as current where the baseline does or must rerun to avoid it | `staleTreatedAsCurrent`, `staleAtEnd`, `agentRuns` (`staleAtEnd` added 2026-10-01) | kuilt has `staleTreatedAsCurrent == 0` **and** `staleAtEnd == 0` on each of S2, S3 and S5, **and** on each of them the baseline has `staleTreatedAsCurrent ≥ 1`, `staleAtEnd ≥ 1`, or `agentRuns` greater than the scenario's number of `StartAgent` steps | kuilt has `staleTreatedAsCurrent ≥ 1` **or** `staleAtEnd ≥ 1` on any of S2, S3 or S5 |
+| H1b | the relevance policy does not ask people too often | `falseInvalidations`, needs-review flags only (amended 2026-10-01); `unknownPresentations` reported beside it, not scored | kuilt's total across S1–S7 is ≤ 1 | kuilt's total across S1–S7 is > 1 |
 | H2 | kuilt spends fewer agent runs on changes that do not matter | `unnecessaryReruns` | on S7, kuilt's value is lower than the baseline's | on S7, kuilt's value is higher than the baseline's |
 | H3 | kuilt serves every offline action locally, and the baseline does not | `outageActionsServed / outageActions` | on S2 and S4, kuilt's ratio is 1.0 and the baseline's is below 1.0 | kuilt's ratio is below 1.0 on S2 or S4 |
 | H4 | kuilt asks people no more often | `humanPrompts`, like with like only | kuilt's value is ≤ the baseline's on each of S1 and S4 | kuilt's value is > the baseline's on S1 or S4 |
@@ -210,8 +225,9 @@ it is recorded for H0. A verdict names the scenarios it rests on. Against the tw
 variants, a hypothesis passes only if it passes against both, stops if it stops against either,
 and is otherwise *no difference*.
 
-- **H1.** *No difference* on a scenario: kuilt has `staleTreatedAsCurrent == 0`, and so does the
-  baseline, with `agentRuns` equal to the number of `StartAgent` steps (no rerun). If kuilt is at 0
+- **H1.** *No difference* on a scenario: kuilt has `staleTreatedAsCurrent == 0` and
+  `staleAtEnd == 0`, and so does the baseline, with `agentRuns` equal to the number of `StartAgent`
+  steps (no rerun). If kuilt is at 0
   on all three but one or more scenarios are *no difference*, H1's verdict is *no difference*,
   naming them. A variant **matches on H1** when all three of S2, S3 and S5 are *no difference*.
 - **H2.** Scored on S7 alone. S1 runs no agent, so both designs score 0 there by construction, and
@@ -230,7 +246,7 @@ accepts). S3 has none, because Sam is on the network throughout, so its ratio wo
 not scored there. S1, S5, S6 and S7 have no partition either.
 
 H4 compares like with like. It is scored only on scenarios where neither design has
-`staleTreatedAsCurrent > 0` or a rerun, so a prompt is weighed against a prompt, never against a
+`staleTreatedAsCurrent > 0`, `staleAtEnd > 0` (added 2026-10-01) or a rerun, so a prompt is weighed against a prompt, never against a
 silent rerun or a stale answer. As the step lists stand, that is S1 and S4. S2, S3, S5, S6 and S7
 are excluded, because the baseline reruns or goes stale on each of them. If a run shows a stale
 presentation or a rerun on S1 or S4, that scenario drops out of H4 and the result says so.
@@ -268,3 +284,46 @@ folded in above.
   backend's design (Task 7) decides its S4 `Accept` numbers.
 - **H4 is like with like.** Scored only where neither design has `staleTreatedAsCurrent > 0` or a
   rerun: S1 and S4 as the lists stand. `humanPrompts` is reported for every scenario.
+
+## Amendment (2026-10-01)
+
+Made **after M1 was measured**, and before any fix for tractat-us/kuilt#2880 (re-checking an answer
+already shown). `RESULTS.md` proposed both changes. Iain accepted both on 2026-10-01, in a comment
+on #2869. `RESULTS.md` keeps the M1 verdicts as first scored, beside the re-score.
+
+**Why.** M1 showed two places where the criteria above measured the wrong thing.
+
+- An answer was scored only when first shown. In S2, Sam and the remote machine are shown `r1`
+  (Trattoria Uno, 40) as fitting, then Alex's budget of 30 reaches them. Nobody looks again, so they
+  end the run with an answer that no longer fits. No metric saw that.
+- H1b charged an *unknown* verdict to the relevance policy. An unknown means the news had not
+  arrived yet. That is network lag, and the trust boundary promises exactly this answer when evidence
+  is missing. Under delay it could stop H1b on a run where the policy never misjudged anything.
+
+**What changed.**
+
+1. **H1b scores needs-review flags only.** `falseInvalidations` no longer counts an unknown
+   verdict. `unknownPresentations` is reported beside H1b as its own row and is not scored.
+2. **End-of-run scoring.** The new metric `staleAtEnd` scores each actor's standing answer at the
+   end of the run (see *Metrics*). The standing answer is the latest proposal the actor has been
+   shown. The "every answer ever shown" variant was considered and rejected: it would re-score a
+   superseded `r1` in S4 and so push S4 out of H4's like-with-like set. The verdict scored is the
+   one the answer was last shown with, never a fresh re-assessment at the end. A fresh re-assessment
+   would pass a design that never re-checks anything.
+
+**How the two scorings combine.** Each scoring stops a hypothesis on its own. This is the stricter
+reading, chosen on purpose. For H1, kuilt must have `staleTreatedAsCurrent == 0` **and**
+`staleAtEnd == 0` on each of S2, S3 and S5 to pass, and `≥ 1` on **either** count, on any of them,
+stops it. The baseline side reads both counts the same way, since a stale answer is the same failure
+whichever design shows it. That half is the less strict choice, and it moves no M1 verdict: the
+baseline's only stale scenario is S5, which it already fails per presentation. H4's like-with-like
+rule and H0's *matches* likewise read both counts.
+
+**Original wording**, as merged before this amendment:
+
+- H1, pass: kuilt has `staleTreatedAsCurrent == 0` on each of S2, S3 and S5, **and** on each of
+  them the baseline has `staleTreatedAsCurrent ≥ 1` or `agentRuns` greater than the scenario's
+  number of `StartAgent` steps. Stop: kuilt has `staleTreatedAsCurrent ≥ 1` on any of S2, S3 or S5.
+- H1b, metric: `falseInvalidations`, defined as the presentations flagged for review where the
+  rerun returns the same recommendation, which counted an unknown verdict as a flag.
+- H4 excluded scenarios where either design had `staleTreatedAsCurrent > 0` or a rerun.
