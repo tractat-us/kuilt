@@ -619,14 +619,54 @@ class FaultySeamTest {
             val heldBeforeClose = atA.isEmpty() && atB.isEmpty() && b.framesDelayed == 3L && b.framesDropped == 0L
 
             b.close()
+            // Read before the scheduler runs anything else: close() itself does the counting, not the
+            // inbound pump that winds down after it.
+            val droppedWhenCloseReturned = b.framesDropped
             testScheduler.runCurrent()
 
             assertAll(
                 { assertTrue(heldBeforeClose, "precondition: one outbound and two inbound frames were held") },
-                { assertEquals(3L, b.framesDropped, "every frame still held at close is a dropped frame") },
+                { assertEquals(3L, droppedWhenCloseReturned, "close() counts every held frame before it returns") },
+                { assertEquals(3L, b.framesDropped, "every frame still held at close is a dropped frame, once") },
                 { assertEquals(0L, b.framesDelivered) },
                 { assertEquals(emptyList(), atA, "the held outbound frame never reached alice") },
                 { assertEquals(emptyList(), atB) },
+            )
+        }
+
+    /**
+     * The link can end underneath the seam — the wrapped seam closed directly, never through
+     * [FaultySeam.close]. Frames held in the inbound window then count as dropped once the inbound
+     * pump sees the link end (#2882).
+     */
+    @Test
+    fun `ReorderWindow — a link that ends underneath the seam counts held frames as dropped`() =
+        runTest {
+            val loom = InMemoryLoom()
+            val inner = loom.host(Pattern("Alice"))
+            val other = loom.join(InMemoryTag("Alice"))
+            val faulty =
+                FaultySeam(
+                    inner,
+                    backgroundScope,
+                    FaultProfile.ReorderWindow(windowSize = 3, seed = 0L, direction = Direction.Inbound),
+                )
+            val atFaulty = collectBytes(faulty)
+            testScheduler.runCurrent()
+
+            other.broadcast(byteArrayOf(1))
+            other.broadcast(byteArrayOf(2))
+            testScheduler.runCurrent()
+            val heldBeforeEnd = atFaulty.isEmpty() && faulty.framesDelayed == 2L && faulty.framesDropped == 0L
+
+            inner.close()
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(heldBeforeEnd, "precondition: both frames were held in the inbound window") },
+                { assertEquals(2L, faulty.framesDropped, "frames held when the link ended are dropped") },
+                { assertEquals(0L, faulty.framesDelivered) },
+                { assertEquals(emptyList(), atFaulty) },
             )
         }
 
