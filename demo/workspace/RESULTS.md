@@ -26,22 +26,22 @@ that answer depends on has changed, and quietly reruns the agent if so. It runs 
 The table is pinned by `BaselineMeasurementTest`: a change to the baseline's numbers fails the
 build. This page is kept in step by hand.
 
-| Scenario | optimisticLocal | editsMade | editsPreserved | agentRuns | unnecessaryReruns | staleTreatedAsCurrent | falseInvalidations | humanPrompts | outageActions | outageActionsServed |
-|---|---|---|---|---|---|---|---|---|---|---|
-| S1 | false | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| S1 | true | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| S2 | false | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 1 | 0 |
-| S2 | true | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 1 | 1 |
-| S3 | false | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
-| S3 | true | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
-| S4 | false | 1 | 1 | 2 | 0 | 0 | 0 | 1 | 2 | 0 |
-| S4 | true | 1 | 1 | 2 | 0 | 0 | 0 | 1 | 2 | 2 |
-| S5 | false | 2 | 2 | 1 | 0 | 3 | 0 | 0 | 0 | 0 |
-| S5 | true | 2 | 2 | 1 | 0 | 3 | 0 | 0 | 0 | 0 |
-| S6 | false | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
-| S6 | true | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
-| S7 | false | 1 | 1 | 2 | 1 | 0 | 0 | 0 | 0 | 0 |
-| S7 | true | 1 | 1 | 2 | 1 | 0 | 0 | 0 | 0 | 0 |
+| Scenario | optimisticLocal | editsMade | editsPreserved | agentRuns | unnecessaryReruns | staleTreatedAsCurrent | staleAtEnd | falseInvalidations | humanPrompts | outageActions | outageActionsServed |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| S1 | false | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S1 | true | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S2 | false | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
+| S2 | true | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
+| S3 | false | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S3 | true | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S4 | false | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 1 | 2 | 0 |
+| S4 | true | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 1 | 2 | 2 |
+| S5 | false | 2 | 2 | 1 | 0 | 3 | 3 | 0 | 0 | 0 | 0 |
+| S5 | true | 2 | 2 | 1 | 0 | 3 | 3 | 0 | 0 | 0 | 0 |
+| S6 | false | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S6 | true | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S7 | false | 1 | 1 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S7 | true | 1 | 1 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 One column is zero everywhere, by design rather than luck. `falseInvalidations` counts answers
 flagged for review, and the baseline never flags anything: it either reruns or shows the answer as
@@ -121,15 +121,15 @@ variant: an offline action always shows on its author's phone. The last column,
 everything the agent saw. It is a breakdown, not a separate outcome. It is zero in every row, and
 that zero is not evidence: this backend cannot produce an unknown at all.
 
-| Scenario | editsMade | editsPreserved | agentRuns | unnecessaryReruns | staleTreatedAsCurrent | falseInvalidations | humanPrompts | outageActions | outageActionsServed | unknownPresentations |
-|---|---|---|---|---|---|---|---|---|---|---|
-| S1 | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| S2 | 1 | 1 | 1 | 0 | 0 | 0 | 1 | 1 | 1 | 0 |
-| S3 | 1 | 1 | 1 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
-| S4 | 1 | 1 | 2 | 0 | 0 | 0 | 1 | 2 | 2 | 0 |
-| S5 | 2 | 2 | 1 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
-| S6 | 1 | 1 | 1 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
-| S7 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Scenario | editsMade | editsPreserved | agentRuns | unnecessaryReruns | staleTreatedAsCurrent | staleAtEnd | falseInvalidations | humanPrompts | outageActions | outageActionsServed | unknownPresentations |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| S1 | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S2 | 1 | 1 | 1 | 0 | 0 | 2 | 0 | 1 | 1 | 1 | 0 |
+| S3 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
+| S4 | 1 | 1 | 2 | 0 | 0 | 0 | 0 | 1 | 2 | 2 | 0 |
+| S5 | 2 | 2 | 1 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
+| S6 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
+| S7 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 Two columns are zero by construction. `unnecessaryReruns` is zero because kuilt never reruns an
 agent, so `agentRuns` is always the number of `StartAgent` steps. `unknownPresentations` is zero
@@ -186,15 +186,15 @@ verdict works. As in the baseline, `editsPreserved` equals `editsMade` in every 
 `optimisticLocal = true`. `editsMade` and `editsPreserved` are left out: they are identical across
 all three in every scenario. Counts over scripted actors, JVM only.
 
-| Scenario | agentRuns k / f / t | unnecessaryReruns k / f / t | staleTreatedAsCurrent k / f / t | falseInvalidations k / f / t | humanPrompts k / f / t | served / outage k · f · t |
-|---|---|---|---|---|---|---|
-| S1 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0/0 · 0/0 · 0/0 |
-| S2 | 1 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 1 / 0 / 0 | 1/1 · 0/1 · 1/1 |
-| S3 | 1 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 2 / 0 / 0 | 0/0 · 0/0 · 0/0 |
-| S4 | 2 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 1 / 1 / 1 | 2/2 · 0/2 · 2/2 |
-| S5 | 1 / 1 / 1 | 0 / 0 / 0 | 0 / 3 / 3 | 0 / 0 / 0 | 2 / 0 / 0 | 0/0 · 0/0 · 0/0 |
-| S6 | 1 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 2 / 0 / 0 | 0/0 · 0/0 · 0/0 |
-| S7 | 1 / 2 / 2 | 0 / 1 / 1 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0/0 · 0/0 · 0/0 |
+| Scenario | agentRuns k / f / t | unnecessaryReruns k / f / t | staleTreatedAsCurrent k / f / t | staleAtEnd k / f / t | falseInvalidations k / f / t | humanPrompts k / f / t | served / outage k · f · t |
+|---|---|---|---|---|---|---|---|
+| S1 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0/0 · 0/0 · 0/0 |
+| S2 | 1 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 2 / 0 / 0 | 0 / 0 / 0 | 1 / 0 / 0 | 1/1 · 0/1 · 1/1 |
+| S3 | 1 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 2 / 0 / 0 | 0/0 · 0/0 · 0/0 |
+| S4 | 2 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 1 / 1 / 1 | 2/2 · 0/2 · 2/2 |
+| S5 | 1 / 1 / 1 | 0 / 0 / 0 | 0 / 3 / 3 | 0 / 3 / 3 | 0 / 0 / 0 | 2 / 0 / 0 | 0/0 · 0/0 · 0/0 |
+| S6 | 1 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 2 / 0 / 0 | 0/0 · 0/0 · 0/0 |
+| S7 | 1 / 2 / 2 | 0 / 1 / 1 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0/0 · 0/0 · 0/0 |
 
 The shape in one sentence: where the baseline quietly reruns the agent (S2, S3, S6, S7) or shows a
 stale answer (S5), kuilt runs the agent once and asks a person when the answer is in doubt on arrival;
