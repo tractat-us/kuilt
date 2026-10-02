@@ -78,11 +78,13 @@ public sealed interface FaultProfile {
      * `broadcast` frame to everyone. A held `sendTo` whose peer has left by the flush is dropped.
      * Every held frame counts in [FaultySeam.framesDelayed] when it enters the window.
      *
-     * **A partial window is never flushed.** Frames still in a window that never fills — because the
-     * test ends, or the profile is swapped or healed — are never delivered. They were counted as
-     * delayed, not dropped, so `framesDropped == 0` does **not** mean nothing was lost under this
-     * profile: compare [FaultySeam.framesDelivered] with what was sent. Flushing on a profile change
-     * is tracked by #2882.
+     * **A partial window is released, or counted lost — never silently kept.** Any
+     * [FaultySeam.setFaultProfile] (so `heal()` and `partition()` too) empties both windows and
+     * delivers what they held, in the order it arrived, each outbound frame to its own route. The
+     * release runs in the seam's scope because `setFaultProfile` cannot suspend, so a frame sent
+     * straight after the swap can arrive ahead of it. Frames still held when the seam closes, or
+     * when its link ends underneath it, count in [FaultySeam.framesDropped] — as does a released
+     * frame that finds the link already closed.
      */
     public data class ReorderWindow(
         val windowSize: Int,
@@ -163,6 +165,19 @@ internal class FaultState(
     // How many inbound frames a ReorderWindow has taken into its window, lifetime. Read as a delta
     // around one evaluation so [evaluateInbound] can tell "held" from "dropped" (#2879).
     private var inboundFramesHeld = 0L
+
+    /**
+     * Empty both reorder windows and return what they held, in the order it arrived (#2882).
+     *
+     * No permutation is drawn: the window never filled, so no shuffle was owed, and drawing one here
+     * would shift every later window's permutation for the same seed.
+     */
+    fun drainHeld(): HeldFrames {
+        val held = HeldFrames(outboundWindow.toList(), inboundWindow.toList())
+        outboundWindow.clear()
+        inboundWindow.clear()
+        return held
+    }
 
     private fun nextOutboundIndex(): Int = outboundCount++
 
@@ -371,6 +386,14 @@ internal class InboundOutcome(
     val frames: List<Swatch>,
     val held: Boolean,
 )
+
+/** The frames a [FaultState] had in its reorder windows when they were drained. */
+internal class HeldFrames(
+    val outbound: List<OutboundFrame>,
+    val inbound: List<Swatch>,
+) {
+    val size: Int get() = outbound.size + inbound.size
+}
 
 /** What the outbound path should do with a frame. */
 internal sealed interface OutboundDecision {
