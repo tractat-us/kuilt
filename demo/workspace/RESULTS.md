@@ -11,9 +11,11 @@ These are **counts over scripted actors, not a user study**. Nobody tapped a scr
 what one deterministic run of one scenario produced. They are also **JVM-only**, and make no claim
 about any other target.
 
-The baseline's numbers come first, then kuilt's, then the scoring, against `HYPOTHESES.md` as
-merged and unedited. **Every hypothesis is scored against both baseline variants**, and a
-hypothesis passes only if it passes against both.
+The baseline's numbers come first, then kuilt's, then the scoring. It is scored twice: first
+against `HYPOTHESES.md` as merged and unedited, then against the criteria as amended on
+2026-10-01, after M1. The amended scoring is the current verdict, and under it **H1 stops on S2**.
+**Every hypothesis is scored against both baseline variants**, and a hypothesis passes only if it
+passes against both.
 
 ## Baseline: a server that owns the model
 
@@ -63,6 +65,9 @@ Where a line covers both variants, the two rows are identical.
 - `outageActions` 1: the budget edit, made while Alex was offline.
 - `outageActionsServed` 0 (false) or 1 (true): without optimistic display the edit shows nowhere
   until reconnect; with it, Alex sees the new budget straight away.
+- `staleAtEnd` 0: Sam and the remote machine were shown Trattoria Uno before the budget arrived,
+  but the rerun's Due Fratelli is pushed to everyone connected, so it is every actor's standing
+  answer when the run ends, and it fits.
 
 **S3: a closure reported during inference.**
 - `editsMade` 1, `editsPreserved` 1: Sam's closure report.
@@ -89,6 +94,8 @@ Where a line covers both variants, the two rows are identical.
   Trattoria Uno, and the check only watches the budget and the venue it recommended.
 - `staleTreatedAsCurrent` 3: Due Fratelli is shown as current to Alex, Sam and the remote machine.
   Each of them already knows Trattoria Uno has reopened, and it is nearer.
+- `staleAtEnd` 3: nothing replaces that answer, so it is still stale for all three when the run
+  ends.
 
 **S6: S2 without the outage.**
 - `editsMade` 1, `editsPreserved` 1: Alex's budget of 30.
@@ -118,8 +125,9 @@ page is kept in step by hand. Like the baseline's, these are counts over scripte
 not a user study. There is one row per scenario, since kuilt has no `optimisticLocal`
 variant: an offline action always shows on its author's phone. The last column,
 `unknownPresentations`, counts answers a phone could not judge because it had not yet received
-everything the agent saw. It is a breakdown, not a separate outcome. It is zero in every row, and
-that zero is not evidence: this backend cannot produce an unknown at all.
+everything the agent saw. Since the 2026-10-01 amendment it is reported beside H1b and is not
+scored. It is zero in every row, and that zero is not evidence: this backend cannot produce an
+unknown at all.
 
 | Scenario | editsMade | editsPreserved | agentRuns | unnecessaryReruns | staleTreatedAsCurrent | staleAtEnd | falseInvalidations | humanPrompts | outageActions | outageActionsServed | unknownPresentations |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -151,6 +159,9 @@ verdict works. As in the baseline, `editsPreserved` equals `editsMade` in every 
   truth for him is Due Fratelli, so the flag is earned, not a false invalidation. Sam and the remote
   machine saw the answer earlier, before the budget reached them, and it fitted what they knew,
   and it is never re-checked.
+- `staleAtEnd` 2: so when the run ends, Sam and the remote machine still have Trattoria Uno shown as
+  fitting, while each holds a budget of 30. Alex's standing answer is the flagged one, which does
+  not count.
 
 **S3: a closure reported during inference.**
 - `agentRuns` 1, `humanPrompts` 2: every copy holds Sam's closure of Trattoria Uno when the answer
@@ -164,6 +175,8 @@ verdict works. As in the baseline, `editsPreserved` equals `editsMade` in every 
   own copy.
 - `humanPrompts` 1: when the phones meet, both copies hold Alex's accept of `r2` and Sam's accept of
   `r1`. That pair conflicts, and it is counted once.
+- `staleAtEnd` 0: everyone's standing answer at the end is `r2` (Due Fratelli), which fits. Sam's
+  accept of `r1` is a choice, not an answer shown to him, so it does not change which answer stands.
 
 **S5: a report corrected later.**
 - `editsMade` 2, `editsPreserved` 2: the closure and the reopening.
@@ -203,7 +216,10 @@ a trade, not a free win. On S2, S3, S5 and S6 kuilt asks people once or twice wh
 asks nobody. The hypotheses weigh that on purpose outside the verdicts (H4 compares prompts only
 where neither design reruns or goes stale), so it shows up here instead.
 
-## Scoring against `HYPOTHESES.md`
+## Scoring against `HYPOTHESES.md` as first merged
+
+**Superseded.** This is the M1 scoring as it first merged, kept unedited apart from pointers to the
+re-score. The current verdicts are in *Re-scored against the amended criteria*, below.
 
 Scored as merged, unedited. Each hypothesis gets a verdict against each baseline variant, then a
 combined verdict: it **passes** only if it passes against both, **stops** if it stops against
@@ -260,7 +276,7 @@ either, and is otherwise **no difference**.
   stays standing after the budget arrives; the baseline replaces it with the rerun its deferred
   re-check produced. Scored at first delivery, kuilt's S2 staleness is 0. Scored on each phone's
   standing answer at the end of the run (the latest proposal it has been shown), it is 2, which
-  meets H1's stop condition. S3 and S5 are unaffected, since every copy holds
+  meets H1's stop condition as amended on 2026-10-01 (see the re-score). S3 and S5 are unaffected, since every copy holds
   the missing input before the answer arrives there. H0 is unaffected too: it does not fire because
   the baseline goes stale on S5 (and reruns needlessly on S7), not because of S2.
 - **H2 cannot fail for kuilt as registered.** kuilt never reruns, so its `unnecessaryReruns` is 0 on
@@ -276,8 +292,52 @@ either, and is otherwise **no difference**.
   backend cannot produce an unknown. A flagged answer whose rerun would come out the same counts
   against H1b even when it was flagged only because a phone had not yet received everything. So
   H1b has not been tested against the case where kuilt says "unknown": a network that lets one
-  sender's news through before another's could add to the total. A proposal to score it separately
-  is below.
+  sender's news through before another's could add to the total. The 2026-10-01 amendment now
+  scores unknowns separately; see the re-score.
+
+## Re-scored against the amended criteria
+
+**Post-M1 amendment, made 2026-10-01, before any fix for tractat-us/kuilt#2880.** After M1, Iain
+accepted two changes to `HYPOTHESES.md` (see its *Amendment* section). H1b now scores needs-review
+flags only. And each actor's standing answer, the latest proposal it has been shown, is now also
+scored when the run ends, as `staleAtEnd`. Either scoring can stop a hypothesis on its own. The
+numbers are the same runs as above; only the criteria changed.
+
+| id | vs `optimisticLocal = false` | vs `optimisticLocal = true` | combined |
+|---|---|---|---|
+| H1 | **stop** (S2) | **stop** (S2) | **stop** |
+| H1b | pass (no baseline comparison) | pass (no baseline comparison) | **pass** |
+| H2 | pass | pass | **pass** |
+| H3 | pass | no difference (S2 and S4) | **no difference** |
+| H4 | pass (no difference on S1 and S4) | pass (no difference on S1 and S4) | **pass** |
+| H0 | does not match | does not match (matches on H3 only) | **not triggered** |
+
+- **H1, stop, on S2.** kuilt's `staleAtEnd` on S2 is 2: Sam and the remote machine end the run with
+  Trattoria Uno shown as fitting while each holds Alex's budget of 30. Both baseline variants score
+  0, because the rerun's Due Fratelli replaces the old answer on every screen. One stale count on
+  S2, S3 or S5 stops H1. S3 and S5 are clean for kuilt under both scorings (0 and 0). The cause is
+  the one *What these numbers rest on* names: kuilt judges an answer once, when it first arrives.
+  Re-checking a shown answer is tractat-us/kuilt#2880.
+- **H1b, pass.** kuilt's needs-review `falseInvalidations` total across S1 to S7 is 0. The
+  `unknownPresentations` row beside it is also 0, and that 0 is vacuous: this backend cannot
+  produce an unknown at all.
+- **H2, H3, unchanged.** Neither reads the counts the amendment touched.
+- **H4, pass, unchanged.** `staleAtEnd` is 0 on S1 and S4 in all three designs, so both stay like
+  with like. On S4 everyone's standing answer is `r2`, which fits.
+- **H0, not triggered.** A variant matches kuilt on H1 only if all of S2, S3 and S5 are *no
+  difference*. S2 is not: kuilt is worse there, which is a stop, not a tie. H0 would not fire
+  anyway, since neither variant matches on H2 (1 unnecessary rerun on S7 against 0). H0 asks
+  whether the simpler design does as well, and on S2 it does better; H1's stop is where that shows.
+
+The headline: **H1 stops on S2**. This is the order the epic set: fix tractat-us/kuilt#2880, then
+re-score M1 against these criteria, unedited, before M2 begins.
+
+`staleAtEnd` is computed in the harness (`Oracle.standingAnswers`) for both backends and both
+baseline variants, and pinned by `KuiltMeasurementTest`, `BaselineMeasurementTest` and
+`EndOfRunScoringTest`. Its numbers match the scratch probe the proposal quoted: S2 2 / 0 / 0, S4
+0 / 0 / 0, and S3, S5 and S7 unchanged. The verdict it scores is the one each answer was **last
+shown with**, never a fresh re-assessment at the end. So a re-check that re-shows `r1` to Sam
+flagged would bring S2 to 0, and a design that never re-checks cannot.
 
 ## What these numbers rest on
 
@@ -288,8 +348,8 @@ either, and is otherwise **no difference**.
   delivers a *deferred* presentation, to a phone that was offline at release; on S2 that is Alex's,
   and the rerun it triggers is pushed to everyone connected. That is why S2 looks one-sided: the
   baseline has a deferred delivery to hang the re-check on, and kuilt's re-check-free rule does not.
-  The metrics score each presentation at the moment it is made, so neither
-  `staleTreatedAsCurrent` nor `humanPrompts` sees this.
+  `staleTreatedAsCurrent` and `humanPrompts` score each presentation at the moment it is made, so
+  neither sees this. `staleAtEnd`, added by the 2026-10-01 amendment, does: it is 2 on S2.
 - **Catching up after a reconnect waits for the background sync.** Healing a link starts no sync of
   its own. A returning phone catches up on the replicas' next anti-entropy round, so how soon it
   sees news is bounded by that interval, not by the moment it reconnects. The tests drive ten rounds
@@ -318,28 +378,10 @@ either, and is otherwise **no difference**.
   table above ran on a healthy network and was not affected. tractat-us/kuilt#2881 fixed the fault:
   held frames reach their own peers and count as delayed, and the trace still passes.
 
-## Proposed changes to `HYPOTHESES.md` (not applied)
+## Proposed changes to `HYPOTHESES.md`: applied
 
-These are proposals for a new pull request against `HYPOTHESES.md`. Nothing above uses them: every
-verdict is scored as merged.
-
-- **Score H1b on review flags only.** H1b asks whether the relevance policy asks people too often.
-  An unknown verdict is not a relevance call. It says an input has not arrived yet, which is network
-  lag. Counting it against H1b charges transport delay to the policy, and under delay or reordering
-  it could stop H1b on a run where the policy never misjudged anything. Refusing to judge without
-  the evidence is the trust boundary's own promise ("missing evidence yields unknown"), not a false
-  alarm. Proposal: count only needs-review flags toward H1b, and report `unknownPresentations`
-  beside it as its own row.
-- **Score what each phone shows at the end, too.** Because an answer is judged only when it first
-  arrives, relevant news that reaches a phone afterwards (S2, for Sam and the remote machine) is
-  invisible to every metric. Proposal: also score each actor's standing answer at the end of the
-  run, where an actor's standing answer is the latest proposal it has been shown (so once `r2`
-  supersedes `r1`, `r2` stands). Measured with a scratch probe, not committed: kuilt scores 2 on S2
-  (Sam and the remote machine) against 0 for both baseline variants, which **stops** H1. S4 scores 0
-  in all three designs, because everyone's standing answer is `r2`, which fits; S3, S5, S7 and H0
-  are unchanged.
-  The definition matters. If instead every proposal ever shown were re-scored at the end, a
-  superseded `r1` would count too: S4 would score 3 in all three designs, so S4 would drop out of
-  H4 as not like with like and leave H4 scored on S1 alone, and S2 would score 2 in all three
-  designs, which still stops H1 for kuilt. The follow-up PR has to pick one.
-
+M1 proposed two changes to `HYPOTHESES.md`: score H1b on needs-review flags only, and score each
+actor's standing answer at the end of the run as well. Iain accepted both on 2026-10-01, defining
+the standing answer as the latest proposal an actor has been shown, not every answer it was ever
+shown. Both now live in `HYPOTHESES.md` § *Amendment (2026-10-01)*, and *Re-scored against the
+amended criteria*, above, applies them.
