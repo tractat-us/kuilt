@@ -329,15 +329,17 @@ numbers are the same runs as above; only the criteria changed.
   anyway, since neither variant matches on H2 (1 unnecessary rerun on S7 against 0). H0 asks
   whether the simpler design does as well, and on S2 it does better; H1's stop is where that shows.
 
-The headline: **H1 stops on S2**. This is the order the epic set: fix tractat-us/kuilt#2880, then
+The headline: **H1 stops on S2**. Next, in the order the epic set: fix tractat-us/kuilt#2880, then
 re-score M1 against these criteria, unedited, before M2 begins.
 
 `staleAtEnd` is computed in the harness (`Oracle.standingAnswers`) for both backends and both
 baseline variants, and pinned by `KuiltMeasurementTest`, `BaselineMeasurementTest` and
 `EndOfRunScoringTest`. Its numbers match the scratch probe the proposal quoted: S2 2 / 0 / 0, S4
 0 / 0 / 0, and S3, S5 and S7 unchanged. The verdict it scores is the one each answer was **last
-shown with**, never a fresh re-assessment at the end. So a re-check that re-shows `r1` to Sam
-flagged would bring S2 to 0, and a design that never re-checks cannot.
+shown with**, never a fresh re-assessment at the end. S2 counts two stale standing answers, Sam's and
+the remote machine's, so a re-check brings S2 to 0 only by re-showing `r1` flagged to **both**. The
+remote machine is never asked, but it still gets the flagged row. A design that never re-checks
+cannot reach 0.
 
 ## What these numbers rest on
 
