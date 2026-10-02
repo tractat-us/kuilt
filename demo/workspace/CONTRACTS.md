@@ -126,8 +126,9 @@ look as if it received newer reports.** Here is what holds it up, and what does 
   already in the basis, nothing more. A caller could pass later host updates off as a tool result,
   widening the basis silently. Only the backend test above catches it.
 - **An answer is judged once, at first delivery.** Relevant news that reaches a phone after it was
-  shown an answer is never re-checked, and no metric sees it. On S2, Sam and the remote machine keep
-  showing the first answer as fitting after Alex's budget reaches them. The baseline does not
+  shown an answer is never re-checked. On S2, Sam and the remote machine keep showing the first
+  answer as fitting after Alex's budget reaches them. The metrics as first merged did not see this.
+  The end-of-run score added on 2026-10-01, `staleAtEnd`, does: it is 2 on S2, and it stops H1. The baseline does not
   re-check an answer it has already shown either; it re-checks only when it delivers a deferred
   presentation to a phone that was offline, which S2 happens to give it.
 - **Catch-up waits for anti-entropy.** Healing a link starts no sync, so a returning phone's view is
