@@ -534,6 +534,134 @@ class FaultySeamTest {
             )
         }
 
+    /**
+     * A window that never fills is released by the next profile change, each frame to its own route
+     * (#2882). Before the fix, `heal()` mid-burst lost both held frames for good and counted neither
+     * as dropped.
+     *
+     * The precondition proves the rig fired: both frames sit in the window and nobody has them yet.
+     */
+    @Test
+    fun `ReorderWindow Outbound — heal releases a partial window to each frame's own route`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val hub = factory.host(Pattern("Hub"))
+            val alex = factory.join(InMemoryTag("Hub"))
+            val sam = factory.join(InMemoryTag("Hub"))
+            val atAlex = collectBytes(alex)
+            val atSam = collectBytes(sam)
+            testScheduler.runCurrent()
+
+            hub.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 3, seed = 0L, direction = Direction.Outbound))
+            hub.sendTo(alex.selfId, byteArrayOf(10))
+            hub.broadcast(byteArrayOf(1))
+            testScheduler.runCurrent()
+            val heldBeforeHeal = atAlex.isEmpty() && atSam.isEmpty() && hub.framesDelayed == 2L
+
+            hub.heal()
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(heldBeforeHeal, "precondition: both frames were held in the window, undelivered") },
+                { assertEquals(listOf(10, 1), atAlex, "alex gets its own frame and the broadcast") },
+                { assertEquals(listOf(1), atSam, "sam gets only the broadcast") },
+                { assertEquals(2L, hub.framesDelivered) },
+                { assertEquals(0L, hub.framesDropped) },
+            )
+        }
+
+    /** The inbound half of the same release (#2882): a held received frame reaches `incoming`. */
+    @Test
+    fun `ReorderWindow Inbound — heal releases a partial window to incoming`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.host(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Alice"))
+            val atB = collectBytes(b)
+            testScheduler.runCurrent()
+
+            b.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 3, seed = 0L, direction = Direction.Inbound))
+            a.broadcast(byteArrayOf(1))
+            a.broadcast(byteArrayOf(2))
+            testScheduler.runCurrent()
+            val heldBeforeHeal = atB.isEmpty() && b.framesDelayed == 2L
+
+            b.heal()
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(heldBeforeHeal, "precondition: both frames were held in the window, undelivered") },
+                { assertEquals(listOf(1, 2), atB, "both held frames are delivered") },
+                { assertEquals(2L, b.framesDelivered) },
+                { assertEquals(0L, b.framesDropped) },
+            )
+        }
+
+    /**
+     * Closing a seam with frames still in its windows loses them, and says so (#2882): each one
+     * counts in [FaultySeam.framesDropped]. Both directions, on one seam.
+     */
+    @Test
+    fun `ReorderWindow — close counts frames still held in either window as dropped`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.host(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Alice"))
+            val atA = collectBytes(a)
+            val atB = collectBytes(b)
+            testScheduler.runCurrent()
+
+            b.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 3, seed = 0L, direction = Direction.Both))
+            b.broadcast(byteArrayOf(5))
+            a.broadcast(byteArrayOf(1))
+            a.broadcast(byteArrayOf(2))
+            testScheduler.runCurrent()
+            val heldBeforeClose = atA.isEmpty() && atB.isEmpty() && b.framesDelayed == 3L && b.framesDropped == 0L
+
+            b.close()
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(heldBeforeClose, "precondition: one outbound and two inbound frames were held") },
+                { assertEquals(3L, b.framesDropped, "every frame still held at close is a dropped frame") },
+                { assertEquals(0L, b.framesDelivered) },
+                { assertEquals(emptyList(), atA, "the held outbound frame never reached alice") },
+                { assertEquals(emptyList(), atB) },
+            )
+        }
+
+    /**
+     * A release that lands after the link has closed is a drop, not a throw (#2882). `heal()` cannot
+     * suspend, so it hands the held frames to a coroutine; here `close()` runs before that coroutine
+     * does. The frame must be counted as dropped, and the closed delegate's refusal must not escape
+     * into the scope.
+     */
+    @Test
+    fun `ReorderWindow — a release overtaken by close counts the frames as dropped`() =
+        runTest {
+            val factory = FaultyLoom(InMemoryLoom(), backgroundScope)
+            val a = factory.host(Pattern("Alice"))
+            val b = factory.join(InMemoryTag("Alice"))
+            val atB = collectBytes(b)
+            testScheduler.runCurrent()
+
+            a.setFaultProfile(FaultProfile.ReorderWindow(windowSize = 3, seed = 0L, direction = Direction.Outbound))
+            a.broadcast(byteArrayOf(1))
+            a.broadcast(byteArrayOf(2))
+            val heldBeforeHeal = a.framesDelayed == 2L
+
+            a.heal()
+            a.close()
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertTrue(heldBeforeHeal, "precondition: both frames were held in the window") },
+                { assertEquals(2L, a.framesDropped, "frames released onto a closed link are dropped") },
+                { assertEquals(0L, a.framesDelivered) },
+                { assertEquals(emptyList(), atB) },
+            )
+        }
+
     private fun kotlinx.coroutines.test.TestScope.collectBytes(seam: FaultySeam): List<Int> {
         val seen = mutableListOf<Int>()
         backgroundScope.launch { seam.incoming.collect { seen += it.byteAt(0).toInt() } }
