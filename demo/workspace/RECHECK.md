@@ -137,7 +137,8 @@ So fixing #2880 moves the stop from H1 to H4, unless a ruling is made **before**
   criteria change, so it belongs in `HYPOTHESES.md` and must land before the numbers, as the
   2026-10-01 amendments did.
 
-This page does not pick between them; that ruling is Iain's (see *Open*).
+**Ruled 2026-10-01 (Iain): accept it.** H4 stays as written. If the re-score stops H4 on S4, the stop
+is recorded as measured, and `RESULTS.md` says the extra prompt is a correct flag.
 
 ## What the fix is unpinned on
 
@@ -174,8 +175,10 @@ This page does not pick between them; that ruling is Iain's (see *Open*).
 - **Storing the verdict and invalidating it on change.** A stored verdict plus an invalidation hook
   is the current bug with one more place to forget; deriving it removes the field.
 
-## Open
-
-- **H4 on S4**: accept the stop, or amend H4's like-with-like rule before the re-score (above).
-  #2880.
-- **End-of-run scoring reads the current verdict.** Confirm in the amended `HYPOTHESES.md`. #2869.
+- **Amending H4 to drop S4.** Ruled 2026-10-01: H4 stays as written and a stop on S4 is recorded,
+  not designed away (above).
+- **End-of-run scoring reads the verdict each standing answer was last shown with.** Defined in the
+  amended `HYPOTHESES.md` (PR #2886), and pinned by
+  `EndOfRunScoringTest.laterFlaggedRowForTheSameProposalStands`. So the re-check must emit a new
+  flagged `Presentation` row for **every** actor holding the stale answer, the agent's host
+  included. On S2 that means both Sam and the remote machine.
