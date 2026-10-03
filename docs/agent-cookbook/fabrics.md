@@ -246,6 +246,8 @@ There are **two** ways such a collector dies and a hand-written `try` only cover
 
 It also settles the cancellation question you would otherwise get wrong: `runCatchingCancellable` discriminates on *type*, which cannot tell your own cancellation from a `CancellationException` a callee minted (a consumer's `withTimeout` inside `sendTo`). Rethrown from a pump, that one **cancels it silently** — no report, no stack trace. `pumpIn` uses `currentCoroutineContext().ensureActive()`, which decides it at runtime; cancelling your scope still cancels the pump.
 
+An `Error` is the one throw `pumpIn` does not absorb. One raised by the body, by the flow or by `onFailure` itself is rethrown and never reported, so the pump's `Job` fails with it. An `Error` means the process, not the item, is in trouble, and a handler can only log it and carry on.
+
 `name` is **required**, and it is not decoration. `launchIn` keeps the `onEach` lambda out of the suspended continuation chain, so every pump of this shape parks at the same frame with no library frame in its stack at all — a coroutine dump renders your whole pump set as one indistinguishable blob, which looks the same whether they are healthy or one of them is wedged. `pumpIn` attaches the name as a `CoroutineName` on the launch, so anything reading `CoroutineInfo.context` can attribute a parked pump to the pump it belongs to. Make it distinct **per pump instance**, not per call site: where several pumps of one kind run side by side, qualify it (`"room-peers[$roomId]"`) so a census can group by kind and still name the instance.
 
 <!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/PumpInSamples.kt#samplePumpIn -->

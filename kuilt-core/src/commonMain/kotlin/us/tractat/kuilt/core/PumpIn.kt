@@ -36,8 +36,9 @@ public enum class PumpFailure {
 }
 
 /**
- * Collect this flow in [scope] as a **long-lived pump** that a throw cannot kill — neither one raised
- * *in* [body] nor one raised *by the flow* — reporting either through [onFailure].
+ * Collect this flow in [scope] as a **long-lived pump** that an exception cannot kill — neither one raised
+ * *in* [body] nor one raised *by the flow* — reporting either through [onFailure]. An [Error] is the one
+ * exception to that: it is rethrown, never reported, and the pump dies with it (see below).
  *
  * Use this instead of `onEach { … }.launchIn(scope)` for any pump that has to keep running for the life
  * of a session and whose flow or body reaches consumer-authored or peer-supplied code.
@@ -66,8 +67,9 @@ public enum class PumpFailure {
  *
  * The upstream guard needs no `ensureActive` of its own: [kotlinx.coroutines.flow.catch] rethrows when
  * the throwable is this coroutine's own cancellation cause and catches otherwise — the same
- * discriminator, already built in. And because the body guard below absorbs everything except our own
- * cancellation, the only thing that guard can ever see is a genuine upstream failure.
+ * discriminator, already built in. The body guard below absorbs everything except our own cancellation
+ * and an [Error], so what reaches the upstream guard is a genuine upstream failure, which it reports, or
+ * an [Error] on its way out, which it rethrows.
  *
  * ### `ensureActive`, not `runCatchingCancellable`, in the body
  * `runCatchingCancellable` discriminates on **type**, and type cannot separate *"my job was cancelled"*
@@ -79,11 +81,22 @@ public enum class PumpFailure {
  * is the discriminator that decides it at runtime; it throws only when this job really was cancelled and
  * falls through on a callee-minted one, which then becomes an ordinary [PumpFailure.ITEM].
  *
- * ### [onFailure] cannot kill the pump either
- * It is invoked inside a total `catch (Throwable)` — `CancellationException` included. It is
- * **non-suspending** and called outside any cancellation contract, so there is no cancellation of ours
- * for it to be reporting and nothing to preserve by rethrowing; and a rethrow here would escape the very
- * guard this exists to be. A consumer's logger must never be able to kill a pump.
+ * ### [onFailure] cannot kill the pump either — except with an [Error]
+ * It is invoked inside a guard that absorbs everything it throws short of an [Error] —
+ * `CancellationException` included. It is **non-suspending** and called outside any cancellation
+ * contract, so there is no cancellation of ours for it to be reporting and nothing to preserve by
+ * rethrowing; and a rethrow here would escape the very guard this exists to be. A consumer's logger must
+ * never be able to kill a pump by accident.
+ *
+ * ### An [Error] is not a pump failure: it escapes, and the pump dies with it
+ * An `OutOfMemoryError`, a `StackOverflowError`, an `AssertionError` or a consumer's own `Error` says the
+ * process — not this item, not this flow — is in a state nothing downstream can reason about. Handing
+ * one to [onFailure] gives a consumer exactly two moves, log it or map it into a recoverable state, and
+ * both carry on past it. So an [Error] raised by [body], by the flow, or by [onFailure] itself is
+ * **rethrown, never reported**: it leaves the pump by the route an unguarded launch would take, the
+ * pump's [Job] fails with it, and it reaches the scope's handler — on Kotlin/Native, the abort above.
+ * That is deliberate. Every guard here exists so that an *exception* cannot end the process; none of
+ * them exists so that an [Error] cannot (#2890).
  *
  * ### Why this is `public`, and in `:kuilt-core`
  * Stated rather than left to inference, because the *identical* remedy for the sibling defect class was
@@ -128,7 +141,7 @@ public enum class PumpFailure {
  *   group by kind *and* still name the instance.
  * @param body the per-item work.
  * @return the pump's [Job]. After [PumpFailure.UPSTREAM] it completes **normally** — the pump is over,
- *   but it ended with a diagnosis rather than a `SIGABRT`.
+ *   but it ended with a diagnosis rather than a `SIGABRT`. After an [Error] it **fails** with that error.
  */
 public fun <T> Flow<T>.pumpIn(
     scope: CoroutineScope,
@@ -139,6 +152,9 @@ public fun <T> Flow<T>.pumpIn(
     val guarded = onEach { value ->
         try {
             body(value)
+        } catch (error: Error) {
+            // Never an item failure — the process is in trouble, and the pump dies with it. See the KDoc.
+            throw error
         } catch (failure: Throwable) {
             // Genuinely our own cancellation → rethrow, so the pump stops as structured concurrency
             // intends; anything else — INCLUDING a `CancellationException` the callee minted itself — is
@@ -149,8 +165,12 @@ public fun <T> Flow<T>.pumpIn(
     }
         // The half the `try` above structurally cannot see. Applied AFTER the body guard so it is
         // downstream of it, and therefore sees the flow's own failures — the guard above has already
-        // absorbed everything [body] can raise.
-        .catch { failure -> reportPumpFailure(onFailure, PumpFailure.UPSTREAM, failure) }
+        // absorbed everything [body] can raise except an `Error`. An `Error` passes through untouched,
+        // whether the flow raised it or the body guard rethrew it.
+        .catch { failure ->
+            if (failure is Error) throw failure
+            reportPumpFailure(onFailure, PumpFailure.UPSTREAM, failure)
+        }
 
     // `launchIn(scope)` is exactly `scope.launch { collect() }` — with no context parameter, which is
     // why the launch is spelled out here instead: [name] has to land on the launched coroutine's OWN
@@ -160,8 +180,8 @@ public fun <T> Flow<T>.pumpIn(
 }
 
 /**
- * Hand a pump failure to a consumer callback, absorbing whatever the callback throws — see [pumpIn]'s
- * KDoc for why the absorption is total, and why this is not the banned bare `runCatching`.
+ * Hand a pump failure to a consumer callback, absorbing whatever the callback throws short of an [Error]
+ * — see [pumpIn]'s KDoc for why, and why this is not the banned bare `runCatching`.
  */
 private fun reportPumpFailure(
     onFailure: (PumpFailure, Throwable) -> Unit,
@@ -170,8 +190,11 @@ private fun reportPumpFailure(
 ) {
     try {
         onFailure(phase, failure)
+    } catch (error: Error) {
+        throw error
     } catch (_: Throwable) {
-        // Deliberately total, `CancellationException` included: this runs inside the pump's own guard, so
-        // a rethrow escapes it and kills the pump silently — the very defect the hook exists to report.
+        // Deliberately total short of an `Error`, `CancellationException` included: this runs inside the
+        // pump's own guard, so a rethrow escapes it and kills the pump silently — the very defect the hook
+        // exists to report.
     }
 }
