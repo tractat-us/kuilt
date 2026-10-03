@@ -151,8 +151,9 @@ class EndOfRunScoringTest {
 
     /**
      * What S2 measures, by actor. kuilt shows Sam and remote r1 (v1) as fitting before the budget
-     * reaches them and never re-checks it, so theirs are the two stale standing answers; Alex's is
-     * flagged. Both baseline variants push the rerun (v2) to everyone, so v2 stands everywhere.
+     * reaches them, then re-shows it flagged once the budget arrives (#2880), so every standing
+     * answer is flagged and none is stale. Both baseline variants push the rerun (v2) to everyone,
+     * so v2 stands everywhere.
      */
     @Test
     fun s2StandingAnswersByBackend() = runTest(UnconfinedTestDispatcher()) {
@@ -161,10 +162,10 @@ class EndOfRunScoringTest {
         val baselines = listOf(false, true).map { BaselineBackend(it).run(Scenarios.s2) }
         assertAll(
             { assertEquals(setOf(alex, sam, remote), kStanding.keys) },
-            { assertEquals(listOf(true, true), listOf(sam, remote).map { kStanding.getValue(it).shownAsApplicable }) },
+            { assertEquals(listOf(false, false), listOf(sam, remote).map { kStanding.getValue(it).shownAsApplicable }) },
             { assertEquals(listOf(v1, v1), listOf(sam, remote).map { kStanding.getValue(it).recommendation }) },
             { assertEquals(false, kStanding.getValue(alex).shownAsApplicable) },
-            { assertEquals(2, Oracle.score(Scenarios.s2, k).staleAtEnd) },
+            { assertEquals(0, Oracle.score(Scenarios.s2, k).staleAtEnd) },
             {
                 baselines.forEach { b ->
                     val standing = Oracle.standingAnswers(Scenarios.s2, b)
