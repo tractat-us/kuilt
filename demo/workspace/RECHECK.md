@@ -8,6 +8,9 @@ decides how a phone looks again, which part of that kuilt owns, and what it cost
 
 ## Current design
 
+**Implemented by tractat-us/kuilt#2893** (`Presenter`). This section records the design as it was
+before that change.
+
 `KuiltBackend` judges each answer once per phone. `presentNew` assesses an `AgentProposal` the first
 time a replica holds it, records one `Presentation`, and never revisits it (`presented` is a
 first-time set). The verdict is stored in that record. Nothing re-runs `Assessment.assess` when the

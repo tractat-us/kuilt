@@ -18,11 +18,11 @@ It makes no claim about any other target.
 | **Delivery.** `Quilted.causalDots()` and `Quilted.causalFloor()`, read as a union, and `VersionVector.contains`. | **`Quilted.delivered(dot)`: confirmed** (evidence below). A per-dot "has this state delivered that dot" helper. A second candidate, "these two states delivered the same dots", has one call site and is not confirmed. | None. Delivery is a fact about the log, not a judgement. |
 | **Replication.** `Quilter`, with `Quilter.mutate` for an atomic append under the replicator's lock, anti-entropy for catch-up, and `QuilterConfig(expectVirtualTime = true)` in tests. | None required. The prototype's convergence check ("every connected copy delivered the same dots") is test support and could live beside `drainAntiEntropy` in `:kuilt-test`; not confirmed. | When a returning phone catches up. Healing a link starts no sync, so catch-up waits for the next anti-entropy round. |
 | **Compaction.** `RgaGcCoordinator` for tombstone collection; `Rga.dropWindow` exercised only in tests. | None, but see the compaction finding below: the floor half of the delivery rule is reached only through `dropWindow`. | Whether and how far to window history. The prototype never windows. |
-| **Faults.** `FaultyLoom`, `FaultySeam` and `FaultProfile` over `InMemoryLoom` (test side), with `drainAntiEntropy`. | A fix to `FaultySeam`'s outbound `ReorderWindow`, which misrouted held frames and never counted them as delayed (tractat-us/kuilt#2879). Fixed by tractat-us/kuilt#2881. | None. |
+| **Faults.** `FaultyLoom`, `FaultySeam` and `FaultProfile` over `InMemoryLoom` (test side), with `drainAntiEntropy`. | A fix to `FaultySeam`'s outbound `ReorderWindow`, which misrouted held frames and never counted them as delayed (tractat-us/kuilt#2879). Fixed by tractat-us/kuilt#2881; tractat-us/kuilt#2888 then released a partly filled window when the profile changes and counted it dropped on close. | None. |
 | **Capture.** The prototype's own `InputCapture.capture` and `Proposal.Pending`: one read of an immutable `Rga` value fixes the basis. | **Rejected for now.** The generic core is one line (`entries().map { it.first.dot }`); the rest is shaped by this app's entry types. One consumer is too few to name the API. | Which inputs an agent is shown (`selectExcluding`), and which step a tool result joins. |
 | | | **Relevance.** Which missing inputs matter to an answer: clauses (a) to (d) of `HYPOTHESES.md`. A note never matters. |
 | | | **Authority.** Who settles a conflict between two accepts. The prototype counts one prompt per conflicting pair and does not decide who is asked. An agent's host is never asked. |
-| | **Re-assess on delivery: confirm or reject in M2**, beside `Quilted.delivered(dot)`. Notify when a newly delivered dot is relevant to an answer already shown, so a phone can re-judge it. The prototype has no such hook, which is why an answer is judged only once. | **Presentation.** When an answer is shown: once per phone, at first delivery, never re-checked. An unknown verdict is shown flagged for review, like a needs-review one. Accepts and proposals stay out of the final views. |
+| | **Re-assess on delivery: rejected** (`RECHECK.md`, *Settled*). Its trigger, "a new dot bears on an answer shown", is relevance, which is the app's. Without relevance it is "the state changed", and `Quilter.state` already says that. A flow of newly delivered dots is derivable from the same `StateFlow`, because delivery only grows. | **Presentation.** When an answer is shown, and when it is shown again: first at delivery, then re-judged with the same relevance clauses whenever the phone's replica settles, and re-shown when the verdict on screen changes (`Presenter`, tractat-us/kuilt#2880). Only the standing answer, the latest one shown, is re-judged. A prompt is charged only on entering a flagged state. An unknown verdict is shown flagged for review, like a needs-review one. Accepts and proposals stay out of the final views. |
 
 ## `Quilted.delivered(dot)`: confirmed
 
@@ -89,8 +89,9 @@ look as if it received newer reports.** Here is what holds it up, and what does 
 - The basis survives Quilter's wire and a merge into another copy, step by step:
   `leakyStampFailsOverTheWire`, eight cells.
 - A reordered and duplicated delivery leaves one proposal with its basis unchanged:
-  `reorderedAndDuplicatedProposalKeepsBasis`. Its reorder rig also misdelivers frames
-  (tractat-us/kuilt#2879), which adds adversity rather than removing it.
+  `reorderedAndDuplicatedProposalKeepsBasis`. Its reorder rig also misdelivered frames
+  (tractat-us/kuilt#2879, fixed by tractat-us/kuilt#2881 and tractat-us/kuilt#2888), which added
+  adversity rather than removing it.
 - A removed and compacted input still reads as delivered: `compactedReportLeavesBasisReadable`.
 - A phone that lacks part of the basis says unknown, never applicable:
   `AssessmentTest.unreceivedBasisIsUnknownNotApplicable` at the judge, and
@@ -125,12 +126,13 @@ look as if it received newer reports.** Here is what holds it up, and what does 
 - **`withToolResult` checks presence only.** It requires the new ids to be in the log and not
   already in the basis, nothing more. A caller could pass later host updates off as a tool result,
   widening the basis silently. Only the backend test above catches it.
-- **An answer is judged once, at first delivery.** Relevant news that reaches a phone after it was
-  shown an answer is never re-checked. On S2, Sam and the remote machine keep showing the first
-  answer as fitting after Alex's budget reaches them. The metrics as first merged did not see this.
-  The end-of-run score added on 2026-10-01, `staleAtEnd`, does: it is 2 on S2, and it stops H1. The baseline does not
-  re-check an answer it has already shown either; it re-checks only when it delivers a deferred
-  presentation to a phone that was offline, which S2 happens to give it.
+- **A re-check is only as good as the relevance clauses.** Since tractat-us/kuilt#2880 each phone
+  re-judges its standing answer after every settled step, so relevant news that arrives late flags
+  it (S2's `staleAtEnd` went from 2 to 0). The judge is the same `Assessment.assess`, so a miss of
+  clauses (a) to (d) is now a miss repeated on every delivery. Only the standing answer is
+  re-judged: an older answer the phone was shown and then replaced stays as it was shown. The
+  baseline does not re-check an answer it has already shown; it re-checks only when it delivers a
+  deferred presentation to a phone that was offline.
 - **Catch-up waits for anti-entropy.** Healing a link starts no sync, so a returning phone's view is
   stale for up to one anti-entropy interval.
 - **Identical entries are one entry to the oracle and to `selectExcluding`.** Both match by value.
