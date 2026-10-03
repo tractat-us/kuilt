@@ -179,6 +179,16 @@ is a TOCTOU another process can win in the window between the probe closing and 
 time it would deadlock silently instead of failing. Test the layers above it over an in-memory
 `Connection` pair instead.
 
+### The other end is not written in Kotlin
+
+**Intent:** a program in another language has to talk to a kuilt `TcpLoom` peer, and you are about
+to read `framed()` and `Hello` to work out the bytes — or to invent a bridge protocol beside them.
+**Primitive:** the wire is a written contract, [`docs/tcp-wire.md`](../tcp-wire.md): a `u32`
+big-endian length per frame, one versioned `Hello` frame each way, then opaque payload frames, and
+close as EOF at a frame boundary. Implement it natively, and run its golden vectors,
+`kuilt-stream/wire/tcp-wire-v1.vectors.json`, as a table test. kuilt's own build checks the same
+file on every target, so the vectors cannot drift from what a kuilt peer actually sends.
+
 ## Sending to yourself
 
 **Intent:** loop a frame back to your own peer — replay your own move locally, feed your own replicator, treat "everyone" uniformly by iterating `peers` and sending to each.
