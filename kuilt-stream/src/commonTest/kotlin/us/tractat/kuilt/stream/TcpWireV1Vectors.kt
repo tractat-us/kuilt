@@ -1,0 +1,228 @@
+package us.tractat.kuilt.stream
+
+/**
+ * A verbatim copy of `kuilt-stream/wire/tcp-wire-v1.vectors.json`, the TCP wire's golden vectors.
+ *
+ * Embedded because a commonTest cannot read a file on every target. `TcpWireVectorsFixtureTest`
+ * (jvmTest) fails when this copy and the checked-in file differ, so edit the JSON, then paste it here
+ * whole.
+ */
+internal const val TCP_WIRE_V1_VECTORS: String = """{
+  "format": "kuilt-tcp-wire-vectors",
+  "wireVersion": 1,
+  "spec": "docs/tcp-wire.md",
+  "maxFrameSize": 16777216,
+  "helloLayout": [
+    { "field": "magic", "bytes": 4, "value": "6b75696c" },
+    { "field": "version", "bytes": 1, "value": "01" },
+    { "field": "idLen", "bytes": 4, "encoding": "u32be" },
+    { "field": "id", "bytes": "idLen", "encoding": "utf8" }
+  ],
+  "hello": [
+    {
+      "name": "hello-ascii",
+      "note": "PeerId 'alice'. Body = magic 6b75696c, version 01, idLen 00000005, id.",
+      "peerId": "alice",
+      "body": "6b75696c0100000005616c696365",
+      "frame": "0000000e6b75696c0100000005616c696365"
+    },
+    {
+      "name": "hello-utf8-multibyte",
+      "note": "PeerId 'Zoë🧵' (Z, o, U+00EB, U+1F9F5): 4 code points, 8 UTF-8 bytes. idLen counts bytes.",
+      "peerId": "Zoë🧵",
+      "body": "6b75696c01000000085a6fc3abf09fa7b5",
+      "frame": "000000116b75696c01000000085a6fc3abf09fa7b5"
+    }
+  ],
+  "frames": [
+    {
+      "name": "payload-binary",
+      "note": "An opaque 5-byte payload. The frame is its length, then the bytes, and nothing else.",
+      "payload": "00017f80ff",
+      "frame": "0000000500017f80ff"
+    },
+    {
+      "name": "payload-empty",
+      "note": "A zero-length payload is a legal frame: a bare 00000000 prefix.",
+      "payload": "",
+      "frame": "00000000"
+    }
+  ],
+  "helloRefusals": [
+    {
+      "name": "legacy-bare-utf8",
+      "note": "The pre-v1 hello: the PeerId as bare UTF-8, with no magic.",
+      "body": "616c696365",
+      "refusal": "bad-magic"
+    },
+    {
+      "name": "legacy-bare-utf8-starting-kuil",
+      "note": "A pre-v1 hello whose id happens to start with 'kuil'. The magic matches; the next byte (0x74, 't') is not a supported version.",
+      "body": "6b75696c742d70656572",
+      "refusal": "unsupported-version"
+    },
+    {
+      "name": "version-2",
+      "body": "6b75696c0200000005616c696365",
+      "refusal": "unsupported-version"
+    },
+    {
+      "name": "version-0",
+      "body": "6b75696c0000000005616c696365",
+      "refusal": "unsupported-version"
+    },
+    {
+      "name": "idlen-overruns-body",
+      "note": "idLen says 6; only 5 id bytes follow.",
+      "body": "6b75696c0100000006616c696365",
+      "refusal": "id-length-mismatch"
+    },
+    {
+      "name": "idlen-leaves-trailing-bytes",
+      "note": "idLen says 4; 5 id bytes follow. v1 forbids trailing bytes.",
+      "body": "6b75696c0100000004616c696365",
+      "refusal": "id-length-mismatch"
+    },
+    {
+      "name": "idlen-huge",
+      "note": "idLen ffffffff, refused from the header alone, before allocating.",
+      "body": "6b75696c01ffffffff616c696365",
+      "refusal": "id-length-mismatch"
+    },
+    {
+      "name": "header-truncated",
+      "note": "Magic and version present; idLen cut short.",
+      "body": "6b75696c010000",
+      "refusal": "truncated"
+    },
+    {
+      "name": "magic-only",
+      "note": "The magic and nothing after it: there is no version byte to read.",
+      "body": "6b75696c",
+      "refusal": "truncated"
+    },
+    {
+      "name": "magic-prefix-only",
+      "note": "Two bytes that agree with the magic as far as they go. Magic is compared over the bytes present, so this is truncated, not foreign.",
+      "body": "6b75",
+      "refusal": "truncated"
+    },
+    {
+      "name": "empty-body",
+      "note": "A zero-length first frame.",
+      "body": "",
+      "refusal": "truncated"
+    },
+    {
+      "name": "short-foreign-body",
+      "note": "Two bytes that disagree with the magic. Magic is checked first, so this is foreign, not truncated.",
+      "body": "6b00",
+      "refusal": "bad-magic"
+    },
+    {
+      "name": "empty-id",
+      "body": "6b75696c0100000000",
+      "refusal": "empty-id"
+    },
+    {
+      "name": "invalid-utf8",
+      "note": "c3 opens a 2-byte sequence; 28 is not a continuation byte.",
+      "body": "6b75696c0100000002c328",
+      "refusal": "invalid-utf8"
+    },
+    {
+      "name": "utf8-encoded-surrogate",
+      "note": "ed a0 80 encodes the lone surrogate U+D800, which strict UTF-8 forbids.",
+      "body": "6b75696c0100000003eda080",
+      "refusal": "invalid-utf8"
+    }
+  ],
+  "streams": [
+    {
+      "name": "close-at-frame-boundary",
+      "note": "Two frames, then EOF exactly after the second: a clean close.",
+      "bytes": "0000000470696e6700000000",
+      "frames": ["70696e67", ""],
+      "end": "clean-close"
+    },
+    {
+      "name": "eof-mid-body",
+      "note": "The prefix promises 10 bytes; 2 arrive, then EOF.",
+      "bytes": "0000000a0102",
+      "frames": [],
+      "end": "truncated-frame"
+    },
+    {
+      "name": "eof-mid-body-after-a-good-frame",
+      "note": "The first frame is delivered; the second is cut short.",
+      "bytes": "00000001aa00000003bb",
+      "frames": ["aa"],
+      "end": "truncated-frame"
+    },
+    {
+      "name": "eof-mid-prefix",
+      "note": "EOF two bytes into a length prefix. No partial frame is delivered; v1 lets the receiver report it as an error or as a close.",
+      "bytes": "00000001aa0000",
+      "frames": ["aa"],
+      "end": "truncated-prefix"
+    },
+    {
+      "name": "prefix-one-over-max",
+      "note": "01000001 is 16 MiB + 1.",
+      "bytes": "01000001",
+      "frames": [],
+      "end": "frame-too-large"
+    },
+    {
+      "name": "prefix-high-bit-set",
+      "note": "80000000 is negative as a signed 32-bit int and over the max as an unsigned one. Refused either way.",
+      "bytes": "80000000",
+      "frames": [],
+      "end": "frame-too-large"
+    },
+    {
+      "name": "prefix-all-ones",
+      "bytes": "ffffffff",
+      "frames": [],
+      "end": "frame-too-large"
+    }
+  ],
+  "handshake": {
+    "name": "two-sided-transcript",
+    "note": "a dials b. Each writes its Hello first, without waiting, then its payloads, then closes at a frame boundary. 'bytes' is everything that side writes, in order.",
+    "a": {
+      "peerId": "alice",
+      "sends": ["70696e67"],
+      "bytes": "0000000e6b75696c0100000005616c6963650000000470696e67"
+    },
+    "b": {
+      "peerId": "bob",
+      "sends": ["706f6e67"],
+      "bytes": "0000000c6b75696c0100000003626f6200000004706f6e67"
+    }
+  },
+  "handshakeRefusals": [
+    {
+      "name": "self-connection",
+      "note": "The peer's Hello names our own id.",
+      "selfId": "alice",
+      "received": "0000000e6b75696c0100000005616c696365",
+      "refusal": "self-connection"
+    },
+    {
+      "name": "closed-before-hello",
+      "note": "EOF before any frame arrives.",
+      "selfId": "alice",
+      "received": "",
+      "refusal": "no-hello"
+    },
+    {
+      "name": "first-frame-not-a-hello",
+      "note": "The peer's first frame is a payload, not a Hello.",
+      "selfId": "alice",
+      "received": "0000000470696e67",
+      "refusal": "bad-magic"
+    }
+  ]
+}
+"""
