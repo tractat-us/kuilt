@@ -86,7 +86,7 @@ sender's error, and kuilt refuses to send it.
 
 For the id `alice`, the vector reads:
 
-<!-- verbatim from kuilt-stream/src/commonTest/kotlin/us/tractat/kuilt/stream/TcpWireV1Vectors.kt#TCP_WIRE_V1_VECTORS -->
+<!-- verbatim from kuilt-stream/src/commonTest/kotlin/us/tractat/kuilt/stream/TcpWireV1Vectors.kt -->
 ```json
     {
       "name": "hello-ascii",
@@ -184,7 +184,13 @@ error frame, so the other side sees a close.
 | truncated frame | any frame | EOF inside a body | `EOFException` |
 | a malformed Hello | first frame | Hello checks 1 to 7 | a `HelloFormatException` subclass |
 | self-connection | first frame | handshake step 3 | `HelloSelfConnectionException` |
-| absent Hello | before the first frame | EOF | `HelloAbsentException` |
+| absent Hello | before the first frame | EOF | `HelloAbsentException`, also a `HelloFormatException` |
+
+kuilt's `handshaking()` closes the connection on every handshake refusal. After
+the handshake, kuilt does not yet close the socket itself. An oversize length or
+a cut body tears the seam down, but the socket stays open until the application
+closes the seam. This gap is tracked by #2898. Until it is fixed, a peer talking
+to kuilt can see a silent, open connection where this contract promises a close.
 
 ## 7. Versions
 

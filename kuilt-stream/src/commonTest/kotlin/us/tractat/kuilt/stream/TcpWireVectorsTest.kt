@@ -25,6 +25,7 @@ import us.tractat.kuilt.core.fabric.HelloIdLengthMismatchException
 import us.tractat.kuilt.core.fabric.HelloInvalidUtf8Exception
 import us.tractat.kuilt.core.fabric.HelloSelfConnectionException
 import us.tractat.kuilt.core.fabric.HelloTruncatedException
+import us.tractat.kuilt.core.fabric.HelloUnencodableIdException
 import us.tractat.kuilt.core.fabric.HelloUnsupportedVersionException
 import us.tractat.kuilt.core.fabric.handshaking
 import us.tractat.kuilt.test.assertAll
@@ -116,6 +117,12 @@ class TcpWireVectorsTest {
             assertEquals(1, received.size, "${v.str("name")} frame count")
             assertEquals(PeerId(v.str("peerId")), Hello.decode(received.single()), v.str("name"))
         }
+    }
+
+    /** A lone surrogate has no UTF-8 form, so encoding one is the sender's error, refused before any byte is written. */
+    @Test
+    fun aLoneSurrogateIdIsRefusedBeforeSending() {
+        assertFailsWith<HelloUnencodableIdException> { Hello.encode(PeerId("a\uD800")) }
     }
 
     /** Bodies that are valid v1 Hellos although kuilt never sends them: unknown flag bits are ignored. */
