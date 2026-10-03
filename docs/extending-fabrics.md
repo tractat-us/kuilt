@@ -198,7 +198,7 @@ Earlier versions of this kit asked every stream fabric to pump the cold flow
 itself before handing it on. That step is now **gone** — `handshaking()` and
 `meshSeam()` wrap the connection internally with a private `singleCollection` adapter:
 one pump coroutine collects `incoming` exactly once and re-publishes frames
-through an unbounded `Channel`, so the preamble read and the read loop draw from
+through a bounded `Spool`, so the preamble read and the read loop draw from
 that single re-collectable stream. The transport just hands its raw `framed()`
 `Connection` straight in.
 

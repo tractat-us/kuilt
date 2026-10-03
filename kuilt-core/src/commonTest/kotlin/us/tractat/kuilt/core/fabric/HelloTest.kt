@@ -49,6 +49,22 @@ class HelloTest {
         )
     }
 
+    /**
+     * `idLen` is UNSIGNED: an id of 0x8000 bytes or more sets its top bit, so a signed read would
+     * see a negative length and refuse the largest ids v1 promises to carry.
+     */
+    @Test
+    fun idsWithTheTopLengthBitSetRoundTrip() {
+        assertAll(
+            *listOf(0x8000, HELLO_MAX_ID_BYTES).map { size ->
+                {
+                    val id = PeerId("x".repeat(size))
+                    assertEquals(id, Hello.decode(Hello.encode(id)), "$size-byte id")
+                }
+            }.toTypedArray(),
+        )
+    }
+
     /** Flags are must-ignore: a v1 receiver accepts a body whatever bits are set. */
     @Test
     fun unknownFlagBitsAreIgnored() {
@@ -128,6 +144,24 @@ class HelloTest {
         )
     }
 
+    /**
+     * The version is checked as soon as its byte has arrived, before the rest of the header: a short
+     * body from a different version is named as a version mismatch, not as truncation. A later
+     * version may well have a shorter header.
+     */
+    @Test
+    fun theVersionIsRefusedBeforeTheHeaderIsComplete() {
+        val body = helloBody(version = 2, id = "a")
+        assertAll(
+            *(HELLO_VERSION_OFFSET + HELLO_VERSION_BYTES until HELLO_HEADER_BYTES).map { size ->
+                {
+                    assertFailsWith<HelloUnsupportedVersionException>("$size-byte body") { Hello.decode(body.copyOf(size)) }
+                    Unit
+                }
+            }.toTypedArray(),
+        )
+    }
+
     /** Every prefix of a valid header that still matches the magic is refused as truncated. */
     @Test
     fun aBodyTooShortForTheHeaderIsRefusedAsTruncated() {
@@ -154,6 +188,8 @@ class HelloTest {
             },
             // Declares one fewer: a trailing byte.
             { assertFailsWith<HelloIdLengthMismatchException> { Hello.decode(helloBody(idLen = 1, id = "ab")) } },
+            // Declares zero but carries bytes: the length mismatch is named before the empty id.
+            { assertFailsWith<HelloIdLengthMismatchException> { Hello.decode(helloBody(idLen = 0, id = "ab")) } },
             // The largest declarable length, against a one-byte id.
             { assertFailsWith<HelloIdLengthMismatchException> { Hello.decode(helloBody(idLen = 0xFFFF, id = "a")) } },
         )

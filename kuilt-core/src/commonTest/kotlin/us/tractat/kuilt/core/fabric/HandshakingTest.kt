@@ -6,6 +6,9 @@ import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.update
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -80,9 +83,35 @@ class HandshakingTest {
         seam.close()
     }
 
+    /** A failed send of our own hello is not a format refusal, and still closes the link. */
+    @Test
+    fun aFailedHelloSendClosesTheLink() = runTest {
+        val conn = ScriptedConnection(hangUp = false, failSend = true)
+        assertFailsWith<SendFailed> { handshaking(conn, PeerId("A"), dispatcher()) }
+        assertEquals(1, conn.closes.value, "a failed send must close the link")
+    }
+
+    /** Cancelled while waiting for the remote's hello: the link is closed before the cancellation propagates. */
+    @Test
+    fun cancellationDuringTheHandshakeClosesTheLink() = runTest {
+        val conn = ScriptedConnection(hangUp = false)
+        val dispatcher = dispatcher()
+        val job = launch { handshaking(conn, PeerId("A"), dispatcher) }
+        runCurrent()
+        assertAll(
+            { assertEquals(1, conn.sent.value.size, "precondition: the handshake is in flight, our hello sent") },
+            { assertEquals(0, conn.closes.value, "precondition: nothing closed yet") },
+        )
+        job.cancelAndJoin()
+        assertAll(
+            { assertTrue(job.isCancelled, "the handshake ended cancelled") },
+            { assertEquals(1, conn.closes.value, "cancellation must close the link") },
+        )
+    }
+
     private fun assertRefusedAndClosed(conn: ScriptedConnection, selfId: PeerId, refused: Throwable) {
         assertAll(
-            { assertTrue(conn.closes.value >= 1, "refusal ($refused) must close the link") },
+            { assertEquals(1, conn.closes.value, "refusal ($refused) must close the link exactly once") },
             {
                 assertEquals(1, conn.sent.value.size, "only our own hello is sent; nothing follows a refusal")
                 assertContentEquals(Hello.encode(selfId), conn.sent.value.single())
@@ -94,14 +123,19 @@ class HandshakingTest {
 
     /**
      * Emits [frames], then ends (a remote that sent them and hung up) or, with [hangUp] false, stays
-     * open. Records sends and closes.
+     * open. Records sends and closes; with [failSend], every send throws [SendFailed].
      */
-    private class ScriptedConnection(vararg frames: ByteArray, private val hangUp: Boolean = true) : Connection {
+    private class ScriptedConnection(
+        vararg frames: ByteArray,
+        private val hangUp: Boolean = true,
+        private val failSend: Boolean = false,
+    ) : Connection {
         private val script = frames.toList()
         val sent = atomic(emptyList<ByteArray>())
         val closes = atomic(0)
 
         override suspend fun send(frame: ByteArray) {
+            if (failSend) throw SendFailed()
             sent.update { it + frame }
         }
 
@@ -114,4 +148,7 @@ class HandshakingTest {
             closes.incrementAndGet()
         }
     }
+
+    /** A transport failure that is deliberately not an [IllegalArgumentException]. */
+    private class SendFailed : Exception("scripted send failure")
 }
