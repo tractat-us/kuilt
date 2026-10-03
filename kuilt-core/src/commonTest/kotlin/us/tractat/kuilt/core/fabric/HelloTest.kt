@@ -9,12 +9,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * The v1 [Hello] preamble body: `kuil` magic, version, `u32` big-endian id length, UTF-8 id.
+ * The v1 [Hello] preamble body: `kuil` magic, `u8` version, `u16` flags, `u16` id length, UTF-8 id.
  *
- * Every malformed body is built by [helloBody], a width-unconstrained surrogate for [Hello.encode]
- * (which refuses to emit most of them), so a layout change is one edit there.
- * [encodesTheV1LayoutByteForByte] is the one deliberate exception: a literal, so a change to the
- * production constants cannot quietly move the expectation with it.
+ * Every malformed body is built by [helloBody], a surrogate for [Hello.encode] (which refuses to
+ * emit most of them) whose receipt is [theTestSurrogateMatchesTheRealEncoder]. The one deliberate
+ * exception is [encodesTheV1LayoutByteForByte], a literal, so a change to the production constants
+ * cannot quietly move its expectation with it.
  */
 class HelloTest {
 
@@ -44,30 +44,53 @@ class HelloTest {
         val id = PeerId("é🧵")
         val body = Hello.encode(id)
         assertAll(
-            {
-                assertEquals(
-                    6L,
-                    body.readUnsignedBe(HELLO_ID_LENGTH_OFFSET, HELLO_ID_LENGTH_BYTES),
-                )
-            },
+            { assertEquals(6L, body.readUnsignedBe(HELLO_ID_LENGTH_OFFSET, HELLO_ID_LENGTH_BYTES)) },
             { assertEquals(id, Hello.decode(body)) },
         )
     }
 
+    /** Flags are must-ignore: a v1 receiver accepts a body whatever bits are set. */
     @Test
-    fun encodeRefusesAnEmptyId() {
-        assertFailsWith<IllegalArgumentException> { Hello.encode(PeerId("")) }
+    fun unknownFlagBitsAreIgnored() {
+        assertAll(
+            { assertEquals(PeerId("a"), Hello.decode(helloBody(flags = 0x8000, id = "a"))) },
+            { assertEquals(PeerId("a"), Hello.decode(helloBody(flags = 0xFFFF, id = "a"))) },
+            { assertEquals(PeerId("a"), Hello.decode(helloBody(flags = 0x0001, id = "a"))) },
+        )
+    }
+
+    @Test
+    fun encodeRefusesAnIdThatDoesNotFitV1() {
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { Hello.encode(PeerId("")) } },
+            { assertFailsWith<IllegalArgumentException> { Hello.encode(PeerId("x".repeat(HELLO_MAX_ID_BYTES + 1))) } },
+            { assertEquals(HELLO_MAX_ID_BYTES + HELLO_HEADER_BYTES, Hello.encode(PeerId("x".repeat(HELLO_MAX_ID_BYTES))).size) },
+        )
+    }
+
+    /** A lone surrogate would be encoded leniently as U+FFFD, so the peer would learn a different id. */
+    @Test
+    fun encodeRefusesAnIdThatIsNotValidUtf16() {
+        assertFailsWith<HelloUnencodableIdException> { Hello.encode(PeerId("a\uD800b")) }
     }
 
     /**
      * A pre-v1 peer sends its id as bare UTF-8. It must be refused as a foreign peer, never misread
-     * as a [PeerId] — at any length, including one shorter than the magic.
+     * as a [PeerId] — at any length, including one shorter than the magic — and the refusal shows
+     * the bytes that stood where the magic should be.
      */
     @Test
     fun aPreV1BareUtf8IdIsRefusedAsBadMagic() {
         assertAll(
-            { assertFailsWith<HelloBadMagicException> { Hello.decode("node-42".encodeToByteArray()) } },
-            { assertFailsWith<HelloBadMagicException> { Hello.decode("ab".encodeToByteArray()) } },
+            {
+                val refused = assertFailsWith<HelloBadMagicException> { Hello.decode("node-42".encodeToByteArray()) }
+                assertEquals("6e6f6465", refused.receivedHex)
+                assertTrue("6e6f6465" in refused.message.orEmpty(), refused.message)
+            },
+            {
+                val refused = assertFailsWith<HelloBadMagicException> { Hello.decode("ab".encodeToByteArray()) }
+                assertEquals("6162", refused.receivedHex)
+            },
             {
                 assertFailsWith<HelloBadMagicException> {
                     Hello.decode(helloBody(magic = "kuim".encodeToByteArray(), id = "node-42"))
@@ -76,12 +99,19 @@ class HelloTest {
         )
     }
 
-    /** A pre-v1 id that happens to start with `kuil` passes the magic, so the bytes after it are the version. */
+    /** A body framed twice opens with its inner length prefix, which the refusal makes visible. */
+    @Test
+    fun aDoublyFramedBodyIsRefusedAsBadMagicShowingTheLengthPrefix() {
+        val body = Hello.encode(PeerId("a"))
+        val doublyFramed = ByteArray(4).also { it.writeUnsignedBe(body.size.toLong(), 0, 4) } + body
+        val refused = assertFailsWith<HelloBadMagicException> { Hello.decode(doublyFramed) }
+        assertEquals("0000000a", refused.receivedHex)
+    }
+
+    /** A pre-v1 id that happens to start with `kuil` passes the magic, so the byte after it is the version. */
     @Test
     fun aPreV1IdStartingWithTheMagicIsRefusedByVersion() {
-        assertFailsWith<HelloUnsupportedVersionException> {
-            Hello.decode("kuilt-peer".encodeToByteArray())
-        }
+        assertFailsWith<HelloUnsupportedVersionException> { Hello.decode("kuilt-peer".encodeToByteArray()) }
     }
 
     @Test
@@ -116,17 +146,16 @@ class HelloTest {
     @Test
     fun anIdLengthDisagreeingWithTheBodyIsRefused() {
         assertAll(
-            // Declares 3, carries 2.
-            { assertFailsWith<HelloIdLengthMismatchException> { Hello.decode(helloBody(idLen = 3, id = "ab")) } },
-            // Declares 1, carries 2: a trailing byte.
-            { assertFailsWith<HelloIdLengthMismatchException> { Hello.decode(helloBody(idLen = 1, id = "ab")) } },
-            // Top bit set: read unsigned, so a mismatch rather than a negative length.
+            // Declares one more than it carries.
             {
-                val refused = assertFailsWith<HelloIdLengthMismatchException> {
-                    Hello.decode(helloBody(idLen = 0xFFFF_FFFFL, id = "a"))
-                }
-                assertEquals(0xFFFF_FFFFL, refused.declaredIdLength)
+                val refused = assertFailsWith<HelloIdLengthMismatchException> { Hello.decode(helloBody(idLen = 3, id = "ab")) }
+                assertEquals(3, refused.declaredIdLength)
+                assertEquals(2, refused.remainingBytes)
             },
+            // Declares one fewer: a trailing byte.
+            { assertFailsWith<HelloIdLengthMismatchException> { Hello.decode(helloBody(idLen = 1, id = "ab")) } },
+            // The largest declarable length, against a one-byte id.
+            { assertFailsWith<HelloIdLengthMismatchException> { Hello.decode(helloBody(idLen = 0xFFFF, id = "a")) } },
         )
     }
 
@@ -135,10 +164,31 @@ class HelloTest {
         assertFailsWith<HelloEmptyIdException> { Hello.decode(helloBody(id = "")) }
     }
 
-    /** `0xC3 0x28` is an invalid two-byte sequence; a lenient decode would yield `U+FFFD(`. */
+    /**
+     * Strict UTF-8: overlong encodings (`C0 80`, `E0 80 80`), a UTF-16 surrogate (`ED A0 80`), a code
+     * point past U+10FFFF (`F4 90 80 80`), a lone continuation byte (`80`), and a truncated sequence
+     * (`E2 82`). A lenient decode would fold each onto U+FFFD, so distinct ids would collide.
+     */
     @Test
     fun invalidUtf8IsRefusedNotReplaced() {
-        assertFailsWith<HelloInvalidUtf8Exception> { Hello.decode(helloBody(idBytes = bytes(0xC3, 0x28))) }
+        val invalid = listOf(
+            bytes(0xC0, 0x80),
+            bytes(0xE0, 0x80, 0x80),
+            bytes(0xED, 0xA0, 0x80),
+            bytes(0xF4, 0x90, 0x80, 0x80),
+            bytes(0x80),
+            bytes(0xE2, 0x82),
+        )
+        assertAll(
+            *invalid.map { id ->
+                {
+                    assertFailsWith<HelloInvalidUtf8Exception>(id.joinToString(" ") { (it.toInt() and 0xff).toString(16) }) {
+                        Hello.decode(helloBody(idBytes = id))
+                    }
+                    Unit
+                }
+            }.toTypedArray(),
+        )
     }
 
     /** Each malformation is refused by its own named type, all under one sealed parent. */
@@ -176,14 +226,16 @@ class HelloTest {
 internal fun helloBody(
     magic: ByteArray = HELLO_MAGIC,
     version: Int = HELLO_WIRE_VERSION,
+    flags: Int = HELLO_V1_FLAGS,
     idBytes: ByteArray,
-    idLen: Long = idBytes.size.toLong(),
+    idLen: Int = idBytes.size,
 ): ByteArray {
     require(magic.size == HELLO_MAGIC_BYTES) { "the surrogate varies field values, not the magic's width" }
     return ByteArray(HELLO_HEADER_BYTES + idBytes.size).also { buf ->
         magic.copyInto(buf)
         buf.writeUnsignedBe(version.toLong(), HELLO_VERSION_OFFSET, HELLO_VERSION_BYTES)
-        buf.writeUnsignedBe(idLen, HELLO_ID_LENGTH_OFFSET, HELLO_ID_LENGTH_BYTES)
+        buf.writeUnsignedBe(flags.toLong(), HELLO_FLAGS_OFFSET, HELLO_FLAGS_BYTES)
+        buf.writeUnsignedBe(idLen.toLong(), HELLO_ID_LENGTH_OFFSET, HELLO_ID_LENGTH_BYTES)
         idBytes.copyInto(buf, destinationOffset = HELLO_HEADER_BYTES)
     }
 }
@@ -192,6 +244,7 @@ internal fun helloBody(
 internal fun helloBody(
     magic: ByteArray = HELLO_MAGIC,
     version: Int = HELLO_WIRE_VERSION,
+    flags: Int = HELLO_V1_FLAGS,
     id: String,
-    idLen: Long = id.encodeToByteArray().size.toLong(),
-): ByteArray = helloBody(magic = magic, version = version, idBytes = id.encodeToByteArray(), idLen = idLen)
+    idLen: Int = id.encodeToByteArray().size,
+): ByteArray = helloBody(magic = magic, version = version, flags = flags, idBytes = id.encodeToByteArray(), idLen = idLen)

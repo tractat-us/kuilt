@@ -15,24 +15,27 @@ import kotlin.test.assertContentEquals
  * `HelloTest` covers the round trip and each named refusal; this states the width property in the
  * form a sibling wire inherits.
  *
- * ## Why only `idLen` is declared, not the magic and the version
+ * ## Why `flags` and `idLen` are declared, and the magic and version are not
  *
- * The v1 header is magic (4), version (1), `idLen` (4). All three are fixed-width, but only `idLen`
- * has a width property a reverted check can expose. Measured on #2894 by declaring all three and
- * removing one decoder check at a time:
+ * The v1 header is magic (4), version (1), flags (2), `idLen` (2). All four are fixed-width, but a
+ * reverted check can expose a width property only on the last two. Measured on #2894 by removing
+ * one decoder check at a time:
  *
- * - **Magic check removed**: this suite stayed green (11/11). A 3- or 5-byte magic shifts the
- *   version byte, so the frame is refused by the *version* check instead.
- * - **Version check removed**: green (11/11). A 0- or 2-byte version shifts `idLen`, so the frame
- *   is refused by the length-agreement check.
- * - **Strict length agreement relaxed to `idLen <= remaining`**: red, 1 of 11
- *   ([everyExactWidthFieldIsRejectedOneByteLong], the `idLen` row). A 5-byte `idLen` reads as 0,
- *   and a lenient decoder accepts the body. Against this final, `idLen`-only suite the same
- *   mutation reds the same arm, 1 of 12; the magic and version removals stay green, 12 of 12.
+ * - **Magic check removed**: this suite stays green (`tests=12 failures=0`). A wrong-width magic
+ *   shifts the version byte, so the frame is refused by the version check instead. An earlier draft
+ *   declared magic and version rows too, and they stayed green under their own check's removal.
+ * - **Version check removed**: green. A wrong-width version shifts the next fields, and the
+ *   length-agreement check refuses the frame.
+ * - **Strict length agreement relaxed to `idLen <= remaining`**: red, `tests=12 failures=1`. The
+ *   failing arm is [everyExactWidthFieldIsRejectedOneByteLong], with both rows red: a 3-byte flags
+ *   or a 3-byte `idLen` makes `idLen` read as 0, and a lenient decoder accepts the body. The short
+ *   and zero-width arms stay green under that mutation, because a narrower field makes `idLen` read
+ *   huge.
  *
- * So a magic or version row would be refused for its content, never its width. The suite KDoc
- * names that as the vacuous rig: an arm that stays green whichever check is removed. Those refusals
- * are pinned by name in `HelloTest`.
+ * So magic and version rows would be refused for their content, never their width, which is the
+ * vacuous rig the suite's KDoc warns about. `HelloTest` pins those refusals by name. Flags have no
+ * content check at all (v1 ignores them), so their width is guarded only by length agreement, and
+ * that is what this suite locks.
  *
  * There is no wire *type* to put an `init { require(...) }` on: [Hello] takes a [PeerId] and writes
  * every fixed-width field from a constant, so no caller can hand it a wrong-width field. The width
@@ -42,12 +45,13 @@ class HelloWireCodecTest : WireCodecConformanceSuite() {
 
     override fun decode(frame: ByteArray): Any? = Hello.decode(frame)
 
-    /** [Hello.decode] throws a named [HelloFormatException]; `handshaking` lets it propagate. */
+    /** [Hello.decode] throws a named [HelloFormatException]; `handshaking` closes the link and rethrows. */
     override fun rejectionMode(): WireRejectionMode = WireRejectionMode.Throwing
 
     override fun exactWidthDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 
     override fun exactWidthFields(): List<ExactWidthField> = listOf(
+        ExactWidthField("flags", HELLO_FLAGS_BYTES) { width -> bodyWithFlagsWidth(width) },
         ExactWidthField("idLen", HELLO_ID_LENGTH_BYTES) { width -> bodyWithIdLengthWidth(width) },
     )
 
@@ -61,17 +65,25 @@ class HelloWireCodecTest : WireCodecConformanceSuite() {
 
     override fun fixedWidthHeaders(): List<FixedWidthHeader> = emptyList()
 
-    /** The rig's receipt: at the declared width it is byte-identical to the real encoder. */
+    /** The rigs' receipt: at the declared widths both are byte-identical to the real encoder. */
     @Test
-    fun theRigAtTheDeclaredWidthIsTheRealEncoding() {
-        assertContentEquals(Hello.encode(PeerId(ID)), bodyWithIdLengthWidth(HELLO_ID_LENGTH_BYTES))
+    fun theRigsAtTheDeclaredWidthsAreTheRealEncoding() {
+        val real = Hello.encode(PeerId(ID))
+        assertContentEquals(real, bodyWithFlagsWidth(HELLO_FLAGS_BYTES), "flags rig")
+        assertContentEquals(real, bodyWithIdLengthWidth(HELLO_ID_LENGTH_BYTES), "idLen rig")
     }
 
     /**
-     * Magic and version as the encoder writes them, the TRUE id length written big-endian into
-     * [width] bytes, then the id. Byte surgery is sound here because the layout is positional. Only
-     * the `idLen` field's width changes; its value and every other byte stay the same.
+     * Magic and version as the encoder writes them, [width] zero bytes of flags (the v1 value), then
+     * `idLen` and the id. Byte surgery is sound because the layout is positional: only the flags
+     * field's width changes.
      */
+    private fun bodyWithFlagsWidth(width: Int): ByteArray {
+        val real = helloBody(id = ID)
+        return real.copyOf(HELLO_FLAGS_OFFSET) + ByteArray(width) + real.copyOfRange(HELLO_ID_LENGTH_OFFSET, real.size)
+    }
+
+    /** As [bodyWithFlagsWidth], but the TRUE id length is written big-endian into [width] bytes. */
     private fun bodyWithIdLengthWidth(width: Int): ByteArray {
         val id = ID.encodeToByteArray()
         val idLen = ByteArray(width).also { it.writeUnsignedBe(id.size.toLong(), offset = 0, width = width) }

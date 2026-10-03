@@ -87,16 +87,24 @@ public suspend fun handshaking(
     dispatcher: CoroutineContext,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ): Seam {
-    conn.send(Hello.encode(selfId))
     val single = conn.singleCollection(dispatcher)
-    val remoteId = Hello.decode(single.firstFrame())
-    // Self-connection guard (#1488): a peer that dials its own advertised endpoint handshakes a
-    // preamble claiming its own id. A 2-peer seam whose "remote" is itself would echo its own frames;
-    // refuse it fast rather than weave a degenerate self-seam. Mirrors the mesh/NwSeam self-drop.
-    require(remoteId != selfId) { "handshaking refused a self-connection: remote resolved to selfId=${selfId.value}" }
-    return identified(single, selfId, remoteId, dispatcher, policy)
+    try {
+        single.send(Hello.encode(selfId))
+        val remoteId = Hello.decode(single.incoming.firstOrNull() ?: throw HelloAbsentException())
+        // Self-connection guard (#1488): a peer that dials its own advertised endpoint handshakes a
+        // preamble claiming its own id. A 2-peer seam whose "remote" is itself would echo its own frames;
+        // refuse it fast rather than weave a degenerate self-seam. Mirrors the mesh/NwSeam self-drop.
+        if (remoteId == selfId) throw HelloSelfConnectionException(selfId)
+        return identified(single, selfId, remoteId, dispatcher, policy)
+    } catch (failure: Throwable) {
+        // …
+        throw failure
+    }
 }
 ```
+
+Every exit that does not return a seam closes the connection first, so a refused hello
+never leaves either end holding a half-open link.
 
 Both take a `policy: DeliveryPolicy` that bounds the woven seam's inbox — capacity and
 overflow strategy. It defaults to `DeliveryPolicy.Reliable` (bounded, backpressured,
@@ -112,15 +120,18 @@ being misread as an identity:
 | Bytes | Field |
 |---|---|
 | 4 | magic `0x6B 0x75 0x69 0x6C` (ASCII `kuil`) |
-| 1 | version `0x01` |
-| 4 | `idLen`, unsigned 32-bit big-endian |
+| 1 | version, `u8`, `0x01` |
+| 2 | flags, `u16` big-endian: v1 sends `0x0000`, and a receiver ignores every bit |
+| 2 | `idLen`, `u16` big-endian, 1 to 65535 |
 | `idLen` | the `PeerId`, UTF-8 |
 
 `idLen` must match the rest of the body exactly. `Hello.decode` refuses a body that breaks
 the layout with a named `HelloFormatException` subclass: a wrong magic, an unsupported
 version, a body shorter than the header, a length mismatch, an empty id, or invalid UTF-8.
-The two ends of a `handshaking()` link must both speak this layout. Before v1 the preamble
-was the bare UTF-8 id, and a peer still sending that is refused as `HelloBadMagicException`.
+A link that closes before any hello is `HelloAbsentException`, and a remote claiming your
+own id is `HelloSelfConnectionException`. The two ends of a `handshaking()` link must both
+speak this layout. Before v1 the preamble was the bare UTF-8 id, and a peer still sending
+that is refused as `HelloBadMagicException`.
 
 ### Step 3 — write a `Loom`
 
@@ -180,7 +191,7 @@ the Ktor IO adapters or the plain `InputStream`/`OutputStream` adapters.
 from the underlying source and **must be collected exactly once**. But
 `handshaking()` (and `meshSeam()`) reads `incoming` *twice* in sequence:
 
-1. `connection.firstFrame()` reads the identity preamble (one collection).
+1. the first frame is read as the identity preamble (one collection).
 2. the inner seam's read loop installs a second collection.
 
 Earlier versions of this kit asked every stream fabric to pump the cold flow
