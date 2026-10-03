@@ -202,14 +202,15 @@ verdict works. As in the baseline, `editsPreserved` equals `editsMade` in every 
 
 `k` is kuilt, `f` the baseline with `optimisticLocal = false`, `t` the baseline with
 `optimisticLocal = true`. `editsMade` and `editsPreserved` are left out: they are identical across
-all three in every scenario. Counts over scripted actors, JVM only.
+all three in every scenario. Counts over scripted actors, JVM only. kuilt's column is re-measured
+with the re-check (see *Re-measured with the re-check*); the M1 value is kept as "(was …)".
 
 | Scenario | agentRuns k / f / t | unnecessaryReruns k / f / t | staleTreatedAsCurrent k / f / t | staleAtEnd k / f / t | falseInvalidations k / f / t | humanPrompts k / f / t | served / outage k · f · t |
 |---|---|---|---|---|---|---|---|
 | S1 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0/0 · 0/0 · 0/0 |
-| S2 | 1 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 2 / 0 / 0 | 0 / 0 / 0 | 1 / 0 / 0 | 1/1 · 0/1 · 1/1 |
+| S2 | 1 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | **0** (was 2) / 0 / 0 | 0 / 0 / 0 | **2** (was 1) / 0 / 0 | 1/1 · 0/1 · 1/1 |
 | S3 | 1 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 2 / 0 / 0 | 0/0 · 0/0 · 0/0 |
-| S4 | 2 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 1 / 1 / 1 | 2/2 · 0/2 · 2/2 |
+| S4 | 2 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | **2** (was 1) / 1 / 1 | 2/2 · 0/2 · 2/2 |
 | S5 | 1 / 1 / 1 | 0 / 0 / 0 | 0 / 3 / 3 | 0 / 3 / 3 | 0 / 0 / 0 | 2 / 0 / 0 | 0/0 · 0/0 · 0/0 |
 | S6 | 1 / 2 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 2 / 0 / 0 | 0/0 · 0/0 · 0/0 |
 | S7 | 1 / 2 / 2 | 0 / 1 / 1 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0/0 · 0/0 · 0/0 |
@@ -218,14 +219,14 @@ The shape in one sentence: where the baseline quietly reruns the agent (S2, S3, 
 stale answer (S5), kuilt runs the agent once and asks a person when the answer is in doubt on arrival;
 news that arrives after an answer was shown was never re-checked in M1 (S2; the re-check now
 fixes that, and costs a prompt on S2 and S4). That is
-a trade, not a free win. On S2, S3, S5 and S6 kuilt asks people once or twice where the baseline
-asks nobody. The hypotheses weigh that on purpose outside the verdicts (H4 compares prompts only
+a trade, not a free win. On S2, S3, S5 and S6 kuilt asks people twice where the baseline
+asks nobody, and on S4 it asks twice where the baseline asks once. The hypotheses weigh that on purpose outside the verdicts (H4 compares prompts only
 where neither design reruns or goes stale), so it shows up here instead.
 
 ## Scoring against `HYPOTHESES.md` as first merged
 
 **Superseded.** This is the M1 scoring as it first merged, kept unedited apart from pointers to the
-re-score. The current verdicts are in *Re-scored against the amended criteria*, below.
+re-score. The current verdicts are in *Re-measured with the re-check*, below.
 
 Scored as merged, unedited. Each hypothesis gets a verdict against each baseline variant, then a
 combined verdict: it **passes** only if it passes against both, **stops** if it stops against
