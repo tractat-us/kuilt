@@ -88,13 +88,16 @@ public interface WorkspaceNetwork : ActorLinks {
  * for a request with no open run on the host (never started, or already released) is refused:
  * nothing is appended, and it counts in `rejectedReplies`.
  *
- * **Presentation timing.** A released proposal is presented to each actor when that actor's replica
- * first holds it, and is assessed with [Assessment.assess] against that replica's state at that
- * moment. The host holds it at once; a partitioned actor holds it after it reconnects. It is shown
- * as applicable only for [Verdict.Applicable]. [Verdict.NeedsReview] and [Verdict.Unknown] are both
- * flagged for review, and each counts one `humanPrompt`, but only when shown to a person: an actor
- * that hosts an agent in the scenario (`remote`) is shown the flag and never counted as asked.
- * A proposal is presented at most once per actor, however many times its entry is delivered.
+ * **Presentation timing** is the [Presenter]'s, run once after every settled step. A released
+ * proposal is presented to each actor when that actor's replica first holds it, and is assessed with
+ * [Assessment.assess] against that replica's state at that moment. The host holds it at once; a
+ * partitioned actor holds it after it reconnects. It is shown as applicable only for
+ * [Verdict.Applicable]. [Verdict.NeedsReview] and [Verdict.Unknown] are both flagged for review.
+ * Each actor's **standing answer**, the latest-released proposal it has been shown, is then
+ * re-judged against its current log on every settled step, and re-shown whenever the verdict on
+ * screen changes (`RECHECK.md`, #2880). Entering a flagged state counts one `humanPrompt`, but only
+ * for a person: an actor that hosts an agent in the scenario (`remote`) is shown the flag and never
+ * counted as asked.
  *
  * **This backend never presents an Unknown.** Links are cut whole-actor, Quilter orders deltas per
  * sender, and the convergence check runs before every presentation, so a replica that holds a
@@ -227,12 +230,17 @@ private class KuiltRun(
     private val partitioned = mutableSetOf<ActorId>()
     private val started = mutableSetOf<String>()
     private val open = mutableMapOf<String, OpenRun>()
-    private val presented = mutableSetOf<Pair<ActorId, RequestId>>()
+    private val releaseOrder = mutableListOf<RequestId>()
     private val conflicts = mutableSetOf<Set<WorkspaceEntry.Accept>>()
 
-    private val presentations = mutableListOf<Presentation>()
+    private val presenter = Presenter(
+        isPerson = { it !in agentHosts },
+        releaseRank = { request -> releaseOrder.indexOf(request).also { check(it >= 0) { "$request was never released" } } },
+        basisKeys = { proposal -> keysOf(proposal.basis.allDots) },
+        known = { actor, log -> deliveredInputs(log) + created[actor].orEmpty() },
+    )
     private var agentRuns = 0
-    private var humanPrompts = 0
+    private var conflictPrompts = 0
     private var outageActions = 0
     private var outageActionsServed = 0
     private var rejectedReplies = 0
@@ -247,16 +255,16 @@ private class KuiltRun(
             // Before presenting: a presentation judged against a lagging replica would score that
             // lag, and the oracle would read the same lagging `known`.
             checkConverged("after ${describe(step)}")
-            presentNew()
+            presenter.settle(replicas.mapValues { it.value.log })
             countConflicts()
         }
         checkConverged("at the end of the run")
         return RunResult(
-            presentations = presentations.toList(),
+            presentations = presenter.presentations,
             finalViews = scenario.actors.associateWith { actor -> replica(actor).log.entries().map { it.second }.filter(::isInput) },
             agentRuns = agentRuns,
             reruns = emptyList(),
-            humanPrompts = humanPrompts,
+            humanPrompts = presenter.humanPrompts + conflictPrompts,
             outageActions = outageActions,
             outageActionsServed = outageActionsServed,
             rejectedReplies = rejectedReplies,
@@ -360,33 +368,12 @@ private class KuiltRun(
         val recommendation = ScriptedAgent.recommend(order.filter { it in basisKeys }.map { scenario.inputs.getValue(it) })
         val proposal = run.pending.complete(recommendation)
         observer.released(proposal)
+        releaseOrder += proposal.request
         replica(run.host).append(proposal.toEntry(run.host))
     }
 
     private fun keysOf(dots: Set<Dot>): Set<InputKey> = dots.mapTo(mutableSetOf()) { dot ->
         requireNotNull(inputKeys[dot]) { "basis names $dot, which no scenario input created" }
-    }
-
-    /** Presents each proposal to each actor the first time that actor's replica holds it. */
-    private fun presentNew() {
-        for ((actor, replica) in replicas) {
-            val log = replica.log
-            for ((_, entry) in log.entries()) {
-                if (entry !is WorkspaceEntry.AgentProposal || !presented.add(actor to entry.request)) continue
-                val proposal = entry.toProposal()
-                val verdict = Assessment.assess(proposal, log)
-                presentations += Presentation(
-                    actor = actor,
-                    request = entry.request.value,
-                    recommendation = proposal.recommendation,
-                    basis = keysOf(proposal.basis.allDots),
-                    known = deliveredInputs(log) + created[actor].orEmpty(),
-                    shownAsApplicable = verdict == Verdict.Applicable,
-                    unknown = verdict is Verdict.Unknown,
-                )
-                if (verdict != Verdict.Applicable && actor !in agentHosts) humanPrompts += 1
-            }
-        }
     }
 
     /** Every scenario input [log] has delivered. */
@@ -399,7 +386,7 @@ private class KuiltRun(
             if (actor in agentHosts) continue
             val accepts = replica.log.entries().map { it.second }.filterIsInstance<WorkspaceEntry.Accept>()
             for (a in accepts) for (b in accepts) {
-                if (a.by != b.by && a.request != b.request && conflicts.add(setOf(a, b))) humanPrompts += 1
+                if (a.by != b.by && a.request != b.request && conflicts.add(setOf(a, b))) conflictPrompts += 1
             }
         }
     }
