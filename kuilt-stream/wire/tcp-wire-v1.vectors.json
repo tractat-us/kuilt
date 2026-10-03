@@ -6,13 +6,14 @@
   "helloLayout": [
     { "field": "magic", "bytes": 4, "value": "6b75696c" },
     { "field": "version", "bytes": 1, "value": "01" },
-    { "field": "idLen", "bytes": 4, "encoding": "u32be" },
+    { "field": "flags", "bytes": 2, "value": "0000" },
+    { "field": "idLen", "bytes": 2, "encoding": "u16be" },
     { "field": "id", "bytes": "idLen", "encoding": "utf8" }
   ],
   "hello": [
     {
       "name": "hello-ascii",
-      "note": "PeerId 'alice'. Body = magic 6b75696c, version 01, idLen 00000005, id.",
+      "note": "PeerId 'alice'. Body = magic 6b75696c, version 01, flags 0000, idLen 0005, id.",
       "peerId": "alice",
       "body": "6b75696c0100000005616c696365",
       "frame": "0000000e6b75696c0100000005616c696365"
@@ -23,6 +24,27 @@
       "peerId": "Zoë🧵",
       "body": "6b75696c01000000085a6fc3abf09fa7b5",
       "frame": "000000116b75696c01000000085a6fc3abf09fa7b5"
+    },
+    {
+      "name": "hello-uuid",
+      "note": "A random-UUID PeerId, the shape kuilt mints by default: 36 ASCII bytes, idLen 0024.",
+      "peerId": "3f2c8a1e-7b4d-4e9a-9c1f-0a2b3c4d5e6f",
+      "body": "6b75696c010000002433663263386131652d376234642d346539612d396331662d306132623363346435653666",
+      "frame": "0000002d6b75696c010000002433663263386131652d376234642d346539612d396331662d306132623363346435653666"
+    }
+  ],
+  "helloAccepts": [
+    {
+      "name": "flags-high-bit-ignored",
+      "note": "flags 8000. A v1 sender sends 0000; a receiver ignores bits it does not know.",
+      "body": "6b75696c0180000005616c696365",
+      "peerId": "alice"
+    },
+    {
+      "name": "flags-all-bits-ignored",
+      "note": "flags ffff, also ignored.",
+      "body": "6b75696c01ffff0005616c696365",
+      "peerId": "alice"
     }
   ],
   "frames": [
@@ -53,6 +75,30 @@
       "refusal": "unsupported-version"
     },
     {
+      "name": "short-foreign-body",
+      "note": "Two bytes that disagree with the magic. Magic is checked first, so this is foreign, not truncated.",
+      "body": "6b00",
+      "refusal": "bad-magic"
+    },
+    {
+      "name": "empty-body",
+      "note": "A zero-length first frame. Legal as a payload, refused as a hello.",
+      "body": "",
+      "refusal": "truncated"
+    },
+    {
+      "name": "magic-prefix-only",
+      "note": "Two bytes that agree with the magic as far as they go. Magic is compared over the bytes present, so this is truncated, not foreign.",
+      "body": "6b75",
+      "refusal": "truncated"
+    },
+    {
+      "name": "magic-only",
+      "note": "The magic and nothing after it: there is no version byte to read.",
+      "body": "6b75696c",
+      "refusal": "truncated"
+    },
+    {
       "name": "version-2",
       "body": "6b75696c0200000005616c696365",
       "refusal": "unsupported-version"
@@ -63,52 +109,28 @@
       "refusal": "unsupported-version"
     },
     {
-      "name": "idlen-overruns-body",
+      "name": "header-truncated",
+      "note": "Magic, version and flags present; idLen cut to one byte.",
+      "body": "6b75696c01000000",
+      "refusal": "truncated"
+    },
+    {
+      "name": "idlen-long-by-one",
       "note": "idLen says 6; only 5 id bytes follow.",
       "body": "6b75696c0100000006616c696365",
       "refusal": "id-length-mismatch"
     },
     {
-      "name": "idlen-leaves-trailing-bytes",
+      "name": "idlen-short-by-one",
       "note": "idLen says 4; 5 id bytes follow. v1 forbids trailing bytes.",
       "body": "6b75696c0100000004616c696365",
       "refusal": "id-length-mismatch"
     },
     {
-      "name": "idlen-huge",
-      "note": "idLen ffffffff, refused from the header alone, before allocating.",
-      "body": "6b75696c01ffffffff616c696365",
+      "name": "idlen-max",
+      "note": "idLen ffff with 5 id bytes: refused from the header alone.",
+      "body": "6b75696c010000ffff616c696365",
       "refusal": "id-length-mismatch"
-    },
-    {
-      "name": "header-truncated",
-      "note": "Magic and version present; idLen cut short.",
-      "body": "6b75696c010000",
-      "refusal": "truncated"
-    },
-    {
-      "name": "magic-only",
-      "note": "The magic and nothing after it: there is no version byte to read.",
-      "body": "6b75696c",
-      "refusal": "truncated"
-    },
-    {
-      "name": "magic-prefix-only",
-      "note": "Two bytes that agree with the magic as far as they go. Magic is compared over the bytes present, so this is truncated, not foreign.",
-      "body": "6b75",
-      "refusal": "truncated"
-    },
-    {
-      "name": "empty-body",
-      "note": "A zero-length first frame.",
-      "body": "",
-      "refusal": "truncated"
-    },
-    {
-      "name": "short-foreign-body",
-      "note": "Two bytes that disagree with the magic. Magic is checked first, so this is foreign, not truncated.",
-      "body": "6b00",
-      "refusal": "bad-magic"
     },
     {
       "name": "empty-id",
@@ -116,15 +138,45 @@
       "refusal": "empty-id"
     },
     {
-      "name": "invalid-utf8",
+      "name": "utf8-bad-continuation",
       "note": "c3 opens a 2-byte sequence; 28 is not a continuation byte.",
       "body": "6b75696c0100000002c328",
       "refusal": "invalid-utf8"
     },
     {
+      "name": "utf8-overlong-2-byte",
+      "note": "c0 80 is an overlong encoding of U+0000.",
+      "body": "6b75696c0100000002c080",
+      "refusal": "invalid-utf8"
+    },
+    {
+      "name": "utf8-overlong-3-byte",
+      "note": "e0 80 80 is an overlong encoding of U+0000.",
+      "body": "6b75696c0100000003e08080",
+      "refusal": "invalid-utf8"
+    },
+    {
       "name": "utf8-encoded-surrogate",
-      "note": "ed a0 80 encodes the lone surrogate U+D800, which strict UTF-8 forbids.",
+      "note": "ed a0 80 encodes the lone surrogate U+D800, which well-formed UTF-8 forbids.",
       "body": "6b75696c0100000003eda080",
+      "refusal": "invalid-utf8"
+    },
+    {
+      "name": "utf8-above-max-code-point",
+      "note": "f4 90 80 80 would be U+110000, past the last code point.",
+      "body": "6b75696c0100000004f4908080",
+      "refusal": "invalid-utf8"
+    },
+    {
+      "name": "utf8-lone-continuation",
+      "note": "80 is a continuation byte with nothing to continue.",
+      "body": "6b75696c010000000180",
+      "refusal": "invalid-utf8"
+    },
+    {
+      "name": "utf8-truncated-sequence",
+      "note": "e2 82 opens a 3-byte sequence and stops one byte short.",
+      "body": "6b75696c0100000002e282",
       "refusal": "invalid-utf8"
     }
   ],
@@ -159,14 +211,14 @@
     },
     {
       "name": "prefix-one-over-max",
-      "note": "01000001 is 16 MiB + 1.",
+      "note": "01000001 is 16 MiB + 1, over the default ceiling.",
       "bytes": "01000001",
       "frames": [],
       "end": "frame-too-large"
     },
     {
       "name": "prefix-high-bit-set",
-      "note": "80000000 is negative as a signed 32-bit int and over the max as an unsigned one. Refused either way.",
+      "note": "80000000 is negative as a signed 32-bit int and over the ceiling as an unsigned one. Refused either way.",
       "bytes": "80000000",
       "frames": [],
       "end": "frame-too-large"
@@ -180,7 +232,7 @@
   ],
   "handshake": {
     "name": "two-sided-transcript",
-    "note": "a dials b. Each writes its Hello first, without waiting, then its payloads, then closes at a frame boundary. 'bytes' is everything that side writes, in order.",
+    "note": "a dials b. Each writes its Hello first, without waiting, then its payloads, then closes at a frame boundary. 'bytes' is everything that side writes, in order. Each side's payload arrives right behind its Hello, and the receiver accepts it.",
     "a": {
       "peerId": "alice",
       "sends": ["70696e67"],
@@ -205,7 +257,7 @@
       "note": "EOF before any frame arrives.",
       "selfId": "alice",
       "received": "",
-      "refusal": "no-hello"
+      "refusal": "absent"
     },
     {
       "name": "first-frame-not-a-hello",

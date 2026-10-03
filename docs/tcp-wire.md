@@ -24,8 +24,8 @@ The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
 ## Conventions
 
-- All integers are **unsigned 32-bit big-endian** (network byte order), written
-  `u32`.
+- Integers are **unsigned and big-endian** (network byte order): `u8`, `u16`
+  and `u32` are 1, 2 and 4 bytes wide.
 - Byte strings are written in lowercase hex, two digits per byte.
 - A *peer* is one end of the connection. The two peers are symmetric. Whichever
   side dialled and whichever side accepted, both follow exactly the same rules.
@@ -40,18 +40,20 @@ that many bytes:
 | 4 | `len`, `u32` |
 | `len` | the frame body |
 
-There is no other header, no checksum, no type byte and no padding. A body may
-be empty: `00000000` is a complete frame with zero bytes of body.
+There is no other header, no checksum, no type byte and no padding. A data
+frame's body may be empty: `00000000` is a complete frame with zero bytes of
+body. (A Hello may not be empty; see section 2.)
 
-**Maximum frame size.** Each receiver has a maximum body length. In kuilt it is
-`DEFAULT_MAX_FRAME_SIZE`, **16 MiB = 16,777,216 bytes**, inclusive: a body of
-exactly 16,777,216 bytes is legal. kuilt's `TcpLoom` always uses the default.
-The limit is not negotiated, so:
+**The frame ceiling.** The frame ceiling is local receive policy, not negotiated
+and not on the wire. The default is 16 MiB. A receiver MUST refuse a length above
+its ceiling before allocating, then close. A sender cannot learn the peer's
+ceiling, so a frame that fits the sender's ceiling but not the receiver's shows
+the sender success followed by a torn seam.
 
-- A sender MUST NOT send a body longer than 16,777,216 bytes.
-- A receiver MUST refuse a length prefix over its maximum **before allocating
-  space for the body**. Read the prefix as unsigned. `80000000` and `ffffffff`
-  are over the limit, not negative.
+kuilt's default is `DEFAULT_MAX_FRAME_SIZE`, 16,777,216 bytes, inclusive: a body
+of exactly that length is accepted. `TcpLoom` always uses the default. Read the
+length prefix as unsigned, so `80000000` and `ffffffff` are over the ceiling,
+not negative.
 
 ## 2. The Hello
 
@@ -60,25 +62,39 @@ The first frame each peer sends is its **Hello**. Its body names the peer:
 | Bytes | Field | Value |
 |---|---|---|
 | 4 | magic | `6b 75 69 6c` (ASCII `kuil`) |
-| 1 | version | `01` |
-| 4 | `idLen` | `u32`, the id's length **in bytes** |
+| 1 | version | `u8`, `01` |
+| 2 | flags | `u16`, `0000` from a v1 sender |
+| 2 | `idLen` | `u16`, the id's length **in bytes**, 1 to 65,535 |
 | `idLen` | id | the peer id, UTF-8 |
 
-The first three fields form a **9-byte header**. A Hello is always exactly
+The first four fields form a **9-byte header**, so a Hello is always exactly
 `9 + idLen` bytes. The fixture's `helloLayout` lists these fields in order, and
-the test composes every Hello vector from that table. A future change to the
-header's shape therefore edits the table, the hex, and nothing else.
+the drift test composes every Hello vector from that table.
 
-The id is any non-empty string, encoded as UTF-8. `idLen` counts bytes, not
-characters: the four-character id `Zoë🧵` is eight bytes long. The id is
-compared byte for byte. kuilt applies no Unicode normalisation, so two
-spellings of the same accented letter are two different peers.
+**Flags.** A v1 sender MUST send `0000`. A receiver MUST ignore bits it does not
+know, so a Hello with flags `8000` or `ffff` is accepted. Flags are how a later
+version will add optional capabilities. A capability is on only when **both**
+Hellos advertise it, so a peer that ignores a bit never has that capability
+switched on.
 
-For the id `alice`, the Hello body and its full frame are:
+**The id.** The id is a non-empty, well-formed UTF-8 string, as Unicode §3.9
+defines it. `idLen` counts bytes, not characters: the four-character id `Zoë🧵`
+is eight bytes long. **Identity is byte equality.** Nothing is normalised, so two
+ids that differ only in Unicode normalisation form are two different peers. A
+string holding a lone surrogate has no UTF-8 form at all. Encoding one is the
+sender's error, and kuilt refuses to send it.
 
-```
-body   6b75696c 01 00000005 616c696365
-frame  0000000e 6b75696c 01 00000005 616c696365
+For the id `alice`, the vector reads:
+
+<!-- verbatim from kuilt-stream/src/commonTest/kotlin/us/tractat/kuilt/stream/TcpWireV1Vectors.kt#TCP_WIRE_V1_VECTORS -->
+```json
+    {
+      "name": "hello-ascii",
+      "note": "PeerId 'alice'. Body = magic 6b75696c, version 01, flags 0000, idLen 0005, id.",
+      "peerId": "alice",
+      "body": "6b75696c0100000005616c696365",
+      "frame": "0000000e6b75696c0100000005616c696365"
+    },
 ```
 
 ### Checking a received Hello
@@ -87,21 +103,20 @@ A receiver checks a Hello body in this order. It stops at the first failure and
 refuses the Hello with the error named in that row. The order is part of the
 contract, because one malformed body can fail several checks at once.
 
-| # | Check | On failure | kuilt throws |
+| # | Check | Refusal | kuilt throws |
 |---|---|---|---|
-| 1 | Every byte present among the first four equals the magic. Compare only the bytes that arrived. | foreign peer | `HelloBadMagicException` |
-| 2 | The body has at least 5 bytes (magic and version). | truncated | `HelloTruncatedException` |
-| 3 | The version byte is `01`. | unsupported version | `HelloUnsupportedVersionException` |
-| 4 | The body has at least 9 bytes (the whole header). | truncated | `HelloTruncatedException` |
-| 5 | `idLen`, read unsigned, equals the body length minus 9. Bytes beyond the id are an error too. | length mismatch | `HelloIdLengthMismatchException` |
-| 6 | `idLen` is not zero. | empty id | `HelloEmptyIdException` |
-| 7 | The id bytes are valid UTF-8, strictly. An invalid sequence, an overlong form or an encoded surrogate fails. Never substitute U+FFFD. | invalid UTF-8 | `HelloInvalidUtf8Exception` |
+| 1 | Every byte present among the first four equals the magic. Compare only the bytes that arrived. | `bad-magic` | `HelloBadMagicException` |
+| 2 | The body has at least 5 bytes (magic and version). | `truncated` | `HelloTruncatedException` |
+| 3 | The version byte is `01`. | `unsupported-version` | `HelloUnsupportedVersionException` |
+| 4 | The body has at least 9 bytes (the whole header). | `truncated` | `HelloTruncatedException` |
+| 5 | `idLen` equals the body length minus 9. Bytes beyond the id are an error too. | `id-length-mismatch` | `HelloIdLengthMismatchException` |
+| 6 | `idLen` is not zero. | `empty-id` | `HelloEmptyIdException` |
+| 7 | The id bytes are well-formed UTF-8. An overlong form, an encoded surrogate, a code point past U+10FFFF, a stray continuation byte and a cut-off sequence all fail. Never substitute U+FFFD. | `invalid-utf8` | `HelloInvalidUtf8Exception` |
 
-All six kuilt exceptions extend `HelloFormatException`, an
-`IllegalArgumentException`. Check 1 is why the pre-v1 greeting is refused. That
-greeting was the bare UTF-8 id, such as `616c696365` for `alice`, and it fails
-the magic test. A pre-v1 id that happens to begin with `kuil` passes check 1 and
-is refused at check 3, because its fifth byte is a letter and not `01`.
+The flags field is never checked. Check 1 is why the pre-v1 greeting is refused.
+That greeting was the bare UTF-8 id, such as `616c696365` for `alice`, and it
+fails the magic test. A pre-v1 id that happens to begin with `kuil` passes check 1
+and is refused at check 3, because its fifth byte is a letter and not `01`.
 
 Strict UTF-8 matters because ids are identities. If two different byte strings
 could decode to one id, two peers could share a name.
@@ -110,24 +125,29 @@ could decode to one id, two peers could share a name.
 
 Each peer, as soon as the TCP connection is open:
 
-1. **MUST send its own Hello as its first frame, without waiting** for anything
-   from the other side. A peer that waits for the other's Hello first will
-   deadlock against another peer doing the same.
+1. **MUST send its own Hello immediately, before reading anything.** If both
+   sides read first, each waits for the other forever. Sending first is always
+   safe, because a Hello is at most 9 + 65,535 bytes. That fits in a socket's
+   send buffer, so both sides can write theirs without either one reading. This
+   is what the `u16` id cap buys.
 2. Reads the other side's first frame and checks it as a Hello (section 2).
-3. **MUST refuse a Hello whose id equals its own**: it has connected to itself.
-   kuilt throws an `IllegalArgumentException` whose message contains
-   `self-connection`.
-4. Once the other Hello is accepted, the connection is established. Every later
-   frame in either direction is a payload.
+3. **MUST refuse a Hello whose id equals its own.** That is a self-connection:
+   the peer has dialled itself. Both ends refuse it. It is not a format error,
+   since the Hello itself is valid.
+4. Once the other side's Hello is accepted, the connection is established, and
+   every later frame in either direction is a data frame.
 
-A peer MUST NOT send a payload before it has accepted the other side's Hello.
-kuilt never does. A peer MUST still accept payload frames that arrive right
-behind the other side's Hello, in the same TCP segment.
+A peer **MAY** send data frames right after its own Hello, without waiting for
+the other side's. The receiver **MUST** accept them. kuilt itself waits for the
+other Hello before it sends data, but it accepts data that arrives right behind
+a Hello.
+
+A connection that ends before a Hello arrives is a refused handshake.
 
 There is no acknowledgement and no third message. Each side learns the other's
 name from one frame, and that is the whole handshake.
 
-## 4. Payloads
+## 4. Data frames
 
 After the handshake, **each frame body is one message, verbatim**. kuilt adds no
 envelope, type byte, sequence number or sender field. The sender is the peer at
@@ -137,8 +157,11 @@ delivers them in order.
 
 ## 5. Closing
 
-There is **no close frame**. A peer ends the session by closing its side of the
-TCP connection after the last byte of a complete frame.
+A peer ends the session by closing its side of the TCP connection (FIN) right
+after the last byte of a complete frame. Version 1 has **no goodbye message and
+no heartbeat**. A future capability bit, typed control frames, would add them.
+Until then, a peer that needs to notice a silent partner does so above the wire,
+or with TCP keep-alive.
 
 - **EOF at a frame boundary** is a clean close. Every complete frame before it
   is delivered.
@@ -148,37 +171,20 @@ TCP connection after the last byte of a complete frame.
   deliver anything for the partial prefix. Version 1 lets the receiver report it
   either as an error or as a clean close. kuilt reports a clean close. A sender
   never produces this case by closing normally.
-- **EOF before any Hello** fails the handshake. kuilt surfaces it as a
-  `NoSuchElementException`.
-
-There is **no heartbeat** at this layer. If a peer needs to notice a silent
-partner, it does so above the wire, or with TCP keep-alive.
+- **EOF before any Hello** is a refused handshake (section 6).
 
 ## 6. Refusals
 
-When a peer refuses the other side for any reason above, it MUST stop: it
-delivers nothing further and closes the TCP connection. It sends no error frame,
-because the wire has none. The other side sees a close.
+On any refusal, a peer closes the transport and sends nothing more. There is no
+error frame, so the other side sees a close.
 
-| Refusal | Where | Detected by |
-|---|---|---|
-| frame too large | any frame | length prefix over the maximum |
-| truncated frame | any frame | EOF inside a body |
-| foreign peer | first frame | Hello check 1 |
-| truncated Hello | first frame | Hello checks 2 and 4 |
-| unsupported version | first frame | Hello check 3 |
-| length mismatch | first frame | Hello check 5 |
-| empty id | first frame | Hello check 6 |
-| invalid UTF-8 | first frame | Hello check 7 |
-| self-connection | first frame | handshake step 3 |
-| no Hello | before the first frame | EOF |
-
-**Known gap in kuilt.** kuilt refuses each case above and delivers nothing
-further. But it does not yet close the socket itself. A refused handshake throws
-and leaves the connection open, with no seam for anyone to close. A read error
-tears the seam down without closing it, so the socket stays open until the
-application closes the seam. This gap is tracked by #2898. Until it is fixed, a peer talking to kuilt can see a
-silent, open connection where this contract promises a close.
+| Refusal | Where | Detected by | kuilt throws |
+|---|---|---|---|
+| frame too large | any frame | length over the ceiling | `FrameTooLargeException` |
+| truncated frame | any frame | EOF inside a body | `EOFException` |
+| a malformed Hello | first frame | Hello checks 1 to 7 | a `HelloFormatException` subclass |
+| self-connection | first frame | handshake step 3 | `HelloSelfConnectionException` |
+| absent Hello | before the first frame | EOF | `HelloAbsentException` |
 
 ## 7. Versions
 
@@ -189,8 +195,9 @@ This is version 1, carried in the Hello's version byte.
 - There is **no negotiation** in version 1. A peer cannot offer several versions
   or fall back to an older one. Negotiation is future work, and a later version
   can add it, because the magic and version come before anything else.
-- A future version that changes the Hello or the framing will use a new version
-  number. Version 1 will never change: the golden vectors pin it.
+- Optional additions that an older peer can safely ignore arrive as flag bits,
+  not as a new version (section 2).
+- Version 1 will never change: the golden vectors pin it.
 
 ## 8. The golden vectors
 
@@ -202,15 +209,15 @@ humans. An implementation can run every section as a table test.
 |---|---|---|
 | `helloLayout` | one Hello field, in order | composes each `hello` body from it |
 | `hello` | `peerId`, `body`, `frame` | encodes `peerId` to exactly `body` and `frame`, and decodes `frame` back to `peerId` |
+| `helloAccepts` | a Hello `body` kuilt never sends, and its `peerId` | decodes `body` to `peerId` |
 | `frames` | `payload`, `frame` | frames `payload` as exactly `frame`, and reads `frame` back as `payload` |
 | `helloRefusals` | a Hello `body` and its `refusal` | refuses `body` with that refusal |
 | `streams` | raw `bytes`, the `frames` delivered, and the `end` | delivers exactly `frames`, then ends as `end` |
 | `handshake` | sides `a` and `b`: `peerId`, payloads `sends`, and `bytes` written | given the other side's `bytes` as input, writes exactly its own `bytes` and receives the other's `sends` |
-| `handshakeRefusals` | `selfId`, the `received` bytes, and the `refusal` | fails the handshake with that refusal |
+| `handshakeRefusals` | `selfId`, the `received` bytes, and the `refusal` | refuses the handshake with that refusal, and closes |
 
-The `refusal` names map to section 2: `bad-magic`, `truncated`,
-`unsupported-version`, `id-length-mismatch`, `empty-id`, `invalid-utf8`. The
-handshake adds `self-connection` and `no-hello`. Stream `end` values are
+The `refusal` names in `helloRefusals` are the ones in section 2's table. The
+handshake adds `self-connection` and `absent`. Stream `end` values are
 `clean-close`, `truncated-frame`, `frame-too-large`, and `truncated-prefix`,
 where either reaction is allowed (section 5).
 

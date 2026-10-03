@@ -5,6 +5,8 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.Buffer
 import kotlinx.io.EOFException
+import kotlinx.io.RawSink
+import kotlinx.io.buffered
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -15,11 +17,13 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.fabric.Hello
+import us.tractat.kuilt.core.fabric.HelloAbsentException
 import us.tractat.kuilt.core.fabric.HelloBadMagicException
 import us.tractat.kuilt.core.fabric.HelloEmptyIdException
 import us.tractat.kuilt.core.fabric.HelloFormatException
 import us.tractat.kuilt.core.fabric.HelloIdLengthMismatchException
 import us.tractat.kuilt.core.fabric.HelloInvalidUtf8Exception
+import us.tractat.kuilt.core.fabric.HelloSelfConnectionException
 import us.tractat.kuilt.core.fabric.HelloTruncatedException
 import us.tractat.kuilt.core.fabric.HelloUnsupportedVersionException
 import us.tractat.kuilt.core.fabric.handshaking
@@ -63,7 +67,7 @@ class TcpWireVectorsTest {
     /**
      * Each Hello vector's body is exactly what the fixture's own `helloLayout` table composes for its
      * PeerId. This checks the fixture against itself, independently of kuilt's encoder, so a layout
-     * edit (a wider version field, say) that misses one hand-written vector reds here.
+     * edit (a wider field, say) that misses one hand-written vector reds here.
      */
     @Test
     fun helloVectorsFollowTheFixtureLayout() {
@@ -74,7 +78,11 @@ class TcpWireVectorsTest {
             section("helloLayout").forEach { field ->
                 val id = v.str("peerId").encodeToByteArray()
                 when (field.str("field")) {
-                    "idLen" -> composed.writeInt(id.size)
+                    "idLen" -> when (val encoding = field.str("encoding")) {
+                        "u16be" -> composed.writeShort(id.size.toShort())
+                        "u32be" -> composed.writeInt(id.size)
+                        else -> error("unknown idLen encoding '$encoding'")
+                    }
                     "id" -> composed.write(id)
                     else -> composed.write(field.str("value").hexToByteArray())
                 }
@@ -107,6 +115,16 @@ class TcpWireVectorsTest {
             val received = framed(source = bufferOf(v.str("frame")), sink = Buffer()).incoming.toList()
             assertEquals(1, received.size, "${v.str("name")} frame count")
             assertEquals(PeerId(v.str("peerId")), Hello.decode(received.single()), v.str("name"))
+        }
+    }
+
+    /** Bodies that are valid v1 Hellos although kuilt never sends them: unknown flag bits are ignored. */
+    @Test
+    fun helloAcceptsIgnoreUnknownFlags() {
+        val accepts = section("helloAccepts")
+        assertTrue(accepts.isNotEmpty(), "no hello accept vectors")
+        accepts.forEach { v ->
+            assertEquals(PeerId(v.str("peerId")), Hello.decode(v.str("body").hexToByteArray()), v.str("name"))
         }
     }
 
@@ -186,13 +204,13 @@ class TcpWireVectorsTest {
 
     /**
      * A side writes its Hello before reading anything: with a peer that sends nothing at all, the
-     * handshake fails, and the Hello is already on the wire.
+     * handshake is refused, and the Hello is already on the wire.
      */
     @Test
     fun helloIsWrittenBeforeThePeersHelloIsRead() = runTest {
         val alice = section("hello").first { it.str("peerId") == "alice" }
         val written = Buffer()
-        assertFailsWith<NoSuchElementException> {
+        assertFailsWith<HelloAbsentException> {
             handshaking(
                 conn = framed(source = Buffer(), sink = written),
                 selfId = PeerId("alice"),
@@ -221,34 +239,39 @@ class TcpWireVectorsTest {
 
     /**
      * The handshake-level refusals, through the real [handshaking] over [framed]: the peer's Hello
-     * names our own id, the peer closes before any frame, or its first frame is not a Hello.
+     * names our own id, the peer closes before any frame, or its first frame is not a Hello. Each is
+     * refused by name, and each closes the transport: the contract says a refusing peer closes and
+     * sends nothing more, and [ClosingSink] counts the close so a refusal that leaves the socket
+     * open reds here.
      */
     @Test
-    fun handshakeRefusalsAreRefused() = runTest {
+    fun handshakeRefusalsAreRefusedAndClose() = runTest {
         val refusals = section("handshakeRefusals")
-        assertEquals(setOf("self-connection", "no-hello", "bad-magic"), refusals.map { it.str("refusal") }.toSet())
+        assertEquals(handshakeRefusalTypes.keys, refusals.map { it.str("refusal") }.toSet(), "every refusal kind has a vector")
         refusals.forEach { v ->
             val name = v.str("name")
-            val attempt: suspend () -> Unit = {
+            val sink = ClosingSink()
+            val thrown = assertFailsWith<IllegalArgumentException>(name) {
                 handshaking(
-                    conn = framed(source = bufferOf(v.str("received")), sink = Buffer()),
+                    conn = framed(source = bufferOf(v.str("received")), sink = sink.buffered()),
                     selfId = PeerId(v.str("selfId")),
                     dispatcher = StandardTestDispatcher(testScheduler),
                 )
             }
-            when (val refusal = v.str("refusal")) {
-                "self-connection" -> {
-                    val thrown = assertFailsWith<IllegalArgumentException>(name) { attempt() }
-                    // A self-connection is a well-formed Hello: it must not be reported as a format error.
-                    assertTrue(thrown !is HelloFormatException, "$name: $thrown")
-                    assertTrue(thrown.message.orEmpty().contains("self-connection"), "$name: $thrown")
-                }
-                "no-hello" -> assertFailsWith<NoSuchElementException>(name) { attempt() }
-                else -> {
-                    val thrown = assertFailsWith<HelloFormatException>(name) { attempt() }
-                    assertEquals(helloRefusalTypes.getValue(refusal), thrown::class, name)
-                }
-            }
+            assertAll(
+                { assertEquals(handshakeRefusalTypes.getValue(v.str("refusal")), thrown::class, name) },
+                { assertEquals(1, sink.closes, "$name closed the transport") },
+            )
+        }
+    }
+
+    /** A sink that records how often it was closed; what is written to it is discarded. */
+    private class ClosingSink : RawSink {
+        var closes = 0
+        override fun write(source: Buffer, byteCount: Long) = source.skip(byteCount)
+        override fun flush() = Unit
+        override fun close() {
+            closes++
         }
     }
 
@@ -259,6 +282,12 @@ class TcpWireVectorsTest {
         "id-length-mismatch" to HelloIdLengthMismatchException::class,
         "empty-id" to HelloEmptyIdException::class,
         "invalid-utf8" to HelloInvalidUtf8Exception::class,
+    )
+
+    private val handshakeRefusalTypes: Map<String, KClass<out IllegalArgumentException>> = mapOf(
+        "self-connection" to HelloSelfConnectionException::class,
+        "absent" to HelloAbsentException::class,
+        "bad-magic" to HelloBadMagicException::class,
     )
 
     private fun bufferOf(hex: String): Buffer = Buffer().apply { write(hex.hexToByteArray()) }
