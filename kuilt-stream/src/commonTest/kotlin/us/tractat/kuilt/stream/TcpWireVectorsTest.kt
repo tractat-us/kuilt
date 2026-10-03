@@ -15,8 +15,16 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.fabric.Hello
+import us.tractat.kuilt.core.fabric.HelloBadMagicException
+import us.tractat.kuilt.core.fabric.HelloEmptyIdException
+import us.tractat.kuilt.core.fabric.HelloFormatException
+import us.tractat.kuilt.core.fabric.HelloIdLengthMismatchException
+import us.tractat.kuilt.core.fabric.HelloInvalidUtf8Exception
+import us.tractat.kuilt.core.fabric.HelloTruncatedException
+import us.tractat.kuilt.core.fabric.HelloUnsupportedVersionException
 import us.tractat.kuilt.core.fabric.handshaking
 import us.tractat.kuilt.test.assertAll
+import kotlin.reflect.KClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -193,6 +201,65 @@ class TcpWireVectorsTest {
         }
         assertEquals(alice.str("frame"), written.readByteArray().toHexString())
     }
+
+    /**
+     * Each refusal vector is refused with the exception the contract names for it, and with no
+     * other. Asserting the exact type is what pins the check ORDER: a body that is both short and
+     * foreign must come back as bad magic, not as truncated.
+     */
+    @Test
+    fun helloRefusalsAreRefusedByName() {
+        val refusals = section("helloRefusals")
+        assertTrue(refusals.isNotEmpty(), "no hello refusal vectors")
+        assertEquals(helloRefusalTypes.keys, refusals.map { it.str("refusal") }.toSet(), "every refusal kind has a vector")
+        refusals.forEach { v ->
+            val name = v.str("name")
+            val thrown = assertFailsWith<HelloFormatException>(name) { Hello.decode(v.str("body").hexToByteArray()) }
+            assertEquals(helloRefusalTypes.getValue(v.str("refusal")), thrown::class, name)
+        }
+    }
+
+    /**
+     * The handshake-level refusals, through the real [handshaking] over [framed]: the peer's Hello
+     * names our own id, the peer closes before any frame, or its first frame is not a Hello.
+     */
+    @Test
+    fun handshakeRefusalsAreRefused() = runTest {
+        val refusals = section("handshakeRefusals")
+        assertEquals(setOf("self-connection", "no-hello", "bad-magic"), refusals.map { it.str("refusal") }.toSet())
+        refusals.forEach { v ->
+            val name = v.str("name")
+            val attempt: suspend () -> Unit = {
+                handshaking(
+                    conn = framed(source = bufferOf(v.str("received")), sink = Buffer()),
+                    selfId = PeerId(v.str("selfId")),
+                    dispatcher = StandardTestDispatcher(testScheduler),
+                )
+            }
+            when (val refusal = v.str("refusal")) {
+                "self-connection" -> {
+                    val thrown = assertFailsWith<IllegalArgumentException>(name) { attempt() }
+                    // A self-connection is a well-formed Hello: it must not be reported as a format error.
+                    assertTrue(thrown !is HelloFormatException, "$name: $thrown")
+                    assertTrue(thrown.message.orEmpty().contains("self-connection"), "$name: $thrown")
+                }
+                "no-hello" -> assertFailsWith<NoSuchElementException>(name) { attempt() }
+                else -> {
+                    val thrown = assertFailsWith<HelloFormatException>(name) { attempt() }
+                    assertEquals(helloRefusalTypes.getValue(refusal), thrown::class, name)
+                }
+            }
+        }
+    }
+
+    private val helloRefusalTypes: Map<String, KClass<out HelloFormatException>> = mapOf(
+        "bad-magic" to HelloBadMagicException::class,
+        "unsupported-version" to HelloUnsupportedVersionException::class,
+        "truncated" to HelloTruncatedException::class,
+        "id-length-mismatch" to HelloIdLengthMismatchException::class,
+        "empty-id" to HelloEmptyIdException::class,
+        "invalid-utf8" to HelloInvalidUtf8Exception::class,
+    )
 
     private fun bufferOf(hex: String): Buffer = Buffer().apply { write(hex.hexToByteArray()) }
 }
