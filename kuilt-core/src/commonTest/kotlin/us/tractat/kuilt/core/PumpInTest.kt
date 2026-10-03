@@ -20,6 +20,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -166,6 +167,84 @@ class PumpInTest {
         )
         rig.close()
     }
+
+    /**
+     * An `Error` is not a pump failure, it is the end of the process (#2890): it must leave the pump
+     * through the same route an unguarded launch would take, and `onFailure` must never see it — a
+     * consumer handed one can only log it and carry on, which is the one thing it must not do.
+     */
+    @Test
+    fun anErrorFromTheBodyFailsThePumpUnreported() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val rig = PumpRig(this)
+        val seen = mutableListOf<Int>()
+        val thrown = PumpTestError()
+
+        val job = flowOf(1, 2, 3).pumpIn(rig.scope, rig::record, PUMP) { value ->
+            if (value == 2) throw thrown
+            seen += value
+        }
+        runCurrent()
+
+        assertAll(
+            { assertEquals(listOf(1), seen, "the pump dies with the Error — nothing after it is consumed") },
+            { assertTrue(rig.failures.isEmpty(), "an Error must never reach onFailure") },
+            { assertTrue(job.isCancelled, "the pump's Job fails rather than completing") },
+            { assertSame(thrown, rig.unhandled.singleOrNull(), "the Error itself escapes the pump") },
+        )
+        rig.close()
+    }
+
+    @Test
+    fun anErrorFromUpstreamFailsThePumpUnreported() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val rig = PumpRig(this)
+        val seen = mutableListOf<Int>()
+        val thrown = PumpTestError()
+
+        val job = flow<Int> {
+            emit(1)
+            throw thrown
+        }.pumpIn(rig.scope, rig::record, PUMP) { seen += it }
+        runCurrent()
+
+        assertAll(
+            { assertEquals(listOf(1), seen) },
+            { assertTrue(rig.failures.isEmpty(), "an upstream Error is not PumpFailure.UPSTREAM") },
+            { assertTrue(job.isCancelled, "the pump's Job fails rather than completing normally") },
+            { assertSame(thrown, rig.unhandled.singleOrNull(), "the Error itself escapes the pump") },
+        )
+        rig.close()
+    }
+
+    /** The other half of #2890: an observer that throws an `Error` must be able to let it escape. */
+    @Test
+    fun anErrorFromOnFailureEscapesThePump() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val rig = PumpRig(this)
+        val seen = mutableListOf<Int>()
+        val thrown = PumpTestError()
+
+        val job = flowOf(1, 2, 3).pumpIn(
+            rig.scope,
+            onFailure = { phase, failure ->
+                rig.record(phase, failure)
+                throw thrown
+            },
+            name = PUMP,
+        ) { value ->
+            if (value == 2) error(BOOM)
+            seen += value
+        }
+        runCurrent()
+
+        assertAll(
+            { assertEquals(listOf(1), seen, "the pump dies with the observer's Error") },
+            { assertEquals(listOf(PumpFailure.ITEM), rig.phases(), "the Exception was still reported first") },
+            { assertTrue(job.isCancelled) },
+            { assertSame(thrown, rig.unhandled.singleOrNull()) },
+        )
+        rig.close()
+    }
+
+    private class PumpTestError : Error(BOOM)
 
     /**
      * A pump scope shaped like production's: a [SupervisorJob] — which is the abort *mechanism*, not
