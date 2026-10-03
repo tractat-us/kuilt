@@ -11,9 +11,12 @@ These are **counts over scripted actors, not a user study**. Nobody tapped a scr
 what one deterministic run of one scenario produced. They are also **JVM-only**, and make no claim
 about any other target.
 
-The baseline's numbers come first, then kuilt's, then the scoring. It is scored twice: first
-against `HYPOTHESES.md` as merged and unedited, then against the criteria as amended on
-2026-10-01, after M1. The amended scoring is the current verdict, and under it **H1 stops on S2**.
+The baseline's numbers come first, then kuilt's, then the scoring. It is scored three times:
+against `HYPOTHESES.md` as merged and unedited, against the criteria as amended on 2026-10-01 after
+M1, and against those same amended criteria again once kuilt re-checks an answer it has already
+shown (tractat-us/kuilt#2880). The last is the current verdict: **H1 passes, and H4 stops on S4**,
+where kuilt asks Alex about an answer his own new budget has just made wrong. Earlier verdicts stay
+on the page, marked superseded.
 **Every hypothesis is scored against both baseline variants**, and a hypothesis passes only if it
 passes against both.
 
@@ -120,8 +123,10 @@ list of inputs it was given, so each phone can compare that list with what it ho
 this still fits, or someone should look again. Nothing reruns quietly. A doubtful answer is flagged
 for a person instead.
 
-The table is pinned by `KuiltMeasurementTest`: a change to kuilt's numbers fails the build. This
-page is kept in step by hand. Like the baseline's, these are counts over scripted actors, JVM only,
+The table below is M1 **as first measured**, when a phone judged an answer only once. Two rows have
+since moved: *Re-measured with the re-check*, below, has the current table, and that is the one
+`KuiltMeasurementTest` pins, so a change to kuilt's numbers fails the build. This page is kept in
+step by hand. Like the baseline's, these are counts over scripted actors, JVM only,
 not a user study. There is one row per scenario, since kuilt has no `optimisticLocal`
 variant: an offline action always shows on its author's phone. The last column,
 `unknownPresentations`, counts answers a phone could not judge because it had not yet received
@@ -211,7 +216,8 @@ all three in every scenario. Counts over scripted actors, JVM only.
 
 The shape in one sentence: where the baseline quietly reruns the agent (S2, S3, S6, S7) or shows a
 stale answer (S5), kuilt runs the agent once and asks a person when the answer is in doubt on arrival;
-news that arrives after an answer was shown is never re-checked (S2). That is
+news that arrives after an answer was shown was never re-checked in M1 (S2; the re-check now
+fixes that, and costs a prompt on S2 and S4). That is
 a trade, not a free win. On S2, S3, S5 and S6 kuilt asks people once or twice where the baseline
 asks nobody. The hypotheses weigh that on purpose outside the verdicts (H4 compares prompts only
 where neither design reruns or goes stale), so it shows up here instead.
@@ -297,6 +303,8 @@ either, and is otherwise **no difference**.
 
 ## Re-scored against the amended criteria
 
+**Superseded** by *Re-measured with the re-check*, below. Kept as scored, on M1's numbers.
+
 **Post-M1 amendment, made 2026-10-01, before any fix for tractat-us/kuilt#2880.** After M1, Iain
 accepted two changes to `HYPOTHESES.md` (see its *Amendment* section). H1b now scores needs-review
 flags only. And each actor's standing answer, the latest proposal it has been shown, is now also
@@ -341,11 +349,82 @@ the remote machine's, so a re-check brings S2 to 0 only by re-showing `r1` flagg
 remote machine is never asked, but it still gets the flagged row. A design that never re-checks
 cannot reach 0.
 
+## Re-measured with the re-check
+
+**After the fix for tractat-us/kuilt#2880, scored against the amended criteria, unedited.** A phone
+now looks again. After every step settles, each phone re-judges its standing answer against
+everything it holds, with the same judge and the same relevance clauses, and shows it again when the
+verdict on screen changes. A person is asked only when an answer goes from fitting to flagged. The
+design is `RECHECK.md`; the code is `Presenter`. Only S2 and S4 move, and only in two columns.
+`KuiltMeasurementTest` pins this table.
+
+| Scenario | editsMade | editsPreserved | agentRuns | unnecessaryReruns | staleTreatedAsCurrent | staleAtEnd | falseInvalidations | humanPrompts | outageActions | outageActionsServed | unknownPresentations |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| S1 | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S2 | 1 | 1 | 1 | 0 | 0 | **0** (was 2) | 0 | **2** (was 1) | 1 | 1 | 0 |
+| S3 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
+| S4 | 1 | 1 | 2 | 0 | 0 | 0 | 0 | **2** (was 1) | 2 | 2 | 0 |
+| S5 | 2 | 2 | 1 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
+| S6 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
+| S7 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+**S2.** When Alex reconnects, his budget of 30 reaches Sam's and the remote machine's copies. Each
+re-judges its standing `r1` (Trattoria Uno, 40), finds the budget below the price, and shows it
+again flagged. Sam is asked; the remote machine gets the flagged row but is not a person. Alex is
+asked on arrival, as before. So `staleAtEnd` is 0 and `humanPrompts` 2. Both flags are earned: the
+truth for each is Due Fratelli.
+
+**S4.** Alex lowers the budget while connected, and his own copy now holds a budget his standing
+`r1` breaks. His phone flags it at once and he is asked. The remote machine flags it too, unasked.
+Sam is offline. When he returns, `r2` reaches him in the same step as the budget, and is shown
+before anything is re-judged, so it replaces `r1` first and Sam is not asked about `r1`. The accept
+conflict still costs one prompt, so the total is 2.
+
+| id | vs `optimisticLocal = false` | vs `optimisticLocal = true` | combined |
+|---|---|---|---|
+| H1 | pass | pass | **pass** |
+| H1b | pass (no baseline comparison) | pass (no baseline comparison) | **pass** |
+| H2 | pass | pass | **pass** |
+| H3 | pass | no difference (S2 and S4) | **no difference** |
+| H4 | **stop** (S4) | **stop** (S4) | **stop** |
+| H0 | does not match | does not match (matches on H3 only) | **not triggered** |
+
+- **H1, pass.** kuilt has `staleTreatedAsCurrent` 0 and `staleAtEnd` 0 on each of S2, S3 and S5.
+  On each, both baseline variants reran (`agentRuns` 2 against one `StartAgent` on S2 and S3) or
+  went stale (3 and 3 on S5), so none is *no difference*. On S2 specifically, kuilt's end-of-run
+  count is 0 against the baseline's 0, and kuilt gets there without rerunning.
+- **H1b, pass.** `falseInvalidations` totals 0 across S1 to S7. Every flagged row the re-check
+  added, on S2 and S4, has a truth that differs from `r1`, so none is false.
+  `unknownPresentations` is still 0, and still vacuous.
+- **H2, H3, unchanged.**
+- **H4, stop, on S4.** S4 is still like with like: neither design has a stale count or a rerun
+  there. kuilt asks 2 times, the baseline 1, against both variants. **The extra prompt is a correct
+  flag.** After his own edit, the truth for Alex is Due Fratelli, not Trattoria Uno; kuilt tells him
+  so the moment his budget makes `r1` wrong. The baseline does not ask because it never looks again:
+  Alex's screen shows `r1` as fitting until `r2` replaces it. That stale interval is real but no
+  metric sees it, since per-presentation scoring sees only first arrivals and end-of-run scoring
+  sees only `r2`. Per Iain's ruling of 2026-10-01, H4 stays as written and the stop is recorded as
+  measured, not designed away. S1 is 0 against 0.
+- **H0, not triggered.** Neither variant matches on H1 (they rerun on S2 and S3 and go stale on S5)
+  or on H2.
+
+The headline: **H1 passes and H4 stops on S4.** The fix traded S2's stale answer for a prompt, and
+on S4 the same rule asks Alex a question the baseline never asks, because the baseline never
+notices his answer went wrong.
+
+How firm. Removing the re-judge pass from `Presenter` reds `KuiltMeasurementTest` with S2 back at
+`staleAtEnd` 2 and 1 prompt, and S4 at 1 prompt. Re-judging before presenting new proposals gives
+Sam a flagged `r1` row and S4 a third prompt. Both were run on the final suite and are recorded on
+the pull request. The H4 stop rests on two choices that `RECHECK.md` lists as what the fix is
+unpinned on: the verdict is read once per settled step, and only the standing answer is re-judged.
+
 ## What these numbers rest on
 
-- **An answer is judged once, when a phone first receives it.** A later arrival is not re-checked.
-  On S2 this matters: after Alex reconnects, Sam's and the remote machine's copies hold his budget,
-  but the answer they were shown earlier as fitting is not re-examined.
+- **In M1, an answer was judged once, when a phone first received it.** A later arrival was not
+  re-checked. On S2 this mattered: after Alex reconnects, Sam's and the remote machine's copies hold
+  his budget, but the answer they were shown earlier as fitting was not re-examined. Since
+  tractat-us/kuilt#2880 each phone re-judges its standing answer after every settled step; the
+  current numbers are in *Re-measured with the re-check*. The rest of this bullet describes M1.
   The baseline never re-checks an answer it has already shown either. It re-checks only when it
   delivers a *deferred* presentation, to a phone that was offline at release; on S2 that is Alex's,
   and the rerun it triggers is pushed to everyone connected. That is why S2 looks one-sided: the
@@ -364,7 +443,9 @@ cannot reach 0.
   received everything the agent was given, and `unknownPresentations` is 0 by construction. The
   verdict is tested elsewhere: `AssessmentTest.unreceivedBasisIsUnknownNotApplicable` at the judge,
   and `AdversarialTraceTest.heldFramesLeaveTheProposalUnknown` end to end on a test mesh, where
-  Sam's frames to Alex are held back so the answer reaches Alex before Sam's closure does.
+  Sam's frames to Alex are held back so the answer reaches Alex before Sam's closure does. On the
+  same rig, `heldFramesUnknownResolvesOnReJudge` drives the backend's own `Presenter`: once the
+  frames land, the re-check turns Alex's unknown into "fits" and asks nobody.
 - **Prompts count people only.** The remote machine hosts the agent. It is shown a flag like
   everyone else, but a flag shown to it is never counted as a person being asked. This is why S3, S5
   and S6 score 2 prompts, not 3.
@@ -379,6 +460,8 @@ cannot reach 0.
   misdelivered, which was extra adversity rather than less, and the copies still converged. The
   table above ran on a healthy network and was not affected. tractat-us/kuilt#2881 fixed the fault:
   held frames reach their own peers and count as delayed, and the trace still passes.
+  tractat-us/kuilt#2888 then released a partly filled window when the fault profile changes, and
+  counted it dropped on close. The re-measured table ran on a healthy network, after both fixes.
 
 ## Proposed changes to `HYPOTHESES.md`: applied
 

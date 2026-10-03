@@ -119,14 +119,15 @@ class KuiltBackendTest {
     /**
      * S4's two offline accepts are real entries, each served on its chooser's phone. When the phones
      * meet, each holds both accepts, for different requests by different people: one conflict, one
-     * prompt, counted once across the run. A backend that never noticed would score 0 and pass H4
-     * vacuously.
+     * prompt, counted once across the run. The run's other prompt is Alex's re-check of r1 when his
+     * own budget makes it over budget (#2880). A backend that never noticed the conflict would score
+     * 1, and one that dropped the de-duplication would score 5.
      */
     @Test
     fun s4AcceptConflictIsSurfacedOnce() = runTest(UnconfinedTestDispatcher()) {
         val m = Oracle.score(Scenarios.s4, backend().run(Scenarios.s4))
         assertAll(
-            { assertEquals(1, m.humanPrompts) },
+            { assertEquals(2, m.humanPrompts) },
             { assertEquals(2, m.outageActions) },
             { assertEquals(2, m.outageActionsServed) },
             { assertEquals(0, m.staleTreatedAsCurrent) },

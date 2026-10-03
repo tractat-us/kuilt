@@ -256,6 +256,61 @@ class AdversarialTraceTest {
         }
     }
 
+    /**
+     * The same held-frames rig, driven through the backend's own [Presenter] instead of a hand call
+     * to [Assessment.assess] (#2880). While Sam's frames are held, Alex is shown r1 unknown and is
+     * asked. Once they land, the re-judge on the next settle resolves it: a new row shows r1 as
+     * fitting, and nobody is asked again. Control: store the first verdict instead of deriving it,
+     * and Alex's standing row stays unknown.
+     */
+    @Test
+    fun heldFramesUnknownResolvesOnReJudge() = runTest(UnconfinedTestDispatcher()) {
+        lateinit var holder: HoldingSeam
+        var alexPeer: PeerId? = null
+        withMesh(decorate = { actor, seam ->
+            when (actor) {
+                alex -> seam.also { alexPeer = it.selfId }
+                sam -> HoldingSeam(seam) { checkNotNull(alexPeer) { "alex is woven before sam" } }.also { holder = it }
+                else -> seam
+            }
+        }) { mesh ->
+            holder.holding = true
+            val closure = mesh.append(sam, WorkspaceEntry.Report.Closed(sam, v1))
+            val hostLog = mesh.log(remote)
+            val captured = InputCapture.capture(RequestId("r1"), hostLog)
+                .complete(ScriptedAgent.recommend(hostLog.entries().map { it.second }))
+            mesh.append(remote, captured.toEntry(remote))
+            val closeV1 = InputKey("closeV1")
+            val presenter = Presenter(
+                isPerson = { it != remote },
+                releaseRank = { 0 },
+                basisKeys = { proposal -> if (closure.dot in proposal.basis.allDots) setOf(closeV1) else emptySet() },
+                known = { _, log -> if (log.delivers(closure.dot)) setOf(closeV1) else emptySet() },
+            )
+            fun logs() = actors.associateWith { mesh.log(it) }
+
+            presenter.settle(logs())
+            val alexBefore = presenter.presentations.filter { it.actor == alex }
+            val promptsBefore = presenter.humanPrompts
+            holder.release()
+            drain()
+            presenter.settle(logs())
+            val alexAfter = presenter.presentations.filter { it.actor == alex }
+            assertAll(
+                // The rig: frames to alex were held, so alex was first shown r1 without the closure.
+                { assertTrue(holder.held.isNotEmpty(), "sam's frames to alex were held") },
+                { assertEquals(listOf(true), alexBefore.map { it.unknown }, "alex was first shown r1 unknown") },
+                // Alex is asked about the unknown. Sam and remote hold the closure the agent received, so r1 fits there.
+                { assertEquals(1, promptsBefore) },
+                { assertTrue(presenter.presentations.filter { it.actor != alex }.all { it.shownAsApplicable }) },
+                // The fix: the re-judge resolves the unknown to fitting, and asks nobody.
+                { assertEquals(listOf(true to false, false to true), alexAfter.map { it.unknown to it.shownAsApplicable }) },
+                { assertEquals(setOf(closeV1), alexAfter.last().known) },
+                { assertEquals(promptsBefore, presenter.humanPrompts) },
+            )
+        }
+    }
+
     // ── Corrections and identities ────────────────────────────────────────────────────────────
 
     /**
