@@ -46,4 +46,20 @@ class HandshakingTest {
         assertFailsWith<IllegalArgumentException> { handshaking(a, PeerId("self"), dispatcher) }
         far.join()
     }
+
+    /**
+     * A pre-v1 peer opens with its id as bare UTF-8 (#2894). `handshaking` must refuse it by name
+     * rather than weave a seam whose remote is whatever those bytes happen to decode to.
+     */
+    @Test
+    fun refusesAPreV1PeerSendingABareUtf8Id() = runTest {
+        val (a, b) = connectionPair()
+        val dispatcher = currentCoroutineContext()[ContinuationInterceptor]!!
+        val far = launch {
+            b.incoming.first()
+            b.send("old-peer".encodeToByteArray())
+        }
+        assertFailsWith<HelloBadMagicException> { handshaking(a, PeerId("A"), dispatcher) }
+        far.join()
+    }
 }

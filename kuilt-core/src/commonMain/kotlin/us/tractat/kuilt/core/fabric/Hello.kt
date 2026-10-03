@@ -48,8 +48,8 @@ public object Hello {
         require(idBytes.isNotEmpty()) { "Hello cannot carry an empty PeerId" }
         return ByteArray(HELLO_HEADER_BYTES + idBytes.size).also { buf ->
             HELLO_MAGIC.copyInto(buf)
-            buf[HELLO_MAGIC_BYTES] = HELLO_WIRE_VERSION.toByte()
-            buf.writeInt(idBytes.size, offset = HELLO_MAGIC_BYTES + HELLO_VERSION_BYTES)
+            buf.writeUnsignedBe(HELLO_WIRE_VERSION.toLong(), HELLO_VERSION_OFFSET, HELLO_VERSION_BYTES)
+            buf.writeUnsignedBe(idBytes.size.toLong(), HELLO_ID_LENGTH_OFFSET, HELLO_ID_LENGTH_BYTES)
             idBytes.copyInto(buf, destinationOffset = HELLO_HEADER_BYTES)
         }
     }
@@ -66,12 +66,12 @@ public object Hello {
     public fun decode(frame: ByteArray): PeerId {
         val magicSeen = minOf(frame.size, HELLO_MAGIC_BYTES)
         if ((0 until magicSeen).any { frame[it] != HELLO_MAGIC[it] }) throw HelloBadMagicException()
-        if (frame.size < HELLO_MAGIC_BYTES + HELLO_VERSION_BYTES) throw HelloTruncatedException(frame.size)
-        val version = frame[HELLO_MAGIC_BYTES].toInt() and 0xff
+        if (frame.size < HELLO_VERSION_OFFSET + HELLO_VERSION_BYTES) throw HelloTruncatedException(frame.size)
+        val version = frame.readUnsignedBe(HELLO_VERSION_OFFSET, HELLO_VERSION_BYTES).toInt()
         if (version != HELLO_WIRE_VERSION) throw HelloUnsupportedVersionException(version, HELLO_WIRE_VERSION)
         if (frame.size < HELLO_HEADER_BYTES) throw HelloTruncatedException(frame.size)
         // u32: read unsigned, so a length with its top bit set is a mismatch rather than a negative.
-        val idLen = frame.readInt(offset = HELLO_MAGIC_BYTES + HELLO_VERSION_BYTES).toLong() and 0xffff_ffffL
+        val idLen = frame.readUnsignedBe(HELLO_ID_LENGTH_OFFSET, HELLO_ID_LENGTH_BYTES)
         val remaining = frame.size - HELLO_HEADER_BYTES
         if (idLen != remaining.toLong()) throw HelloIdLengthMismatchException(idLen, remaining)
         if (remaining == 0) throw HelloEmptyIdException()
@@ -96,8 +96,14 @@ internal const val HELLO_VERSION_BYTES: Int = 1
 /** Width of the `idLen` field, in bytes. */
 internal const val HELLO_ID_LENGTH_BYTES: Int = 4
 
+/** Offset of the version field: straight after the magic. */
+internal const val HELLO_VERSION_OFFSET: Int = HELLO_MAGIC_BYTES
+
+/** Offset of the `idLen` field: straight after the version. */
+internal const val HELLO_ID_LENGTH_OFFSET: Int = HELLO_VERSION_OFFSET + HELLO_VERSION_BYTES
+
 /** Magic + version + `idLen`: everything before the id. */
-internal const val HELLO_HEADER_BYTES: Int = HELLO_MAGIC_BYTES + HELLO_VERSION_BYTES + HELLO_ID_LENGTH_BYTES
+internal const val HELLO_HEADER_BYTES: Int = HELLO_ID_LENGTH_OFFSET + HELLO_ID_LENGTH_BYTES
 
 /**
  * The [Hello] layout version this build speaks and accepts.

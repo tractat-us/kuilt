@@ -11,6 +11,13 @@ import kotlin.coroutines.CoroutineContext
  * then delegates to [identified] over the **same single collection** of
  * [Connection.incoming]. Suspends until the peer's preamble arrives.
  *
+ * **The preamble is a versioned [Hello] body:** the `kuil` magic, a version, then the [PeerId] as
+ * length-prefixed UTF-8. [Hello] carries the byte-level layout. A
+ * remote whose first frame is not a well-formed v1 body (a non-kuilt peer, a pre-v1 peer sending its
+ * bare UTF-8 id, an unsupported version) makes this function throw a named [HelloFormatException].
+ * A remote that claims this peer's own [selfId] is refused with a plain [IllegalArgumentException].
+ * Neither refusal closes [conn]; the caller owns it.
+ *
  * **Single-collection safe.** [Connection.incoming] is collected exactly once: the conn is
  * wrapped with [singleCollection], which starts one pump coroutine that drains the
  * delegate's `incoming` into an internal channel. The preamble is read from that

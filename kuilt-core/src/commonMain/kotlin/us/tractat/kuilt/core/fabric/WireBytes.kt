@@ -22,3 +22,12 @@ internal fun ByteArray.readInt(offset: Int): Int =
         ((this[offset + 1].toInt() and 0xff) shl 16) or
         ((this[offset + 2].toInt() and 0xff) shl 8) or
         (this[offset + 3].toInt() and 0xff)
+
+/** Write the low [width] bytes of [value] big-endian into [this] at [offset]; [width] is 1..8. */
+internal fun ByteArray.writeUnsignedBe(value: Long, offset: Int, width: Int) {
+    for (i in 0 until width) this[offset + i] = (value ushr (8 * (width - 1 - i))).toByte()
+}
+
+/** Read [width] bytes at [offset] as an unsigned big-endian value; [width] is 1..7, so it never goes negative. */
+internal fun ByteArray.readUnsignedBe(offset: Int, width: Int): Long =
+    (0 until width).fold(0L) { acc, i -> (acc shl 8) or (this[offset + i].toLong() and 0xff) }

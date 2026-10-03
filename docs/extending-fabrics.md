@@ -105,15 +105,22 @@ worth less than the memory it occupies. Expose it on your `Loom` factory so a co
 can choose — `handshaking()` used to drop it, which is why `:kuilt-tcp` shipped without
 the knob until #2323.
 
-`Hello` encodes a `PeerId` as its UTF-8 bytes — one frame, one round-trip:
+`Hello` is one frame, one round trip. Its body opens with a magic and a version, so a
+peer that is not kuilt, or speaks a different layout, is refused by name instead of
+being misread as an identity:
 
-<!-- verbatim from kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Hello.kt#Hello -->
-```kotlin
-public object Hello {
-    public fun encode(selfId: PeerId): ByteArray = selfId.value.encodeToByteArray()
-    public fun decode(frame: ByteArray): PeerId = PeerId(frame.decodeToString())
-}
-```
+| Bytes | Field |
+|---|---|
+| 4 | magic `0x6B 0x75 0x69 0x6C` (ASCII `kuil`) |
+| 1 | version `0x01` |
+| 4 | `idLen`, unsigned 32-bit big-endian |
+| `idLen` | the `PeerId`, UTF-8 |
+
+`idLen` must match the rest of the body exactly. `Hello.decode` refuses a body that breaks
+the layout with a named `HelloFormatException` subclass: a wrong magic, an unsupported
+version, a body shorter than the header, a length mismatch, an empty id, or invalid UTF-8.
+The two ends of a `handshaking()` link must both speak this layout. Before v1 the preamble
+was the bare UTF-8 id, and a peer still sending that is refused as `HelloBadMagicException`.
 
 ### Step 3 — write a `Loom`
 

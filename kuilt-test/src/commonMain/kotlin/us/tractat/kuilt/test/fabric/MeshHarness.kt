@@ -15,7 +15,7 @@ import kotlin.coroutines.ContinuationInterceptor
  *
  * For each unordered pair (i, j) one [connectionPair] is created. Peer i gets the
  * first end, peer j gets the second. All [meshSeam] calls run concurrently so
- * the [Hello] preambles cross in parallel (required — serial would deadlock).
+ * the mesh hello preambles cross in parallel (required — serial would deadlock).
  *
  * Returns one [Seam] per peer in index order. All inter-peer handshakes are
  * complete before this function returns.
