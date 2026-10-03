@@ -125,11 +125,12 @@ private fun Flow<RosterEvent>.isolate(
     try {
         onFailure(source, failure)
     } catch (_: Throwable) {
-        // Deliberately total, `CancellationException` included, and for the same reason `pumpIn`'s
-        // `reportPumpFailure` is: this runs *inside* the guard that keeps the fold alive, so a
-        // rethrow escapes it and kills every other source — the exact defect the hook reports on.
+        // Deliberately total, `CancellationException` included: this runs *inside* the guard that
+        // keeps the fold alive, so a rethrow escapes it and kills every other source — the exact
+        // defect the hook reports on.
         // Nothing suspends in the callback's contract, so there is no cancellation of ours here for
-        // `ensureActive()` to find. ALLOW-ise: a consumer's logger must not be able to kill the fold.
+        // `ensureActive()` to find. Unlike `pumpIn`'s `reportPumpFailure`, this still absorbs an
+        // `Error` — tracked by #2892. ALLOW-ise: a consumer's logger must not be able to kill the fold.
     }
 }
 

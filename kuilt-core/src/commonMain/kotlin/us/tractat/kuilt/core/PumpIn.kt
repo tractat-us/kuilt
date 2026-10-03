@@ -67,8 +67,9 @@ public enum class PumpFailure {
  *
  * The upstream guard needs no `ensureActive` of its own: [kotlinx.coroutines.flow.catch] rethrows when
  * the throwable is this coroutine's own cancellation cause and catches otherwise — the same
- * discriminator, already built in. And because the body guard below absorbs everything except our own
- * cancellation, the only thing that guard can ever see is a genuine upstream failure.
+ * discriminator, already built in. The body guard below absorbs everything except our own cancellation
+ * and an [Error], so what reaches the upstream guard is a genuine upstream failure, which it reports, or
+ * an [Error] on its way out, which it rethrows.
  *
  * ### `ensureActive`, not `runCatchingCancellable`, in the body
  * `runCatchingCancellable` discriminates on **type**, and type cannot separate *"my job was cancelled"*
@@ -80,7 +81,7 @@ public enum class PumpFailure {
  * is the discriminator that decides it at runtime; it throws only when this job really was cancelled and
  * falls through on a callee-minted one, which then becomes an ordinary [PumpFailure.ITEM].
  *
- * ### [onFailure] cannot kill the pump either — with an [Error]'s exception
+ * ### [onFailure] cannot kill the pump either — except with an [Error]
  * It is invoked inside a guard that absorbs everything it throws short of an [Error] —
  * `CancellationException` included. It is **non-suspending** and called outside any cancellation
  * contract, so there is no cancellation of ours for it to be reporting and nothing to preserve by
@@ -164,8 +165,8 @@ public fun <T> Flow<T>.pumpIn(
     }
         // The half the `try` above structurally cannot see. Applied AFTER the body guard so it is
         // downstream of it, and therefore sees the flow's own failures — the guard above has already
-        // absorbed everything [body] can raise.
-        // An `Error` passes through it untouched, whether the flow raised it or the body guard rethrew it.
+        // absorbed everything [body] can raise except an `Error`. An `Error` passes through untouched,
+        // whether the flow raised it or the body guard rethrew it.
         .catch { failure ->
             if (failure is Error) throw failure
             reportPumpFailure(onFailure, PumpFailure.UPSTREAM, failure)
