@@ -1,9 +1,13 @@
 package us.tractat.kuilt.core.fabric
 
+import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.Spool
@@ -26,6 +30,12 @@ import kotlin.coroutines.CoroutineContext
  * — the preamble read via [firstFrame] and the subsequent read loop — draws from that
  * one spool, so the upstream is never collected twice. Both `handshaking` (2-peer)
  * and `meshSeam` (N-peer) wrap each conn with this before reading.
+ *
+ * **A read error is surfaced, not folded into a clean end (#2898).** When the delegate's
+ * [Connection.incoming] throws — a stream cut inside a frame, an oversize length prefix — the
+ * wrapper's [Connection.incoming] delivers every frame that arrived first and then throws the same
+ * exception. Only a normal completion of the delegate completes it normally. A reader can therefore
+ * tell a cut stream from a clean close, which the TCP wire contract requires (`docs/tcp-wire.md` § 5).
  *
  * @param dispatcher Scopes the pump coroutine, so the preamble drain shares the seam's
  *   (and tests') clock. Production callers pass the seam's scheduling dispatcher; test
@@ -51,14 +61,22 @@ private class SingleCollectionConnection(
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val inbox = Spool<ByteArray>(policy)
 
+    // Written by the pump BEFORE it closes the spool, read by `incoming` only AFTER the spool has
+    // drained, so a reader that sees the spool complete also sees the failure that ended it.
+    private val readFailure = atomic<Throwable?>(null)
+
     init {
         scope.launch {
-            // A wire close (peer disconnect EOFs the read; local close cancels it) surfaces
-            // as a delegate completion or exception — treat end-of-stream as normal completion
-            // of incoming, but let CancellationException propagate. The spool is closed in
-            // `finally` so `incoming` completes on every exit path (completion or cancellation).
+            // A wire close completes the delegate normally; a cut or refused stream throws. Record a
+            // throw so `incoming` can re-raise it after the frames that preceded it (#2898). A
+            // cancellation — our own close cancels this pump — propagates and records nothing. The
+            // spool is closed in `finally` so `incoming` ends on every exit path.
             try {
-                runCatchingCancellable { delegate.incoming.collect { inbox.deliver(it) } }
+                delegate.incoming.collect { inbox.deliver(it) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                readFailure.value = e
             } finally {
                 inbox.close()
             }
@@ -71,7 +89,10 @@ private class SingleCollectionConnection(
     // passes through unchanged.
     override val maxFrameBytes: Int? get() = delegate.maxFrameBytes
 
-    override val incoming: Flow<ByteArray> = inbox.incoming
+    override val incoming: Flow<ByteArray> = flow {
+        emitAll(inbox.incoming)
+        readFailure.value?.let { throw it }
+    }
 
     // Best-effort teardown: cancel the pump, then close the delegate. close() is idempotent
     // and must not propagate a delegate-close failure on an already-cancelled link.

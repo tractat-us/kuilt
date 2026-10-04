@@ -1,7 +1,10 @@
 package us.tractat.kuilt.core.fabric
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -12,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
@@ -29,6 +33,13 @@ import kotlin.coroutines.CoroutineContext
  * `broadcast` == `sendTo(remoteId)`. Woven at construction; Torn on conn EOF/error
  * or [close]. Concurrent sends are serialized through an internal channel + single
  * writer so wire order matches call order.
+ *
+ * **The seam closes [conn] itself when the link ends (#2898)** — it does not wait for the
+ * application to call [Seam.close]. A clean end of [Connection.incoming] tears the seam with
+ * [CloseReason.RemoteRequested]; an `incoming` that throws (a stream cut mid-frame, an oversize
+ * length prefix) tears it with [CloseReason.Error] carrying that exception, so a consumer can tell
+ * the two apart. Either way the frames the writer had already queued are flushed first, and then
+ * [conn] is closed — exactly once across every path, a later [close] included.
  *
  * **Thread-safety.** This type is correct under a *multi-threaded* dispatcher — the
  * injected [dispatcher] is only the scope for the read/write loops (scheduling); it is
@@ -109,8 +120,14 @@ internal class LinkSeam(
     // Confined to readLoop's single collector; not shared across threads.
     private var seq = 0L
 
+    // Single-shot latch for `conn.close()`: whichever path flips it closes the conn, and completes
+    // `connClosed` so a concurrent `close()` that lost the race can still wait for the close to land.
+    private val connCloseClaimed = atomic(false)
+    private val connClosed = CompletableDeferred<Unit>()
+
+    private val writer = scope.launch { writeLoop() }
+
     init {
-        scope.launch { writeLoop() }
         scope.launch { readLoop() }
     }
 
@@ -150,7 +167,33 @@ internal class LinkSeam(
 
     override suspend fun close(reason: CloseReason) {
         tearDown(reason)
-        conn.close()
+        // A local close does not drain the outbox: closing the conn now is also what unsticks a writer
+        // suspended in `conn.send` on a peer that has stopped reading. If the link already closed
+        // itself, wait for that close rather than closing twice.
+        if (!connCloseClaimed.compareAndSet(expect = false, update = true)) return connClosed.await()
+        closeConn()?.let { throw it }
+    }
+
+    /**
+     * Close [conn] for a path the remote or the wire ended, once. Best effort: there is no caller to
+     * report a failure to, so it is absorbed. Shielded, so it runs even when the path ending is a
+     * cancellation; inside the shield every cancellation is one `conn.close()` minted, so the catch in
+     * [closeConn] is plain (#1803/#1824).
+     */
+    private suspend fun closeConnOnce() {
+        if (connCloseClaimed.compareAndSet(expect = false, update = true)) closeConn()
+    }
+
+    /** Close [conn] under [NonCancellable]; returns the failure, if any, and always settles [connClosed]. */
+    private suspend fun closeConn(): Throwable? = withContext(NonCancellable) {
+        try {
+            conn.close()
+            null
+        } catch (failure: Throwable) {
+            failure
+        } finally {
+            connClosed.complete(Unit)
+        }
     }
 
     private suspend fun writeLoop() {
@@ -163,12 +206,14 @@ internal class LinkSeam(
             val sent = runCatchingCancellable { conn.send(frame) }
             if (sent.isFailure) {
                 tearDown(CloseReason.RemoteRequested)
+                closeConnOnce()
                 return
             }
         }
     }
 
     private suspend fun readLoop() {
+        var reason: CloseReason = CloseReason.RemoteRequested
         try {
             conn.incoming.collect { bytes ->
                 if (state.value !is SeamState.Torn) {
@@ -181,9 +226,17 @@ internal class LinkSeam(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // remote dropped — fall through to teardown
+            // The read failed rather than ended: a cut or refused stream, not a clean close (#2898).
+            reason = CloseReason.Error(e)
         } finally {
-            tearDown(CloseReason.RemoteRequested)
+            tearDown(reason)
+            // The remote is gone, so this side closes too (`docs/tcp-wire.md` § 5) — but only after
+            // the writer drains what was already queued: `tearDown` closed the outbox, so the writer
+            // ends once it has flushed it. Shielded so the close still lands if this loop is cancelled.
+            withContext(NonCancellable) {
+                writer.join()
+                closeConnOnce()
+            }
         }
     }
 
