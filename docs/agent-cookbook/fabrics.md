@@ -150,8 +150,9 @@ assertFailsWith<FrameTooLargeException> { conn.incoming.toList() }
 Two assumptions to hold on to. Reading uses `Source.readByteArray`, which **blocks the collecting
 coroutine** until the bytes arrive — so collect on a real IO dispatcher, never under a virtual-time
 test scheduler, where a blocking read never advances and the test hangs rather than fails. And a
-clean EOF *at a frame boundary* completes `incoming` normally, while an EOF *mid-frame* propagates as
-an `EOFException`: a truncated frame is an error, not a tidy end of stream.
+clean EOF *at a frame boundary* completes `incoming` normally, while an EOF anywhere else — inside a
+body or partway through a length prefix — propagates as an `EOFException`: a truncated frame is an
+error, not a tidy end of stream.
 
 ### Plain TCP is already assembled
 

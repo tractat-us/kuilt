@@ -55,6 +55,10 @@ of exactly that length is accepted. `TcpLoom` always uses the default. Read the
 length prefix as unsigned, so `80000000` and `ffffffff` are over the ceiling,
 not negative.
 
+A receiver talking to a kuilt peer MUST accept every length up to and including
+16,777,216, because a kuilt sender may send any of them. A ceiling MUST NOT be
+below 9 + 65,535, the largest possible Hello.
+
 ## 2. The Hello
 
 The first frame each peer sends is its **Hello**. Its body names the peer:
@@ -126,10 +130,11 @@ could decode to one id, two peers could share a name.
 Each peer, as soon as the TCP connection is open:
 
 1. **MUST send its own Hello immediately, before reading anything.** If both
-   sides read first, each waits for the other forever. Sending first is always
-   safe, because a Hello is at most 9 + 65,535 bytes. That fits in a socket's
-   send buffer, so both sides can write theirs without either one reading. This
-   is what the `u16` id cap buys.
+   sides read first, each waits for the other forever. Sending first is safe for
+   any Hello that fits the platform's socket buffers, because then both sides can
+   write theirs without either one reading. The `u16` id cap bounds a Hello at
+   9 + 65,535 bytes, which keeps that within reach. Keep ids short all the same:
+   kuilt's own are 36-byte UUIDs.
 2. Reads the other side's first frame and checks it as a Hello (section 2).
 3. **MUST refuse a Hello whose id equals its own.** That is a self-connection:
    the peer has dialled itself. Both ends refuse it. It is not a format error,
@@ -158,20 +163,24 @@ delivers them in order.
 ## 5. Closing
 
 A peer ends the session by closing its side of the TCP connection (FIN) right
-after the last byte of a complete frame. Version 1 has **no goodbye message and
-no heartbeat**. A future capability bit, typed control frames, would add them.
+after the last byte of a complete frame. That is version 1's only graceful way
+to leave. Version 1 has **no goodbye message and no heartbeat**. A future capability bit, typed control frames, would add them.
 Until then, a peer that needs to notice a silent partner does so above the wire,
 or with TCP keep-alive.
 
 - **EOF at a frame boundary** is a clean close. Every complete frame before it
   is delivered.
-- **EOF inside a frame body** is an error: the stream was cut. The partial body
-  MUST NOT be delivered. kuilt raises an `EOFException`.
-- **EOF inside a length prefix**, after one to three bytes of the four, MUST NOT
-  deliver anything for the partial prefix. Version 1 lets the receiver report it
-  either as an error or as a clean close. kuilt reports a clean close. A sender
-  never produces this case by closing normally.
+- **EOF anywhere else is a truncated stream**, which is an error. That covers EOF
+  inside a frame body and EOF after one to three bytes of a length prefix. The
+  partial frame MUST NOT be delivered, and the stream MUST NOT be reported as a
+  clean close. kuilt's `framed()` raises an `EOFException` for both.
 - **EOF before any Hello** is a refused handshake (section 6).
+
+EOF from the peer ends the session in both directions: the receiver MUST stop
+sending and SHOULD close its side. Version 1 has no half-open session. kuilt
+tears its seam down on any EOF, clean or not, and accepts no further send. A
+frame it had already queued may still be flushed. It does not yet close its own
+side until the application closes the seam (#2898, section 6).
 
 ## 6. Refusals
 
@@ -224,8 +233,8 @@ humans. An implementation can run every section as a table test.
 
 The `refusal` names in `helloRefusals` are the ones in section 2's table. The
 handshake adds `self-connection` and `absent`. Stream `end` values are
-`clean-close`, `truncated-frame`, `frame-too-large`, and `truncated-prefix`,
-where either reaction is allowed (section 5).
+`clean-close`, `truncated-frame` (any EOF that is not at a frame boundary), and
+`frame-too-large`.
 
 kuilt keeps an exact copy of the file in its test sources, and a JVM test fails
 if the two ever differ. Edit the JSON, then paste it into
