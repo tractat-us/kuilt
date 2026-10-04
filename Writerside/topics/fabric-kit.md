@@ -56,7 +56,9 @@ When you already know **both** identities on a single link, `identified()`
 presents it as a 2-peer `Seam`. There is no handshake and no discovery — you
 supply `selfId` and `remoteId` directly. The result is `Woven` at construction,
 `broadcast` is the same as `sendTo(remoteId)`, and it goes `Torn` on the connection's
-EOF/error or on `close()`:
+EOF/error or on `close()`. When the connection ends by itself, the seam closes it
+for you. A clean end tears with `CloseReason.RemoteRequested`, and a read error
+tears with `CloseReason.Error`:
 
 ```kotlin
 val seam: Seam = identified(connection, selfId = me, remoteId = peer, dispatcher)

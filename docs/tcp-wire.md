@@ -179,8 +179,10 @@ or with TCP keep-alive.
 EOF from the peer ends the session in both directions: the receiver MUST stop
 sending and SHOULD close its side. Version 1 has no half-open session. kuilt
 tears its seam down on any EOF, clean or not, and accepts no further send. A
-frame it had already queued may still be flushed. It does not yet close its own
-side until the application closes the seam (#2898, section 6).
+frame it had already queued is still flushed, and then kuilt closes its own
+side, without waiting for the application to close the seam. A clean close
+tears the seam with `CloseReason.RemoteRequested`. A truncated stream tears it
+with `CloseReason.Error`, which carries the `EOFException`.
 
 ## 6. Refusals
 
@@ -196,10 +198,10 @@ error frame, so the other side sees a close.
 | absent Hello | before the first frame | EOF | `HelloAbsentException`, also a `HelloFormatException` |
 
 kuilt's `handshaking()` closes the connection on every handshake refusal. After
-the handshake, kuilt does not yet close the socket itself. An oversize length or
-a cut body tears the seam down, but the socket stays open until the application
-closes the seam. This gap is tracked by #2898. Until it is fixed, a peer talking
-to kuilt can see a silent, open connection where this contract promises a close.
+the handshake, kuilt closes it too: an oversize length or a cut body tears the
+seam down with `CloseReason.Error`, carrying the exception named above, and
+closes the connection once any queued frames are flushed. The application does
+not have to close the seam first.
 
 ## 7. Versions
 
