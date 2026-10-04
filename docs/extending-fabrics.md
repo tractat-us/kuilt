@@ -87,16 +87,24 @@ public suspend fun handshaking(
     dispatcher: CoroutineContext,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ): Seam {
-    conn.send(Hello.encode(selfId))
     val single = conn.singleCollection(dispatcher)
-    val remoteId = Hello.decode(single.firstFrame())
-    // Self-connection guard (#1488): a peer that dials its own advertised endpoint handshakes a
-    // preamble claiming its own id. A 2-peer seam whose "remote" is itself would echo its own frames;
-    // refuse it fast rather than weave a degenerate self-seam. Mirrors the mesh/NwSeam self-drop.
-    require(remoteId != selfId) { "handshaking refused a self-connection: remote resolved to selfId=${selfId.value}" }
-    return identified(single, selfId, remoteId, dispatcher, policy)
+    try {
+        single.send(Hello.encode(selfId))
+        val remoteId = Hello.decode(single.incoming.firstOrNull() ?: throw HelloAbsentException())
+        // Self-connection guard (#1488): a peer that dials its own advertised endpoint handshakes a
+        // preamble claiming its own id. A 2-peer seam whose "remote" is itself would echo its own frames;
+        // refuse it fast rather than weave a degenerate self-seam. Mirrors the mesh/NwSeam self-drop.
+        if (remoteId == selfId) throw HelloSelfConnectionException(selfId)
+        return identified(single, selfId, remoteId, dispatcher, policy)
+    } catch (failure: Throwable) {
+        // …
+        throw failure
+    }
 }
 ```
+
+Every exit that does not return a seam closes the connection first, so a refused hello
+never leaves either end holding a half-open link.
 
 Both take a `policy: DeliveryPolicy` that bounds the woven seam's inbox — capacity and
 overflow strategy. It defaults to `DeliveryPolicy.Reliable` (bounded, backpressured,
@@ -105,15 +113,25 @@ worth less than the memory it occupies. Expose it on your `Loom` factory so a co
 can choose — `handshaking()` used to drop it, which is why `:kuilt-tcp` shipped without
 the knob until #2323.
 
-`Hello` encodes a `PeerId` as its UTF-8 bytes — one frame, one round-trip:
+`Hello` is one frame, one round trip. Its body opens with a magic and a version, so a
+peer that is not kuilt, or speaks a different layout, is refused by name instead of
+being misread as an identity:
 
-<!-- verbatim from kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/Hello.kt#Hello -->
-```kotlin
-public object Hello {
-    public fun encode(selfId: PeerId): ByteArray = selfId.value.encodeToByteArray()
-    public fun decode(frame: ByteArray): PeerId = PeerId(frame.decodeToString())
-}
-```
+| Bytes | Field |
+|---|---|
+| 4 | magic `0x6B 0x75 0x69 0x6C` (ASCII `kuil`) |
+| 1 | version, `u8`, `0x01` |
+| 2 | flags, `u16` big-endian: v1 sends `0x0000`, and a receiver ignores every bit |
+| 2 | `idLen`, `u16` big-endian, 1 to 65535 |
+| `idLen` | the `PeerId`, UTF-8 |
+
+`idLen` must match the rest of the body exactly. `Hello.decode` refuses a body that breaks
+the layout with a named `HelloFormatException` subclass: a wrong magic, an unsupported
+version, a body shorter than the header, a length mismatch, an empty id, or invalid UTF-8.
+A link that closes before any hello is `HelloAbsentException`, and a remote claiming your
+own id is `HelloSelfConnectionException`. The two ends of a `handshaking()` link must both
+speak this layout. Before v1 the preamble was the bare UTF-8 id, and a peer still sending
+that is refused as `HelloBadMagicException`.
 
 ### Step 3 — write a `Loom`
 
@@ -173,14 +191,14 @@ the Ktor IO adapters or the plain `InputStream`/`OutputStream` adapters.
 from the underlying source and **must be collected exactly once**. But
 `handshaking()` (and `meshSeam()`) reads `incoming` *twice* in sequence:
 
-1. `connection.firstFrame()` reads the identity preamble (one collection).
+1. the first frame is read as the identity preamble (one collection).
 2. the inner seam's read loop installs a second collection.
 
 Earlier versions of this kit asked every stream fabric to pump the cold flow
 itself before handing it on. That step is now **gone** — `handshaking()` and
 `meshSeam()` wrap the connection internally with a private `singleCollection` adapter:
 one pump coroutine collects `incoming` exactly once and re-publishes frames
-through an unbounded `Channel`, so the preamble read and the read loop draw from
+through a bounded `Spool`, so the preamble read and the read loop draw from
 that single re-collectable stream. The transport just hands its raw `framed()`
 `Connection` straight in.
 
