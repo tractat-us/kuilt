@@ -150,8 +150,9 @@ assertFailsWith<FrameTooLargeException> { conn.incoming.toList() }
 Two assumptions to hold on to. Reading uses `Source.readByteArray`, which **blocks the collecting
 coroutine** until the bytes arrive — so collect on a real IO dispatcher, never under a virtual-time
 test scheduler, where a blocking read never advances and the test hangs rather than fails. And a
-clean EOF *at a frame boundary* completes `incoming` normally, while an EOF *mid-frame* propagates as
-an `EOFException`: a truncated frame is an error, not a tidy end of stream.
+clean EOF *at a frame boundary* completes `incoming` normally, while an EOF anywhere else — inside a
+body or partway through a length prefix — propagates as an `EOFException`: a truncated frame is an
+error, not a tidy end of stream.
 
 ### Plain TCP is already assembled
 
@@ -178,6 +179,16 @@ is a TOCTOU another process can win in the window between the probe closing and 
 `weave` refuses outright to build under a `TestDispatcher`: this is real socket IO, and under virtual
 time it would deadlock silently instead of failing. Test the layers above it over an in-memory
 `Connection` pair instead.
+
+### The other end is not written in Kotlin
+
+**Intent:** a program in another language has to talk to a kuilt `TcpLoom` peer, and you are about
+to read `framed()` and `Hello` to work out the bytes — or to invent a bridge protocol beside them.
+**Primitive:** the wire is a written contract, [`docs/tcp-wire.md`](../tcp-wire.md): a `u32`
+big-endian length per frame, one versioned `Hello` frame each way, then opaque payload frames, and
+close as EOF at a frame boundary. Implement it natively, and run its golden vectors,
+`kuilt-stream/wire/tcp-wire-v1.vectors.json`, as a table test. kuilt's own build checks the same
+file on every target, so the vectors cannot drift from what a kuilt peer actually sends.
 
 ## Sending to yourself
 

@@ -41,7 +41,8 @@ the kit once you have `Connection`s in hand.
 **`:kuilt-stream`** provides `framed(source, sink)`, which adapts a kotlinx-io
 `Source`/`Sink` byte-stream into a `Connection` using a 4-byte big-endian length
 prefix per frame. Oversize prefixes throw `FrameTooLargeException` before any
-allocation; a clean EOF at a frame boundary completes `incoming` normally.
+allocation. A clean EOF at a frame boundary completes `incoming` normally. A
+stream cut anywhere else, even inside a length prefix, throws `EOFException`.
 
 **`:kuilt-tcp`** (`tcpLoomHost` / `tcpLoomJoin`, JVM/Android only) is the worked
 example: it wires a Ktor socket's channels through `framed()` into a `Connection`,

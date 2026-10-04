@@ -29,8 +29,10 @@ public class FrameTooLargeException(size: Int, max: Int) :
  * - **Oversize protection (symmetric):** both directions are checked against [maxFrameSize].
  *   An oversize `send` throws [FrameTooLargeException] before writing; on read, a hostile
  *   prefix throws [FrameTooLargeException] before any allocation.
- * - **Clean EOF:** an [EOFException] thrown by [Source.readInt] at a frame boundary
- *   closes [incoming] normally. An EOF mid-frame propagates as [EOFException].
+ * - **Clean EOF only at a frame boundary:** a stream that ends exactly between two frames closes
+ *   [incoming] normally. A stream that ends anywhere else — inside a length prefix as well as
+ *   inside a body — is a truncated stream and propagates as [EOFException]. A close at a frame
+ *   boundary is the wire's only graceful leave, so a cut stream must never read as one.
  *
  * **Assumption:** the provided [Source] is backed by a hot (buffered) stream
  * (e.g. a Ktor read channel or an in-memory [kotlinx.io.Buffer]). Cold/non-buffered
@@ -60,12 +62,12 @@ private class FramedConnection(
 
     override val incoming: Flow<ByteArray> = flow {
         while (true) {
-            val len = try {
-                source.readInt()
-            } catch (_: EOFException) {
-                // Clean EOF at a frame boundary — incoming completes normally.
-                break
-            }
+            // Clean EOF is decided BEFORE the prefix is read, and only here: `exhausted()` is true
+            // exactly when no byte of a next frame exists. Once one has arrived, `readInt` throws
+            // EOFException on a stream cut inside the prefix, and that propagates as a truncation.
+            // Catching `readInt`'s EOFException instead would also swallow a 1–3 byte prefix.
+            if (source.exhausted()) break
+            val len = source.readInt()
             if (len < 0 || len > maxFrameSize) throw FrameTooLargeException(len, maxFrameSize)
             // readByteArray throws EOFException if the stream ends mid-frame — surface it loudly.
             emit(source.readByteArray(len))
