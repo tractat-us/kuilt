@@ -4,6 +4,7 @@ import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
@@ -125,9 +126,11 @@ internal class LinkSeam(
     private val connCloseClaimed = atomic(false)
     private val connClosed = CompletableDeferred<Unit>()
 
-    private val writer = scope.launch { writeLoop() }
+    // The read loop joins the writer before closing the conn, so it can flush what was queued.
+    private val writer: Job
 
     init {
+        writer = scope.launch { writeLoop() }
         scope.launch { readLoop() }
     }
 
