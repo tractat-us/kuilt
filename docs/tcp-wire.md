@@ -178,9 +178,10 @@ or with TCP keep-alive.
 
 EOF from the peer ends the session in both directions: the receiver MUST stop
 sending and SHOULD close its side. Version 1 has no half-open session. kuilt
-tears its seam down on any EOF, clean or not, and accepts no further send. A
-frame it had already queued is still flushed, and then kuilt closes its own
-side, without waiting for the application to close the seam. A clean close
+tears its seam down on any EOF, clean or not, and accepts no further send. It
+closes its own side at once, without waiting for the application to close the
+seam. Frames still queued to send are dropped, not flushed: a peer that has
+stopped reading would never take them. A clean close
 tears the seam with `CloseReason.RemoteRequested`. A truncated stream tears it
 with `CloseReason.Error`, which carries the `EOFException`.
 
@@ -200,8 +201,9 @@ error frame, so the other side sees a close.
 kuilt's `handshaking()` closes the connection on every handshake refusal. After
 the handshake, kuilt closes it too: an oversize length or a cut body tears the
 seam down with `CloseReason.Error`, carrying the exception named above, and
-closes the connection once any queued frames are flushed. The application does
-not have to close the seam first.
+closes the connection at once. Frames still queued to send are dropped, so
+nothing more is sent after the refusal. The application does not have to close
+the seam first.
 
 ## 7. Versions
 

@@ -21,9 +21,9 @@ import kotlin.coroutines.CoroutineContext
  * peer sending its bare UTF-8 id, an unsupported version) makes this function throw a named
  * [HelloFormatException], as does a link that ends before any frame ([HelloAbsentException]). A
  * remote that claims this peer's own [selfId] throws [HelloSelfConnectionException]. A link whose
-first frame the transport itself cuts or refuses (`framed()`'s `EOFException` or
-`FrameTooLargeException`) throws that read error unchanged: it is a broken stream, not a missing
-Hello (#2898). **Every exit
+ * first frame the transport itself cuts or refuses (`framed()`'s `EOFException` or
+ * `FrameTooLargeException`) throws that read error unchanged: it is a broken stream, not a missing
+ * Hello (#2898). **Every exit
  * that does not return a seam closes [conn]** — a refusal, a failed send, and cancellation alike —
  * so neither this caller nor the remote is left holding a half-open link, and nothing further is
  * sent on it. The same shape as the mesh's per-link handshake (#2587).
