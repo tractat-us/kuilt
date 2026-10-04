@@ -4,7 +4,6 @@ import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
@@ -39,8 +38,10 @@ import kotlin.coroutines.CoroutineContext
  * application to call [Seam.close]. A clean end of [Connection.incoming] tears the seam with
  * [CloseReason.RemoteRequested]; an `incoming` that throws (a stream cut mid-frame, an oversize
  * length prefix) tears it with [CloseReason.Error] carrying that exception, so a consumer can tell
- * the two apart. Either way the frames the writer had already queued are flushed first, and then
- * [conn] is closed — exactly once across every path, a later [close] included.
+ * the two apart. Either way [conn] is closed at once, without flushing frames still queued for the
+ * writer: the peer has gone or been refused, so nothing more is sent. A failed send closes [conn]
+ * the same way. The close happens exactly once across every path, and a [close] that arrives while
+ * another path's close is in flight waits for that one rather than closing again.
  *
  * **Thread-safety.** This type is correct under a *multi-threaded* dispatcher — the
  * injected [dispatcher] is only the scope for the read/write loops (scheduling); it is
@@ -126,11 +127,8 @@ internal class LinkSeam(
     private val connCloseClaimed = atomic(false)
     private val connClosed = CompletableDeferred<Unit>()
 
-    // The read loop joins the writer before closing the conn, so it can flush what was queued.
-    private val writer: Job
-
     init {
-        writer = scope.launch { writeLoop() }
+        scope.launch { writeLoop() }
         scope.launch { readLoop() }
     }
 
@@ -233,13 +231,12 @@ internal class LinkSeam(
             reason = CloseReason.Error(e)
         } finally {
             tearDown(reason)
-            // The remote is gone, so this side closes too (`docs/tcp-wire.md` § 5) — but only after
-            // the writer drains what was already queued: `tearDown` closed the outbox, so the writer
-            // ends once it has flushed it. Shielded so the close still lands if this loop is cancelled.
-            withContext(NonCancellable) {
-                writer.join()
-                closeConnOnce()
-            }
+            // The remote is gone or refused, so this side closes now and sends nothing more
+            // (`docs/tcp-wire.md` §§ 5–6). No flush first: a writer stuck in `conn.send` on a peer
+            // that has stopped reading would never finish one, and the socket would stay open (#2898).
+            // Closing unsticks it instead — its send fails and its own teardown is a no-op. Shielded so
+            // the close still lands if this loop is cancelled.
+            withContext(NonCancellable) { closeConnOnce() }
         }
     }
 
