@@ -23,6 +23,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.reflect.KClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -86,6 +87,19 @@ class TcpWireReadErrorCloseTest {
                 { assertEquals(SeamState.Torn(CloseReason.RemoteRequested), outcome.terminal, outcome.name) },
             )
         }
+    }
+
+    /**
+     * The same distinction one frame earlier: a Hello frame cut short is a broken stream, so the
+     * handshake throws the read error itself rather than reporting the Hello as merely absent, and
+     * still closes the transport.
+     */
+    @Test
+    fun aHelloCutShortThrowsTheReadErrorAndCloses() = runTest {
+        val cutHello = remoteHello.str("frame").dropLast(4)
+        val conn = CountingConnection(framed(source = bufferOf(cutHello), sink = Buffer()))
+        assertFailsWith<EOFException> { handshaking(conn, PeerId("zoe"), StandardTestDispatcher(testScheduler)) }
+        assertEquals(1, conn.closes, "a refused handshake closes the transport")
     }
 
     private class Outcome(
