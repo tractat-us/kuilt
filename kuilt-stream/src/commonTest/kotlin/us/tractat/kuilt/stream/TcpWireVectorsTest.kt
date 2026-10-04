@@ -161,16 +161,14 @@ class TcpWireVectorsTest {
         val streams = section("streams")
         assertTrue(streams.isNotEmpty(), "no stream vectors")
         val endings = streams.map { it.str("end") }.toSet()
-        assertEquals(setOf("clean-close", "truncated-frame", "truncated-prefix", "frame-too-large"), endings)
+        assertEquals(setOf("clean-close", "truncated-frame", "frame-too-large"), endings)
         streams.forEach { v ->
             val name = v.str("name")
             val delivered = mutableListOf<String>()
             val conn = framed(source = bufferOf(v.str("bytes")), sink = Buffer())
             val readAll: suspend () -> Unit = { conn.incoming.collect { delivered += it.toHexString() } }
             when (val end = v.str("end")) {
-                // kuilt's v1 receiver ends a stream cut inside a length prefix as a clean close; the
-                // contract allows that or an error, and forbids only delivering a partial frame.
-                "clean-close", "truncated-prefix" -> readAll()
+                "clean-close" -> readAll()
                 "truncated-frame" -> assertFailsWith<EOFException>(name) { readAll() }
                 "frame-too-large" -> assertFailsWith<FrameTooLargeException>(name) { readAll() }
                 else -> error("$name: unknown end '$end'")

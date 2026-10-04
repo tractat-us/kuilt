@@ -204,10 +204,17 @@
     },
     {
       "name": "eof-mid-prefix",
-      "note": "EOF two bytes into a length prefix. No partial frame is delivered; v1 lets the receiver report it as an error or as a close.",
+      "note": "EOF two bytes into a length prefix. A cut stream, not a clean close: only EOF at a frame boundary is graceful.",
       "bytes": "00000001aa0000",
       "frames": ["aa"],
-      "end": "truncated-prefix"
+      "end": "truncated-frame"
+    },
+    {
+      "name": "prefix-exactly-max",
+      "note": "01000000 is exactly 16 MiB, which the ceiling admits. The body never arrives, so the stream ends truncated rather than too large. This reds an exclusive ceiling.",
+      "bytes": "01000000",
+      "frames": [],
+      "end": "truncated-frame"
     },
     {
       "name": "prefix-one-over-max",

@@ -80,4 +80,21 @@ class FramedTest {
         val conn = framed(source = wire, sink = wire, maxFrameSize = 1024)
         assertFailsWith<EOFException> { conn.incoming.toList() }
     }
+
+    /**
+     * A stream cut inside a length prefix is a truncated stream, not a clean close. FIN at a frame
+     * boundary is the wire's only graceful leave, so a cut must not read as one. The good frame
+     * before the cut is still delivered, which proves the reader got as far as the partial prefix.
+     */
+    @Test
+    fun eofInsideALengthPrefixSurfacesAsEofException() = runTest {
+        val wire = Buffer()
+        wire.writeInt(1)
+        wire.write(byteArrayOf(7))
+        wire.write(byteArrayOf(0, 0))   // two bytes of the next four-byte prefix, then EOF
+        val conn = framed(source = wire, sink = wire, maxFrameSize = 1024)
+        val delivered = mutableListOf<ByteArray>()
+        assertFailsWith<EOFException> { conn.incoming.collect { delivered += it } }
+        assertEquals(listOf(listOf<Byte>(7)), delivered.map { it.toList() })
+    }
 }
