@@ -15,8 +15,9 @@ import us.tractat.kuilt.raft.test.FakeRaftNode
  * Sample usage of [ClusterClient].
  *
  * These functions are compiled as part of `commonTest` (via the `commonSamples` source set
- * wired by the `kuilt.kmp-library` convention plugin) and referenced from `module.md` via
- * `@sample`. They are load-bearing: a rename or API breakage fails the build.
+ * wired by the `kuilt.kmp-library` convention plugin), and `module.md` quotes their bodies under a
+ * `verbatim from` citation that `verifyDocCitations` keeps true. They are load-bearing: a rename,
+ * an API breakage or an edit the quote no longer matches fails the build.
  */
 object ClusterClientSample {
 
