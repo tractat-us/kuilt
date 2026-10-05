@@ -88,8 +88,6 @@ internal class SnapshotSender(
      * two can differ: a restore that drops a malformed stored config leaves the engine's record `null`
      * over it, and there the early check passes and the second one refuses, loading on each refusal.
      *
-     * @param storedIndex the stored snapshot's `lastIncludedIndex`, as the caller last recorded it
-     *   beside [RaftStorage.saveSnapshot]. Consulted only when an in-flight transfer is refused.
      * **A fresh transfer waits for a round no earlier chunk to [peer] was stamped with.** An
      * `InstallSnapshotResponse` names no snapshot, only an offset and the round it answers, and
      * heartbeats resend the outstanding chunk, so duplicate acks are routine. A transfer started in the
@@ -99,6 +97,8 @@ internal class SnapshotSender(
      * the next heartbeat (which bumps the round before it diverts here) starts it instead. The cost is
      * at most one heartbeat interval, paid only when one transfer follows another to the same peer.
      *
+     * @param storedIndex the stored snapshot's `lastIncludedIndex`, as the caller last recorded it
+     *   beside [RaftStorage.saveSnapshot]. Consulted only when an in-flight transfer is refused.
      * @param storedConfig the membership the stored snapshot carries, as the caller last recorded it
      *   beside [RaftStorage.saveSnapshot]. Consulted only when no transfer is in flight, or when a
      *   refused one is dropped for a newer snapshot.

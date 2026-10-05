@@ -27,7 +27,8 @@ internal data class GatedRead(val deferred: CompletableDeferred<Long>, val reinv
  * The heartbeat [round] nonce lives here because it exists *for* read freshness: the engine stamps it
  * into outgoing `AppendEntries`/`InstallSnapshot` sends (`round = tracker.round`), bumps it once per
  * heartbeat tick ([bumpRound]), and followers echo it back so an ACK can be credited to the exact
- * round it answered.
+ * round it answered. It has a second consumer: [SnapshotSender.onAck] tells a snapshot ack for the
+ * current transfer from a late one for an earlier transfer by the echoed round (#2843).
  *
  * **BLOCKER 1 — round-slip nonce (do not regress).** [recordAck] stores the `echoedRound` the follower
  * actually answered — the round the leader stamped into the request that triggered the response — NOT
@@ -95,6 +96,12 @@ internal class ReadIndexTracker {
     /**
      * Monotonically increasing per-leadership heartbeat round counter; bumped on each broadcast. The
      * engine stamps it into outgoing `AppendEntries`/`InstallSnapshot` sends and followers echo it back.
+     *
+     * **Monotonic per leadership, and [SnapshotSender.onAck] depends on it as well as read freshness.**
+     * It resets only in [reset] at the start of a leadership, which pairs with
+     * [SnapshotSender.abandonAll] at its end. A reset partway through a leadership would let a late
+     * InstallSnapshot ack for a dropped transfer pass as an ack for its replacement, and silently
+     * re-open the fake-`Complete` window #2843 closed.
      */
     var round: Long = 0L
         private set
