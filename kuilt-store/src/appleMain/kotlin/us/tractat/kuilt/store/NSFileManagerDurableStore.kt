@@ -75,8 +75,10 @@ import platform.posix.unlink
  * backends promise the same thing.
  *
  * The flush has a cost on every write, which matters because this store sits on a
- * telemetry exporter's per-export path (#1860, #2126); the measurement that
- * accepted it is recorded on #2141.
+ * telemetry exporter's per-export path (#1860, #2126). Measured on a Mac's internal
+ * SSD (`NSFileManagerDurableStoreFlushCostProbe`, opt-in): about 5 ms median and
+ * 7 ms p95 per write, for a 1 KB record and a 123 KB one alike, against well under
+ * 1 ms unflushed. The flush cost is per call, not per byte. Not measured on a device.
  *
  * `rename(2)` rather than `NSFileManager.moveItemAtPath:toPath:error:` because
  * the latter refuses to replace an existing destination, which forced an

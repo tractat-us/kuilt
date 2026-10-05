@@ -19,10 +19,10 @@ import us.tractat.kuilt.raft.RaftStorage
  * [DurableStoreRaftStorage.open], so every restart property here crosses a real filesystem and the
  * adapter's real encoder/decoder.
  *
- * It does **not** pin the medium's durability. `NSFileManagerDurableStore` commits with
- * `NSData.writeToFile` plus POSIX `rename(2)`, and issue #2141 records that this stops short of an
- * `fsync` on the containing directory — so a power loss between the rename and the filesystem's own
- * flush can lose a write that already returned. That caveat is invisible to every assertion below,
+ * It does **not** pin the medium's durability. `NSFileManagerDurableStore` flushes its temp file
+ * with `F_FULLFSYNC` before `rename(2)` (#2141) but does not flush the containing directory after
+ * it — so a power loss between the rename and the filesystem's own flush can bring back the previous
+ * record in place of a write that already returned. That caveat is invisible to every assertion below,
  * because nothing here kills the machine; a second handle in the same process reads back through the
  * page cache whether or not anything reached the platter. It is the **medium's** caveat, not the
  * adapter's: this adapter's whole durability claim is "I called `DurableStore.write` and it

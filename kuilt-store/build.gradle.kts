@@ -58,6 +58,17 @@ kotlin {
     }
 }
 
+// The flush-cost probe (#2141) times real disk writes, so it is opt-in. Excluded at the TASK level,
+// never self-skipped at runtime, so an un-run probe is absent from the results XML rather than a
+// green row (see AGENTS.md on -P-gated probes). `AbstractTestTask`, not `Test`: the probe lives in
+// appleTest, and `KotlinNativeHostTest`/`KotlinNativeSimulatorTest` are not `Test` tasks.
+val runBenchmarkTests = providers.gradleProperty("kuilt.benchmark.tests").orNull == "true"
+tasks.withType<AbstractTestTask>().configureEach {
+    if (!runBenchmarkTests) {
+        filter.excludeTestsMatching("*NSFileManagerDurableStoreFlushCostProbe")
+    }
+}
+
 // kuilt-conformance ships kotlin-test-junit in commonMain; resolve the
 // kotlin-test-framework-impl capability conflict to the JUnit4 variant so
 // kuilt-conformance and the default kotlin-test wiring don't clash.
