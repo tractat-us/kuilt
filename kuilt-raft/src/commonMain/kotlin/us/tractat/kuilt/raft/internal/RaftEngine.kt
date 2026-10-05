@@ -4289,6 +4289,7 @@ internal class RaftEngine(
             // The same exception, with the same numbers, as a local propose over the budget throws.
             is ForwardOutcome.PayloadTooLarge ->
                 pf.deferred.completeExceptionally(PayloadTooLarge(o.payloadBytes, o.budgetBytes, o.reservedBytes))
+            // `Failed` has no producer yet, but is documented non-retryable; the split is tracked by #2922.
             ForwardOutcome.NotLeader, ForwardOutcome.Failed ->
                 pf.deferred.completeExceptionally(LeadershipLostException("forwarded proposal was not committed; retry"))
         }

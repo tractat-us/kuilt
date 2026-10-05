@@ -357,8 +357,7 @@ internal sealed interface ForwardOutcome {
      * No leader produces this today: the only failures that reach a forwarded proposal's deferred on
      * the leader are `NotLeaderException` and `LeadershipLostException`, and both map to [NotLeader].
      * The originator still surfaces it as a retryable `LeadershipLostException`, which would be wrong
-     * the moment something produced it; that split is left for whoever adds the first producer
-     * (#2155).
+     * the moment something produced it. Splitting the two is tracked by #2922.
      */
     @Serializable
     @SerialName("fl")

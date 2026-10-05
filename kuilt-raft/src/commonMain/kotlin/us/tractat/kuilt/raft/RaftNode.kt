@@ -295,7 +295,9 @@ public interface RaftNode {
      *   envelope reserve (#2069). Raised before the command reaches the log, so [requestId] is
      *   unspent and replaying it against a smaller command keeps the exactly-once guarantee intact.
      *   That holds when the refusal comes from the leader of a forwarded propose too (#2155): it is
-     *   refused before the append, so nothing is ever committed under [requestId].
+     *   refused before the append, so this attempt appends nothing under [requestId]. The size check
+     *   runs before the leader's dedup lookup, though, so a retry of a request that already committed
+     *   can also be refused this way — tracked by #2923.
      */
     public suspend fun propose(command: ByteArray, requestId: Long): LogEntry
 
