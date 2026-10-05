@@ -127,6 +127,13 @@ import kotlin.time.Duration.Companion.milliseconds
  *
  *   The type is [Int], mirroring [snapshotChunkCeiling], which also means the ceiling
  *   can never be configured above what a single `ByteArray` can hold.
+ *
+ *   **Validated at construction to at least 1 (#2909).** At `0` only an empty snapshot fits and
+ *   below `0` not even that, so every snapshot carrying state is refused and a follower behind the
+ *   leader's compaction floor never catches up; the only sign is the rejection metric, which does
+ *   not name this setting. The floor is `1` rather than [snapshotChunkCeiling] on purpose: the
+ *   receiver checks only the accumulated sum, so a positive total below one chunk still installs
+ *   every snapshot that small. Requiring a whole chunk would impose a size policy, not reject a defect.
  * @param maxTermJump How far above this node's own term a frame may claim to be and still
  *   be admitted (#1897). A frame whose term exceeds `currentTerm + maxTermJump` is dropped
  *   at the dispatch boundary, before any adoption.
@@ -271,6 +278,14 @@ public data class RaftConfig(
                 "catching up; below 0 the slice itself throws on the engine's actor loop. Neither failure " +
                 "names this setting, which is why it is refused here (#2839)."
         }
+        require(snapshotTotalCeiling >= MIN_SNAPSHOT_TOTAL_BYTES) {
+            "snapshotTotalCeiling must be at least $MIN_SNAPSHOT_TOTAL_BYTES, was $snapshotTotalCeiling. " +
+                "A follower discards any InstallSnapshot reassembly that would grow past this many bytes: " +
+                "at 0 only an empty snapshot fits and below 0 not even that, so every snapshot carrying " +
+                "state is refused and a follower that falls behind the leader's compaction floor never " +
+                "catches up. The only sign is a rejection metric that does not name this setting, which is " +
+                "why it is refused here (#2909)."
+        }
     }
 
     private companion object {
@@ -289,5 +304,8 @@ public data class RaftConfig(
 
         /** Smallest [snapshotChunkCeiling] whose chunks advance a transfer. See its KDoc. */
         const val MIN_SNAPSHOT_CHUNK_BYTES = 1
+
+        /** Smallest [snapshotTotalCeiling] that admits a snapshot carrying any state. See its KDoc. */
+        const val MIN_SNAPSHOT_TOTAL_BYTES = 1
     }
 }
