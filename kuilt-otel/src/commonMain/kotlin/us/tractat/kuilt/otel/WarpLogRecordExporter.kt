@@ -459,8 +459,9 @@ public class WarpLogRecordExporter(
     private val sealedContents: MutableMap<Int, SegmentContent> = mutableMapOf()
 
     /**
-     * The sweep ledger — segments already retired out of [sealedSegments] whose keys are not
-     * yet confirmed deleted. Mirrors [LogSegmentIndex.retired]; see it for the crash argument.
+     * The sweep ledger — segments already retired out of [sealedSegments], or adopted segments
+     * whose write failed and so never entered it ([abandonAdopt]), whose keys are not yet
+     * confirmed deleted. Mirrors [LogSegmentIndex.retired]; see it for the crash argument.
      */
     private val retiringSegments: MutableList<Int> = mutableListOf()
 
@@ -657,6 +658,10 @@ public class WarpLogRecordExporter(
          *
          * The index write naming [number] still goes **first**, as a plain [Put]: see
          * [adoptRemoteSegment] for why that order, and what a crash between the two leaves.
+         *
+         * A **failed** write — refused, or cancelled, whose bytes may have landed anyway — puts
+         * [number] on the retirement ledger instead ([abandonAdopt]), so it is named and swept
+         * rather than orphaned or read back as a phantom.
          */
         class CommitAdopt(val number: Int, val bytes: ByteArray, val content: SegmentContent) : StoreAction
 
@@ -674,10 +679,13 @@ public class WarpLogRecordExporter(
          * The startup counterpart in [loadPersistedState] deletes with no ordering of its own —
          * it sweeps [LogSegmentIndex.retired] before it reads anything. It is sound for a
          * different reason, one turn's ordering alone would not give it: [CommitRetirement] is the
-         * only thing that can **extend** that list, so anything the next process finds there was
-         * already covered by a write that landed first. (Every other index write *restates* the
-         * list — a leading `Put(INDEX_KEY, encodeIndex())` writes those same numbers out again,
-         * which is free; it is the number appearing for the first time that has to be covered.)
+         * only thing that can **extend** that list with a number that was ever sealed, so any such
+         * number the next process finds there was already covered by a write that landed first.
+         * (Every other index write *restates* the list — a leading `Put(INDEX_KEY, encodeIndex())`
+         * writes those same numbers out again, which is free; it is the number appearing for the
+         * first time that has to be covered.) The one exception is an abandoned adopt
+         * ([abandonAdopt]), which a leading index write *does* publish for the first time — sound
+         * because that number was never sealed: no record under it was ever acknowledged durable.
          */
         class Sweep(val number: Int) : StoreAction
     }
@@ -1586,26 +1594,18 @@ public class WarpLogRecordExporter(
      */
     private suspend fun commit(actions: List<StoreAction>, logFailure: (Throwable) -> Unit): ExportResult {
         val swept = mutableListOf<Int>()
-        return runCatchingCancellable {
-            actions.forEach { action ->
-                when (action) {
-                    is StoreAction.Put -> store.write(action.key, action.bytes)
-                    is StoreAction.CommitRetirement -> {
-                        store.write(INDEX_KEY, action.bytes)
-                        lock.withLock { applyRetirement(action.numbers) }
-                    }
-                    is StoreAction.CommitRoll -> {
-                        store.write(INDEX_KEY, action.bytes)
-                        lock.withLock { applyRoll(action) }
-                    }
-                    is StoreAction.CommitAdopt -> {
-                        store.write(segmentKey(action.number), action.bytes)
-                        lock.withLock { applyAdopt(action) }
-                    }
-                    is StoreAction.Sweep -> if (sweep(action.number)) swept += action.number
-                }
-            }
-        }.fold(
+        // A cancellation is rethrown by `runCatchingCancellable`, past the `fold` below, so
+        // without this the index would keep whatever `indexPersisted` the previous turn left —
+        // `true`, usually — although this turn's leading index write may have landed and the rest
+        // did not. The `finally` marks it dirty on that one path, so the next turn rewrites the
+        // index from the fields (#2186). It does no I/O, so cancellation has nothing to interrupt.
+        var escaped = true
+        val outcome = try {
+            runCatchingCancellable { applyTurn(actions, swept) }.also { escaped = false }
+        } finally {
+            if (escaped) lock.withLock { ledgerSwept(swept, turnFailed = true) }
+        }
+        return outcome.fold(
             onSuccess = {
                 lock.withLock { ledgerSwept(swept, turnFailed = false) }
                 // The store took what it was given, so the next refusal is a new outage.
@@ -1626,6 +1626,39 @@ public class WarpLogRecordExporter(
     }
 
     /**
+     * Apply one turn's [actions] to [store] in order, stopping at the first that throws; record
+     * every key [StoreAction.Sweep] confirmed gone in [swept]. [commit]'s body — see it for the
+     * ordering argument.
+     */
+    private suspend fun applyTurn(actions: List<StoreAction>, swept: MutableList<Int>) {
+        actions.forEach { action ->
+            when (action) {
+                is StoreAction.Put -> store.write(action.key, action.bytes)
+                is StoreAction.CommitRetirement -> {
+                    store.write(INDEX_KEY, action.bytes)
+                    lock.withLock { applyRetirement(action.numbers) }
+                }
+                is StoreAction.CommitRoll -> {
+                    store.write(INDEX_KEY, action.bytes)
+                    lock.withLock { applyRoll(action) }
+                }
+                is StoreAction.CommitAdopt -> try {
+                    store.write(segmentKey(action.number), action.bytes)
+                    lock.withLock { applyAdopt(action) }
+                } catch (failure: Throwable) {
+                    // Every failure, cancellation included — a cancelled write's bytes may have
+                    // landed anyway — and the original is rethrown untouched, so this is
+                    // bookkeeping, not a guard. It does not suspend, so a plain call is enough: a
+                    // `NonCancellable` shield would protect nothing here. See [abandonAdopt].
+                    lock.withLock { abandonAdopt(action.number) }
+                    throw failure
+                }
+                is StoreAction.Sweep -> if (sweep(action.number)) swept += action.number
+            }
+        }
+    }
+
+    /**
      * Retire [swept] from the ledger and decide whether the index is still current.
      * Must hold [lock].
      *
@@ -1643,10 +1676,12 @@ public class WarpLogRecordExporter(
      * Apply a retirement whose ledger write has **returned**: move [numbers] off the sealed
      * layout and onto the in-memory ledger. Must hold [lock].
      *
-     * The only writer of [retiringSegments] outside recovery, and it runs only from
-     * [StoreAction.CommitRetirement] — which is why every number this field holds is already
-     * named under [LogSegmentIndex.retired] on disk, and why every number a later [encodeIndex]
-     * publishes there was covered by a write that landed first.
+     * The only writer of [retiringSegments] outside recovery for a number that was ever sealed,
+     * and it runs only from [StoreAction.CommitRetirement] — which is why every such number this
+     * field holds is already named under [LogSegmentIndex.retired] on disk, and why every such
+     * number a later [encodeIndex] publishes there was covered by a write that landed first. The
+     * other writer, [abandonAdopt], adds only numbers that were never sealed; see it for why those
+     * need no covering write.
      */
     private fun applyRetirement(numbers: List<Int>) {
         sealedSegments.removeAll(numbers.toSet())
@@ -1709,9 +1744,10 @@ public class WarpLogRecordExporter(
         // The index names the active segment, so it has to exist on disk before any content is
         // written into a segment it announces. It can never be the write that COMMITS a
         // retirement, and not because of where it sits in this list: it is `encodeIndex()` over
-        // the live fields, and `retiringSegments` only ever holds numbers a
-        // StoreAction.CommitRetirement already put on disk (see applyRetirement). So this write
-        // restates the ledger; it cannot extend it.
+        // the live fields, and the only once-sealed numbers `retiringSegments` holds are ones a
+        // StoreAction.CommitRetirement already put on disk (see applyRetirement). So for those
+        // this write restates the ledger; it cannot extend it. It does extend it with an abandoned
+        // adopt's number (see abandonAdopt), which was never sealed and needs no covering write.
         if (!indexPersisted) actions += StoreAction.Put(INDEX_KEY, encodeIndex())
         actions += flushActiveSegment(retire = retire, adopting = emptyList())
         return actions
@@ -1844,18 +1880,20 @@ public class WarpLogRecordExporter(
      * build time, because the roll that can follow in the same turn opens its segment at
      * [nextSegmentNumber]; deferring the reservation would hand both the same number, and the
      * roll's `maxOf` in [applyRoll] cannot repair a collision it was never shown. A turn that
-     * fails therefore burns the number. That is harmless for a refused write: no key exists under
-     * it, and numbers are never reused, so nothing can ever name it. It is not harmless for a
-     * write that throws *after* the bytes landed — that blob is now named by nothing, where the
-     * build-time form would have kept it readable. The refusal is the reachable case (a
-     * quota-bound store refuses large writes), so that is the trade taken.
+     * fails therefore burns the number, and [abandonAdopt] puts it on the retirement ledger —
+     * whether or not the write landed, which a *cancelled* write cannot tell — so the next index
+     * write names it as retired and a sweep removes whatever is there. Numbers are never reused,
+     * so nothing else can ever claim it.
      *
      * The index is written **first** here: a crash before the segment lands leaves the
      * index naming a segment the store lacks, which recovery tolerates (it is read back as
      * [SegmentContent.Pinned]), whereas the reverse order would leak an unreferenced segment blob
-     * forever. A *refusal* in that window, unlike a crash, is repaired: the turn fails, the index
-     * stays dirty, and the next turn's index write is encoded from fields that never held the
-     * number.
+     * forever. A failed write in that window, unlike a crash, is repaired, and the repair does not
+     * depend on how the turn failed: the number is on the ledger, and [commit] marks the index
+     * dirty on a refusal (its failure fold) and on a cancellation (its `finally`, since a
+     * cancellation is rethrown past the fold), so the next turn's index write names it as
+     * retired. **What is still open is a crash, or a restart, between the failure and that next
+     * index write** — the leading write's "sealed" claim is then what the next start reads.
      */
     private fun adoptRemoteSegment(remote: Rga<LogRecord>): PendingAdopt {
         val number = nextSegmentNumber++
@@ -1884,8 +1922,41 @@ public class WarpLogRecordExporter(
      * [applyRetirement] for the merge path.
      */
     private fun applyAdopt(adopt: StoreAction.CommitAdopt) {
-        if (adopt.number !in sealedSegments) sealedSegments += adopt.number
+        // Numbers are never reused and an adopt is applied once, so a number already sealed here
+        // is a broken invariant, not a repeat to be absorbed.
+        check(adopt.number !in sealedSegments) { "otel.logs: adopted segment ${adopt.number} is already sealed" }
+        sealedSegments += adopt.number
         sealedContents[adopt.number] = adopt.content
+    }
+
+    /**
+     * An adopt whose segment write **failed** — refused, or cancelled — puts its number on the
+     * retirement ledger instead of the layout. Must hold [lock].
+     *
+     * The write's outcome is unknown, and the ledger is the one place that is safe for both:
+     *
+     * - **It landed.** `IndexedDbDurableStore.write` suspends on a cancellable await for
+     *   `oncomplete`, and cancelling the caller does not abort the transaction, so a merge
+     *   cancelled there can leave the whole blob on disk. Held by no field, the next index write —
+     *   a roll's, a retirement's — is encoded without it, and the key is named by nothing in a
+     *   format with no key enumeration. On the ledger it is named under
+     *   [LogSegmentIndex.retired] and swept: by the next window pass, or by the next start.
+     * - **It did not.** The turn's leading index write already named the number as sealed, and a
+     *   restart before anything rewrote the index would read it back as [SegmentContent.Pinned].
+     *   On the ledger the next index write names it as retired instead, and the sweep deletes an
+     *   absent key, which is a no-op.
+     *
+     * Retiring it loses nothing that was promised: the merge did not return
+     * [ExportResult.Success], so the peer's log was never acknowledged as durable here. This is
+     * the one writer of [retiringSegments] besides [applyRetirement], and the one that does not
+     * rest on a covering write — it does not need one, because the number was never sealed, so
+     * there is no suppression state it could carry.
+     *
+     * A number already sealed is left alone: deleting a live segment's key is the one outcome
+     * this path must never reach, and [applyAdopt]'s `check` is the only way here with it sealed.
+     */
+    private fun abandonAdopt(number: Int) {
+        if (number !in sealedSegments && number !in retiringSegments) retiringSegments += number
     }
 
     /**
