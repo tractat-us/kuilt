@@ -343,10 +343,10 @@ fun kotlinSourcesIn(roots: List<java.io.File>, patterns: List<String>): FileTree
 
 // Every subproject's `module.md`: the Dokka per-module doc surface, and a doc root in its own right.
 //
-// It is the FIRST page a reader meets a module through, it carries both of the things this build
-// script checks in prose — `<!-- verbatim from … -->` citations and `@sample` tags — and it lives
-// under neither `docs/` nor `Writerside/`. `verifySampleLinks` (#2259) had to reach for it on day
-// one; `verifyDocCitations` did not, and so spent its whole life unable to see a citation written
+// It is the FIRST page a reader meets a module through, it is where both of the things this build
+// script checks in prose meet — `<!-- verbatim from … -->` citations, and `@sample` tags, which are
+// REJECTED here because Dokka renders them literally in a module doc (#2206) — and it lives under
+// neither `docs/` nor `Writerside/`. `verifySampleLinks` (#2259) had to reach for it on day one; `verifyDocCitations` did not, and so spent its whole life unable to see a citation written
 // there (#2256). One provider, two guards: the set of files they cover is now the same object, and
 // a reader can see at a glance that it is.
 //
@@ -2320,6 +2320,20 @@ val verifyModuleDocLinks by tasks.registering {
 // is why the name this guard indexes is the trailing identifier before the parameter list rather
 // than anything parsed out of a receiver.
 //
+// ── And a rule 0: the tag must be in KDoc on a DECLARATION, never in a `module.md` (#2206) ───────
+// This guard used to resolve module-doc tags by rules 1–6 and pass the resolvable ones — blessing
+// eight tags that every one rendered as literal text, because Dokka expands `@sample` only in KDoc.
+// Measured on `:kuilt-otel`: `dokkaGenerateModuleHtml` emitted `<code …>@sample
+// us.tractat.kuilt.otel.sampleWarpTelemetry</code>` and none of the sample's body. Resolvability
+// is the wrong question there, so a module-doc tag is now rejected outright, mid-line form
+// included, and the message points at the replacement: the body inlined under a `<!-- verbatim
+// from … -->` citation, which `verifyDocCitations` scans in `module.md` and keeps true. The
+// detector carries its own positive control (`moduleDocControls`), checked on every execution.
+// Tier: a text scan, because a `module.md` is prose no compiler or Dokka setting ever rejects
+// (Dokka's `failOnWarning` would not help — it does not warn here either). What would retire it:
+// Dokka expanding `@sample` in module docs, at which point this rule becomes a false red and the
+// inlined blocks could go back to tags.
+//
 // ── Why it cannot be quietly bypassed ───────────────────────────────────────────────────────────
 // Rule 6 is a MODEL of a wiring that lives somewhere else, and `verifyDocCitations` already learned
 // what happens when a guard's model can drift from the thing it models: it goes green over exactly
@@ -2336,7 +2350,7 @@ val verifyModuleDocLinks by tasks.registering {
 // someone sees, rather than a false green, which nobody does. That asymmetry is the design.
 val verifySampleLinks by tasks.registering {
     group = "verification"
-    description = "Fails if an @sample KDoc tag names a sample Dokka cannot resolve (#2259)."
+    description = "Fails if an @sample KDoc tag names a sample Dokka cannot resolve (#2259), or sits in a module.md (#2206)."
     // A module is keyed by its directory RELATIVE TO THE ROOT, not by its Gradle name, so every path
     // this task prints is one a reader can paste (`:demo-web` lives at `demo/web`). Longest-path
     // first, so mapping a file to its module is a first-match on a prefix even when one module's
@@ -2351,9 +2365,10 @@ val verifySampleLinks by tasks.registering {
     val sources = kotlinSourcesIn(moduleDirs.map { it.second.resolve("src") })
     inputs.files(sources).withPropertyName("kotlinSources")
         .withPathSensitivity(PathSensitivity.RELATIVE)
-    // `module.md` carries `@sample` tags too, and a module.md-only PR is docs-only — which is why
-    // this task is also run by CI's `doc-citations` job, exactly as its sibling is. Shared with
-    // `verifyDocCitations`, which reads the same files for citations (#2256).
+    // `module.md` is read to REJECT `@sample` tags there (#2206 — Dokka never expands one in a
+    // module doc), and a module.md-only PR is docs-only — which is why this task is also run by
+    // CI's `doc-citations` job, exactly as its sibling is. Shared with `verifyDocCitations`, which
+    // reads the same files for the citations that replace those tags (#2256).
     val moduleDocs = moduleDocFiles()
     inputs.files(moduleDocs).withPropertyName("moduleDocs")
         .withPathSensitivity(PathSensitivity.RELATIVE)
@@ -2517,6 +2532,44 @@ val verifySampleLinks by tasks.registering {
         fun isSampleTag(content: String): Boolean =
             content == "@sample" || content.startsWith("@sample ") || content.startsWith("@sample\t")
 
+        // A `@sample` in a `module.md` (#2206). Dokka expands the tag only in KDoc on a
+        // declaration; in a module doc it renders the raw `@sample <fqn>` line as text — measured
+        // on `:kuilt-otel`, whose quick start showed exactly that. So in a module doc the tag is
+        // wrong wherever it stands and whatever it names: a line-starting tag, and the dotted
+        // mid-line form `strayTag` matches (a backticked mention is prose ABOUT the tag, not one).
+        fun moduleDocSampleLines(lines: List<String>): List<Int> = lines.indices.filter { i ->
+            isSampleTag(kdocContent(lines[i])) || strayTag.containsMatchIn(lines[i])
+        }
+
+        // This guard's own positive control, run on every execution: the detector must red on each
+        // shape that shipped (fenced, bare, bracketed, mid-line) and stay clear of the replacement
+        // form and of prose naming the tag. A detector that matched nothing would otherwise read
+        // as a tree with no module-doc samples.
+        val moduleDocControls = listOf(
+            "fenced, as kuilt-otel shipped it" to (listOf("```kotlin", "@sample a.b.sampleX", "```") to listOf(1)),
+            "bare, as kuilt-cluster shipped it" to (listOf("Text.", "", "@sample a.b.C.f") to listOf(2)),
+            "bracketed" to (listOf("@sample [a.b.sampleX]") to listOf(0)),
+            "mid-line" to (listOf("See @sample a.b.sampleX for more.") to listOf(0)),
+            "the verbatim citation that replaces it" to (
+                listOf("<!-- verbatim from m/src/commonSamples/kotlin/S.kt#sampleX -->", "```kotlin", "f()", "```")
+                    to emptyList()
+                ),
+            "prose naming the tag in backticks" to (listOf("Never write `@sample a.b.f` here.") to emptyList()),
+            "a different tag" to (listOf("@sampleFoo a.b.f") to emptyList()),
+        )
+        val controlMisses = moduleDocControls.mapNotNull { (name, case) ->
+            val (lines, expected) = case
+            val actual = moduleDocSampleLines(lines)
+            if (actual == expected) null else "$name — expected lines $expected, got $actual"
+        }
+        if (controlMisses.isNotEmpty()) {
+            error(
+                "verifySampleLinks' module-doc detector does not agree with its own positive control " +
+                    "(#2206), so its verdict on module.md means nothing in either direction:\n  " +
+                    controlMisses.joinToString("\n  "),
+            )
+        }
+
         val failures = mutableListOf<String>()
         var checked = 0
 
@@ -2596,20 +2649,27 @@ val verifySampleLinks by tasks.registering {
         }
 
         moduleDocs.files.sortedBy { it.invariantSeparatorsPath }.forEach { md ->
-            val module = moduleOf(md) ?: return@forEach
+            moduleOf(md) ?: return@forEach
             val rel = md.relativeTo(rootPath).invariantSeparatorsPath
-            md.readLines().forEachIndexed { i, line ->
-                val content = kdocContent(line)
-                if (isSampleTag(content)) {
-                    verify("$rel:${i + 1}", module, "in the module doc", content.removePrefix("@sample").trim())
-                }
+            val lines = md.readLines()
+            moduleDocSampleLines(lines).forEach { i ->
+                checked++
+                failures += "$rel:${i + 1}\n      ${lines[i].trim()}\n      " +
+                    "Dokka does not expand @sample in a module doc — it renders this line as literal " +
+                    "text where the example should be (#2206). Inline the sample's body instead, " +
+                    "under a citation verifyDocCitations keeps true:\n" +
+                    "        <!-- verbatim from <module>/src/commonSamples/kotlin/<File>.kt#<sampleFunction> -->\n" +
+                    "        ```kotlin\n        <the sample's body>\n        ```\n      " +
+                    "kuilt-bolt/module.md shows the shape. A @sample on a declaration's KDoc DOES " +
+                    "render, so if the example belongs there, put the tag there."
             }
         }
 
         if (failures.isNotEmpty()) {
             error(
-                "Dangling @sample link(s) (#2259). A sample's body is compiled, but its LINK is not " +
-                    "— a tag Dokka cannot resolve renders the raw name where the example should be, " +
+                "@sample tag(s) that will not render (#2259, #2206). A sample's body is compiled, but " +
+                    "its LINK is not — a tag Dokka cannot resolve, or one written in a module doc " +
+                    "where Dokka never expands it, renders the raw name where the example should be, " +
                     "and warns into a build nobody fails:\n\n" + failures.joinToString("\n\n") + "\n",
             )
         }
