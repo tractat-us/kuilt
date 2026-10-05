@@ -209,9 +209,9 @@ public class GovernedHeddleNode internal constructor(
      * open and the leaf cannot cover the request.
      */
     override fun reserve(leaf: GroupId, maximumCost: Long): ReserveOutcome =
-        when (closedBecause.value) {
+        when (val reason = closedBecause.value) {
             null -> node.reserve(leaf, maximumCost)
-            else -> ReserveOutcome.NoHoldings // RED: still conflates the closed gate with an idle lane
+            else -> GateClosed(self, reason)
         }
 
     /** Complete reservation [id], charging [actualCost] ([HeddleNode.complete]). */
@@ -233,9 +233,9 @@ public class GovernedHeddleNode internal constructor(
      * [isWritable] boot gate is closed.
      */
     public fun schedule(parent: GroupId): ScheduleOutcome =
-        when (closedBecause.value) {
+        when (val reason = closedBecause.value) {
             null -> scheduleOutcomeOf(node.schedule(parent))
-            else -> ScheduleOutcome.NothingToDelegate // RED: still conflates the closed gate with idleness
+            else -> GateClosed(self, reason)
         }
 
     /** The §8.2 bound metrics at [parent] ([HeddleNode.boundMetrics]). */
