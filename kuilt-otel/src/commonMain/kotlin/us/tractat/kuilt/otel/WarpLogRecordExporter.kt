@@ -1601,7 +1601,7 @@ public class WarpLogRecordExporter(
         // index from the fields (#2186). It does no I/O, so cancellation has nothing to interrupt.
         var escaped = true
         val outcome = try {
-            runCatchingCancellable { applyTurn(actions, swept) }.also { escaped = false }
+            runCatchingCancellable { storeTurn(actions, swept) }.also { escaped = false }
         } finally {
             if (escaped) lock.withLock { ledgerSwept(swept, turnFailed = true) }
         }
@@ -1630,7 +1630,7 @@ public class WarpLogRecordExporter(
      * every key [StoreAction.Sweep] confirmed gone in [swept]. [commit]'s body — see it for the
      * ordering argument.
      */
-    private suspend fun applyTurn(actions: List<StoreAction>, swept: MutableList<Int>) {
+    private suspend fun storeTurn(actions: List<StoreAction>, swept: MutableList<Int>) {
         actions.forEach { action ->
             when (action) {
                 is StoreAction.Put -> store.write(action.key, action.bytes)
