@@ -34,7 +34,7 @@ import us.tractat.kuilt.raft.RaftMessageType
  * | [TimeoutNow] | `tn` | | [Forward] | `fw` |
  * | [ForwardResponse] | `fwr` | | | |
  *
- * and [ForwardOutcome]'s `cm` / `nl` / `fl`.
+ * and [ForwardOutcome]'s `cm` / `nl` / `fl` / `ptl`.
  *
  * **Never change a tag on its own.** A peer that does not recognise a tag refuses the frame
  * (`RaftTraceEvent.FrameUndecodable`), so renaming one splits a group along that one frame type —
@@ -43,7 +43,12 @@ import us.tractat.kuilt.raft.RaftMessageType
  * moved: byte-string framing changed only the frames that carry bytes. A tag changes only as part of
  * a new wire epoch that changes **all** of them, so a mixed group refuses every frame. Renaming or
  * moving a class no longer touches the wire; that is the other half of why the tags are explicit.
- * Pinned, all fourteen, by `RaftWireGoldenVectorTest.everyFrameTypeCarriesItsDocumentedTag`.
+ * Pinned, all fifteen, by `RaftWireGoldenVectorTest.everyFrameTypeCarriesItsDocumentedTag`.
+ *
+ * **Adding a tag is a smaller break than changing one, but it is still a break.** There is no
+ * unknown-subtype fallback in the polymorphic decoder, so a build without the new subtype refuses
+ * any frame carrying it as `FrameUndecodable`. A new subtype therefore has to say what an older peer
+ * does when that one frame goes missing — see [ForwardOutcome.PayloadTooLarge] for the worked case.
  *
  * Short on purpose, too: a fully-qualified tag cost 52–68 bytes on every frame, where these cost 3
  * or 4 — and a vote is only about 30 bytes of fields.
@@ -346,8 +351,57 @@ internal sealed interface ForwardOutcome {
     @SerialName("nl")
     data object NotLeader : ForwardOutcome
 
-    /** The proposal failed for a non-retryable reason. */
+    /**
+     * The proposal failed for a non-retryable reason.
+     *
+     * No leader produces this today: the only failures that reach a forwarded proposal's deferred on
+     * the leader are `NotLeaderException` and `LeadershipLostException`, and both map to [NotLeader].
+     * The originator still surfaces it as a retryable `LeadershipLostException`, which would be wrong
+     * the moment something produced it; that split is left for whoever adds the first producer
+     * (#2155).
+     */
     @Serializable
     @SerialName("fl")
     data object Failed : ForwardOutcome
+
+    /**
+     * The leader refused the command before appending it: on the wire it costs [payloadBytes], and
+     * **this leader's** transport admits at most [budgetBytes] once [reservedBytes] of envelope is held
+     * back (#2155). They are the three numbers a local `propose` throws as
+     * [us.tractat.kuilt.core.PayloadTooLarge], and the originator rethrows exactly that. It is not
+     * retryable: the command fails the same way against every leader whose budget is no larger.
+     *
+     * The leader has to check a forward itself, because the forwarder's own check used the
+     * forwarder's budget. A mesh reports the minimum across its own live links, so two nodes' budgets
+     * routinely differ, and a forwarder with the larger one admits a command its leader cannot
+     * replicate.
+     *
+     * The `init` holds what a genuine refusal satisfies. A frame that contradicts itself (a negative
+     * limit, or a payload that would have fitted) fails to decode and is dropped as
+     * `FrameUndecodable`, rather than reaching the caller as a refusal that names no real limit.
+     *
+     * **What an older peer does with it.** The `ptl` tag was added inside the still-unreleased wire
+     * epoch of #2160, so no tagged release ever receives it: every release up to and including 0.7.3
+     * already refuses all of this build's frames. A *snapshot* build from between that epoch and this
+     * variant has no `ptl` subtype, and the polymorphic decoder has no unknown-subtype fallback, so
+     * it drops the reply as `FrameUndecodable`. Its forward then stays outstanding until the caller's
+     * own timeout, or until the node closes. That is the whole cost, and only a command the leader
+     * would otherwise have wedged its log on ever pays it.
+     */
+    @Serializable
+    @SerialName("ptl")
+    data class PayloadTooLarge(
+        val payloadBytes: Int,
+        val budgetBytes: Int,
+        val reservedBytes: Int,
+    ) : ForwardOutcome {
+        init {
+            require(budgetBytes >= 0 && reservedBytes >= 0) {
+                "a payload refusal names non-negative limits, got budget=$budgetBytes reserved=$reservedBytes"
+            }
+            require(payloadBytes > budgetBytes) {
+                "a payload refusal names a payload over its budget, got payload=$payloadBytes budget=$budgetBytes"
+            }
+        }
+    }
 }

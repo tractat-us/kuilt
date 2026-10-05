@@ -275,7 +275,10 @@ public interface RaftNode {
      * @throws PayloadTooLarge if [command] exceeds the transport's published payload budget less an
      *   envelope reserve (#2069). Raised on the calling coroutine *before* the command reaches the
      *   log — nothing was appended and no client serial was burned, so a retry with a smaller
-     *   command is safe. A transport that publishes no budget never raises it.
+     *   command is safe. A transport that publishes no budget never raises it. On a non-leader it
+     *   can also arrive from the **leader**, whose budget may be smaller than this node's (#2155):
+     *   then the numbers are the leader's, a serial was drawn but nothing was appended under it, and
+     *   it is still not worth retrying the same command. It is never a [LeadershipLostException].
      */
     public suspend fun propose(command: ByteArray): LogEntry
 
@@ -291,6 +294,8 @@ public interface RaftNode {
      * @throws PayloadTooLarge if [command] exceeds the transport's published payload budget less an
      *   envelope reserve (#2069). Raised before the command reaches the log, so [requestId] is
      *   unspent and replaying it against a smaller command keeps the exactly-once guarantee intact.
+     *   That holds when the refusal comes from the leader of a forwarded propose too (#2155): it is
+     *   refused before the append, so nothing is ever committed under [requestId].
      */
     public suspend fun propose(command: ByteArray, requestId: Long): LogEntry
 

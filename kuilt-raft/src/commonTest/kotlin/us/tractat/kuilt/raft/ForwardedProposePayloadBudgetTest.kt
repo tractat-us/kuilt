@@ -1,9 +1,12 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.serialization.ExperimentalSerializationApi::class)
 package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.builtins.ByteArraySerializer
 import us.tractat.kuilt.core.PayloadTooLarge
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.internal.RaftMessage
+import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -116,6 +119,99 @@ class ForwardedProposePayloadBudgetTest {
             { assertTrue(sim.nodes.values.all { it.commitIndex.value >= entry.index }, "replicated to every voter") },
         )
     }
+
+    /**
+     * The leader measures a forward's envelope around the **originator's** id, because that is the
+     * id the appended entry carries — a leader appends a forward under the proposer's `DedupKey`
+     * unchanged. Measured around its own short id instead, the leader admits a command at its own
+     * limit, wraps it in the forwarder's long id, and mints a frame its transport drops.
+     *
+     * Fix-agnostic in the same way as `ProposeEnvelopeReserveTest`'s durable-id arm: the leader may
+     * refuse this command or carry it, but it must never mint a frame over its budget, and the
+     * originator must never be told to retry.
+     */
+    @Test
+    fun aForwardIsMeasuredAroundTheOriginatorsIdNotTheLeaders() = raftRunTest {
+        val ids = (1..3).map { NodeId("v$it") }
+        val longIdNode = ids.first()
+        val cluster = ClusterConfig(voters = ids.toSet())
+        // One shared config so the seeded election timeouts differ across nodes (see `raftSim`).
+        val config = fastRaftConfig()
+        val sim = RaftSimulation(
+            nodeIds = ids,
+            scope = this,
+            nodeScope = backgroundScope,
+            maxPayloadBytes = leaderBudget,
+            nodeFactory = { id, transport, storage, childScope ->
+                val identity = if (id == longIdNode) ClientIdentity.Durable(ClientId(longDurableId)) else ClientIdentity.Auto
+                childScope.raftNode(cluster, transport, storage, config, identity)
+            },
+        )
+        // The long id has to be the forwarder's, so it must not be the leader's.
+        if (sim.idOf(sim.awaitLeader()) == longIdNode) sim.nodes.getValue(longIdNode).transferLeadership(ids[1])
+        val leader = sim.awaitLeader(among = ids.toSet() - longIdNode)
+        sim.awaitRole(longIdNode, RaftRole.Follower)
+        sim.network.setNodeMaxPayloadBytes(longIdNode, forwarderBudget)
+        assertTrue(
+            sim.network.overBudget.isEmpty(),
+            "rig: nothing may be over budget before the forward, or the assertion below measures nothing: " +
+                "${sim.network.overBudget}",
+        )
+        sim.network.recording = true
+
+        // The limit the leader enforces around its OWN id, discovered from a refusal.
+        val leadersOwnLimit = assertFailsWith<PayloadTooLarge> { leader.propose(ByteArray(leaderBudget)) }.budgetBytes
+        val command = commandOfWireSize(leadersOwnLimit)
+        val outcome = runCatchingCancellable {
+            withTimeout(30.seconds) { sim.nodes.getValue(longIdNode).propose(command) }
+        }
+        sim.settle()
+
+        val leaderId = sim.idOf(leader)
+        assertAll(
+            {
+                assertTrue(
+                    sim.network.sent.any { it.from == longIdNode && it.to == leaderId && it.message is RaftMessage.Forward },
+                    "rig: the forwarder's own gate must have admitted the command, or the leader was never asked",
+                )
+            },
+            {
+                assertTrue(
+                    sim.network.overBudget.isEmpty(),
+                    "a ${longDurableId.length}-character originator id must not carry a command past the " +
+                        "leader's budget: ${sim.network.overBudget}",
+                )
+            },
+            {
+                assertTrue(
+                    outcome.exceptionOrNull() !is LeadershipLostException,
+                    "and the originator must get a verdict it can act on, not a retry: ${outcome.exceptionOrNull()}",
+                )
+            },
+        )
+    }
+
+    /**
+     * A command of exactly [wire] encoded bytes, found by walking down from `wire − 1` so the codec,
+     * not this test, decides the header width.
+     */
+    private fun commandOfWireSize(wire: Int): ByteArray {
+        for (raw in (wire - 1) downTo maxOf(0, wire - 8)) {
+            val candidate = ByteArray(raw) { if (it % 2 == 0) 0x7F else 0 }
+            if (raftCbor.encodeToByteArray(ByteArraySerializer(), candidate).size == wire) return candidate
+        }
+        error("no command encodes to exactly $wire wire bytes")
+    }
+
+    /**
+     * Long enough that even the narrowest envelope around it outgrows the 256 B floor every short
+     * auto id sits under — the same 160-character id `ProposeEnvelopeReserveTest` uses, for the same
+     * reason.
+     */
+    private val longDurableId = (
+        "tenant-7f3a9c21:client-0f8e1d4b-6a52-4c9e-b1d7-3e8a5f2c0946:shard-11-writer:" +
+            "route/eu-west-2/az-c/rack-17/host-0042/process-3/lane-writer"
+        ).padEnd(160, 'z')
 }
 
 /** The [NodeId] under which [node] is registered in this simulation. */

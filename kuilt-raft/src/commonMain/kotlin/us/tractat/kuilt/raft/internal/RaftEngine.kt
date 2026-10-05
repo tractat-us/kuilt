@@ -3539,8 +3539,10 @@ internal class RaftEngine(
      * **Why here rather than in the actor loop.** Refusing on the caller's coroutine means the command
      * never enters the engine at all: no dedup serial is burned ([onLocalPropose] does `++serial`), no
      * forward is queued, and the caller gets a synchronous, actionable failure it can retry against a
-     * smaller command. It also covers the **follower-forward** path for free — a non-leader's propose
-     * leaves as a [RaftMessage.Forward], which must cross this same local transport.
+     * smaller command. On a non-leader it bounds the [RaftMessage.Forward] hop, which crosses this
+     * same local transport — but **not** the leader's append, which is held to the leader's budget.
+     * Those differ, so [onForward] applies the same measurement on the leader through
+     * [proposeRefusal] and answers [ForwardOutcome.PayloadTooLarge] (#2155).
      *
      * **Why the budget is read per propose rather than snapshotted at construction.**
      * `Seam.maxPayloadBytes` is "a reading, not a lease": a mesh reports the minimum across its live
@@ -3615,11 +3617,25 @@ internal class RaftEngine(
      * differs there by the payload array's own header, for the reason [snapshotChunkReserve] gives.
      */
     private fun checkProposeFitsTransport(command: ByteArray) {
-        val budget = transport.maxPayloadBytes ?: return
-        val reserved = maxOf(HEADER_BUDGET, proposeEnvelopeBytes())
+        proposeRefusal(command, clientIdProbe)?.let { throw it }
+    }
+
+    /**
+     * [checkProposeFitsTransport]'s measurement, **returned** rather than thrown: the refusal for
+     * [command] carried in an entry stamped with [clientId], or `null` when it fits (or the transport
+     * names no budget).
+     *
+     * The local gate passes this node's own [clientIdProbe]. [onForward] passes the **originator's**
+     * id, because that is the id the appended entry will carry: the leader appends a forward under
+     * the proposer's [DedupKey] unchanged, so measuring the envelope around its own id would
+     * under-reserve for every forwarder whose id is wider (#2155).
+     */
+    private fun proposeRefusal(command: ByteArray, clientId: ClientId): PayloadTooLarge? {
+        val budget = transport.maxPayloadBytes ?: return null
+        val reserved = maxOf(HEADER_BUDGET, proposeEnvelopeBytes(clientId))
         val limit = (budget - reserved).coerceAtLeast(0)
         val wireBytes = raftCbor.encodeToByteArray(ByteArraySerializer(), command).size
-        if (wireBytes > limit) throw PayloadTooLarge(wireBytes, limit, reserved)
+        return if (wireBytes > limit) PayloadTooLarge(wireBytes, limit, reserved) else null
     }
 
     /**
@@ -3663,8 +3679,11 @@ internal class RaftEngine(
      * caller's coroutine, so the cache would be shared mutable state needing a lock to be worth
      * having. It encodes roughly 250 bytes, against a command the same call is already encoding in
      * full; the lock would cost more than the saving.
+     *
+     * [clientId] is the id the entry will carry: this node's [clientIdProbe] for a local propose, the
+     * originator's for a forwarded one (see [proposeRefusal]).
      */
-    private fun proposeEnvelopeBytes(): Int {
+    private fun proposeEnvelopeBytes(clientId: ClientId): Int {
         val empty = ByteArray(0)
         val probe: RaftMessage = RaftMessage.AppendEntries(
             term = MAX_PLAUSIBLE_TERM,
@@ -3675,7 +3694,7 @@ internal class RaftEngine(
                     index = MAX_PLAUSIBLE_INDEX,
                     term = MAX_PLAUSIBLE_TERM,
                     command = empty,
-                    dedupKey = DedupKey(clientIdProbe, Long.MAX_VALUE),
+                    dedupKey = DedupKey(clientId, Long.MAX_VALUE),
                 ),
             ),
             leaderCommit = MAX_PLAUSIBLE_INDEX,
@@ -4193,6 +4212,21 @@ internal class RaftEngine(
             send(from, RaftMessage.ForwardResponse(m.clientRequestId, ForwardOutcome.NotLeader))
             return
         }
+        // The forwarder's own propose-time gate measured against ITS transport, not this one, and a
+        // forwarder with the larger budget admits a command this leader cannot replicate — the
+        // permanent wedge checkProposeFitsTransport closes for a local propose (#2155). So refuse
+        // here, before the append, measured around the id the entry would carry.
+        proposeRefusal(m.command, m.dedupKey?.clientId ?: clientIdProbe)?.let { refusal ->
+            debug { "onForward: refused reqId=${m.clientRequestId} from ${from.value} — ${refusal.message}" }
+            send(
+                from,
+                RaftMessage.ForwardResponse(
+                    m.clientRequestId,
+                    ForwardOutcome.PayloadTooLarge(refusal.payloadBytes, refusal.budgetBytes, refusal.reservedBytes),
+                ),
+            )
+            return
+        }
         val d = CompletableDeferred<LogEntry>()
         // Append under the proposer's own dedupKey UNCHANGED — the leader must not re-stamp it (that
         // would defeat exactly-once) and does not count it among the serials it issued itself.
@@ -4251,6 +4285,10 @@ internal class RaftEngine(
         when (val o = m.outcome) {
             // Re-wrap with the proposer's own dedupKey so the returned entry matches what the leader appended.
             is ForwardOutcome.Committed -> pf.deferred.complete(LogEntry(o.index, o.term, pf.command, dedupKey = pf.dedupKey))
+            // Not retryable: the leader refused it before appending, and would refuse it again (#2155).
+            // The same exception, with the same numbers, as a local propose over the budget throws.
+            is ForwardOutcome.PayloadTooLarge ->
+                pf.deferred.completeExceptionally(PayloadTooLarge(o.payloadBytes, o.budgetBytes, o.reservedBytes))
             ForwardOutcome.NotLeader, ForwardOutcome.Failed ->
                 pf.deferred.completeExceptionally(LeadershipLostException("forwarded proposal was not committed; retry"))
         }
