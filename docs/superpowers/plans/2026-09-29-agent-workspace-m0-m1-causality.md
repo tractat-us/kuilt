@@ -1,5 +1,9 @@
 # Agent workspace — M0 harness and M1 causality spike: Implementation Plan
 
+> **Historical (2026-10-05).** This plan was executed. The `:demo-workspace` module it builds was
+> removed from this repository afterwards; its code is at commit `53f89b34`, and its findings are
+> frozen in `demo/workspace/RESULTS.md` and `demo/workspace/CONTRACTS.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build one headless scenario harness for the dinner story, run a server-owned baseline through it (M0), then add a kuilt backend and prove or refute the input-history promise on the same scenarios (M1, causality half).

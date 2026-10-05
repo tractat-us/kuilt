@@ -1,5 +1,10 @@
 # Agent workspace: what kuilt already had, and what it lacks
 
+> **Frozen evidence (2026-10-05).** This page records M0/M1 of epic #2869 as measured. The code it
+> cites (`KuiltBackend`, the scenarios, the oracle and every named test) is at commit `53f89b34` in
+> `demo/workspace/src/`. It was removed from this repository afterwards, when the work moved to an
+> application prototype outside kuilt. Read code citations against that commit.
+
 An agent's answer arrives late, and a phone has to decide whether it still fits. To make that call
 honestly the phone needs three things: a name for every input the agent was given, a way to tell
 whether it has received each of those inputs itself, and a rule for which missing inputs matter.

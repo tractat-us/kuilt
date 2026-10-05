@@ -1,5 +1,10 @@
 # Agent workspace: what we measured
 
+> **Frozen evidence (2026-10-05).** This page records M0/M1 of epic #2869 as measured. The code it
+> cites (`KuiltBackend`, the scenarios, the oracle and every named test) is at commit `53f89b34` in
+> `demo/workspace/src/`. It was removed from this repository afterwards, when the work moved to an
+> application prototype outside kuilt. Read code citations against that commit.
+
 Alex, Sam and a remote agent plan dinner through seven small scripted stories, and we count what
 happens: whose edits survive, how often the agent has to think again, when someone is asked to
 choose, and whether an old answer is shown as if it were still right. This page records those

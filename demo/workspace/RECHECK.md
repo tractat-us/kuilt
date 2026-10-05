@@ -1,5 +1,10 @@
 # Agent workspace: looking again when the news arrives late
 
+> **Frozen evidence (2026-10-05).** This page records M0/M1 of epic #2869 as measured. The code it
+> cites (`KuiltBackend`, the scenarios, the oracle and every named test) is at commit `53f89b34` in
+> `demo/workspace/src/`. It was removed from this repository afterwards, when the work moved to an
+> application prototype outside kuilt. Read code citations against that commit.
+
 Sam's phone shows the agent's pick, Trattoria Uno at 40 a head, and says it fits. A minute later
 Alex's new budget of 30 reaches Sam's phone. Uno no longer fits, but the screen still says it does,
 because the phone judged the answer once, when it first arrived, and never looked again. This page
