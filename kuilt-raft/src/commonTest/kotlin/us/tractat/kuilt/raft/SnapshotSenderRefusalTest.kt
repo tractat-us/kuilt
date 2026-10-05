@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * How [SnapshotSender] treats a `null` from its sizer — a refusal, because the transport's budget
@@ -181,6 +182,45 @@ internal class SnapshotSenderRefusalTest {
             { assertEquals(50L, restarted.meta.lastIncludedIndex, "the newer snapshot") },
             { assertEquals(narrow, restarted.meta.config, "carrying the newer config") },
             { assertEquals(0L, restarted.offset, "from its first byte") },
+        )
+    }
+
+    /**
+     * A duplicate ack for the **old** transfer, arriving after the restart onto a newer snapshot, must
+     * not complete the new transfer.
+     *
+     * `InstallSnapshotResponse` names no snapshot, and heartbeats resend the outstanding chunk, so
+     * duplicate acks are routine. Here the old transfer's ack of 8 bytes arrives after the restart onto
+     * a 4-byte snapshot: read as the new transfer's ack it is past the end, and `Complete(50)` would
+     * have the engine credit `matchIndex = 50` to a follower holding none of it.
+     *
+     * ### What proves the rig fired
+     *
+     * The old transfer provably reached offset 8 (its second chunk was sent and acked), was refused,
+     * and the restart provably happened (the chunk returned carries index 50 from offset 0).
+     */
+    @Test
+    fun aStaleAckFromTheDroppedTransferDoesNotCompleteTheNewOne() = raftRunTest {
+        val storage = InMemoryRaftStorage()
+        storage.saveSnapshot(SnapshotMeta(lastIncludedIndex = 42L, lastIncludedTerm = 3L, config = wide), ByteArray(10))
+        var starved = false
+        val sender = SnapshotSender(storage) { _, config -> if (starved && config == wide) null else 4 }
+        assertNotNull(sender.nextChunk(peer, storedIndex = 42L, wide), "rig: the transfer must start")
+        assertEquals(SnapshotSender.AckOutcome.SendNext, sender.onAck(peer, 4L), "rig: the first chunk is acked")
+        val second = assertNotNull(sender.nextChunk(peer, storedIndex = 42L, wide), "rig: the second chunk")
+        assertEquals(4L, second.offset, "rig: the second chunk starts at 4")
+        assertEquals(SnapshotSender.AckOutcome.SendNext, sender.onAck(peer, 8L), "rig: the old transfer reached 8")
+        starved = true
+        assertNull(sender.nextChunk(peer, storedIndex = 42L, wide), "rig: the starved budget must refuse the old snapshot")
+
+        storage.saveSnapshot(SnapshotMeta(lastIncludedIndex = 50L, lastIncludedTerm = 3L, config = narrow), ByteArray(4))
+        val restarted = assertNotNull(sender.nextChunk(peer, storedIndex = 50L, narrow), "rig: the restart")
+        assertEquals(50L to 0L, restarted.meta.lastIncludedIndex to restarted.offset, "rig: restarted on 50 from 0")
+
+        val stale = sender.onAck(peer, 8L)                    // the old chunk's duplicate ack, delivered late
+        assertTrue(
+            stale !is SnapshotSender.AckOutcome.Complete,
+            "an ack the old transfer earned must not complete the new one; got $stale",
         )
     }
 
