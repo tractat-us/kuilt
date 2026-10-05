@@ -43,6 +43,22 @@ class InMemoryRaftNetwork(
     private val _peers = MutableStateFlow<Set<NodeId>>(emptySet())
     private val dropped = mutableSetOf<Pair<NodeId, NodeId>>()
     private val latencies = mutableMapOf<Pair<NodeId, NodeId>, Duration>()
+    private val nodeBudgets = mutableMapOf<NodeId, Int>()
+
+    /**
+     * Give [node]'s transport its own budget in place of the network-wide [maxPayloadBytes] — both
+     * the value it publishes and the one its sends are held to (#2155).
+     *
+     * Real nodes routinely disagree: a mesh reports the minimum across its *own* live links, so a node
+     * with one tight link publishes less than a peer with only fast ones. A single network-wide number
+     * cannot express a forwarder whose budget is larger than its leader's, which is the only direction
+     * in which a forwarder's own propose-time check is not enough.
+     */
+    fun setNodeMaxPayloadBytes(node: NodeId, bytes: Int) {
+        nodeBudgets[node] = bytes
+    }
+
+    private fun budgetOf(node: NodeId): Int? = nodeBudgets[node] ?: maxPayloadBytes
 
     /** One decoded, in-order record of a send attempted on the network — see [recording] / [sent]. */
     internal data class Sent(val from: NodeId, val to: NodeId, val message: RaftMessage)
@@ -89,10 +105,10 @@ class InMemoryRaftNetwork(
             override val selfId = id
             override val peers: StateFlow<Set<NodeId>> = _peers.asStateFlow()
             override val incoming: Flow<RaftEnvelope> = ch.receiveAsFlow()
-            override val maxPayloadBytes: Int? get() = network.maxPayloadBytes
+            override val maxPayloadBytes: Int? get() = network.budgetOf(id)
             override suspend fun sendTo(peer: NodeId, message: ByteArray) {
                 if (recording) sent += Sent(id, peer, raftCbor.decodeFromByteArray(RaftMessage.serializer(), message))
-                val limit = network.maxPayloadBytes
+                val limit = network.budgetOf(id)
                 if (limit != null && message.size > limit) {
                     // Refused on size, ahead of the partition filter — see [overBudget].
                     overBudget += OverBudget(id, peer, message.size, limit)

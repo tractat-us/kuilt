@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.builtins.ByteArraySerializer
 import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.descriptors.elementNames
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.raft.internal.ForwardOutcome
 import us.tractat.kuilt.raft.internal.RaftMessage
@@ -270,8 +271,9 @@ class RaftWireGoldenVectorTest {
      * of the frame, and each is checked against the fully-qualified class name a pre-#2160 build writes
      * — the tag the old decoder looks for, and so the one tag a new frame must never carry.
      *
-     * `ForwardOutcome` rides inside `ForwardResponse` and is polymorphic too, so its three tags are
-     * pinned the same way.
+     * `ForwardOutcome` rides inside `ForwardResponse` and is polymorphic too, so its four tags are
+     * pinned the same way — and against the sealed serializer's own subtype list, so a fifth outcome
+     * cannot be added without a row here.
      */
     @Test
     fun everyFrameTypeCarriesItsDocumentedTag() {
@@ -292,6 +294,7 @@ class RaftWireGoldenVectorTest {
             Triple("cm", "Committed", ForwardOutcome.Committed(1, 1)),
             Triple("nl", "NotLeader", ForwardOutcome.NotLeader),
             Triple("fl", "Failed", ForwardOutcome.Failed),
+            Triple("ptl", "PayloadTooLarge", ForwardOutcome.PayloadTooLarge(2, 1, 0)),
         )
         val fqFrame = "us.tractat.kuilt.raft.internal.RaftMessage."
         val fqOutcome = "us.tractat.kuilt.raft.internal.ForwardOutcome."
@@ -301,6 +304,14 @@ class RaftWireGoldenVectorTest {
                     RaftMessageType.entries.toSet(),
                     frames.map { (_, frame) -> frame.messageType }.toSet(),
                     "rig: one construction per frame type — a new RaftMessage subtype needs a row here",
+                )
+            },
+            {
+                // A sealed serializer's descriptor lists its subtypes' serial names as element 1.
+                assertEquals(
+                    ForwardOutcome.serializer().descriptor.getElementDescriptor(1).elementNames.toSet(),
+                    outcomes.map { (tag, _, _) -> tag }.toSet(),
+                    "rig: one row per ForwardOutcome subtype — a new outcome needs a row here",
                 )
             },
             {
