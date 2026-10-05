@@ -30,6 +30,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -145,8 +146,7 @@ class HeddleNodeTest {
         h.pump()
 
         val spentBefore = node.ledger.value.edge(e1)!!.spent
-        val id = node.reserve(g1, 10L)
-        assertNotNull(id, "reservation must succeed against delegated holdings")
+        val id = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L), "reservation must succeed against delegated holdings").id
 
         node.complete(id, 7L)
         node.complete(id, 7L) // duplicate delivery
@@ -209,8 +209,7 @@ class HeddleNodeTest {
             h.pump(600)
 
             // A reservation is outstanding on peer0 while global conservation is checked.
-            val id = h.peers[0].node.reserve(g1, 20L)
-            assertNotNull(id, "peer0 reserves against its delegated holdings")
+            val id = assertIs<ReserveOutcome.Reserved>(h.peers[0].node.reserve(g1, 20L), "peer0 reserves against its delegated holdings").id
             assertGlobalConservation(h, minted)
 
             // Complete part of it, converge across the merge, re-check.
@@ -251,8 +250,7 @@ class HeddleNodeTest {
             node.advertise(e1, hungry)
             node.schedule(root)
             h.pump()
-            val id = node.reserve(g1, 10L)
-            assertNotNull(id)
+            val id = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L)).id
 
             // A second inbound generation into g1 → DualActiveInbound quarantines g1's lineage.
             val e1b = AttachmentRecord(AttachmentId("e1b"), root, g1, Weight.ONE)
@@ -276,8 +274,7 @@ class HeddleNodeTest {
             node.advertise(e1, hungry)
             node.schedule(root)
             h.pump()
-            val id = node.reserve(g1, 10L)
-            assertNotNull(id)
+            val id = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L)).id
 
             // g1 gains a PREPARED child concurrently → isLeaf(g1) becomes false.
             val child = AttachmentRecord(AttachmentId("g1-child"), g1, GroupId("gc"), Weight.ONE)
@@ -295,7 +292,7 @@ class HeddleNodeTest {
         val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
         h.pump()
         // root has children → not a leaf → reserve must refuse (else every complete throws).
-        assertNull(h.peers[0].node.reserve(root, 10L), "reserve refuses a non-leaf group")
+        assertEquals(ReserveOutcome.NoHoldings, h.peers[0].node.reserve(root, 10L), "reserve refuses a non-leaf group")
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -312,7 +309,7 @@ class HeddleNodeTest {
             node.advertise(e1, hungry)
             node.schedule(root)
             h.pump()
-            val id = node.reserve(g1, 10L)!!
+            val id = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L)).id
             assertEquals(10L, node.earmarked(g1))
 
             // Over-max completion is rejected — earmark intact, reservation still present.
@@ -345,8 +342,7 @@ class HeddleNodeTest {
         assertTrue(node.ledger.value.holdings(g1, node.self) >= 50L, "g1 holds the delegated units")
 
         // 2. Reserve 50 at g1 (captured path [e1]).
-        val id = node.reserve(g1, 50L)
-        assertNotNull(id)
+        val id = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 50L)).id
 
         // 3. g1 gains an ACTIVE child e3 — the exact reshape captured-path charging supports.
         val g3 = GroupId("g3")
@@ -456,8 +452,7 @@ class HeddleNodeTest {
             crashing.advertise(e1, hungry)
             crashing.schedule(root)
             h.pump(300)
-            val earmark = crashing.reserve(g1, 10L)
-            assertNotNull(earmark, "crashing peer reserves before it goes silent")
+            val earmark = assertIs<ReserveOutcome.Reserved>(crashing.reserve(g1, 10L), "crashing peer reserves before it goes silent").id
 
             // Record the alive peer's holdings and the crashing peer's ledger holdings, then crash.
             val aliveHoldingsBefore = h.peers.map { alive.ledger.value.holdings(root, it.id) }

@@ -7,6 +7,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-warp"))
             api(project(":kuilt-heddle"))
+            implementation(libs.kotlin.logging)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))

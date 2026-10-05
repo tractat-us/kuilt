@@ -207,6 +207,10 @@ and nothing else does:
   operation that has to wait for *everyone* to answer: without an agreed list, "everyone" has no
   meaning. Only a peer itself may say it is leaving; a peer that has crashed stays on the list (and
   keeps its share) until it comes back — see `revocation` below.
+- **A peer that has not said `enroll` cannot spend, and it says so.** Until its own `enroll`
+  lands, `reserve` and `schedule` answer `GateClosed` — never the same "nothing here" answer an
+  idle peer gives — so forgetting to enroll shows up as a refusal with a reason rather than as a
+  scheduler that quietly does nothing.
 
 `heddleGoverned` returns a `GovernedHeddleNode`: the same data-plane calls as `HeddleNode` plus
 `mint`/`prepare`/`activate`/`close`/`retire` and `enroll`/`depart`, each of which returns a

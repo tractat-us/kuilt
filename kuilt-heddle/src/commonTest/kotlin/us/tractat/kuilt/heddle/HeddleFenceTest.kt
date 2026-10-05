@@ -95,7 +95,7 @@ class HeddleFenceTest {
         assertTrue(issued >= 3L, "fixture: the leaf must be funded, was $issued")
 
         // The straggler's reservation, captured across e1 while it was still live (design §4.4).
-        val reservation = assertNotNull(f.node.reserve(g, 3L), "reserve against the funded leaf")
+        val reservation = assertIs<ReserveOutcome.Reserved>(f.node.reserve(g, 3L), "reserve against the funded leaf").id
 
         f.racedRetireAndReparent()
         assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Quiesce(e1)))
@@ -163,7 +163,7 @@ class HeddleFenceTest {
             val downE2 = f.node.ledger.value.edge(e2)!!.issued
             assertTrue(downE2 >= 2L, "fixture: the leaf must be funded, was $downE2")
 
-            val reservation = assertNotNull(f.node.reserve(h, 2L), "reserve at the two-hop leaf")
+            val reservation = assertIs<ReserveOutcome.Reserved>(f.node.reserve(h, 2L), "reserve at the two-hop leaf").id
             assertEquals(listOf(e1, e2), f.node.ledger.value.lineageOf(h), "fixture: the captured path is [e1, e2]")
 
             f.racedRetireAndReparent()
@@ -200,7 +200,7 @@ class HeddleFenceTest {
         val f = fixture("fence-prebarrier")
         f.mintAndDelegateDownE1()
         val issued = f.node.ledger.value.edge(e1)!!.issued
-        val reservation = assertNotNull(f.node.reserve(g, 3L))
+        val reservation = assertIs<ReserveOutcome.Reserved>(f.node.reserve(g, 3L)).id
         f.racedRetireAndReparent()
 
         // Completes BEFORE the barrier: the charge lands on e1's own base leafSpent slot.
@@ -239,7 +239,7 @@ class HeddleFenceTest {
             val f = fixture("fence-buffer")
             f.mintAndDelegateDownE1()
             val issued = f.node.ledger.value.edge(e1)!!.issued
-            val reservation = assertNotNull(f.node.reserve(g, 3L))
+            val reservation = assertIs<ReserveOutcome.Reserved>(f.node.reserve(g, 3L)).id
 
             // Raced retire, but NO reparent yet — g has no live inbound at all.
             assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Close(e1)))
@@ -498,23 +498,32 @@ class HeddleFenceTest {
         assertIs<ControlOutcome.Applied>(governed.activate(e1))
         governed.advertise(e1, Demand(targetOutstanding = 500L, maximumUsefulGrant = 500L))
 
+        // Precondition: the gate really is closed, so the arms below are measuring it.
+        assertFalse(governed.isWritable, "a fresh incarnation boots closed to writes")
+        val awaiting = GateClosed(self, GateClosed.Reason.AwaitingEnrollment)
         assertAll(
-            { assertFalse(governed.isWritable, "a fresh incarnation boots closed to writes") },
-            { assertEquals(0, governed.schedule(root), "schedule delegates nothing while the gate is closed") },
+            { assertEquals(awaiting, governed.schedule(root), "schedule names the closed gate, not an idle tree") },
             { assertEquals(0L, governed.ledger.value.edge(e1)?.issued, "…and authors no counter slot") },
-            { assertNull(governed.reserve(leaf, 1L), "reserve refuses while the gate is closed") },
+            { assertEquals(awaiting, governed.reserve(leaf, 1L), "reserve names the closed gate, not an empty lane") },
         )
 
         assertIs<ControlOutcome.Applied>(governed.enroll(self))
         assertTrue(governed.isWritable, "the applied self-enroll opens the gate")
-        assertTrue(governed.schedule(root) > 0, "and the ordinary data plane runs")
-        assertNotNull(governed.reserve(leaf, 1L))
+        assertIs<ScheduleOutcome.Delegated>(governed.schedule(root), "and the ordinary data plane runs")
+        assertAll(
+            { assertIs<ReserveOutcome.Reserved>(governed.reserve(leaf, 1L)) },
+            // The legitimate empty outcomes stay distinct from the closed gate once it is open.
+            { assertEquals(ReserveOutcome.NoHoldings, governed.reserve(leaf, 1_000_000L), "an open gate with too little to spend") },
+            { assertEquals(ScheduleOutcome.NothingToDelegate, governed.schedule(leaf), "an open gate with no child to delegate to") },
+        )
 
         // Departing closes it again: the promise a departure makes is "I author nothing more".
         assertIs<ControlOutcome.Applied>(governed.depart())
+        assertFalse(governed.isWritable, "a departed peer is not a writer")
+        val departed = GateClosed(self, GateClosed.Reason.Departed)
         assertAll(
-            { assertFalse(governed.isWritable, "a departed peer is not a writer") },
-            { assertNull(governed.reserve(leaf, 1L)) },
+            { assertEquals(departed, governed.reserve(leaf, 1L)) },
+            { assertEquals(departed, governed.schedule(root)) },
         )
     }
 
@@ -540,7 +549,7 @@ class HeddleFenceTest {
             val e4 = AttachmentId("e4") // root → g, the SECOND legal reparent generation
             val f = fixture("fence-eighth")
             f.mintAndDelegateDownE1()
-            val reservation = assertNotNull(f.node.reserve(g, 3L), "reserve against the funded leaf")
+            val reservation = assertIs<ReserveOutcome.Reserved>(f.node.reserve(g, 3L), "reserve against the funded leaf").id
 
             // Round 1: the raced retire of e1, reparent onto e3, fence e1.
             f.racedRetireAndReparent()

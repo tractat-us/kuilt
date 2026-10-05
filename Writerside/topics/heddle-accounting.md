@@ -26,10 +26,10 @@ Once a leaf holds allowance, work reserves a maximum cost:
 <!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleHeddleNode -->
 
 ```kotlin
-val reservation = node.reserve(leaf, maximumCost = 10L)
-if (reservation != null) {
-    node.complete(reservation, actualCost = 7L)
-    node.complete(reservation, actualCost = 7L) // idempotent no-op
+val outcome = node.reserve(leaf, maximumCost = 10L)
+if (outcome is ReserveOutcome.Reserved) {
+    node.complete(outcome.id, actualCost = 7L)
+    node.complete(outcome.id, actualCost = 7L) // idempotent no-op
 }
 ```
 
@@ -37,7 +37,9 @@ The reservation earmarks ten units on this node. Other local jobs cannot
 use them; other peers can spend only their own holdings. Completing at seven
 removes the earmark and leaves three available.
 
-A failed reservation returns `null`. Cost must lie between zero and the
+A reservation the leaf cannot cover returns `ReserveOutcome.NoHoldings`.
+A governed node that has not enrolled itself yet returns `GateClosed` instead,
+so it never looks like a team with nothing left. Cost must lie between zero and the
 reserved maximum; an invalid cost throws without discarding the reservation.
 Repeated completion on the same node charges once. Reservations are not
 durable receipts across a restart.

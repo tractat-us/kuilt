@@ -142,8 +142,11 @@ public class GovernedHeddleNode internal constructor(
     private val root: GroupId,
 ) : FairShareExecution {
 
-    /** The §6.5.3 boot gate. Set once, by [enroll]; a restart starts a fresh incarnation closed. */
-    private val writable = atomic(false)
+    /**
+     * The §6.5.3 boot gate: why it is closed, or `null` while it is open. Opened by this peer's own
+     * applied [enroll], closed again by [depart]; a restart starts a fresh incarnation closed.
+     */
+    private val closedBecause = atomic<GateClosed.Reason?>(GateClosed.Reason.AwaitingEnrollment)
 
     // ── data plane (design §4/§6/§7 — coordination-free, never touches the log) ──────
 
@@ -170,8 +173,10 @@ public class GovernedHeddleNode internal constructor(
      *   through a side door. Slice 2 could only document that as an obligation; requiring the
      *   enrollment to have landed before the first write is what makes it **structural**.
      *
-     * While closed, [reserve] returns `null` and [schedule] returns `0` — the two entry points
-     * through which this node authors a counter slot. Reads, [advertise] (an ephemeral, advisory
+     * While closed, [reserve] and [schedule] — the two entry points through which this node authors
+     * a counter slot — answer [GateClosed], naming why. They used to answer `null` and `0`, which
+     * already meant "no holdings" and "nothing to delegate", so a consumer that forgot to enroll got
+     * a scheduler that silently did nothing (issue #1892). Reads, [advertise] (an ephemeral, advisory
      * board that authorizes nothing), and every control verb stay open, so a peer can mint, reshape
      * and enroll before it is writable.
      *
@@ -186,7 +191,7 @@ public class GovernedHeddleNode internal constructor(
      * overstated "it is transitively gated" would invite a reader to assume enforcement that this
      * class does not perform.
      */
-    public val isWritable: Boolean get() = writable.value
+    public val isWritable: Boolean get() = closedBecause.value == null
 
     /** The replicated entitlement ledger as converged on this peer (the gossip-merged data-plane view). */
     public val ledger: StateFlow<EntitlementLedger> get() = node.ledger
@@ -198,12 +203,16 @@ public class GovernedHeddleNode internal constructor(
     public val unreachable: StateFlow<Set<ReplicaId>> get() = node.unreachable
 
     /**
-     * Earmark up to [maximumCost] against holdings at leaf [leaf] ([HeddleNode.reserve]), or `null`
-     * while the [isWritable] boot gate is closed — this peer must have enrolled before it may author
-     * entitlement.
+     * Earmark up to [maximumCost] against holdings at leaf [leaf] ([HeddleNode.reserve]), or
+     * [GateClosed] while the [isWritable] boot gate is closed — this peer must have enrolled before
+     * it may author entitlement. [ReserveOutcome.NoHoldings] keeps its ordinary meaning: the gate is
+     * open and the leaf cannot cover the request.
      */
-    override fun reserve(leaf: GroupId, maximumCost: Long): ReservationId? =
-        if (!isWritable) null else node.reserve(leaf, maximumCost)
+    override fun reserve(leaf: GroupId, maximumCost: Long): ReserveOutcome =
+        when (val reason = closedBecause.value) {
+            null -> node.reserve(leaf, maximumCost)
+            else -> GateClosed(self, reason)
+        }
 
     /** Complete reservation [id], charging [actualCost] ([HeddleNode.complete]). */
     override fun complete(id: ReservationId, actualCost: Long): Unit = node.complete(id, actualCost)
@@ -219,9 +228,15 @@ public class GovernedHeddleNode internal constructor(
 
     /**
      * Run allocation rounds at [parent], delegating holdings toward demand ([HeddleNode.schedule]).
-     * Returns `0` without delegating while the [isWritable] boot gate is closed.
+     * Answers [ScheduleOutcome.Delegated] with the grant count, [ScheduleOutcome.NothingToDelegate]
+     * when the gate is open but no holdings move, or [GateClosed] — delegating nothing — while the
+     * [isWritable] boot gate is closed.
      */
-    public fun schedule(parent: GroupId): Int = if (!isWritable) 0 else node.schedule(parent)
+    public fun schedule(parent: GroupId): ScheduleOutcome =
+        when (val reason = closedBecause.value) {
+            null -> scheduleOutcomeOf(node.schedule(parent))
+            else -> GateClosed(self, reason)
+        }
 
     /** The §8.2 bound metrics at [parent] ([HeddleNode.boundMetrics]). */
     public fun boundMetrics(parent: GroupId): BoundMetrics = node.boundMetrics(parent)
@@ -438,7 +453,7 @@ public class GovernedHeddleNode internal constructor(
      * is what makes "every writer has promised" a well-defined question; a replica that spends,
      * delegates, or completes without being enrolled is a writer no barrier is waiting for (§13.2).
      * So enrolling **self** is what opens this node's [isWritable] boot gate — until it returns
-     * [ControlOutcome.Applied] here, [reserve] returns `null` and [schedule] delegates nothing.
+     * [ControlOutcome.Applied] here, [reserve] and [schedule] answer [GateClosed] and author nothing.
      *
      * It doubles as the §6.5.3 **boot-ordering** fence: `submit` returns only once this peer's apply
      * loop has applied the entry, and Raft applies in index order, so a peer that has applied its own
@@ -451,7 +466,7 @@ public class GovernedHeddleNode internal constructor(
         val outcome = control.submit(ControlCommand.Enroll(replica), timeout)
         // The gate opens on OUR OWN applied enroll and nothing else: a third party enrolling this
         // replica proves nothing about what this incarnation has applied.
-        if (replica == self && outcome is ControlOutcome.Applied) writable.value = true
+        if (replica == self && outcome is ControlOutcome.Applied) closedBecause.value = null
         return outcome
     }
 
@@ -476,7 +491,7 @@ public class GovernedHeddleNode internal constructor(
      */
     public suspend fun depart(timeout: Duration? = null): ControlOutcome {
         val outcome = control.submit(ControlCommand.Depart(self), timeout)
-        if (outcome is ControlOutcome.Applied) writable.value = false
+        if (outcome is ControlOutcome.Applied) closedBecause.value = GateClosed.Reason.Departed
         return outcome
     }
 
@@ -493,3 +508,7 @@ public class GovernedHeddleNode internal constructor(
      * distinct, log-serialized recovery: see [reconcile].     */
     public val revocation: RevocationSeam get() = control.revocation
 }
+
+/** Lift [HeddleNode.schedule]'s grant count into a [ScheduleOutcome]; zero grants is its own arm. */
+private fun scheduleOutcomeOf(grants: Int): ScheduleOutcome =
+    if (grants == 0) ScheduleOutcome.NothingToDelegate else ScheduleOutcome.Delegated(grants)

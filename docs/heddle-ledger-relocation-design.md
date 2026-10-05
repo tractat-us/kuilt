@@ -576,7 +576,8 @@ derivation.
    it cannot be wedged by a withheld entry, and it makes §13.2's enrollment
    precondition *the same act*, closing both holes with one gate. Shipped as
    `GovernedHeddleNode.isWritable`, gating `reserve` and `schedule` (and `complete`
-   transitively, since a reservation can only come from `reserve`).
+   transitively, since a reservation can only come from `reserve`); while it is shut both answer
+   `GateClosed` (§14 item 7).
 
 ### 6.6 Cost, honestly
 
@@ -995,8 +996,13 @@ section documented as safe turns out to be a real conservation break in one shap
    loudly rather than return an ambiguous in-band value is an open question** — this module's own
    precedent (#1737, #1753) is to fail loudly rather than return a silent fallback.
 
-   **Unresolved, tracked as #1892.** Unlike items 3 and 4, this one is not a text correction: what
-   ships is what the design intends, and the open question is whether the *reporting shape* should
-   change. Noted here rather than decided, because the gate is legitimately closed for a window
-   during every normal boot — so "closed" is not always a caller error, and the loudest option is
-   not obviously the right one.
+   **Resolved by #1892: a sealed result, not a throw.** `reserve` answers a `ReserveOutcome`
+   (`Reserved`, `NoHoldings`) and `GovernedHeddleNode.schedule` a `ScheduleOutcome` (`Delegated`,
+   `NothingToDelegate`); both also admit `GateClosed(replica, reason)`, one type shared by the two
+   results, so a caller must branch on the closed gate and cannot mistake it for an idle tree.
+   Throwing was rejected because the gate is legitimately closed for a window during every normal
+   boot, so "closed" is not always a caller error; a flag such as `isWritable` was rejected because
+   a consumer who forgets to enroll will equally forget to read it. Later causes of a closed gate —
+   #1738's fail-closed on an undecodable control-log act is the expected one — arrive as a new
+   `GateClosed.Reason`, not a new arm in either result. Shipped as a breaking change in place,
+   with no deprecation shim, because heddle had no consumers yet.

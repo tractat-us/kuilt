@@ -85,10 +85,10 @@ internal fun CoroutineScope.sampleHeddleNode(seam: Seam) {
     node.schedule(root)
 
     // Leaf work reserves a slice, runs, then completes — completing twice charges once.
-    val reservation = node.reserve(leaf, maximumCost = 10L)
-    if (reservation != null) {
-        node.complete(reservation, actualCost = 7L)
-        node.complete(reservation, actualCost = 7L) // idempotent no-op
+    val outcome = node.reserve(leaf, maximumCost = 10L)
+    if (outcome is ReserveOutcome.Reserved) {
+        node.complete(outcome.id, actualCost = 7L)
+        node.complete(outcome.id, actualCost = 7L) // idempotent no-op
     }
 }
 
@@ -117,8 +117,11 @@ internal suspend fun CoroutineScope.sampleHeddleGoverned(seam: Seam, raft: us.tr
         epoch = 1L,                                // numeric per-boot counter — bumped every restart
     )
 
-    // Enrolling self is what opens this node's write gate: until it applies, `reserve` returns null
-    // and `schedule` delegates nothing, so an unenrolled peer can never author entitlement (#1693).
+    // Before enrolling, the write gate is closed and both spend verbs say so rather than looking idle.
+    check(node.schedule(root) is GateClosed)
+
+    // Enrolling self is what opens this node's write gate: until it applies, `reserve` and `schedule`
+    // answer GateClosed, so an unenrolled peer can never author entitlement (#1693, #1892).
     check(node.enroll(self) is ControlOutcome.Applied)
 
     // Mint and reshape are serialized through the Raft log — each returns a structured outcome.
@@ -128,8 +131,12 @@ internal suspend fun CoroutineScope.sampleHeddleGoverned(seam: Seam, raft: us.tr
 
     // The spend path is coordination-free — it issues no consensus messages.
     node.advertise(edge, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
-    node.schedule(root)
-    node.reserve(leaf, maximumCost = 10L)?.let { node.complete(it, actualCost = 7L) }
+    node.schedule(root) // Delegated, or NothingToDelegate if no holdings can move
+    when (val outcome = node.reserve(leaf, maximumCost = 10L)) {
+        is ReserveOutcome.Reserved -> node.complete(outcome.id, actualCost = 7L)
+        ReserveOutcome.NoHoldings -> Unit // lane exhausted — try again once entitlement flows in
+        is GateClosed -> error("enrolled above, yet the write gate is closed: ${outcome.reason}")
+    }
 }
 
 /** Weights order by exact cross-multiplication — see [Weight]. */

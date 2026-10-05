@@ -31,6 +31,7 @@ import us.tractat.kuilt.heddle.GroupId
 import us.tractat.kuilt.heddle.ControlOutcome
 import us.tractat.kuilt.heddle.HeddleConfig
 import us.tractat.kuilt.heddle.HeddleNode
+import us.tractat.kuilt.heddle.ScheduleOutcome
 import us.tractat.kuilt.heddle.PolicyConfig
 import us.tractat.kuilt.heddle.Weight
 import us.tractat.kuilt.heddle.heddleGoverned
@@ -383,9 +384,9 @@ class HeddleAdmissionControlTest {
         )
 
         // Enrolling self is what opens this node's write gate (#1693): until it applies, `reserve`
-        // returns null and `schedule` delegates nothing, so an unenrolled peer can never author
-        // entitlement no barrier is waiting for (§13.2). Every governed consumer must do this on
-        // every boot — omitting it makes the node silently schedule nothing.
+        // and `schedule` answer GateClosed, so an unenrolled peer can never author entitlement no
+        // barrier is waiting for (§13.2). Every governed consumer must do this on every boot —
+        // omitting it used to make the node silently schedule nothing (#1892); now it says so.
         assertIs<ControlOutcome.Applied>(governed.enroll(self))
 
         // Mint + build the 3:1 tree through the governed control plane, then delegate down.
@@ -396,7 +397,7 @@ class HeddleAdmissionControlTest {
         assertIs<ControlOutcome.Applied>(governed.activate(eB))
         governed.advertise(eA, hungry)
         governed.advertise(eB, hungry)
-        governed.schedule(root)
+        assertIs<ScheduleOutcome.Delegated>(governed.schedule(root), "the enrolled governed node delegates down the tree")
 
         val holdingsA = governed.ledger.value.holdings(laneA, self)
         val holdingsB = governed.ledger.value.holdings(laneB, self)
