@@ -2480,10 +2480,10 @@ internal class RaftEngine(
      * which differs by state. A joint configuration carries two [ClusterConfig]s, so a cluster whose
      * settled membership fits can still be stranded by a snapshot cut mid-change, and that does
      * **not** clear when the change commits: [onCompact] stamps a snapshot's config once, at the cut,
-     * and nothing re-stamps it. With no transfer in flight, a new snapshot cut past the change clears
-     * it, since each attempt measures the stored snapshot. A transfer already in flight is sized on
-     * the snapshot it loaded, and [onCompact] never touches [snapshotSender] — so that one clears only
-     * when the budget recovers or a leadership change runs [SnapshotSender.abandonAll].
+     * and nothing re-stamps it. A new snapshot cut past the change clears it whether or not a transfer
+     * was in flight: a fresh attempt measures the stored snapshot, and a refused in-flight transfer
+     * pinned below the stored snapshot is dropped for it (#2843) — [onCompact] still never touches
+     * [snapshotSender], so a transfer that is *progressing* finishes on the snapshot it started with.
      */
     private fun snapshotEnvelopeDiagnostic(peer: NodeId, reserved: Int, wireCap: Int): String =
         "sendSnapshotChunk($peer): REFUSED — the InstallSnapshot envelope costs $reserved bytes and the " +
@@ -2492,24 +2492,32 @@ internal class RaftEngine(
             "above $reserved with room for a chunk, or shorten the NodeIds — the envelope is dominated by " +
             "the snapshot's ConfigPayload, which rides on every chunk. A snapshot cut during a membership " +
             "change carries a joint config (two ClusterConfigs, roughly twice the cost) and keeps it after " +
-            "the change commits. If no transfer to $peer was in flight, publishing a new snapshot cut past " +
-            "the change clears it; a transfer already in flight keeps its snapshot and clears only when " +
-            "the budget recovers or leadership changes (#2720)."
+            "the change commits. Publishing a new snapshot cut past the change clears it, including for a " +
+            "transfer to $peer already in flight on the older snapshot (#2720, #2843)."
 
     /**
      * Sends the next snapshot chunk to [peer], resuming its in-flight transfer from the peer's acked
      * offset (loading the stored snapshot fresh from offset 0 only when no transfer is in flight). A
-     * restart is never initiated here — the follower drives any rewind via its `ReAdvertise(0)` ack.
+     * rewind of the same snapshot is never initiated here — the follower drives that via its
+     * `ReAdvertise(0)` ack; a refused transfer pinned below the stored snapshot restarts on it (#2843).
      * The load/slice/advance arithmetic lives in [snapshotSender]; the engine keeps the trace/send
      * side-effects.
      */
     private suspend fun sendSnapshotChunk(peer: NodeId) {
         // null = nothing to send yet, or chunkBytes refused this transfer outright (#2720) — in which
         // case it has already emitted RaftMetric.SnapshotChunkEnvelopeOverBudget naming why.
-        // `state.snapshotConfig` tracks the stored snapshot's config (set beside every `saveSnapshot`,
-        // and at restore), so a refusal can be decided before the stored snapshot is loaded — see
-        // SnapshotSender.nextChunk's "A refusal costs no load".
-        val chunk = snapshotSender.nextChunk(peer, storedConfig = state.snapshotConfig) ?: return
+        // `state.snapshotIndex` / `state.snapshotConfig` track the stored snapshot (set beside every
+        // `saveSnapshot`, and at restore), so a refusal can be decided before the stored snapshot is
+        // loaded — see SnapshotSender.nextChunk's "A refusal costs no load" — and a refused transfer
+        // pinned to an older snapshot can give way to the stored one (#2843). `round` is captured once
+        // and stamped on the frame below: the sender keys stale-ack detection on exactly this value.
+        val round = readIndexTracker.round
+        val chunk = snapshotSender.nextChunk(
+            peer,
+            storedIndex = state.snapshotIndex,
+            storedConfig = state.snapshotConfig,
+            round = round,
+        ) ?: return
         val start = chunk.offset.toInt()
         val end = start + chunk.data.size
         debug { "sendSnapshotChunk($peer): through=${chunk.meta.lastIncludedIndex} offset=$start..$end/${chunk.totalBytes} done=${chunk.done}" }
@@ -2528,7 +2536,7 @@ internal class RaftEngine(
                 data = chunk.data,
                 done = chunk.done,
                 config = chunk.meta.config,
-                round = readIndexTracker.round,
+                round = round,
             )
         )
     }
@@ -2540,8 +2548,11 @@ internal class RaftEngine(
         recentVoterContacts += from                // reachability signal for CheckQuorum
         readIndexTracker.recordAck(from, m.echoedRound)   // credit ACK to the round it actually responded to (BLOCKER 1a)
         confirmFreshReads()                        // ReadIndex: snapshot ACKs count as freshness evidence
-        when (val outcome = snapshotSender.onAck(from, m.nextOffset)) {
+        when (val outcome = snapshotSender.onAck(from, m.nextOffset, m.echoedRound)) {
             SnapshotSender.AckOutcome.NoTransfer -> return
+            SnapshotSender.AckOutcome.Stale -> {
+                debug { "onInstallSnapshotResponse($from): STALE ack offset=${m.nextOffset} round=${m.echoedRound} answers an earlier transfer — ignored" }
+            }
             is SnapshotSender.AckOutcome.Complete -> {            // fully received
                 state.matchIndex[from] = maxOf(state.matchIndex[from] ?: 0L, outcome.lastIncludedIndex)
                 state.nextIndex[from] = outcome.lastIncludedIndex + 1L

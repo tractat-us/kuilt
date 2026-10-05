@@ -37,23 +37,45 @@ internal class SnapshotSender(
     private val storage: RaftStorage,
     private val chunkBytes: (NodeId, ConfigPayload?) -> Int?,
 ) {
-    /** One in-flight transfer to a peer: the stored snapshot's [meta]/[state] bytes and the next byte offset to send. */
-    private class SnapshotXfer(val meta: SnapshotMeta, val state: ByteArray, var nextOffset: Long)
+    /**
+     * One in-flight transfer to a peer: the stored snapshot's [meta]/[state] bytes, the next byte
+     * offset to send, and the heartbeat round its first chunk was stamped with — see [onAck].
+     */
+    private class SnapshotXfer(val meta: SnapshotMeta, val state: ByteArray, var nextOffset: Long, val startRound: Long)
 
     private val snapshotXfer = mutableMapOf<NodeId, SnapshotXfer>()
 
     /**
+     * The round the latest chunk to each peer was stamped with, kept past the end of its transfer. A
+     * fresh transfer starts only in a round strictly above it, which is what lets [onAck] tell an ack
+     * for this transfer from a late one for the transfer before it.
+     */
+    private val lastStampedRound = mutableMapOf<NodeId, Long>()
+
+    /**
      * The next chunk for [peer]'s in-flight transfer, loading the stored snapshot fresh (from offset 0)
-     * iff there is none in flight; otherwise it resumes from the peer's acked offset. A restart is never
-     * initiated here — the follower drives any rewind via its `ReAdvertise(0)` ack. Returns null when no
+     * iff there is none in flight; otherwise it resumes from the peer's acked offset. A rewind of the
+     * same snapshot is never initiated here — the follower drives that via its `ReAdvertise(0)` ack; the
+     * one restart this makes is onto a *newer* snapshot, below. Returns null when no
      * snapshot is stored yet (nothing to send), and when [chunkBytes] refuses the transfer outright.
      *
-     * **A refusal does not start a transfer, and does not end one already running.** A budget too small
+     * **A refusal does not start a transfer, and does not end one already running** — unless a newer
+     * snapshot is stored, below. A budget too small
      * for this snapshot's envelope is a *level*, not a verdict — `Seam.maxPayloadBytes` is a reading
      * that a peer attaching over a tighter link lowers and leaving raises — so an in-flight transfer
      * keeps its acked offset and resumes when the budget recovers, while a fresh one is not installed
      * at all. The second half matters beyond tidiness: installing it would retain a private copy of the
      * whole snapshot per peer, for a transfer that has not sent a byte.
+     *
+     * **Except when a newer snapshot is stored (#2843).** A transfer sizes on the snapshot it loaded,
+     * so one pinned to a snapshot cut mid-membership-change carries the joint config on every chunk
+     * and stays refused after the application cuts a simpler snapshot that would fit. So a refused
+     * transfer whose `lastIncludedIndex` is below [storedIndex] is dropped, and this call falls
+     * through to the fresh path, which decides against the newer snapshot — sending its first chunk,
+     * or refusing it too and installing nothing. Only the *refused* transfer is dropped: one that is
+     * still making progress finishes on the snapshot it started with, because restarting every
+     * transfer on every compaction would starve a long transfer under frequent compaction. That is
+     * also why the hook is here rather than in the engine's compaction.
      *
      * **A refusal costs no load.** With no transfer in flight the refusal is decided against
      * [storedConfig] — the caller's record of the stored snapshot's membership — *before*
@@ -66,17 +88,50 @@ internal class SnapshotSender(
      * two can differ: a restore that drops a malformed stored config leaves the engine's record `null`
      * over it, and there the early check passes and the second one refuses, loading on each refusal.
      *
+     * **A fresh transfer waits for a round no earlier chunk to [peer] was stamped with.** An
+     * `InstallSnapshotResponse` names no snapshot, only an offset and the round it answers, and
+     * heartbeats resend the outstanding chunk, so duplicate acks are routine. A transfer started in the
+     * round that stamped its predecessor's last chunk could not tell that chunk's late ack from its
+     * own — and an old ack past the end of a smaller snapshot reads as completion, crediting the
+     * follower with a `matchIndex` it does not hold. So a fresh start in that round returns null, and
+     * the next heartbeat (which bumps the round before it diverts here) starts it instead. The cost is
+     * at most one heartbeat interval, paid only when one transfer follows another to the same peer.
+     *
+     * @param storedIndex the stored snapshot's `lastIncludedIndex`, as the caller last recorded it
+     *   beside [RaftStorage.saveSnapshot]. Consulted only when an in-flight transfer is refused.
      * @param storedConfig the membership the stored snapshot carries, as the caller last recorded it
-     *   beside [RaftStorage.saveSnapshot]. Consulted only when no transfer is in flight.
+     *   beside [RaftStorage.saveSnapshot]. Consulted only when no transfer is in flight, or when a
+     *   refused one is dropped for a newer snapshot.
+     * @param round the heartbeat round the caller will stamp on the chunk this returns. Must be the
+     *   value actually sent, and must never decrease while this sender's state lives — it is cleared
+     *   by [abandonAll] on every leadership change, which is where the round counter resets.
      */
-    suspend fun nextChunk(peer: NodeId, storedConfig: ConfigPayload?): Chunk? {
-        val xfer = snapshotXfer[peer] ?: run {
-            chunkBytes(peer, storedConfig) ?: return null        // refused before paying for the load
-            val stored = storage.loadSnapshot() ?: return null   // nothing to send yet
-            SnapshotXfer(stored.meta, stored.state, 0L)
+    suspend fun nextChunk(peer: NodeId, storedIndex: Long, storedConfig: ConfigPayload?, round: Long): Chunk? {
+        snapshotXfer[peer]?.let { inFlight ->
+            chunkBytes(peer, inFlight.meta.config)?.let { budget -> return stamp(peer, round, slice(inFlight, budget)) }
+            // Refused mid-transfer. Keep the acked offset only while the snapshot it carries is still
+            // the newest: once a newer one is stored, the old one is a stale target, and the newer one
+            // may fit where it does not (#2843). Fall through to the fresh path, which decides afresh.
+            if (inFlight.meta.lastIncludedIndex >= storedIndex) return null
+            snapshotXfer.remove(peer)
         }
-        val budget = chunkBytes(peer, xfer.meta.config) ?: return null  // sized on what the chunk carries
-        snapshotXfer[peer] = xfer
+        if (lastStampedRound[peer]?.let { round <= it } == true) return null  // a late ack could not be told apart
+        chunkBytes(peer, storedConfig) ?: return null            // refused before paying for the load
+        val stored = storage.loadSnapshot() ?: return null       // nothing to send yet
+        val fresh = SnapshotXfer(stored.meta, stored.state, 0L, startRound = round)
+        val budget = chunkBytes(peer, fresh.meta.config) ?: return null  // sized on what the chunk carries
+        snapshotXfer[peer] = fresh
+        return stamp(peer, round, slice(fresh, budget))
+    }
+
+    /** Record that [chunk] goes to [peer] stamped with [round], and hand it back. */
+    private fun stamp(peer: NodeId, round: Long, chunk: Chunk): Chunk {
+        lastStampedRound[peer] = round
+        return chunk
+    }
+
+    /** The chunk of [xfer] starting at its acked offset, at most [budget] raw bytes long. */
+    private fun slice(xfer: SnapshotXfer, budget: Int): Chunk {
         // Lossless by construction: nextOffset is only ever 0 (fresh load) or a value [onAck] clamped
         // into 0..state.size, and state.size is an Int. Keep that clamp if you touch [onAck] (#1818).
         val start = xfer.nextOffset.toInt()
@@ -124,9 +179,20 @@ internal class SnapshotSender(
      * gate, which defends because it *has* one. The full policy and the other accepted exposures
      * (snapshot position #1876, snapshot config #1880) are under "Trust between peers" in
      * kuilt-raft/module.md.
+     *
+     * **An ack for an earlier transfer is [AckOutcome.Stale] (#2843).** The response carries no
+     * snapshot identity, only [echoedRound], the round of the chunk it answers. Every chunk of the
+     * current transfer is stamped at or above its start round, and [nextChunk] starts a transfer only
+     * in a round above every chunk its predecessor sent, so `echoedRound < startRound` proves the ack
+     * answers the predecessor. Read as this transfer's ack, it would move the offset to a position in a
+     * different snapshot, and one past the end of a smaller snapshot would return
+     * [AckOutcome.Complete] for bytes the follower never received. Unlike a clamp, this discriminates:
+     * an honest follower echoes the round it was sent (#364's BLOCKER 1a). A forged round is outside
+     * the crash-fault model, like the forged offset above.
      */
-    fun onAck(peer: NodeId, nextOffset: Long): AckOutcome {
+    fun onAck(peer: NodeId, nextOffset: Long, echoedRound: Long): AckOutcome {
         val xfer = snapshotXfer[peer] ?: return AckOutcome.NoTransfer
+        if (echoedRound < xfer.startRound) return AckOutcome.Stale       // answers an earlier transfer's chunk
         xfer.nextOffset = nextOffset.coerceIn(0L, xfer.state.size.toLong())
         return if (xfer.nextOffset >= xfer.state.size) {          // fully received
             snapshotXfer.remove(peer)
@@ -137,7 +203,10 @@ internal class SnapshotSender(
     }
 
     /** Abandon every in-flight transfer — call on leadership relinquish (leader-only state). */
-    fun abandonAll(): Unit = snapshotXfer.clear()
+    fun abandonAll() {
+        snapshotXfer.clear()
+        lastStampedRound.clear()   // the round counter restarts with the next leadership
+    }
 
     /** A chunk ready to be framed into a `RaftMessage.InstallSnapshot` by the engine. */
     class Chunk(
@@ -153,6 +222,9 @@ internal class SnapshotSender(
     sealed interface AckOutcome {
         /** No transfer in flight for this peer — ignore the ack. */
         data object NoTransfer : AckOutcome
+
+        /** The ack answers a chunk of an **earlier** transfer to this peer — ignore it; see [onAck]. */
+        data object Stale : AckOutcome
 
         /** More chunks remain — send the next one. */
         data object SendNext : AckOutcome

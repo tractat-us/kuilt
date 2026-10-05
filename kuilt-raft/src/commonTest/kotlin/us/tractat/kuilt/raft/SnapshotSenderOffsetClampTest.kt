@@ -57,7 +57,7 @@ internal class SnapshotSenderOffsetClampTest {
     private suspend fun senderWithTransferInFlight(): SnapshotSender {
         val storage = InMemoryRaftStorage()
         storage.saveSnapshot(meta, snapshotBytes)
-        return SnapshotSender(storage) { _, _ -> chunkBytes }.also { it.nextChunk(peer, meta.config) }
+        return SnapshotSender(storage) { _, _ -> chunkBytes }.also { it.nextChunk(peer, meta.lastIncludedIndex, meta.config, round = 1L) }
     }
 
     /**
@@ -68,7 +68,7 @@ internal class SnapshotSenderOffsetClampTest {
     fun malformedAckOffsetNeverEscapesSnapshotBounds() = raftRunTest {
         for (forged in listOf(-1L, 1L shl 32, Long.MAX_VALUE)) {
             val sender = senderWithTransferInFlight()
-            when (val outcome = sender.onAck(peer, forged)) {
+            when (val outcome = sender.onAck(peer, forged, echoedRound = 1L)) {
                 // Clamped up to state.size ⇒ reported finished. The credited index must come from the
                 // stored snapshot's metadata, never be derived from the forged offset.
                 is SnapshotSender.AckOutcome.Complete ->
@@ -81,7 +81,7 @@ internal class SnapshotSenderOffsetClampTest {
                 // Pre-fix with forged = -1 this line THROWS IndexOutOfBoundsException from
                 // copyOfRange(-1, 3) — inside the engine's uncaught actor loop, killing the leader.
                 SnapshotSender.AckOutcome.SendNext -> {
-                    val chunk = assertNotNull(sender.nextChunk(peer, meta.config), "forged=$forged: a transfer is in flight")
+                    val chunk = assertNotNull(sender.nextChunk(peer, meta.lastIncludedIndex, meta.config, round = 1L), "forged=$forged: a transfer is in flight")
                     assertAll(
                         {
                             assertTrue(
@@ -97,7 +97,8 @@ internal class SnapshotSenderOffsetClampTest {
                         },
                     )
                 }
-                SnapshotSender.AckOutcome.NoTransfer -> fail("forged=$forged: a transfer IS in flight")
+                SnapshotSender.AckOutcome.NoTransfer, SnapshotSender.AckOutcome.Stale ->
+                    fail("forged=$forged: a transfer IS in flight, and this ack answers its own round")
             }
         }
     }
@@ -110,9 +111,9 @@ internal class SnapshotSenderOffsetClampTest {
     fun honestAckAdvancesThenCompletesTransfer() = raftRunTest {
         val sender = senderWithTransferInFlight()
 
-        val afterPartial = sender.onAck(peer, chunkBytes.toLong())          // stored 4 of 10 bytes
-        val resumed = assertNotNull(sender.nextChunk(peer, meta.config), "transfer must still be in flight")
-        val afterFinal = sender.onAck(peer, snapshotBytes.size.toLong())    // stored all 10
+        val afterPartial = sender.onAck(peer, chunkBytes.toLong(), echoedRound = 1L)          // stored 4 of 10 bytes
+        val resumed = assertNotNull(sender.nextChunk(peer, meta.lastIncludedIndex, meta.config, round = 1L), "transfer must still be in flight")
+        val afterFinal = sender.onAck(peer, snapshotBytes.size.toLong(), echoedRound = 1L)    // stored all 10
 
         assertAll(
             { assertEquals(SnapshotSender.AckOutcome.SendNext, afterPartial, "a partial ack must ask for the next chunk") },
@@ -131,8 +132,8 @@ internal class SnapshotSenderOffsetClampTest {
     fun negativeAckRewindsToStartOfSnapshot() = raftRunTest {
         val sender = senderWithTransferInFlight()
 
-        val outcome = sender.onAck(peer, -1L)
-        val chunk = assertNotNull(sender.nextChunk(peer, meta.config), "a rewound transfer must still be in flight")
+        val outcome = sender.onAck(peer, -1L, echoedRound = 1L)
+        val chunk = assertNotNull(sender.nextChunk(peer, meta.lastIncludedIndex, meta.config, round = 1L), "a rewound transfer must still be in flight")
 
         assertAll(
             { assertEquals(SnapshotSender.AckOutcome.SendNext, outcome, "a negative ack must resume, not complete") },

@@ -152,6 +152,11 @@ internal sealed interface RaftMessage {
      * Follower's reply to [InstallSnapshot]: [nextOffset] is how many bytes it has stored, resyncing
      * the leader after a dropped chunk. [echoedRound] echoes the [InstallSnapshot.round] from the
      * request (BLOCKER 1a fix — same purpose as [AppendEntriesResponse.echoedRound]).
+     *
+     * The response names no snapshot, so [echoedRound] is also how the leader tells an ack for the
+     * transfer in flight from a late one for an earlier transfer to the same follower
+     * (`SnapshotSender.onAck`, #2843). That only works while the leader's round never goes backwards
+     * within one leadership. If it did, a stale ack could complete a transfer the follower never received.
      */
     @Serializable
     @SerialName("isr")
