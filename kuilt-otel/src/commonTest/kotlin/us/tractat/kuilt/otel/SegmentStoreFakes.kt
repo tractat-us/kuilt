@@ -4,6 +4,8 @@ package us.tractat.kuilt.otel
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.store.DurableStore
@@ -261,6 +263,66 @@ internal class RefuseSegmentWritesStore(private val backing: DurableStore) : Dur
         }
         if (refuse) throw IllegalStateException("simulated quota refusal of a ${bytes.size}-byte write to $key")
         backing.write(key, bytes)
+    }
+
+    override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
+}
+
+/**
+ * Delegates to [backing], but once [arm] is called the **next** segment-key write parks until its
+ * caller is cancelled — after the bytes landed ([landFirst] `= true`) or before they did.
+ *
+ * This is `IndexedDbDurableStore.write`'s shape under cancellation: the transaction is issued,
+ * the caller suspends on a cancellable `await` for `oncomplete`, and cancelling the caller does not
+ * abort the transaction. So the write's *outcome* is unknown to the caller — it may have landed or
+ * not — and the caller sees a `CancellationException` either way. [RefuseSegmentWritesStore] cannot
+ * reach this: its refusal is an ordinary throw, which the exporter's turn catches and folds; a
+ * cancellation is rethrown past that fold.
+ *
+ * One-shot: it parks exactly one write and then delegates everything, so the turns a test runs
+ * after the cancellation see a healthy store.
+ */
+internal class CancelDuringSegmentWriteStore(
+    private val backing: DurableStore,
+    private val landFirst: Boolean,
+) : DurableStore {
+    private val lock = reentrantLock()
+    private var armed = false
+    private var landed = 0
+    private var cancelled = 0
+
+    /** Completes when the parked write has been entered (and, if [landFirst], has landed). */
+    val parked: CompletableDeferred<Unit> = CompletableDeferred()
+
+    fun arm(): Unit = lock.withLock { armed = true }
+
+    /** Segment writes that reached [backing] while parked — a precondition guard. */
+    fun landedWrites(): Int = lock.withLock { landed }
+
+    /** Parked writes whose caller's cancellation actually reached them — a precondition guard. */
+    fun cancelledWrites(): Int = lock.withLock { cancelled }
+
+    override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+
+    override suspend fun write(key: StoreKey, bytes: ByteArray) {
+        val park = lock.withLock {
+            val park = armed && key.name.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST)
+            if (park) armed = false
+            park
+        }
+        if (!park) return backing.write(key, bytes)
+        if (landFirst) {
+            backing.write(key, bytes)
+            lock.withLock { landed++ }
+        }
+        parked.complete(Unit)
+        // `awaitCancellation` only ever leaves by cancellation, so the `finally` counts exactly
+        // the cancellations that reached this write.
+        try {
+            awaitCancellation()
+        } finally {
+            lock.withLock { cancelled++ }
+        }
     }
 
     override suspend fun delete(key: StoreKey): Unit = backing.delete(key)

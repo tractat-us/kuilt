@@ -1,5 +1,6 @@
 package us.tractat.kuilt.otel
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
@@ -902,6 +903,112 @@ class WarpLogRecordExporterRetirementTest {
     }
 
     @Test
+    fun aMergeCancelledAfterItsSegmentLandedLeavesNoOrphanKey() = runTest {
+        // A cancellation is not a refusal. `IndexedDbDurableStore.write` suspends on a cancellable
+        // await for `oncomplete`, and cancelling the caller does not abort the transaction — so a
+        // merge cancelled there (a `withTimeout` around it, a cancelled gossip collector) can land
+        // the adopted blob while the turn never learns it did. The turn's failure fold never runs
+        // either: a cancellation is rethrown past it, so the index is not marked dirty. The merge's
+        // number is then held by no field, and the next index write — the next roll — is encoded
+        // without it: a ~segment-sized key named by nothing, in a format with no key enumeration.
+        //
+        // The drive past the cancellation is long enough to roll (segmentOps = 8), because the
+        // orphan only appears once an index write is built from the fields; and a restart follows,
+        // because that is where an unswept or unnamed key would be found or not.
+        val store = RecordingStore()
+        val parking = CancelDuringSegmentWriteStore(store, landFirst = true)
+        val exporter = exporterFor(parking)
+        repeat(3) { i -> exporter.export(record(i)) }
+
+        parking.arm()
+        val merge = launch { exporter.merge(foreignLog()) }
+        parking.parked.await()
+        merge.cancel()
+        merge.join()
+        val orphanedAt = orphanKeys(store)
+
+        repeat(20) { i -> exporter.export(record(100 + i)) }
+        val orphansAfterRoll = orphanKeys(store)
+
+        val restarted = exporterFor(store)
+        restarted.recover()
+        restarted.export(record(1_000))
+        val orphansAfterRestart = orphanKeys(store)
+        val phantomsAfterRestart = phantomSegments(store)
+
+        assertAll(
+            { assertEquals(1, parking.landedWrites(), "precondition: the parked segment write must have landed") },
+            {
+                assertEquals(1, parking.cancelledWrites(), "precondition: the cancellation must have reached the write")
+            },
+            { assertTrue(merge.isCancelled, "precondition: the merge must have ended cancelled") },
+            {
+                // At the moment of cancellation the merge's own leading index write still names the
+                // key, so it is not yet orphaned; that is what makes the later drive necessary.
+                assertEquals(emptyList(), orphanedAt, "precondition: the key must be named when the merge ends")
+            },
+            { assertEquals(emptyList(), orphansAfterRoll, "segment keys named by no index after the next roll") },
+            { assertEquals(emptyList(), orphansAfterRestart, "segment keys named by no index after a restart") },
+            { assertEquals(emptyList(), phantomsAfterRestart, "sealed segments with no key after a restart") },
+        )
+    }
+
+    @Test
+    fun aMergeCancelledBeforeItsSegmentLandedLeavesNoPhantomAcrossARestart() = runTest {
+        // The other outcome of the same cancellation: the transaction never landed. The merge's
+        // leading index write already named the number as sealed, and because the cancellation
+        // bypasses the failure fold, the index is not marked dirty — so an export that does not
+        // roll writes no index, and a restart then reads the number back as a key that was never
+        // written: the #2186 phantom, reached by cancellation instead of by refusal.
+        val store = RecordingStore()
+        val parking = CancelDuringSegmentWriteStore(store, landFirst = false)
+        val exporter = exporterFor(parking)
+        repeat(3) { i -> exporter.export(record(i)) }
+
+        parking.arm()
+        val merge = launch { exporter.merge(foreignLog()) }
+        parking.parked.await()
+        merge.cancel()
+        merge.join()
+        val phantomAtCancel = phantomSegments(store)
+
+        exporter.export(record(100))
+
+        val restarted = exporterFor(store)
+        restarted.recover()
+        restarted.export(record(1_000))
+        val orphansAfterRestart = orphanKeys(store)
+        val phantomsAfterRestart = phantomSegments(store)
+
+        assertAll(
+            { assertEquals(0, parking.landedWrites(), "precondition: the parked segment write must NOT have landed") },
+            {
+                assertEquals(1, parking.cancelledWrites(), "precondition: the cancellation must have reached the write")
+            },
+            { assertTrue(merge.isCancelled, "precondition: the merge must have ended cancelled") },
+            {
+                // Without this the index never named the number and "no phantom" holds vacuously.
+                assertEquals(1, phantomAtCancel.size, "precondition: the merge's index write must name the unwritten key")
+            },
+            { assertEquals(emptyList(), phantomsAfterRestart, "sealed segments with no key after a restart") },
+            { assertEquals(emptyList(), orphansAfterRestart, "segment keys named by no index after a restart") },
+        )
+    }
+
+    /** Segment keys present in [store] that its current index names neither sealed, active nor retired. */
+    private suspend fun orphanKeys(store: RecordingStore): List<String> {
+        val index = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)))
+        val named = (index.sealedSegments + index.retired + index.active).map(::segmentKeyForTest).toSet()
+        return segmentKeys(store).filter { it !in named }.sorted()
+    }
+
+    /** Numbers [store]'s current index names as sealed whose key is absent — read back as `Pinned`. */
+    private suspend fun phantomSegments(store: RecordingStore): List<Int> {
+        val index = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)))
+        return index.sealedSegments.filterNot { segmentKeyForTest(it) in segmentKeys(store) }
+    }
+
+    @Test
     fun everySegmentKeyAMergeWritesStaysNamedByTheIndex() = runTest {
         // A merge batch can carry index writes AFTER the adopt's — a retirement's ledger write and
         // a roll's — whenever its window pass fires. Those are encoded while the batch is built,
@@ -918,25 +1025,29 @@ class WarpLogRecordExporterRetirementTest {
         repeat(20) { i -> a.export(record(i, body = "a$i")) }
 
         val orphans = mutableListOf<String>()
-        var multiIndexMerges = 0
+        var rollTurns = 0
+        var retireTurns = 0
         repeat(MERGE_ROUNDS) { round ->
             repeat(5) { i -> peer.export(record(1_000 + round * 5 + i)) }
+            val activeBefore = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).active
             val mark = store.operations().size
             a.merge(peer.snapshot())
-            val indexWrites = store.operations().drop(mark)
-                .count { it.kind == StoreOpKind.WRITE && it.key == INDEX_KEY_FOR_TEST }
-            if (indexWrites > 1) multiIndexMerges++
-            val index = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)))
-            val named = (index.sealedSegments + index.retired + index.active).map(::segmentKeyForTest).toSet()
-            orphans += segmentKeys(store).filter { it !in named }.map { "round $round: $it" }
+            val turn = store.operations().drop(mark)
+            // A merge turn that moved `active` rolled; one that deleted a segment key carried a
+            // retirement's ledger write before its sweep. Each is a separate index write the
+            // projection has to reach, so each is counted on its own.
+            if (decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).active != activeBefore) rollTurns++
+            if (turn.any { it.kind == StoreOpKind.DELETE && it.key.name.startsWith("otel.logs.seg.") }) retireTurns++
+            orphans += orphanKeys(store).map { "round $round: $it" }
         }
 
         assertAll(
             {
-                // Without a second index write in a merge batch there is nothing to project onto,
-                // and the property below would hold for any ordering of the adopt's move.
-                assertTrue(multiIndexMerges > 0, "precondition: some merge must have written the index twice")
+                // Without a roll or a retirement inside a merge turn there is nothing to project
+                // onto, and the property below would hold for any ordering of the adopt's move.
+                assertTrue(rollTurns > 0, "precondition: some merge turn must have rolled")
             },
+            { assertTrue(retireTurns > 0, "precondition: some merge turn must have retired a segment") },
             { assertEquals(emptyList(), orphans, "segment keys named by no index: $orphans") },
         )
     }
