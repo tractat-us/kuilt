@@ -1194,7 +1194,7 @@ decoration on a `Draft`, consistent with the opaque-tag/satellite decision above
 
 Execution-side enforcement first (no producer API beyond the tag): the ring
 owner of a task must `reserve` from the task's lane before running it —
-`HeddleNode.reserve(leaf, maximumCost)` returning `null` defers the task
+`HeddleNode.reserve(leaf, maximumCost)` answering `ReserveOutcome.NoHoldings` defers the task
 until entitlement flows in, throttling each lane to its share while the ring
 still decides placement. Producer-side admission (reserve at `shuttle` time,
 bounding `WorkQueue` growth itself) is the follow-on.

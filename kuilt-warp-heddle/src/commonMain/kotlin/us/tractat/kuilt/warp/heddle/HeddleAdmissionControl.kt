@@ -83,8 +83,9 @@ public class HeddleAdmissionControl(
      * Reserve this task's lane entitlement, or defer it.
      *
      * Returns a settling [AdmissionTicket] when the reservation succeeds; `null` (defer) when the
-     * lane's leaf is out of entitlement, or when the heddle's write gate is closed. An un-gated lane (`laneToLeaf` returns `null`, e.g. the
-     * default [Lane.ROOT]) is admitted immediately with a no-op ticket, touching no ledger.
+     * lane's leaf is out of entitlement, or when the heddle's write gate is closed ([GateClosed]).
+     * An un-gated lane (`laneToLeaf` returns `null`, e.g. the default [Lane.ROOT]) is admitted
+     * immediately with a no-op ticket, touching no ledger.
      */
     override fun admit(descriptor: TaskDescriptor): AdmissionTicket? {
         val leaf = laneToLeaf(descriptor.lane) ?: return AdmissionTicket.NOOP
