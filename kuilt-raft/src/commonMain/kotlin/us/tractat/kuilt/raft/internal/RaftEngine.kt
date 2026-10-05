@@ -2509,11 +2509,14 @@ internal class RaftEngine(
         // `state.snapshotIndex` / `state.snapshotConfig` track the stored snapshot (set beside every
         // `saveSnapshot`, and at restore), so a refusal can be decided before the stored snapshot is
         // loaded — see SnapshotSender.nextChunk's "A refusal costs no load" — and a refused transfer
-        // pinned to an older snapshot can give way to the stored one (#2843).
+        // pinned to an older snapshot can give way to the stored one (#2843). `round` is captured once
+        // and stamped on the frame below: the sender keys stale-ack detection on exactly this value.
+        val round = readIndexTracker.round
         val chunk = snapshotSender.nextChunk(
             peer,
             storedIndex = state.snapshotIndex,
             storedConfig = state.snapshotConfig,
+            round = round,
         ) ?: return
         val start = chunk.offset.toInt()
         val end = start + chunk.data.size
@@ -2533,7 +2536,7 @@ internal class RaftEngine(
                 data = chunk.data,
                 done = chunk.done,
                 config = chunk.meta.config,
-                round = readIndexTracker.round,
+                round = round,
             )
         )
     }
@@ -2545,8 +2548,11 @@ internal class RaftEngine(
         recentVoterContacts += from                // reachability signal for CheckQuorum
         readIndexTracker.recordAck(from, m.echoedRound)   // credit ACK to the round it actually responded to (BLOCKER 1a)
         confirmFreshReads()                        // ReadIndex: snapshot ACKs count as freshness evidence
-        when (val outcome = snapshotSender.onAck(from, m.nextOffset)) {
+        when (val outcome = snapshotSender.onAck(from, m.nextOffset, m.echoedRound)) {
             SnapshotSender.AckOutcome.NoTransfer -> return
+            SnapshotSender.AckOutcome.Stale -> {
+                debug { "onInstallSnapshotResponse($from): STALE ack offset=${m.nextOffset} round=${m.echoedRound} answers an earlier transfer — ignored" }
+            }
             is SnapshotSender.AckOutcome.Complete -> {            // fully received
                 state.matchIndex[from] = maxOf(state.matchIndex[from] ?: 0L, outcome.lastIncludedIndex)
                 state.nextIndex[from] = outcome.lastIncludedIndex + 1L

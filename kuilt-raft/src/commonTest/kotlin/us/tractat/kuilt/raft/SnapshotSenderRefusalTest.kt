@@ -54,8 +54,8 @@ internal class SnapshotSenderRefusalTest {
                         .also { loads++ }
             }
             val sender = SnapshotSender(storage, sizer)
-            assertNull(sender.nextChunk(peer, storedIndex = 42L, storedConfig), "rig: this sizer must refuse the transfer")
-            return sender.onAck(peer, 4L) to loads
+            assertNull(sender.nextChunk(peer, storedIndex = 42L, storedConfig, round = 1L), "rig: this sizer must refuse the transfer")
+            return sender.onAck(peer, 4L, echoedRound = 1L) to loads
         }
 
         val (early, earlyLoads) = refused(storedConfig = wide) { _, _ -> null }
@@ -92,7 +92,7 @@ internal class SnapshotSenderRefusalTest {
         val asked = mutableListOf<ConfigPayload?>()
         val sender = SnapshotSender(storage) { _, config -> asked += config; if (config == wide) null else 4 }
 
-        val chunk = sender.nextChunk(peer, storedIndex = 42L, storedConfig = null)   // the caller's record disagrees with storage
+        val chunk = sender.nextChunk(peer, storedIndex = 42L, storedConfig = null, round = 1L)   // the caller's record disagrees with storage
 
         assertAll(
             {
@@ -109,7 +109,11 @@ internal class SnapshotSenderRefusalTest {
     /** The settled membership past the change [wide] stands in for — the sizers below always fit it. */
     private val narrow = ConfigPayload(old = null, new = ClusterConfig(voters = setOf(NodeId("a"))))
 
-    /** A transfer in flight on a snapshot at index 42, with its first 4-byte chunk sent and acked. */
+    /**
+     * A transfer in flight on a snapshot at index 42, with its first 4-byte chunk sent in round
+     * [ROUND_SENT] and acked. The arms below then act in later rounds, as the engine's heartbeat
+     * divert does: it bumps the round before every attempt.
+     */
     private class InFlight(val storage: InMemoryRaftStorage, val sender: SnapshotSender, val starve: (Boolean) -> Unit)
 
     /**
@@ -121,10 +125,18 @@ internal class SnapshotSenderRefusalTest {
         storage.saveSnapshot(SnapshotMeta(lastIncludedIndex = 42L, lastIncludedTerm = 3L, config = wide), ByteArray(10))
         var starved = false
         val sender = SnapshotSender(storage) { _, config -> if (starved && config == wide) null else 4 }
-        val first = assertNotNull(sender.nextChunk(peer, storedIndex = 42L, wide), "rig: the transfer must start")
+        val first = assertNotNull(sender.nextChunk(peer, storedIndex = 42L, wide, ROUND_SENT), "rig: the transfer must start")
         assertEquals(0L, first.offset, "rig: the first chunk starts at 0")
-        assertEquals(SnapshotSender.AckOutcome.SendNext, sender.onAck(peer, 4L), "rig: the first chunk is acked")
+        assertEquals(
+            SnapshotSender.AckOutcome.SendNext, sender.onAck(peer, 4L, echoedRound = ROUND_SENT),
+            "rig: the first chunk is acked",
+        )
         return InFlight(storage, sender) { starved = it }
+    }
+
+    private companion object {
+        /** The round [inFlight]'s chunk was stamped with. */
+        const val ROUND_SENT = 1L
     }
 
     /**
@@ -144,12 +156,15 @@ internal class SnapshotSenderRefusalTest {
     fun aRefusalWithNoNewerSnapshotKeepsTheAckedOffset() = raftRunTest {
         val f = inFlight()
         f.starve(true)
-        repeat(3) {
-            assertNull(f.sender.nextChunk(peer, storedIndex = 42L, wide), "rig: the starved budget must refuse")
+        for (round in ROUND_SENT + 1..ROUND_SENT + 3) {
+            assertNull(f.sender.nextChunk(peer, storedIndex = 42L, wide, round), "rig: the starved budget must refuse")
         }
         f.starve(false)
 
-        val resumed = assertNotNull(f.sender.nextChunk(peer, storedIndex = 42L, wide), "the transfer must survive")
+        val resumed = assertNotNull(
+            f.sender.nextChunk(peer, storedIndex = 42L, wide, ROUND_SENT + 4),
+            "the transfer must survive",
+        )
         assertAll(
             { assertEquals(42L, resumed.meta.lastIncludedIndex, "the same snapshot") },
             { assertEquals(4L, resumed.offset, "resumed at the acked offset, not restarted") },
@@ -171,11 +186,12 @@ internal class SnapshotSenderRefusalTest {
     fun aRefusedTransferPinnedBelowTheStoredSnapshotRestartsOnIt() = raftRunTest {
         val f = inFlight()
         f.starve(true)
-        assertNull(f.sender.nextChunk(peer, storedIndex = 42L, wide), "rig: the starved budget must refuse the old snapshot")
+        val round = ROUND_SENT + 1                            // the next heartbeat's divert
+        assertNull(f.sender.nextChunk(peer, storedIndex = 42L, wide, round), "rig: the starved budget must refuse the old snapshot")
 
         f.storage.saveSnapshot(SnapshotMeta(lastIncludedIndex = 50L, lastIncludedTerm = 3L, config = narrow), ByteArray(10))
         val restarted = assertNotNull(
-            f.sender.nextChunk(peer, storedIndex = 50L, narrow),
+            f.sender.nextChunk(peer, storedIndex = 50L, narrow, round),
             "a newer snapshot that fits must replace the refused transfer while the budget is still starved",
         )
         assertAll(
@@ -197,7 +213,9 @@ internal class SnapshotSenderRefusalTest {
      * ### What proves the rig fired
      *
      * The old transfer provably reached offset 8 (its second chunk was sent and acked), was refused,
-     * and the restart provably happened (the chunk returned carries index 50 from offset 0).
+     * and the restart provably happened (the chunk returned carries index 50 from offset 0). And the
+     * new transfer's own ack still completes it, so the arm cannot pass against a sender that simply
+     * ignores every ack after a restart.
      */
     @Test
     fun aStaleAckFromTheDroppedTransferDoesNotCompleteTheNewOne() = raftRunTest {
@@ -205,22 +223,64 @@ internal class SnapshotSenderRefusalTest {
         storage.saveSnapshot(SnapshotMeta(lastIncludedIndex = 42L, lastIncludedTerm = 3L, config = wide), ByteArray(10))
         var starved = false
         val sender = SnapshotSender(storage) { _, config -> if (starved && config == wide) null else 4 }
-        assertNotNull(sender.nextChunk(peer, storedIndex = 42L, wide), "rig: the transfer must start")
-        assertEquals(SnapshotSender.AckOutcome.SendNext, sender.onAck(peer, 4L), "rig: the first chunk is acked")
-        val second = assertNotNull(sender.nextChunk(peer, storedIndex = 42L, wide), "rig: the second chunk")
+        assertNotNull(sender.nextChunk(peer, storedIndex = 42L, wide, round = 1L), "rig: the transfer must start")
+        assertEquals(SnapshotSender.AckOutcome.SendNext, sender.onAck(peer, 4L, echoedRound = 1L), "rig: the first chunk is acked")
+        val second = assertNotNull(sender.nextChunk(peer, storedIndex = 42L, wide, round = 1L), "rig: the second chunk")
         assertEquals(4L, second.offset, "rig: the second chunk starts at 4")
-        assertEquals(SnapshotSender.AckOutcome.SendNext, sender.onAck(peer, 8L), "rig: the old transfer reached 8")
+        assertEquals(SnapshotSender.AckOutcome.SendNext, sender.onAck(peer, 8L, echoedRound = 1L), "rig: the old transfer reached 8")
         starved = true
-        assertNull(sender.nextChunk(peer, storedIndex = 42L, wide), "rig: the starved budget must refuse the old snapshot")
+        assertNull(sender.nextChunk(peer, storedIndex = 42L, wide, round = 2L), "rig: the starved budget must refuse the old snapshot")
 
         storage.saveSnapshot(SnapshotMeta(lastIncludedIndex = 50L, lastIncludedTerm = 3L, config = narrow), ByteArray(4))
-        val restarted = assertNotNull(sender.nextChunk(peer, storedIndex = 50L, narrow), "rig: the restart")
+        val restarted = assertNotNull(sender.nextChunk(peer, storedIndex = 50L, narrow, round = 2L), "rig: the restart")
         assertEquals(50L to 0L, restarted.meta.lastIncludedIndex to restarted.offset, "rig: restarted on 50 from 0")
 
-        val stale = sender.onAck(peer, 8L)                    // the old chunk's duplicate ack, delivered late
-        assertTrue(
-            stale !is SnapshotSender.AckOutcome.Complete,
-            "an ack the old transfer earned must not complete the new one; got $stale",
+        val stale = sender.onAck(peer, 8L, echoedRound = 1L)  // the old chunk's duplicate ack, delivered late
+        val honest = sender.onAck(peer, 4L, echoedRound = 2L) // the new transfer's own ack
+        assertAll(
+            {
+                assertTrue(
+                    stale !is SnapshotSender.AckOutcome.Complete,
+                    "an ack the old transfer earned must not complete the new one; got $stale",
+                )
+            },
+            { assertEquals(SnapshotSender.AckOutcome.Complete(50L), honest, "the new transfer's own ack completes it") },
+        )
+    }
+
+    /**
+     * A restart onto a newer snapshot **in the same round** that stamped the old transfer's last chunk
+     * waits for the next round.
+     *
+     * The response's echoed round is the only thing that tells the two transfers' acks apart, so a
+     * transfer may not start in a round its predecessor's chunks also carry. Reached when the old
+     * transfer is refused on the ack path — its ack arrives, the next chunk is refused, and the newer
+     * snapshot is already stored — rather than on a heartbeat, which bumps the round first.
+     *
+     * ### What proves the rig fired
+     *
+     * The restart is asserted to happen one round later, so the null here is the deferral and not a
+     * refusal; and the old transfer's late ack is then asserted stale.
+     */
+    @Test
+    fun aRestartInTheRoundThatStampedTheOldTransferWaitsForTheNextRound() = raftRunTest {
+        val f = inFlight()
+        f.starve(true)
+        f.storage.saveSnapshot(SnapshotMeta(lastIncludedIndex = 50L, lastIncludedTerm = 3L, config = narrow), ByteArray(4))
+
+        val sameRound = f.sender.nextChunk(peer, storedIndex = 50L, narrow, ROUND_SENT)
+        val nextRound = f.sender.nextChunk(peer, storedIndex = 50L, narrow, ROUND_SENT + 1)
+        val lateOldAck = f.sender.onAck(peer, 4L, echoedRound = ROUND_SENT)
+
+        assertAll(
+            { assertNull(sameRound, "a restart in the round that stamped the old transfer must wait") },
+            {
+                assertEquals(
+                    50L to 0L, nextRound?.let { it.meta.lastIncludedIndex to it.offset },
+                    "rig: the restart happens one round later, so the null above is the deferral",
+                )
+            },
+            { assertEquals(SnapshotSender.AckOutcome.Stale, lateOldAck, "the old transfer's late ack is stale") },
         )
     }
 
@@ -239,13 +299,13 @@ internal class SnapshotSenderRefusalTest {
     fun aRefusedTransferDroppedForANewerSnapshotThatIsAlsoRefusedLeavesNothingBehind() = raftRunTest {
         val f = inFlight()
         f.starve(true)
-        assertNull(f.sender.nextChunk(peer, storedIndex = 42L, wide), "rig: the starved budget must refuse the old snapshot")
+        assertNull(f.sender.nextChunk(peer, storedIndex = 42L, wide, ROUND_SENT + 1), "rig: the starved budget must refuse the old snapshot")
 
         f.storage.saveSnapshot(SnapshotMeta(lastIncludedIndex = 50L, lastIncludedTerm = 3L, config = wide), ByteArray(10))
-        assertNull(f.sender.nextChunk(peer, storedIndex = 50L, wide), "rig: the newer snapshot is refused as well")
-        val strayAck = f.sender.onAck(peer, 6L)
+        assertNull(f.sender.nextChunk(peer, storedIndex = 50L, wide, ROUND_SENT + 1), "rig: the newer snapshot is refused as well")
+        val strayAck = f.sender.onAck(peer, 6L, echoedRound = ROUND_SENT)
         f.starve(false)
-        val recovered = assertNotNull(f.sender.nextChunk(peer, storedIndex = 50L, wide), "the budget recovered")
+        val recovered = assertNotNull(f.sender.nextChunk(peer, storedIndex = 50L, wide, ROUND_SENT + 2), "the budget recovered")
 
         assertAll(
             { assertEquals(SnapshotSender.AckOutcome.NoTransfer, strayAck, "no transfer may be left in flight") },

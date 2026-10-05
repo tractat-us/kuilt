@@ -7,6 +7,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.serialization.builtins.ByteArraySerializer
+import us.tractat.kuilt.raft.internal.RaftMessage
 import us.tractat.kuilt.raft.internal.raftCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -14,6 +15,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlin.time.Duration.Companion.milliseconds
 
 class InstallSnapshotTest {
@@ -150,13 +152,22 @@ class InstallSnapshotTest {
         leader.compactionFloor.first { it == through }
 
         // Heartbeat #1: the leader diverts and sends chunk 0 (offset 0) — the transfer starts.
+        sim.network.recording = true
         advanceTimeBy(hb); runCurrent(); sim.settle()
         assertTrue(0L in sentOffsets, "the transfer must start at offset 0 (sent=$sentOffsets)")
         assertTrue(leaderTerm > 0L, "captured the leader's term for the injected ack")
+        // The injected ack echoes the round the leader stamped on chunk 0, as an honest follower's
+        // does — an ack echoing an earlier round answers an earlier transfer and is ignored (#2843).
+        val chunkRound = sim.network.sent
+            .lastOrNull { it.from == leaderId && it.to == offline && it.message is RaftMessage.InstallSnapshot }
+            ?.let { (it.message as RaftMessage.InstallSnapshot).round }
+            ?: fail("rig: the leader must have sent chunk 0 to $offline")
 
         // The follower acks partial progress — the in-flight transfer advances well past offset 0.
         val ackedOffset = 200L
-        sim.deliverInstallSnapshotResponse(to = leaderId, from = offline, term = leaderTerm, nextOffset = ackedOffset)
+        sim.deliverInstallSnapshotResponse(
+            to = leaderId, from = offline, term = leaderTerm, nextOffset = ackedOffset, echoedRound = chunkRound,
+        )
         runCurrent(); sim.settle()
         assertTrue(ackedOffset in sentOffsets, "leader resumes the next chunk from the acked offset (sent=$sentOffsets)")
 
