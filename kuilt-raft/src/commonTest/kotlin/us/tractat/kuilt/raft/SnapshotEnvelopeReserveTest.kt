@@ -568,6 +568,119 @@ class SnapshotEnvelopeReserveTest {
     }
 
     /**
+     * A refused transfer pinned to a snapshot **older than the one now stored** must give way to the
+     * newer one, rather than being refused every heartbeat until the budget recovers (#2843).
+     *
+     * The scenario the joint-config diagnostic advises an operator into: a joint-stamped snapshot is
+     * mid-transfer, a peer attaches over a tighter link and drops the budget below the joint envelope
+     * but above the simple one, and the application cuts a new snapshot past the membership change.
+     * That snapshot fits; the transfer pinned to the old one does not. Keeping the old transfer's acked
+     * offset is right only while the snapshot it carries is still the newest — once a newer one exists
+     * the old one is a stale target, and resuming it means resuming nothing.
+     *
+     * The budget is **never restored** in this arm, so convergence can come only from the new snapshot.
+     *
+     * ### What proves the rig fired
+     *
+     * The same starve-from-the-trace rig as [aRefusalMidTransferResumesFromTheAckedOffsetWhenTheBudgetRecovers],
+     * with the same three preconditions asserted *before* the new snapshot is cut: the follower acked
+     * part of the joint snapshot and not all of it, the leader refused this peer inside the window, and
+     * nothing was dropped for size. Plus the premise that makes the scenario possible at all — the
+     * starved budget sits strictly between the simple and the joint envelopes — measured, not assumed.
+     */
+    @Test
+    fun aRefusedTransferPinnedBelowTheStoredSnapshotRestartsOnTheNewerOne() = raftRunTest {
+        val metrics = mutableListOf<Pair<NodeId, RaftMetric>>()
+        val t = snapshotStampedWithConfig(sim(this, BUDGET) { id, m -> metrics += id to m }, wantJoint = true)
+        val network = t.sim.network
+        val leader = t.sim.nodes.getValue(t.leaderId)
+        val (simpleIndex, simpleConfig) = t.sim.storages.getValue(t.leaderId).entries(0L)
+            .mapNotNull { entry -> entry.config?.let { entry.index to it } }
+            .firstOrNull { (index, payload) -> payload.old == null && index > t.through }
+            ?: fail("rig: the promotion must leave a Simple config entry after the joint one")
+        assertTrue(
+            worstCaseReserve(simpleConfig) < STARVED_BUDGET && worstCaseReserve(t.config) > STARVED_BUDGET,
+            "rig: $STARVED_BUDGET B must refuse the joint envelope (${worstCaseReserve(t.config)} B) and " +
+                "fit the simple one (${worstCaseReserve(simpleConfig)} B), or there is no newer snapshot that fits",
+        )
+
+        val chunks = mutableListOf<RaftTraceEvent.InstallSnapshot>()
+        var starvedAfter: Long? = null
+        backgroundScope.launch {
+            leader.trace.collect { event ->
+                if (event is RaftTraceEvent.InstallSnapshot && event.to == t.behind) {
+                    chunks += event
+                    if (starvedAfter == null && event.offset > 0L) {
+                        network.maxPayloadBytes = STARVED_BUDGET  // a peer attaches over a tighter link, mid-transfer
+                        starvedAfter = event.offset
+                    }
+                }
+            }
+        }
+        t.sim.settle()                                        // subscribe before the transfer starts
+        network.recording = true
+
+        t.sim.restart(t.behind)
+        t.sim.awaitTrue("the budget was starved mid-transfer") { starvedAfter != null }
+        val hb = fastRaftConfig().heartbeatInterval.inWholeMilliseconds
+        advanceTimeBy(hb * 4); runCurrent(); t.sim.settle()  // several divert rounds at the starved budget
+
+        val acked = network.sent
+            .filter { it.from == t.behind && it.to == t.leaderId }
+            .mapNotNull { (it.message as? RaftMessage.InstallSnapshotResponse)?.nextOffset }
+            .lastOrNull()
+        val refusals = metrics.count { (id, m) ->
+            id == t.leaderId && m is RaftMetric.SnapshotChunkEnvelopeOverBudget && m.peer == t.behind
+        }
+        assertAll(
+            {
+                assertTrue(
+                    acked != null && acked in 1L until BIG_STATE.toLong(),
+                    "rig: the follower must have acked part of the joint snapshot and not all of it, or no " +
+                        "transfer was in flight when the refusal fired; acked=$acked of $BIG_STATE",
+                )
+            },
+            { assertTrue(refusals > 0, "rig: the leader must refuse ${t.behind} inside the window") },
+            {
+                assertTrue(
+                    network.overBudget.isEmpty(),
+                    "rig: nothing may be dropped for size before the new snapshot: ${network.overBudget}",
+                )
+            },
+        )
+
+        val sentBeforeCut = chunks.size
+        val newState = ByteArray(1_000) { (0x40 or (it and 0x3F)).toByte() }
+        leader.snapshots.value = Snapshot(simpleIndex, newState)  // cut past the membership change
+        leader.compactionFloor.first { it == simpleIndex }
+        assertEquals(
+            simpleConfig,
+            t.sim.storages.getValue(t.leaderId).loadSnapshot()?.meta?.config,
+            "rig: the new stored snapshot must be stamped with the Simple config",
+        )
+        advanceTimeBy(hb * 4); runCurrent(); t.sim.settle()  // the budget stays starved throughout
+
+        val after = chunks.drop(sentBeforeCut)
+        assertAll(
+            {
+                assertTrue(
+                    after.firstOrNull()?.let { it.lastIncludedIndex == simpleIndex && it.offset == 0L } == true,
+                    "with a newer snapshot that fits, the refused transfer must restart on it from offset 0 " +
+                        "while the budget is still starved; chunks after the cut=" +
+                        after.map { it.lastIncludedIndex to it.offset },
+                )
+            },
+            {
+                assertTrue(
+                    network.overBudget.isEmpty(),
+                    "the restarted transfer must fit the starved budget: ${network.overBudget}",
+                )
+            },
+        )
+        t.sim.awaitCommit(simpleIndex, on = setOf(t.behind))  // converges without the budget recovering
+    }
+
+    /**
      * A refusal with no transfer in flight must be decided **before** the stored snapshot is loaded,
      * not after loading it and throwing the copy away.
      *
