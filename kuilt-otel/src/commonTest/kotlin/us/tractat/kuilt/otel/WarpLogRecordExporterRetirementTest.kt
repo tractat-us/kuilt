@@ -799,6 +799,149 @@ class WarpLogRecordExporterRetirementTest {
     }
 
     @Test
+    fun aRefusedAdoptedSegmentWriteLeavesNoPhantomOnceTheNextIndexWriteLands() = runTest {
+        // The **merge** half of "a layout change becomes real in memory only after the write that
+        // publishes it has returned" (#2186). `adoptRemoteSegment` allocates a number for the
+        // peer's whole log, and if it seals that number while the batch is still being BUILT, a
+        // refused segment write leaves it sealed in memory with no key behind it. The failed
+        // batch leaves the index dirty, so the next batch's leading index write publishes the
+        // phantom — and from then on every start reads it back as `Pinned`, never retirable.
+        //
+        // The merge's OWN index write still names the number for a moment: it is emitted before
+        // the segment write on purpose (the reverse order would leak an unnamed segment blob on a
+        // crash, which is worse than a phantom entry). So the property is stated at the point
+        // the next index write has landed, not at the instant the merge returns.
+        val store = RecordingStore()
+        val quota = RefuseSegmentWritesStore(store)
+        val exporter = exporterFor(quota)
+        repeat(20) { i -> exporter.export(record(i)) }
+        val sealedBefore = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).sealedSegments.toSet()
+
+        quota.refuseSegmentWrites()
+        val merged = exporter.merge(foreignLog())
+        val refusedByMerge = quota.refusedWrites()
+        val adopted = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).sealedSegments - sealedBefore
+
+        // The next batch — still under refusal, so its own segment write fails too, but its
+        // leading index write lands. That index write is what would publish a build-time seal.
+        exporter.export(record(1_000))
+
+        val onDisk = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)))
+        val phantom = onDisk.sealedSegments.filterNot { segmentKeyForTest(it) in segmentKeys(store) }
+
+        // A fresh start against what reached disk: a phantom here would be read back as Pinned.
+        val restarted = exporterFor(store)
+        restarted.recover()
+        restarted.export(record(2_000))
+        val afterRestart = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)))
+        val phantomAfterRestart = afterRestart.sealedSegments.filterNot { segmentKeyForTest(it) in segmentKeys(store) }
+
+        assertAll(
+            { assertTrue(merged is ExportResult.Failure, "precondition: the merge must have failed, got $merged") },
+            {
+                // Exactly one: the adopted segment write, which is where the merge batch stops.
+                assertEquals(1, refusedByMerge, "precondition: the rig must have refused the adopted segment write")
+            },
+            {
+                // Without this the run never allocated an adopted number at all, and "no phantom"
+                // below would hold vacuously.
+                assertEquals(1, adopted.size, "precondition: the merge's index write must name the adopted number")
+            },
+            {
+                assertEquals(
+                    emptyList(),
+                    phantom,
+                    "the index names sealed segments $phantom whose keys were never written — the " +
+                        "merge sealed its adopted number before the segment write returned",
+                )
+            },
+            {
+                assertEquals(
+                    emptyList(),
+                    phantomAfterRestart,
+                    "a restart carries the phantom $phantomAfterRestart forward as a Pinned segment",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun aSuccessfulMergeAdoptsTheRemoteLogAsASealedSegment() = runTest {
+        // The control for the refusal test above: the adopted segment still lands, is named by
+        // the index as sealed, and survives a restart.
+        val store = RecordingStore()
+        val exporter = exporterFor(store)
+        repeat(3) { i -> exporter.export(record(i)) }
+        val sealedBefore = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).sealedSegments.toSet()
+
+        val merged = exporter.merge(foreignLog())
+        val index = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)))
+        val adopted = index.sealedSegments - sealedBefore
+
+        val restarted = exporterFor(store)
+        restarted.recover()
+        val bodies = restarted.snapshot().toList().map { it.body }
+
+        assertAll(
+            { assertEquals(ExportResult.Success, merged) },
+            { assertEquals(1, adopted.size, "the merge must seal exactly one adopted segment: $index") },
+            {
+                assertTrue(
+                    adopted.all { segmentKeyForTest(it) in segmentKeys(store) },
+                    "the adopted segment ${adopted.toList()} is named but its key is absent",
+                )
+            },
+            { assertTrue(index.next > adopted.max(), "the adopted number must be reserved past: $index") },
+            {
+                assertTrue(
+                    (0 until 6).all { "foreign$it" in bodies },
+                    "a restart lost the merged records: $bodies",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun everySegmentKeyAMergeWritesStaysNamedByTheIndex() = runTest {
+        // A merge batch can carry index writes AFTER the adopt's — a retirement's ledger write and
+        // a roll's — whenever its window pass fires. Those are encoded while the batch is built,
+        // so if the adopt's move is applied only once its segment write returns, they have to
+        // PROJECT it. Without the projection the last index write of the batch drops the adopted
+        // number, the batch still succeeds, and its key is named by nothing: unreachable and
+        // unsweepable in a format with no key enumeration, and its records gone on restart.
+        //
+        // Stated after every merge, over the whole store: each segment key present is named by
+        // the current index, as sealed, active or retired.
+        val store = RecordingStore()
+        val a = exporterFor(store, maxRecords = 5, bufferPolicy = BufferPolicy.DROP_NEWEST, segmentOps = 4)
+        val peer = exporterFor(RecordingStore(), replica = replicaB, maxRecords = 10_000, segmentOps = 64)
+        repeat(20) { i -> a.export(record(i, body = "a$i")) }
+
+        val orphans = mutableListOf<String>()
+        var multiIndexMerges = 0
+        repeat(MERGE_ROUNDS) { round ->
+            repeat(5) { i -> peer.export(record(1_000 + round * 5 + i)) }
+            val mark = store.operations().size
+            a.merge(peer.snapshot())
+            val indexWrites = store.operations().drop(mark)
+                .count { it.kind == StoreOpKind.WRITE && it.key == INDEX_KEY_FOR_TEST }
+            if (indexWrites > 1) multiIndexMerges++
+            val index = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)))
+            val named = (index.sealedSegments + index.retired + index.active).map(::segmentKeyForTest).toSet()
+            orphans += segmentKeys(store).filter { it !in named }.map { "round $round: $it" }
+        }
+
+        assertAll(
+            {
+                // Without a second index write in a merge batch there is nothing to project onto,
+                // and the property below would hold for any ordering of the adopt's move.
+                assertTrue(multiIndexMerges > 0, "precondition: some merge must have written the index twice")
+            },
+            { assertEquals(emptyList(), orphans, "segment keys named by no index: $orphans") },
+        )
+    }
+
+    @Test
     fun noIndexWriteEverNamesARetiredSegmentAsSealedAgain() = runTest {
         // One batch can carry TWO index writes: the ledger commit, and then a roll's, when the
         // pass pushed the active segment past `segmentOps`. The roll's is encoded while the batch
