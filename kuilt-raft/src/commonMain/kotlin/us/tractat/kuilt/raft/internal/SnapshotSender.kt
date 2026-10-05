@@ -44,16 +44,28 @@ internal class SnapshotSender(
 
     /**
      * The next chunk for [peer]'s in-flight transfer, loading the stored snapshot fresh (from offset 0)
-     * iff there is none in flight; otherwise it resumes from the peer's acked offset. A restart is never
-     * initiated here — the follower drives any rewind via its `ReAdvertise(0)` ack. Returns null when no
+     * iff there is none in flight; otherwise it resumes from the peer's acked offset. A rewind of the
+     * same snapshot is never initiated here — the follower drives that via its `ReAdvertise(0)` ack; the
+     * one restart this makes is onto a *newer* snapshot, below. Returns null when no
      * snapshot is stored yet (nothing to send), and when [chunkBytes] refuses the transfer outright.
      *
-     * **A refusal does not start a transfer, and does not end one already running.** A budget too small
+     * **A refusal does not start a transfer, and does not end one already running** — unless a newer
+     * snapshot is stored, below. A budget too small
      * for this snapshot's envelope is a *level*, not a verdict — `Seam.maxPayloadBytes` is a reading
      * that a peer attaching over a tighter link lowers and leaving raises — so an in-flight transfer
      * keeps its acked offset and resumes when the budget recovers, while a fresh one is not installed
      * at all. The second half matters beyond tidiness: installing it would retain a private copy of the
      * whole snapshot per peer, for a transfer that has not sent a byte.
+     *
+     * **Except when a newer snapshot is stored (#2843).** A transfer sizes on the snapshot it loaded,
+     * so one pinned to a snapshot cut mid-membership-change carries the joint config on every chunk
+     * and stays refused after the application cuts a simpler snapshot that would fit. So a refused
+     * transfer whose `lastIncludedIndex` is below [storedIndex] is dropped, and this call falls
+     * through to the fresh path, which decides against the newer snapshot — sending its first chunk,
+     * or refusing it too and installing nothing. Only the *refused* transfer is dropped: one that is
+     * still making progress finishes on the snapshot it started with, because restarting every
+     * transfer on every compaction would starve a long transfer under frequent compaction. That is
+     * also why the hook is here rather than in the engine's compaction.
      *
      * **A refusal costs no load.** With no transfer in flight the refusal is decided against
      * [storedConfig] — the caller's record of the stored snapshot's membership — *before*
@@ -66,17 +78,31 @@ internal class SnapshotSender(
      * two can differ: a restore that drops a malformed stored config leaves the engine's record `null`
      * over it, and there the early check passes and the second one refuses, loading on each refusal.
      *
+     * @param storedIndex the stored snapshot's `lastIncludedIndex`, as the caller last recorded it
+     *   beside [RaftStorage.saveSnapshot]. Consulted only when an in-flight transfer is refused.
      * @param storedConfig the membership the stored snapshot carries, as the caller last recorded it
-     *   beside [RaftStorage.saveSnapshot]. Consulted only when no transfer is in flight.
+     *   beside [RaftStorage.saveSnapshot]. Consulted only when no transfer is in flight, or when a
+     *   refused one is dropped for a newer snapshot.
      */
-    suspend fun nextChunk(peer: NodeId, storedConfig: ConfigPayload?): Chunk? {
-        val xfer = snapshotXfer[peer] ?: run {
-            chunkBytes(peer, storedConfig) ?: return null        // refused before paying for the load
-            val stored = storage.loadSnapshot() ?: return null   // nothing to send yet
-            SnapshotXfer(stored.meta, stored.state, 0L)
+    suspend fun nextChunk(peer: NodeId, storedIndex: Long, storedConfig: ConfigPayload?): Chunk? {
+        snapshotXfer[peer]?.let { inFlight ->
+            chunkBytes(peer, inFlight.meta.config)?.let { budget -> return slice(inFlight, budget) }
+            // Refused mid-transfer. Keep the acked offset only while the snapshot it carries is still
+            // the newest: once a newer one is stored, the old one is a stale target, and the newer one
+            // may fit where it does not (#2843). Fall through to the fresh path, which decides afresh.
+            if (inFlight.meta.lastIncludedIndex >= storedIndex) return null
+            snapshotXfer.remove(peer)
         }
-        val budget = chunkBytes(peer, xfer.meta.config) ?: return null  // sized on what the chunk carries
-        snapshotXfer[peer] = xfer
+        chunkBytes(peer, storedConfig) ?: return null            // refused before paying for the load
+        val stored = storage.loadSnapshot() ?: return null       // nothing to send yet
+        val fresh = SnapshotXfer(stored.meta, stored.state, 0L)
+        val budget = chunkBytes(peer, fresh.meta.config) ?: return null  // sized on what the chunk carries
+        snapshotXfer[peer] = fresh
+        return slice(fresh, budget)
+    }
+
+    /** The chunk of [xfer] starting at its acked offset, at most [budget] raw bytes long. */
+    private fun slice(xfer: SnapshotXfer, budget: Int): Chunk {
         // Lossless by construction: nextOffset is only ever 0 (fresh load) or a value [onAck] clamped
         // into 0..state.size, and state.size is an Int. Keep that clamp if you touch [onAck] (#1818).
         val start = xfer.nextOffset.toInt()

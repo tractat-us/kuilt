@@ -62,7 +62,9 @@ import kotlin.test.fail
  * - [aBudgetTooSmallForTheWholeEnvelopeRefusesObservablyInsteadOfMintingAChunkThatCannotFit] — the
  *   refusal, and that it is not permanent.
  * - [aRefusalMidTransferResumesFromTheAckedOffsetWhenTheBudgetRecovers] — a refusal that lands on a
- *   transfer in flight keeps its acked offset.
+ *   transfer in flight keeps its acked offset, while no newer snapshot is stored.
+ * - [aRefusedTransferPinnedBelowTheStoredSnapshotRestartsOnTheNewerOne] — and gives way to a newer
+ *   stored snapshot that fits, without waiting for the budget to recover (#2843).
  * - [aRefusalWithNoTransferInFlightNeverLoadsTheStoredSnapshot] — a refusal costs no snapshot load.
  * - [theChunkEnvelopeAlreadyOutgrowsTheFlatReserve] — the premise the fix exists for, over an
  *   **independently constructed** envelope.
@@ -288,8 +290,8 @@ class SnapshotEnvelopeReserveTest {
      * config fits the budget can still be wedged by a snapshot cut during a membership change. That
      * snapshot is stamped joint, keeps the stamp after the change commits, and so every chunk of every
      * transfer that installs it carries the wider payload. A newer snapshot cut past the change ends
-     * that only for transfers that start after it: one already in flight keeps the joint snapshot
-     * until it completes, the budget recovers, or leadership changes.
+     * that for transfers that start after it, and for one already in flight that the budget refuses —
+     * see [aRefusedTransferPinnedBelowTheStoredSnapshotRestartsOnTheNewerOne].
      */
     @Test
     fun aJointConfigOnTheChunkNeverMintsAnOverBudgetFrame() = raftRunTest {
@@ -488,8 +490,10 @@ class SnapshotEnvelopeReserveTest {
     }
 
     /**
-     * A refusal that lands on a transfer **already in flight** must keep it: when the budget recovers,
-     * the next chunk starts at the offset the follower acked, not at zero.
+     * A refusal that lands on a transfer **already in flight** must keep it while no newer snapshot is
+     * stored: when the budget recovers, the next chunk starts at the offset the follower acked, not at
+     * zero. (With a newer snapshot stored the refused transfer gives way to it instead — see
+     * [aRefusedTransferPinnedBelowTheStoredSnapshotRestartsOnTheNewerOne]; nothing compacts in this arm.)
      *
      * `SnapshotSender.nextChunk`'s contract is that a refusal "does not end" a running transfer,
      * because a budget too small for the envelope is a level — a peer attaching over a tighter link
