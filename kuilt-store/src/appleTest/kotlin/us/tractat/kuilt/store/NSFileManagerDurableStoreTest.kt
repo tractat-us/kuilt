@@ -91,7 +91,7 @@ class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
      * Pointing the store at a subdirectory of a *regular file* makes the
      * directory creation and then the temp write both fail — the same class of
      * failure a device hits when its storage rejects a write. Before the
-     * `NSError` was captured, this threw `"write to temp file failed"` and
+     * cause was captured, this threw `"write to temp file failed"` and
      * nothing else, which is exactly why a field occurrence could not be
      * diagnosed from the device's own logs.
      */
@@ -110,11 +110,14 @@ class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
         assertAll(
             { assertContains(message, "otel.logs", message = "names the key") },
             { assertContains(message, "bytes=3", message = "names the payload size") },
-            // Anchored to `cause=` deliberately. A bare "NSError(domain=" would also
-            // be satisfied by the directory= field alone, so the assertion would
-            // still pass with the write's own error discarded — the exact defect
-            // under repair.
-            { assertContains(message, "cause=NSError(domain=", message = "carries the WRITE's own NSError") },
+            // Anchored to `cause=` deliberately: the directory= field carries its own
+            // error, so an unanchored match could be satisfied by that field alone
+            // with the write's own cause discarded — the exact defect under repair.
+            // Since #2141 the temp write is POSIX, so its cause is an errno and the
+            // call that set it.
+            { assertContains(message, "cause=errno=", message = "carries the WRITE's own errno") },
+            { assertContains(message, "step=open", message = "names the call that failed") },
+            { assertFalse(message.contains("(unknown)"), "the errno resolved to readable text") },
             { assertContains(message, "directoryExists=false", message = "names the missing directory") },
         )
     }
