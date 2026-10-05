@@ -416,8 +416,10 @@ class HeddleControlPlaneTest {
         val baseline = counting.consensusCalls
         governed.advertise(eLeaf, Demand(targetOutstanding = 500L, maximumUsefulGrant = 500L))
         governed.schedule(root)
-        val reservation = governed.reserve(leaf, 10L)
-        assertNotNull(reservation, "reservation must succeed while a control-plane proposal is in flight")
+        val reservation = assertIs<ReserveOutcome.Reserved>(
+            governed.reserve(leaf, 10L),
+            "reservation must succeed while a control-plane proposal is in flight",
+        ).id
         governed.complete(reservation, 7L)
         governed.boundMetrics(root)
         governed.earmarked(leaf)

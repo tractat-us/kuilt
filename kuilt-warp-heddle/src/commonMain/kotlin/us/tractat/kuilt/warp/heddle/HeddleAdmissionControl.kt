@@ -1,8 +1,11 @@
 package us.tractat.kuilt.warp.heddle
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import us.tractat.kuilt.heddle.FairShareExecution
+import us.tractat.kuilt.heddle.GateClosed
 import us.tractat.kuilt.heddle.GroupId
 import us.tractat.kuilt.heddle.HeddleNode
+import us.tractat.kuilt.heddle.ReserveOutcome
 import us.tractat.kuilt.warp.AdmissionControl
 import us.tractat.kuilt.warp.AdmissionTicket
 import us.tractat.kuilt.warp.Lane
@@ -34,9 +37,13 @@ import us.tractat.kuilt.warp.WarpNode
  *    with a no-op ticket — no reservation, no ledger touch — so an untagged workload is
  *    bit-for-bit today's warp.
  *  - **Exhaustion defers, never drops.** When a lane's leaf has no spare entitlement,
- *    [FairShareExecution.reserve] returns `null`; this adapter returns `null` too, so warp *defers*
- *    the task (leaves it pending) and re-attempts it on a later claim cycle — work resumes when
- *    entitlement flows in.
+ *    [FairShareExecution.reserve] answers [ReserveOutcome.NoHoldings]; this adapter returns `null`,
+ *    so warp *defers* the task (leaves it pending) and re-attempts it on a later claim cycle — work
+ *    resumes when entitlement flows in.
+ *  - **A closed write gate defers too, but says so.** A governed node answers [GateClosed] until
+ *    its own `enroll(self)` applies. Warp has only one way to not run a task, so the task is
+ *    deferred exactly as for exhaustion — but the refusal is logged with its reason, so a node that
+ *    never enrolled no longer looks like an idle lane (issue #1892).
  *  - **Zero consensus on the hot path.** [reserve] / [complete] are local reads and writes of
  *    already-converged holdings; admitting a task adds no consensus round. The heddle's own
  *    ledger replication is coordination-free cloth (a `Quilter`), not consensus.
@@ -51,8 +58,8 @@ import us.tractat.kuilt.warp.WarpNode
  *   [us.tractat.kuilt.heddle.heddleStatic] node (no consensus) or an H5
  *   [us.tractat.kuilt.heddle.heddleGoverned] node (governed) interchangeably. One asymmetry: a
  *   governed node must have enrolled **itself** before it will author any entitlement — until
- *   `enroll(self)` applies, its write gate is closed, so `reserve` returns `null` and `schedule`
- *   delegates nothing and this adapter admits no gated task (#1693, design §13.2).
+ *   `enroll(self)` applies, its write gate is closed, so `reserve` and `schedule` answer
+ *   [GateClosed] and this adapter admits no gated task (#1693, design §13.2).
  * @param costPerTask service units reserved and charged per **execution**. Defaults to `1` — the
  *   §14.4 one-unit-per-execution costing; a caller with variable-cost work supplies a
  *   per-descriptor cost via [costOf].
@@ -76,14 +83,21 @@ public class HeddleAdmissionControl(
      * Reserve this task's lane entitlement, or defer it.
      *
      * Returns a settling [AdmissionTicket] when the reservation succeeds; `null` (defer) when the
-     * lane's leaf is out of entitlement. An un-gated lane (`laneToLeaf` returns `null`, e.g. the
+     * lane's leaf is out of entitlement, or when the heddle's write gate is closed. An un-gated lane (`laneToLeaf` returns `null`, e.g. the
      * default [Lane.ROOT]) is admitted immediately with a no-op ticket, touching no ledger.
      */
     override fun admit(descriptor: TaskDescriptor): AdmissionTicket? {
         val leaf = laneToLeaf(descriptor.lane) ?: return AdmissionTicket.NOOP
         val cost = costOf(descriptor)
-        val reservation = heddle.reserve(leaf, cost) ?: return null // lane exhausted → defer
-        return AdmissionTicket { heddle.complete(reservation, cost) }
+        return when (val outcome = heddle.reserve(leaf, cost)) {
+            is ReserveOutcome.Reserved -> AdmissionTicket { heddle.complete(outcome.id, cost) }
+            ReserveOutcome.NoHoldings -> null // lane exhausted → defer
+            is GateClosed -> {
+                // Normal for a moment after every boot; permanent if the consumer never enrolls.
+                logger.debug { "deferring ${descriptor.lane}: write gate of ${outcome.replica} closed (${outcome.reason})" }
+                null
+            }
+        }
     }
 
     public companion object {
@@ -95,3 +109,5 @@ public class HeddleAdmissionControl(
             if (lane == Lane.ROOT) null else GroupId(lane.tag)
     }
 }
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.heddle.HeddleAdmissionControl")

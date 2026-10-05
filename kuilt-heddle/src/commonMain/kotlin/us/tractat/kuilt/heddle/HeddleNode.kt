@@ -402,28 +402,30 @@ public class HeddleNode internal constructor(
 
     /**
      * Earmark up to [maximumCost] service units against this peer's holdings at leaf
-     * [leaf], returning a [ReservationId] to complete against, or `null` if the peer's
-     * *available* holdings (holdings minus outstanding earmarks) at [leaf] cannot cover
-     * it. The earmark is **local state, not replicated** (design §4.4): the reserved
+     * [leaf], returning [ReserveOutcome.Reserved] with a [ReservationId] to complete against,
+     * or [ReserveOutcome.NoHoldings] if the peer's *available* holdings (holdings minus
+     * outstanding earmarks) at [leaf] cannot cover it — or [leaf] is not a reservable leaf.
+     * A static node has no write gate, so it never answers [GateClosed]. The earmark is **local state, not replicated** (design §4.4): the reserved
      * units simply stay `outstanding` on the leaf edge until spent, which the accounting
      * already charges. A crashed peer strands its earmarks (design §8.1).
      */
-    override fun reserve(leaf: GroupId, maximumCost: Long): ReservationId? {
+    override fun reserve(leaf: GroupId, maximumCost: Long): ReserveOutcome {
         require(maximumCost > 0L) { "maximumCost must be positive, was $maximumCost" }
         return lock.withLock {
             val s = ledger.value
             // Reject a non-leaf group up front (else every completion would throw), and
             // capture the entitlement path NOW, while the topology is valid (design §4.4):
             // the completion charges these exact captured edges, never a later recompute.
-            if (!s.isLeaf(leaf)) return@withLock null
-            val captured = s.lineageOf(leaf) ?: return@withLock null // quarantined lineage → refuse
-            if (captured.isEmpty()) return@withLock null // a root leaf has no edge to charge
+            if (!s.isLeaf(leaf)) return@withLock ReserveOutcome.NoHoldings
+            // quarantined lineage → refuse
+            val captured = s.lineageOf(leaf) ?: return@withLock ReserveOutcome.NoHoldings
+            if (captured.isEmpty()) return@withLock ReserveOutcome.NoHoldings // a root leaf has no edge to charge
             val available = s.holdings(leaf, self) - (earmarks[leaf] ?: 0L)
-            if (available < maximumCost) return@withLock null
+            if (available < maximumCost) return@withLock ReserveOutcome.NoHoldings
             val id = ReservationId("$self#${reservationSeq++}")
             reservations[id] = Reservation(leaf, maximumCost, captured)
             earmarks[leaf] = (earmarks[leaf] ?: 0L) + maximumCost
-            id
+            ReserveOutcome.Reserved(id)
         }
     }
 

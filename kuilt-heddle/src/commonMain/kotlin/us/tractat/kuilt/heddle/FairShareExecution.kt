@@ -17,11 +17,14 @@ package us.tractat.kuilt.heddle
 public interface FairShareExecution {
 
     /**
-     * Earmark up to [maximumCost] service units against this peer's holdings at leaf [leaf],
-     * returning a [ReservationId] to complete against, or `null` if available holdings at [leaf]
-     * cannot cover it (design §4.4). The earmark is local state, not replicated.
+     * Earmark up to [maximumCost] service units against this peer's holdings at leaf [leaf]
+     * (design §4.4). The earmark is local state, not replicated. Returns
+     * [ReserveOutcome.Reserved] carrying the [ReservationId] to complete against;
+     * [ReserveOutcome.NoHoldings] when available holdings at [leaf] cannot cover it; or
+     * [GateClosed] when this peer may not author entitlement at all — only a governed node, before
+     * its own `enroll(self)` applies or after it departs (issue #1892).
      */
-    public fun reserve(leaf: GroupId, maximumCost: Long): ReservationId?
+    public fun reserve(leaf: GroupId, maximumCost: Long): ReserveOutcome
 
     /**
      * Complete reservation [id], charging [actualCost] (`0 ≤ actualCost ≤` the reserved maximum)
