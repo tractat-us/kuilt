@@ -34,7 +34,35 @@ Wraps a Raft learner `RaftNode` and exposes:
 Obtain an instance via `clusterClientWithNode(raftNode)` (tests / caller-managed
 transport) or via `CoroutineScope.clusterClient()` (production relay-room path).
 
-@sample us.tractat.kuilt.cluster.samples.ClusterClientSample.connectAndPropose
+<!-- verbatim from kuilt-cluster/src/commonSamples/kotlin/us/tractat/kuilt/cluster/samples/ClusterClientSample.kt#connectAndPropose -->
+```kotlin
+// Tests use FakeRaftNode; production uses a real raftNode over a SeamRaftTransport.
+val fakeNode = FakeRaftNode(
+    initialRole = RaftRole.Leader,
+    clientId = ClientId("stable-client-id"),
+)
+
+val client: ClusterClient = clusterClientWithNode(fakeNode)
+
+// Propose with an auto-minted requestId — at-least-once but survives failover.
+val entry = client.propose("set x=1".encodeToByteArray())
+
+// Propose with a caller-pinned requestId for cross-crash exactly-once semantics.
+val dedupEntry = client.propose("set y=2".encodeToByteArray(), requestId = 42L)
+
+// Collect the committed stream and apply through ClientSessionTable for dedup.
+val table = ClientSessionTable()
+val committed = client.committed
+    .filterIsInstance<Committed.Entry>()
+    .first { table.shouldApply(it.entry.dedupKey) }
+
+println("Committed at index ${committed.entry.index}")
+
+// Report current Raft role (always Learner in the relay model).
+println("Role: ${client.role.value}")
+
+client.close()
+```
 
 ### `ClusterEndpoints` (commonMain)
 

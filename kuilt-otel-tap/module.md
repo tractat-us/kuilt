@@ -29,14 +29,44 @@ Two ends:
 
 Host the tap on the device, then join and pull the backlog:
 
+<!-- verbatim from kuilt-otel-tap/src/commonSamples/kotlin/us/tractat/kuilt/otel/tap/Samples.kt#sampleLogTapHostAndPull -->
 ```kotlin
-@sample us.tractat.kuilt.otel.tap.sampleLogTapHostAndPull
+// The device's captured-log buffer — the same one installLogCapture fills.
+val exporter = WarpLogRecordExporter(
+    replica = ReplicaId("device-uuid-abc123"),
+    store = InMemoryDurableStore(),
+)
+
+// The fabric the two peers meet over. An in-memory/loopback Loom is the
+// simulator-and-CI case; swap it for a LAN (mDNS + WebSocket) or peer-to-peer
+// (Multipeer) Loom to reach a real phone — the tap code below is unchanged.
+val loom = InMemoryLoom()
+
+// On the device: turn the opt-in tap on. It does nothing until called and is
+// loopback-bound by default. Hold the host; close it to stop offering logs.
+val host = installLogTap(loom, exporter, scope)
+
+// In the test / CI harness: join the same session and pull the backlog —
+// every line the device captured, in the device's order, with no duplicates.
+val client = LogTapClient(loom.join(InMemoryTag("puller")), scope)
+val logs: List<LogRecord> = client.pull()
+
+// Release both replicators when finished.
+client.close()
+host.close()
+return logs
 ```
 
 Or stream the logs live as they are captured:
 
+<!-- verbatim from kuilt-otel-tap/src/commonSamples/kotlin/us/tractat/kuilt/otel/tap/Samples.kt#sampleLogTapTail -->
 ```kotlin
-@sample us.tractat.kuilt.otel.tap.sampleLogTapTail
+val loom = InMemoryLoom()
+// Join a device that is already hosting a tap and stream its logs live: each
+// record is emitted once, in order, as it is captured. The flow replays
+// everything already known on collection, then continues with new lines.
+val client = LogTapClient(loom.join(InMemoryTag("tailer")), seamScope)
+return client.tail()
 ```
 
 ## Why it is correct, deeper down
@@ -72,8 +102,35 @@ in.
   the code you read off the device. A wrong or expired code is refused, and the
   replicator never sees the unauthorized peer.
 
+<!-- verbatim from kuilt-otel-tap/src/commonSamples/kotlin/us/tractat/kuilt/otel/tap/Samples.kt#sampleGatedLogTap -->
 ```kotlin
-@sample us.tractat.kuilt.otel.tap.sampleGatedLogTap
+val exporter = WarpLogRecordExporter(
+    replica = ReplicaId("device-uuid-abc123"),
+    store = InMemoryDurableStore(),
+)
+val loom = InMemoryLoom()
+
+// On the device: mint a short-lived join code from a CRYPTOGRAPHICALLY SECURE source.
+// cryptoRandom() is that source — the code is the only secret, so never Random.Default.
+val secure = cryptoRandom()
+val token = LogTapJoinToken.issue(random = secure, clock = Clock.System)
+val host = installLogTap(loom, exporter, scope, admission = LogTapAdmission.Verify(token, Clock.System, secure))
+
+// Show token.code to the operator OUT OF BAND — a pairing UI, or a deliberate println to
+// the Xcode console the app controls. The library never logs the code itself.
+// e.g. showJoinCodeInDebugUi(token.code)
+
+// In the puller: present the code the device showed. A wrong or expired code is refused.
+val client = LogTapClient(
+    loom.join(InMemoryTag("puller")),
+    scope,
+    admission = LogTapAdmission.Present(token.code),
+)
+val logs: List<LogRecord> = client.pull()
+
+client.close()
+host.close()
+return logs
 ```
 
 The code itself never travels the network — the puller proves it knows the code by

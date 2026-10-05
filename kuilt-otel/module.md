@@ -23,8 +23,43 @@ delta-temporality retry bug is structurally impossible.
 
 ## Quick start
 
+<!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpTelemetry -->
 ```kotlin
-@sample us.tractat.kuilt.otel.sampleWarpTelemetry
+val telemetry = WarpTelemetry(
+    replica = ReplicaId("device-uuid-abc123"),
+    store = InMemoryDurableStore(),
+)
+
+// Load any spans and log records buffered during a previous session.
+telemetry.recover()
+
+// Span ids are raw bytes (OTLP wire format): 16 bytes for trace id, 8 for span id.
+val span = SpanRecord(
+    traceId = ByteString(ByteArray(16) { it.toByte() }),
+    spanId = ByteString(ByteArray(8) { it.toByte() }),
+    parentSpanId = null,
+    name = "purchase",
+    kind = SpanKind.SERVER,
+    startEpochNanos = 1_000_000_000L,
+    endEpochNanos = 1_500_000_000L,
+    attributes = mapOf("item.id" to "widget-42"),
+    status = SpanStatus.Ok,
+)
+
+// export() returns the moment the data is durably written locally —
+// not when it reaches a backend. Delivery is the fabric's job.
+val spanResult = telemetry.spans.export(span)
+check(spanResult == ExportResult.Success) { "export failed: $spanResult" }
+
+val logRecord = LogRecord(
+    recordId = ByteString(ByteArray(8) { it.toByte() }),
+    body = "purchase completed",
+    severityNumber = 9, // INFO
+    traceId = ByteString(ByteArray(16) { it.toByte() }),
+    spanId = ByteString(ByteArray(8) { it.toByte() }),
+)
+val logResult = telemetry.logs.export(logRecord)
+check(logResult == ExportResult.Success) { "log export failed: $logResult" }
 ```
 
 ## When an app suddenly has a lot to say
