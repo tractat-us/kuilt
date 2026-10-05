@@ -47,14 +47,16 @@ check(store.read(key) == null)
 | `StoreKey` | all | A named key. A `value class` over `String`, so two keys cannot be swapped by accident. |
 | `InMemoryDurableStore` | all | Keeps everything in a map. **Not** crash-safe — for tests and anywhere a restart doesn't matter. |
 | `FileChannelDurableStore` | JVM, Android | Temp file → `FileChannel.force(true)` → atomic rename. |
-| `NSFileManagerDurableStore` | iOS, macOS | `NSData.writeToFile` → POSIX `rename(2)`. |
+| `NSFileManagerDurableStore` | iOS, macOS | Temp file → `fcntl(F_FULLFSYNC)` → POSIX `rename(2)`. |
 | `IndexedDbDurableStore` | wasmJs | An IndexedDB transaction, awaited to its `complete` event. |
 
 Each implementation's KDoc names the exact instant it treats as the commit, and where
-its guarantee stops. They are not all equally strong: the JVM/Android store forces the
-bytes to the device before it renames, the Apple one does not, so power loss (as opposed
-to process death) can commit the new *name* over unwritten *extents* — see #2141. The
-in-memory store, of course, keeps nothing at all across a process exit.
+its guarantee stops. The two file stores make the same promise: each forces the new
+bytes to the device before it renames, so power loss (as opposed to process death) can
+never leave a record empty or torn. Neither forces the directory after the rename, so a
+power cut just after `write` returns can bring back the *previous* record instead of the
+new one — old or new, never torn. The in-memory store, of course, keeps nothing at all
+across a process exit.
 
 ## Key names
 

@@ -116,8 +116,9 @@ import kotlin.test.assertNull
  * establishes is that a write reached **the medium's namespace**, not that it reached **stable
  * storage**. Telling those apart needs a real process kill or a fault-injecting filesystem, neither
  * of which a `commonMain` suite can have. Said plainly so nobody reads a green here as a durability
- * proof: `NSFileManagerDurableStore` does not force before its rename at all (#2141), documents that,
- * and passes every property below.
+ * proof: until #2141 `NSFileManagerDurableStore` did not force before its rename at all, documented
+ * that, and passed every property below — and removing its `F_FULLFSYNC` today would still red
+ * nothing here.
  *
  * **What the fixture rows are and are not.** The six fixture rows mutate a subclass in
  * `:kuilt-store`'s own tests, which nothing else references, so their "and nothing else" is

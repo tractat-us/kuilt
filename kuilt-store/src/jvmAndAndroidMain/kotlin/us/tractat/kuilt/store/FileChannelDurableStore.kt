@@ -23,6 +23,13 @@ import java.nio.file.StandardCopyOption
  * the `.tmp` file, which is ignored on the next open. There is no window
  * where neither the old nor the new value is visible.
  *
+ * Under **power loss** the forced file cannot come back empty or torn, but the
+ * parent directory is not forced after the rename, so a power cut just after
+ * [write] returns may bring back the *previous* record rather than the new one —
+ * old or new, never torn. `NSFileManagerDurableStore` makes the same trade with
+ * `F_FULLFSYNC` in place of `force(true)`, so the two file backends promise the
+ * same thing.
+ *
  * The filename is [encodeStoreKeyName] of the key's name — a lossless, path-safe
  * percent-encoding shared with `NSFileManagerDurableStore`, so **distinct keys are
  * always distinct files** and a key that looks like a path is still just a key.

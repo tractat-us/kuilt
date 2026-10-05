@@ -28,7 +28,7 @@ package us.tractat.kuilt.store
  * |---|---|---|
  * | any | [InMemoryDurableStore] | none — **not** crash-safe; for tests and ephemeral use |
  * | JVM / Android | `FileChannelDurableStore` | `FileChannel.force(true)` + atomic rename |
- * | iOS / macOS | `NSFileManagerDurableStore` | `NSData.writeToFile` + POSIX `rename(2)` |
+ * | iOS / macOS | `NSFileManagerDurableStore` | `fcntl(F_FULLFSYNC)` + POSIX `rename(2)` |
  * | wasmJs | `IndexedDbDurableStore` | IndexedDB transaction `complete` |
  *
  * The in-memory store satisfies the read/write/delete behaviour but keeps nothing across a

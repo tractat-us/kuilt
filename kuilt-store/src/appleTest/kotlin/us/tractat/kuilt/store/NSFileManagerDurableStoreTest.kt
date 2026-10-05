@@ -2,10 +2,12 @@
 
 package us.tractat.kuilt.store
 
+import kotlinx.cinterop.convert
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.runTest
 import platform.Foundation.NSFileManager
+import platform.posix.chmod
 import us.tractat.kuilt.conformance.DurableStoreConformanceSuite
 import us.tractat.kuilt.conformance.DurableStoreFilenameConformanceSuite
 import us.tractat.kuilt.conformance.RestartFixture
@@ -89,7 +91,7 @@ class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
      * Pointing the store at a subdirectory of a *regular file* makes the
      * directory creation and then the temp write both fail — the same class of
      * failure a device hits when its storage rejects a write. Before the
-     * `NSError` was captured, this threw `"write to temp file failed"` and
+     * cause was captured, this threw `"write to temp file failed"` and
      * nothing else, which is exactly why a field occurrence could not be
      * diagnosed from the device's own logs.
      */
@@ -108,11 +110,14 @@ class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
         assertAll(
             { assertContains(message, "otel.logs", message = "names the key") },
             { assertContains(message, "bytes=3", message = "names the payload size") },
-            // Anchored to `cause=` deliberately. A bare "NSError(domain=" would also
-            // be satisfied by the directory= field alone, so the assertion would
-            // still pass with the write's own error discarded — the exact defect
-            // under repair.
-            { assertContains(message, "cause=NSError(domain=", message = "carries the WRITE's own NSError") },
+            // Anchored to `cause=` deliberately: the directory= field carries its own
+            // error, so an unanchored match could be satisfied by that field alone
+            // with the write's own cause discarded — the exact defect under repair.
+            // Since #2141 the temp write is POSIX, so its cause is an errno and the
+            // call that set it.
+            { assertContains(message, "cause=errno=", message = "carries the WRITE's own errno") },
+            { assertContains(message, "step=open", message = "names the call that failed") },
+            { assertFalse(message.contains("(unknown)"), "the errno resolved to readable text") },
             { assertContains(message, "directoryExists=false", message = "names the missing directory") },
         )
     }
@@ -167,6 +172,43 @@ class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
             // #1860 is about.
             { assertContains(failure?.message.orEmpty(), "errno=", message = "the failure names its errno") },
             { assertFalse(failure?.message.orEmpty().contains("(unknown)"), "the errno resolved to readable text") },
+            // #2141: the temp file is written, flushed and closed BEFORE the rename is attempted, so
+            // by the time the rename fails a fully-written `.tmp` exists. That this assertion can be
+            // false is what `assertNotNull(failure)` above guarantees — the rename really was reached.
+            { assertFalse(fm.fileExistsAtPath("$dest.tmp"), "a failed rename unlinks its temp file") },
         )
     }
+
+    /**
+     * A write that cannot even create its temp file leaves nothing behind and still throws the same
+     * [IllegalStateException] (#2141).
+     *
+     * The directory is made read-only, so `open(2)` on the temp path is refused with `EACCES`. The
+     * assertions are on what is left in the directory, because a half-created temp file is the
+     * residue a careless error path in the POSIX write would leave.
+     */
+    @Test
+    fun unwritableDirectoryLeavesNoTempFile() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val dir = freshTempDir()
+        val fm = NSFileManager.defaultManager
+        val key = StoreKey("otel.metrics")
+        val tmp = dir + encodeStoreKeyName(key.name) + ".tmp"
+        check(chmod(dir, READ_AND_TRAVERSE_ONLY.convert()) == 0) { "rig: could not make $dir read-only" }
+        try {
+            val failure = NSFileManagerDurableStore(dir).writeFailure(key, byteArrayOf(1, 2, 3))
+            assertAll(
+                { assertNotNull(failure, "a write into a read-only directory reported its failure") },
+                { assertContains(failure?.message.orEmpty(), "bytes=3", message = "the failure names the payload size") },
+                { assertFalse(fm.fileExistsAtPath(tmp), "the failed write left no temp file behind") },
+            )
+        } finally {
+            chmod(dir, OWNER_ALL.convert())
+        }
+    }
 }
+
+/** `r-x------`: the owner may list and traverse the directory but not create entries in it. */
+private const val READ_AND_TRAVERSE_ONLY = 0x140
+
+/** `rwx------`: restores the directory so the next run's [freshTempPath] can remove it. */
+private const val OWNER_ALL = 0x1C0
