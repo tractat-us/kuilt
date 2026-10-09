@@ -330,6 +330,85 @@ public class MultiNodeRaftSim(
     public fun appliedState(id: NodeId): ByteArray = stateMachines.getValue(id).bytes()
 
     /**
+     * Snapshot of [id]'s recorded events, oldest first, detached from the live ring.
+     * Only the most recent [TRACE_RING_CAPACITY] events are retained. A crashed node keeps its
+     * transcript; [restart] starts a fresh one. An unknown id is rejected.
+     *
+     * This reads what the collector has already received; it neither waits nor advances virtual
+     * time. Call [settle] after driving the scenario before inspecting its trace. Like
+     * [RaftNode.trace], this is diagnostic data, not a lossless history: absence from the ring
+     * says nothing about events dropped by the flow or evicted from the ring.
+     *
+     * @sample us.tractat.kuilt.raft.test.samples.traceAssertions
+     */
+    public fun traceOf(id: NodeId): List<RaftTraceEvent> = traces.getValue(id).toList()
+
+    /**
+     * Assert that [id]'s retained transcript contains an event of type [T] satisfying [predicate].
+     * Returns the first match. [message] describes the predicate in a failure transcript.
+     * This does not wait; the snapshot and retention limits of [traceOf] apply.
+     *
+     * @sample us.tractat.kuilt.raft.test.samples.traceAssertions
+     */
+    public inline fun <reified T : RaftTraceEvent> assertTraced(
+        id: NodeId,
+        message: String = "matching event",
+        predicate: (T) -> Boolean = { true },
+    ): T = traceOf(id).firstOrNull { it is T && predicate(it) } as T?
+        ?: throw AssertionError(traceFailure(id, "Expected ${T::class.simpleName}: $message"))
+
+    /**
+     * Assert that no retained event of type [T] satisfies [predicate]. [message] describes the
+     * forbidden predicate on failure. This proves absence only in [traceOf]'s retained snapshot,
+     * not in the node's complete history, and does not wait for future events.
+     *
+     * @sample us.tractat.kuilt.raft.test.samples.traceAssertions
+     */
+    public inline fun <reified T : RaftTraceEvent> assertNotTraced(
+        id: NodeId,
+        message: String = "matching event",
+        predicate: (T) -> Boolean = { true },
+    ) {
+        val match = traceOf(id).firstOrNull { it is T && predicate(it) }
+        if (match != null) throw AssertionError(traceFailure(id, "Unexpected ${T::class.simpleName}: $message; matched $match"))
+    }
+
+    /**
+     * Assert an ordered subsequence of [id]'s retained transcript. Each predicate consumes a
+     * distinct event in collection order; unrelated events may appear between matches. An empty
+     * sequence passes. On failure, [message] and the first unmatched step accompany the recent
+     * transcript. This does not wait; [traceOf]'s snapshot and retention limits apply.
+     *
+     * @sample us.tractat.kuilt.raft.test.samples.traceAssertions
+     */
+    public fun assertTracedInOrder(
+        id: NodeId,
+        vararg predicates: (RaftTraceEvent) -> Boolean,
+        message: String = "ordered trace subsequence",
+    ) {
+        val events = traceOf(id).iterator()
+        predicates.forEachIndexed { index, predicate ->
+            var matched = false
+            while (events.hasNext()) {
+                if (predicate(events.next())) {
+                    matched = true
+                    break
+                }
+            }
+            if (!matched) throw AssertionError(traceFailure(id,
+                "$message: unmatched step ${index + 1} of ${predicates.size}"))
+        }
+    }
+
+    @PublishedApi
+    internal fun traceFailure(id: NodeId, reason: String): String = buildString {
+        appendLine("MultiNodeRaftSim trace assertion for $id — $reason")
+        appendLine("Retained events: ${traceOf(id).size}")
+        appendLine("Last $RECENT_EVENTS events for node $id:")
+        appendRecentEvents(id)
+    }
+
+    /**
      * Render a per-node diagnostic snapshot — roles, terms, commit indices, the durable per-term
      * leader **pin**, log ranges, and an election-event histogram (Timeout / BecomeLeader /
      * BecomeFollower) that makes leadership thrash and term inflation visible at a glance. Used as
@@ -346,7 +425,7 @@ public class MultiNodeRaftSim(
         nodeIds.forEach { id -> appendLine(nodeLine(id)) }
         worstOffNode()?.let { id ->
             appendLine("Last $RECENT_EVENTS events for worst-off node $id:")
-            recentEvents(id).forEach { appendLine("    $it") }
+            appendRecentEvents(id)
         }
     }
 
@@ -429,8 +508,9 @@ public class MultiNodeRaftSim(
         }
     }
 
-    private fun recentEvents(id: NodeId): List<RaftTraceEvent> =
-        traces[id].orEmpty().toList().takeLast(RECENT_EVENTS)
+    private fun StringBuilder.appendRecentEvents(id: NodeId) {
+        traceOf(id).takeLast(RECENT_EVENTS).forEach { appendLine("    $it") }
+    }
 
     /** Folds a node's [Committed] stream into opaque bytes for state-machine equality checks. */
     private class AppliedStateMachine {

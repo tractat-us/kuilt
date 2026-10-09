@@ -28,61 +28,6 @@ class TraceTest {
         }
     }
 
-    @Test fun initialElection_emits_Timeout_and_RequestVote() = raftRunTest {
-        val sim = raftSim(this, backgroundScope)
-        val allEvents = mutableListOf<RaftTraceEvent>()
-        val collectJobs = sim.nodes.values.map { node ->
-            launch { node.trace.collect { allEvents.add(it) } }
-        }
-        awaitLeader(sim)
-        delay(20)
-        collectJobs.forEach { it.cancel() }
-
-        assertTrue(allEvents.filterIsInstance<RaftTraceEvent.Timeout>().isNotEmpty(),
-            "Expected at least one Timeout event")
-        assertTrue(allEvents.filterIsInstance<RaftTraceEvent.RequestVote>().isNotEmpty(),
-            "Expected at least one RequestVote event")
-    }
-
-    @Test fun proposal_emits_ClientRequest_then_AdvanceCommitIndex() = raftRunTest {
-        val sim = raftSim(this, backgroundScope)
-        val leader = awaitLeader(sim)
-        val events = mutableListOf<RaftTraceEvent>()
-        val job = launch { leader.trace.collect { events.add(it) } }
-        leader.propose(byteArrayOf(42))
-        delay(20)
-        job.cancel()
-
-        val clientReqs = events.filterIsInstance<RaftTraceEvent.ClientRequest>()
-        val advances = events.filterIsInstance<RaftTraceEvent.AdvanceCommitIndex>()
-        assertTrue(clientReqs.isNotEmpty(), "Expected ClientRequest event")
-        assertTrue(advances.isNotEmpty(), "Expected AdvanceCommitIndex event")
-        // ClientRequest must precede AdvanceCommitIndex
-        val firstReq = clientReqs.minBy { it.clock }
-        val firstAdvance = advances.minBy { it.clock }
-        assertTrue(
-            firstReq.clock < firstAdvance.clock,
-            "ClientRequest(clock=${firstReq.clock}) must precede AdvanceCommitIndex(clock=${firstAdvance.clock})",
-        )
-    }
-
-    @Test fun stepDown_emits_BecomeFollower() = raftRunTest {
-        val sim = raftSim(this, backgroundScope)
-        val leader = awaitLeader(sim)
-        val leaderId = sim.nodes.entries.first { it.value === leader }.key
-        val events = mutableListOf<RaftTraceEvent>()
-        val job = launch { leader.trace.collect { events.add(it) } }
-        // Isolate leader so the other two elect a new leader and send higher-term AppendEntries back
-        sim.partition(setOf(leaderId), sim.nodes.keys.filter { it != leaderId }.toSet())
-        delay(80)
-        sim.heal()
-        delay(50)
-        job.cancel()
-
-        val stepDowns = events.filterIsInstance<RaftTraceEvent.BecomeFollower>()
-        assertTrue(stepDowns.isNotEmpty(), "Expected BecomeFollower event after partition heal")
-    }
-
     @Test fun trace_clocks_are_monotonic() = raftRunTest {
         val sim = raftSim(this, backgroundScope)
         val leader = awaitLeader(sim)
