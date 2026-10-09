@@ -168,8 +168,8 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
  * after the last `#`. Using undecorated names here would test an identity shape production never
  * produces.
  *
- * @param testScope owns the links' delivery-drain dispatcher. `null` is legal for the scope-free
- *   `newLoomPair()` used by the suite's `availability()` obligation, which never weaves.
+ * @param testScope owns the links' delivery-drain dispatcher. `null` permits construction
+ *   through the scope-free `newLoomPair()`; weaving requires a scope.
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalCoroutinesApi::class)
 internal class MCSessionLinkLoomPair(private val testScope: TestScope?) {

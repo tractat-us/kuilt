@@ -82,7 +82,7 @@ import kotlin.test.fail
  *  - Task 1.8's rendered capability matrix surfaces the declared gaps.
  *
  * The **core** obligations (host yields a usable seam, broadcast delivery, order,
- * peers≥2, close-idempotency, availability, both Woven-state invariants, close→Torn,
+ * peers≥2, close-idempotency, both Woven-state invariants, close→Torn,
  * absent-peer throw, self-send refusal, close-does-not-mint-a-cancellation) are **ungated** — no
  * capability flag can suppress them. That
  * structural guarantee is pinned by [SeamConformanceUngatedCoreTest], which drives the
@@ -854,24 +854,9 @@ public abstract class SeamConformanceSuite {
     public fun closeIsIdempotent(): TestResult =
         runTest { runCloseIsIdempotent(this) }
 
-    // ── (6) availability returns a known FabricAvailability variant ─────────
-
-    internal fun runAvailabilityReturnsAKnownVariant() {
-        val (hostLoom, _) = newLoomPair()
-        val availability = hostLoom.availability()
-
-        assertTrue(
-            availability is FabricAvailability.Available ||
-                availability is FabricAvailability.Unavailable ||
-                availability is FabricAvailability.Unknown,
-            "availability() must return Available, Unavailable, or Unknown, got $availability",
-        )
-    }
-
-    @Test
-    public fun availabilityReturnsAKnownVariant() {
-        runAvailabilityReturnsAKnownVariant()
-    }
+    // (6) removed: checking the variant of Loom.availability() was a tautology. The sealed
+    // FabricAvailability type and the compiler's exhaustiveness check already cover the variants;
+    // accepting all of them tests no availability behaviour. See #2554.
 
     // ── (7) state is Woven after host and joiner both return ─────────────────
 

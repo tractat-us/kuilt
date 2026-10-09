@@ -316,8 +316,8 @@ Design points forced by the review:
   artifact that makes the gap visible. A `false` with no issue link fails the build.
 - **Enumerate the full flag ↔ obligation map before migrating** (all three hatches
   included), so the fabric migrations don't invent flags mid-flight.
-- **Pin the ungated core.** Obligations 1–9b (host yields usable seam, broadcast
-  delivers, order preserved, peers ≥2, close idempotent, availability, Woven states)
+- **Pin the ungated core.** The core obligations (host yields usable seam, broadcast
+  delivers, order preserved, peers ≥2, close idempotent, Woven states)
   are **ungated** — no capability may skip them. In particular
   `broadcastFromHostDeliversToJoinedPeer` is core; nothing gates it.
 - **Add the missing positive obligations** (the suite today has only the *negative*

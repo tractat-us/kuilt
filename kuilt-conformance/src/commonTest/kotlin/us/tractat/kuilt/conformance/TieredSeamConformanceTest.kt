@@ -139,8 +139,8 @@ class TieredSeamConformanceTest : SeamConformanceSuite() {
  * assumed: [joinerLoom] awaits [hostWoven] before touching [roomLoom], so the ordering does not
  * depend on how `connectedPair`'s two `async` bodies interleave.
  *
- * @param testScope owns the union/state/incoming pumps. `null` is legal for the scope-free
- *   `newLoomPair()` used by the suite's `availability()` obligation, which never weaves.
+ * @param testScope owns the union/state/incoming pumps. `null` permits construction
+ *   through the scope-free `newLoomPair()`; weaving requires a scope.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal class TieredLoomPair(private val testScope: TestScope?) {

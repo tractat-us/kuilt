@@ -211,8 +211,8 @@ class MuxServerLoomConformanceTest : SeamConformanceSuite() {
  * hub admits it, and returns that channel view.
  *
  * @param testScope owns the server's accept pump, per-connection read loops, and the client's mux
- *   collectors. `null` is legal for the scope-free `newLoomPair()` used by the suite's
- *   `availability()` obligation, which never weaves.
+ *   collectors. `null` permits construction through the scope-free `newLoomPair()`; weaving
+ *   requires a scope.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal class RoomHubLoomPair(private val testScope: TestScope?) {

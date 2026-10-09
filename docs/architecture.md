@@ -279,7 +279,9 @@ reach each other.
 The suite encodes the invariants as tests: `open` yields a usable `Seam` with a
 non-empty `selfId`; `broadcast`/`sendTo` deliver to joined peers and stamp the
 sender; `peers` reflects membership; `incoming` preserves single-collection
-ordering; `close` is idempotent; `availability()` returns sensibly.
+ordering; `close` is idempotent. The suite does not test `Loom.availability()`
+verdicts: accepting every sealed `FabricAvailability` variant adds no check beyond
+the type system.
 
 `InMemoryLoom` is the reference implementation — a no-network, channel-backed
 mesh that is both the worked example of the contract and the test bedrock for

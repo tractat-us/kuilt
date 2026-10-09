@@ -172,8 +172,8 @@ jobs:
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
       # A green tick here is NOT the receipt — a suite that self-skips is also green. The signal is
-      # that the bridge suite reports a non-zero run count with zero skips, so assert it rather than
-      # leaving it to a human to read the artifact. Fails the step (and so the lane) if the XML is
+      # that NwBridgeLoopbackConformanceTest reports at least one test that was not skipped; only
+      # that suite's XML is checked. Fails the step (and so the lane) if the XML is
       # missing, empty, or all-skipped, which is exactly the regression that would silently undo
       # #2487: anything that stops the dylib reaching the test classpath returns the suite to a
       # clean, invisible skip.

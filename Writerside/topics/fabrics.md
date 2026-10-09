@@ -145,7 +145,9 @@ The suite tests:
 - `peers` tracks membership.
 - `incoming` is single-collection and ordered.
 - `close()` is idempotent.
-- `capability()` (and the `availability()` it derives) returns sensibly.
+
+The suite does not test whether `Loom.availability()` verdicts are justified.
+Check those in your fabric-specific tests.
 
 Keep real-network smoke tests in a separate test that is opt-in (e.g. `-Pmy.fabric.integration.tests=true`) so the conformance suite stays fast and deterministic.
 
