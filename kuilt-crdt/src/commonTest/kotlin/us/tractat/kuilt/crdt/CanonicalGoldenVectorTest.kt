@@ -59,6 +59,10 @@ import kotlin.test.assertEquals
  * | `VersionVector.entries` | [VERSION_VECTOR], [RGA_FLOORED] |
  * | `RgaSerializer`'s op sort | [RGA], [RGA_FLOORED], [JSON_CRDT] |
  * | `FugueSerializer`'s op sort | [FUGUE] |
+ * | `Histogram.buckets` | [HISTOGRAM] |
+ * | `DDSketch.positive` | [DDSKETCH] |
+ * | `DDSketch.negative` | [DDSKETCH] |
+ * | `GCounterDouble.counts` | [GCOUNTER_DOUBLE] |
  *
  * The `cloud`, `RgaSerializer` and `FugueSerializer` rows closed #2038: `cloud` is empty in
  * [ORSET], [ORMAP] and [MV_REGISTER], so its sort had no vector at all, and `Rga`, `Fugue` and
@@ -145,6 +149,9 @@ class CanonicalGoldenVectorTest {
                 )
             },
             { assertEquals(GCOUNTER, hex(GCounter.serializer(), gCounter()), "GCounter") },
+            { assertEquals(HISTOGRAM, hex(Histogram.serializer(), histogram()), "Histogram") },
+            { assertEquals(DDSKETCH, hex(DDSketch.serializer(), ddSketch()), "DDSketch") },
+            { assertEquals(GCOUNTER_DOUBLE, hex(GCounterDouble.serializer(), gCounterDouble()), "GCounterDouble") },
             { assertEquals(PNCOUNTER, hex(PNCounter.serializer(), pnCounter()), "PNCounter") },
             {
                 assertEquals(
@@ -261,6 +268,19 @@ class CanonicalGoldenVectorTest {
             { assertEquals(3, twoPhaseSet().added.size, "TwoPhaseSet added") },
             { assertEquals(2, twoPhaseSet().removed.size, "TwoPhaseSet removed") },
             { assertEquals(4, gCounter().replicas().size, "GCounter slots") },
+            {
+                assertEquals(
+                    listOf(1L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 1L),
+                    histogram().bucketCounts,
+                    "Histogram occupied buckets",
+                )
+            },
+            { assertEquals(setOf(0, 8), ddSketch().positiveBuckets.keys, "DDSketch positive buckets") },
+            { assertEquals(setOf(0, 8), ddSketch().negativeBuckets.keys, "DDSketch negative buckets") },
+            { assertEquals(3.5, gCounterDouble().count(zulu), "GCounterDouble zulu slot") },
+            { assertEquals(1.25, gCounterDouble().count(mike), "GCounterDouble mike slot") },
+            { assertEquals(4.5, gCounterDouble().count(alpha), "GCounterDouble alpha slot") },
+            { assertEquals(2.25, gCounterDouble().count(delta), "GCounterDouble delta slot") },
             { assertEquals(15L, pnCounter().totalIncrement, "PNCounter increments") },
             { assertEquals(0L, pnCounter().incrementShortfall(zulu, 5L), "PNCounter increment slot zulu") },
             { assertEquals(0L, pnCounter().incrementShortfall(alpha, 7L), "PNCounter increment slot alpha") },
@@ -429,6 +449,34 @@ class CanonicalGoldenVectorTest {
             .piece(GCounter.ZERO.inc(mike, 1L))
             .piece(GCounter.ZERO.inc(alpha, 4L))
             .piece(GCounter.ZERO.inc(delta, 2L))
+
+    /**
+     * Distinct replicas populate buckets 8 then 0. Those keys collide in the small JVM hash
+     * map, so its iteration order also differs from canonical order; adjacent keys would not.
+     */
+    private fun histogram(): Histogram {
+        val empty = Histogram.empty((0..7).map { it.toDouble() })
+        return empty.piece(empty.record(zulu, 8.5)).piece(empty.record(alpha, -0.5))
+    }
+
+    /**
+     * Each sign has buckets 8 then 0, contributed by different replicas. With gamma = 3,
+     * magnitudes 4000 and 0.5 lie well inside those buckets, away from log-rounding boundaries.
+     */
+    private fun ddSketch(): DDSketch {
+        val empty = DDSketch.empty(relativeAccuracy = 0.5, minIndexedValue = 0.25, maxIndexedValue = 8192.0)
+        val high = empty.piece(empty.add(zulu, 4000.0)).piece(empty.add(zulu, -4000.0))
+        val low = empty.piece(empty.add(alpha, 0.5)).piece(empty.add(alpha, -0.5))
+        return high.piece(low)
+    }
+
+    /** Distinct fractional slots from four replicas, absorbed out of canonical replica order. */
+    private fun gCounterDouble(): GCounterDouble =
+        GCounterDouble.ZERO
+            .piece(GCounterDouble.ZERO.inc(zulu, 3.5))
+            .piece(GCounterDouble.ZERO.inc(mike, 1.25))
+            .piece(GCounterDouble.ZERO.inc(alpha, 4.5))
+            .piece(GCounterDouble.ZERO.inc(delta, 2.25))
 
     /** Both `GCounter` halves are three-entry and absorbed in different, non-sorted orders. */
     private fun pnCounter(): PNCounter =
@@ -830,11 +878,26 @@ class CanonicalGoldenVectorTest {
     private fun MovableTree<String>.compactedDotCount(): Int = causalDots().size - moveLogSize
 
     /**
-     * CBOR bytes, lower-case hex. Captured once on `jvmTest` and verified unchanged on
-     * `macosArm64Test`, `wasmJsTest` and `iosSimulatorArm64Test` — see the class KDoc before
-     * touching any of them.
+     * CBOR bytes, lower-case hex. Captured once on `jvmTest`; every target checks the same
+     * constants, including `macosArm64Test`, `wasmJsTest` and `iosSimulatorArm64Test`.
+     * See the class KDoc before touching any of them.
      */
     private companion object {
+        const val HISTOGRAM =
+            "bf6a626f756e6461726965739ffb0000000000000000fb3ff0000000000000fb4000000000000000fb40080000000000" +
+                "00fb4010000000000000fb4014000000000000fb4018000000000000fb401c000000000000ff676275636b657473bf00" +
+                "bf66636f756e7473bf65616c70686101ffff08bf66636f756e7473bf647a756c7501ffffff6b706f7369746976655375" +
+                "6dbf66636f756e7473bf647a756c75fb4021000000000000ffff6b6e6567617469766553756dbf66636f756e7473bf65" +
+                "616c706861fb3fe0000000000000ffffff"
+        const val DDSKETCH =
+            "bf7072656c61746976654163637572616379fb3fe00000000000006f6d696e496e646578656456616c7565fb3fd00000" +
+                "000000006f6d6178496e646578656456616c7565fb40c000000000000068706f736974697665bf00bf66636f756e7473" +
+                "bf65616c70686101ffff08bf66636f756e7473bf647a756c7501ffffff686e65676174697665bf00bf66636f756e7473" +
+                "bf65616c70686101ffff08bf66636f756e7473bf647a756c7501ffffff657a65726f73bf66636f756e7473bfffff696f" +
+                "766572666c6f7773bf66636f756e7473bfffffff"
+        const val GCOUNTER_DOUBLE =
+            "bf66636f756e7473bf65616c706861fb40120000000000006564656c7461fb4002000000000000646d696b65fb3ff400" +
+                "0000000000647a756c75fb400c000000000000ffff"
         const val GSET =
             "bf68656c656d656e74739f65616c7068616564656c7461646d696b65647a756c75ffff"
         const val TWO_PHASE_SET =

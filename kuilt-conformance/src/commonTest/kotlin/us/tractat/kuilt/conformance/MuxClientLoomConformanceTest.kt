@@ -163,8 +163,7 @@ class MuxClientLoomConformanceTest : SeamConformanceSuite() {
  * `hostLoom.host(…)` and `joinerLoom.join(…)` land on the two ends of one logical session.
  *
  * @param testScope owns the per-generation mux collectors and the two channel-view lifecycle pumps.
- *   `null` is legal for the scope-free `newLoomPair()` used by the suite's `availability()`
- *   obligation, which never weaves.
+ *   `null` permits construction through the scope-free `newLoomPair()`; weaving requires a scope.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal class MuxClientLoomPair(private val testScope: TestScope?) {

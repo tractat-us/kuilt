@@ -44,8 +44,10 @@ class InMemoryLoomConformanceTest : SeamConformanceSuite() {
 ```
 
 `RoomConformanceSuite` follows the same shape for membership-aware `Room`
-implementations, binding a `RoomFactory` through an abstract `newHarness` instead of
-`newLoomPair`.
+implementations, binding a `RoomFactory` through `newHarness` instead of
+`newLoomPair`. Its required `newResumeHarness` hook observes the host verdict and
+joiner send attempts so the resume properties can check exact reply codes and
+prove that a left joiner answers locally.
 
 ## The cluster harness
 

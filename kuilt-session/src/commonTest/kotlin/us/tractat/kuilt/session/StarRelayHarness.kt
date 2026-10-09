@@ -453,6 +453,7 @@ internal class FabricFrameTooLarge(size: Int, max: Int) :
  * - [disconnect] — as [exclude], **and** make [sendTo] to that peer throw [PeerNotConnected].
  * - [silence] — drop that peer's inbound frames, so a liveness detector matures the silence.
  * - [wedge] — make [sendTo] to that peer never return, the black-holed link of #1655.
+ * - [unwedge] — let future sends through; already parked sends still await cancellation.
  * - [limitFrames] — bound the frame size this fabric accepts, as a length-prefixed one does.
  * - [inject] — put a frame on this member's inbound stream with an arbitrary stamped sender.
  *
@@ -597,6 +598,14 @@ internal class WireTapSeam(
 
     fun wedge(peer: PeerId) {
         wedged.update { it + peer }
+    }
+
+    /**
+     * Let future sends to [peer] through. A send already parked by [wedge] still awaits
+     * cancellation: healing must not release it before the writer's own budget expires.
+     */
+    fun unwedge(peer: PeerId) {
+        wedged.update { it - peer }
     }
 
     /**
