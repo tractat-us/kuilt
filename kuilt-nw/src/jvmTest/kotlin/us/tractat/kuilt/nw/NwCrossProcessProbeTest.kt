@@ -1,5 +1,6 @@
 package us.tractat.kuilt.nw
 
+import org.junit.Assume.assumeTrue
 import us.tractat.kuilt.core.FabricAvailability
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -11,8 +12,8 @@ import kotlin.test.assertFalse
  * must never touch the network or hang. On a Linux CI runner the native bridge is
  * [FabricAvailability.Unavailable], so both roles return a clean failed [Result] at
  * virtual `t=0`; on a Mac with `libkuilt.dylib` present the real-radio path would block,
- * so the assertions self-skip there (the happy path is a manual/hardware exercise —
- * see the probe KDoc).
+ * so JUnit assumptions report these tests as skipped there (the happy path is a
+ * manual/hardware exercise — see the probe KDoc).
  */
 class NwCrossProcessProbeTest {
 
@@ -21,7 +22,7 @@ class NwCrossProcessProbeTest {
 
     @Test
     fun `host short-circuits cleanly when the bridge is unavailable`() {
-        if (!bridgeUnavailable) return // macOS-with-dylib: real-radio path, skip
+        assumeTrue("This test requires an unavailable native bridge.", bridgeUnavailable)
         val lines = mutableListOf<String>()
         val result = NwCrossProcessProbe.runHost(
             displayName = "host-probe",
@@ -36,7 +37,7 @@ class NwCrossProcessProbeTest {
 
     @Test
     fun `join short-circuits cleanly when the bridge is unavailable`() {
-        if (!bridgeUnavailable) return
+        assumeTrue("This test requires an unavailable native bridge.", bridgeUnavailable)
         val lines = mutableListOf<String>()
         val result = NwCrossProcessProbe.runJoin(
             displayName = "joiner-probe",
