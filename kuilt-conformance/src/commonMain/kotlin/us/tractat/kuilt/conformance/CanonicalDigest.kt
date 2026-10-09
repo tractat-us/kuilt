@@ -34,20 +34,16 @@ private const val FNV_PRIME: Long = 1099511628211L
  * in `LatticeLawHarness` (every merge order must encode identically) and, per CRDT type, by
  * `CanonicalSerializationTest` in `:kuilt-crdt`'s `commonTest` (issue #1957).
  *
- * **The cross-target dimension is pinned as well**, by `CanonicalGoldenVectorTest` in the same
- * source set. It holds checked-in CBOR byte strings for ten zoo types, covering every
- * `Canonical*Serializer` site **#1957 introduced** plus `DotMapSerializer`, and `commonTest`
- * compiles and runs on JVM, Android, iOS, macOS and wasmJs, so every target is held to the same
- * constants — which is what the cross-process use above needs. For those ten, a digest mismatch
- * between peers on *different* targets reads as real divergence rather than as an artefact of the
- * encoding. Types outside them — `MVRegister`, `ResettableCounter`, `Rga`, `Fugue`, `JsonCrdt` —
- * have no cross-target byte pin; see that file's KDoc.
+ * **The cross-target dimension is pinned for the fixtures in `CanonicalGoldenVectorTest`**, in
+ * the same source set. Its checked-in CBOR byte strings hold JVM, Android, iOS, macOS and wasmJs
+ * to the same constants — which is what the cross-process use above needs. Coverage is explicit:
+ * a new type needs its own vector, and a vector pins only the state shape it constructs. See
+ * that file's KDoc for the mutation-verified sites and the remaining gaps.
  *
- * **That "every site" is scoped to #1957, and #1979 added four more it does not reach**:
- * `Histogram.buckets`, `DDSketch.positive`, `DDSketch.negative` and `GCounterDouble.counts`. Those
- * three types now hold the *within*-target byte law — each has a `LatticeLawSuite` binding, which
- * is the whole of what they had missing — but no checked-in vector, so JVM-vs-Native agreement on
- * their bytes is unpinned. Tracked by #2718.
+ * `Histogram`, `DDSketch` and `GCounterDouble` have dedicated golden vectors (#2718), alongside
+ * their *within*-target `LatticeLawSuite` bindings. Removing the canonical annotation on
+ * `Histogram.buckets`, either DDSketch store, or `GCounterDouble.counts` independently fails its
+ * golden assertion on JVM; every target checks the same recorded bytes.
  *
  * The caveat there is latency, not coverage: `ci-required`'s build jobs run on Linux, so per-PR
  * only the JVM/Android and wasmJs executions happen — the Apple Kotlin/Native ones live in
