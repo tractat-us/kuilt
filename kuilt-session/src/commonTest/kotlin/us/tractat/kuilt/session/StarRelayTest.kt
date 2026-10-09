@@ -713,10 +713,9 @@ class StarRelayTest {
      * two recipients do not share a queue — which `FanOutHeadOfLineTest` now asserts more sharply,
      * with no virtual time allowed at all.
      *
-     * Pinning the budget's *magnitude* after per-recipient keying needs a different shape: the budget
-     * now bounds only how long a wedged recipient's **own** next frame waits, so a test would have to
-     * heal the wedge and assert on a second frame to that same peer — which needs an `unwedge` the
-     * harness does not have. Deliberately not added here; tracked in #2068.
+     * [FanOutSendBudgetTest] pins both budgets on the wedged recipient's **own** next frame:
+     * future sends are healed while the first stays parked, so the next frame must wait until
+     * the writer's deadline (#2068).
      */
     @Test
     fun `a relay forward to a wedged spoke does not delay one to a healthy spoke`() =

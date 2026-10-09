@@ -5,7 +5,7 @@
 local.properties
 .idea
 .DS_Store
-.claude/worktrees/
+.cla*/worktrees/
 .claude/*.lock
 .claude/settings.local.json
 
