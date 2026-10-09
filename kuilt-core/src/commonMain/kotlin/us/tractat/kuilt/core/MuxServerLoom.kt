@@ -203,7 +203,7 @@ public class MuxServerLoom(
         val job = scope.acceptPump(
             source = source,
             handshakeTimeout = handshakeTimeout,
-            onFailure = { /* best-effort: torn/garbled/slow spoke — drop and keep accepting */ },
+            onFailure = { /* best-effort: accept-source failure or torn/garbled/slow spoke — keep accepting */ },
             handle = { conn -> admit(conn) },
         )
         lock.withLock { launchedJobs += job }

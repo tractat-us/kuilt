@@ -165,11 +165,10 @@ public suspend fun CoroutineScope.hostedMesh(
         source = source,
         handshakeTimeout = handshakeTimeout,
         onFailure = {
-            // Reject-and-continue: a torn/garbled spoke (client dropped during the MeshHello preamble),
-            // an admission-rejected link (LinkRejectedException), or a spoke that never completed its
-            // handshake (HandshakeTimeoutException) surfaces here. Log the one dropped spoke at debug
-            // and keep accepting — the hub and every admitted link stay intact.
-            logger.debug { "hostedMesh: dropping rejected/torn/slow spoke — ${it.message}" }
+            // An accept-source failure, a torn/garbled spoke (client dropped during the MeshHello
+            // preamble), an admission-rejected link (LinkRejectedException), or a handshake timeout
+            // surfaces here. Log the failure and keep accepting — the hub and admitted links stay intact.
+            logger.debug { "hostedMesh: accept-source failure or rejected/torn/slow spoke — ${it.message}" }
         },
         handle = { conn -> hubMesh.addLink(conn) },
     )

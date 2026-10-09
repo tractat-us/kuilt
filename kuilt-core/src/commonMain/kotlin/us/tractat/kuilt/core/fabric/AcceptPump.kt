@@ -3,13 +3,18 @@ package us.tractat.kuilt.core.fabric
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.time.Duration
+
+// Retry brief source failures promptly without spinning while a listener remains unavailable.
+private const val INITIAL_ACCEPT_RETRY_DELAY_MILLIS: Long = 10
+// Bound recovery latency after a prolonged outage while limiting repeated failures to once per second.
+private const val MAX_ACCEPT_RETRY_DELAY_MILLIS: Long = 1_000
 
 /**
  * Persistent, concurrent, handshake-timed accept loop. Drains [source] forever; each accepted
@@ -19,10 +24,11 @@ import kotlin.time.Duration
  *
  * On success the conn is left live (owned by [handle] — e.g. now published into a mesh). On [handle]
  * failure or a handshake timeout, [onFailure] is invoked and the conn is closed. `kuilt-core` is
- * logger-free, so [onFailure] is how a host surfaces a per-link rejection/timeout to its own logger.
+ * logger-free, so [onFailure] surfaces accept-source failures and per-link rejections/timeouts to a host's logger.
  *
- * An [Exception] from [ConnectionSource.accept] is reported through [onFailure], then the pump yields
- * and accepts again. This includes a cancellation minted by the source while the pump remains active;
+ * An [Exception] from [ConnectionSource.accept] is reported through [onFailure], then the pump delays
+ * before accepting again: 10 ms initially, doubling on consecutive failures up to 1 s. A successful
+ * accept resets the delay. Source-minted cancellation is retried while the pump remains active;
  * cancellation of the pump itself always propagates. An [Error] escapes. No conn was returned on this
  * path, so the source owns cleanup of any partially accepted conn. Exceptions from [onFailure] while
  * reporting an accept failure are absorbed too; an [Error] from the callback still escapes.
@@ -57,6 +63,7 @@ public fun CoroutineScope.acceptPump(
     onFailure: (Throwable) -> Unit = {},
     handle: suspend (Connection) -> Unit,
 ): Job = launch {
+    var retryDelayMillis = INITIAL_ACCEPT_RETRY_DELAY_MILLIS
     while (isActive) {
         val conn = try {
             source.accept()
@@ -67,10 +74,11 @@ public fun CoroutineScope.acceptPump(
             } catch (_: Exception) {
                 currentCoroutineContext().ensureActive()
             }
-            // A source that fails without suspending must still let other coroutines make progress.
-            yield()
+            delay(retryDelayMillis)
+            retryDelayMillis = (retryDelayMillis * 2).coerceAtMost(MAX_ACCEPT_RETRY_DELAY_MILLIS)
             continue
         }
+        retryDelayMillis = INITIAL_ACCEPT_RETRY_DELAY_MILLIS
         launch {
             val completed = withTimeoutOrNull(handshakeTimeout) {
                 runCatchingCancellable { handle(conn) }
