@@ -95,10 +95,10 @@ import kotlin.time.Duration
  *   cancellation instead of the connection, so the continuation never yields a handle anyone here
  *   could close. Nothing weaker than a guarantee on this side of the boundary closes that hole, and
  *   it is a real one — a redial is cancelled on the ordinary shutdown path, since [VoterMesh.close]
- *   begins by cancelling the scope the supervisors run on. This is **documented, not enforced**: no
- *   in-tree fabric can even demonstrate the window (the in-memory ones do not suspend inside `dial`
- *   at all, so it is zero-width in every harness and non-zero only over a real socket). A fixture
- *   that could, and therefore a property that could red, is tracked by #2708.
+ *   begins by cancelling the scope the supervisors run on. This remains a **caller obligation**:
+ *   `VoterDialCancellationTest` pins it with a fixture that suspends after creating a connection pair
+ *   and before returning the dialer end (#2708). That test demonstrates compliant cleanup; it does
+ *   not enforce cancellation-cleanliness on caller-supplied transports.
  * @param dispatcher Scheduler for each mesh's per-link read loops (scheduling only — the mesh guards
  *   its own state with primitives). Production passes `Dispatchers.Default`; tests pass a dispatcher
  *   derived from the test scheduler.
