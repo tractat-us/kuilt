@@ -4,7 +4,9 @@ import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -110,8 +112,10 @@ public class FaultySeam(
      * Frames held in a [FaultProfile.ReorderWindow] are released by the swap rather than stranded in
      * a window the new profile will never fill (#2882): each outbound frame goes to its own route,
      * each inbound frame to [incoming], in the order they arrived. This function cannot suspend, so
-     * the release runs in the seam's scope — a frame sent straight after the swap can overtake it. A
-     * released frame that finds the link already closed counts in [framesDropped].
+     * the release runs in the seam's scope — a frame sent straight after the swap can overtake it.
+     * An outbound [IllegalStateException] counts in [framesDropped] only if the delegate is
+     * [SeamState.Torn] when the failure is handled; otherwise it is rethrown in the seam's scope.
+     * Cancellation of the release coroutine is checked first and still propagates.
      */
     public fun setFaultProfile(profile: FaultProfile) {
         val held =
@@ -248,16 +252,20 @@ public class FaultySeam(
     /**
      * Deliver frames a profile swap drained out of the reorder windows (#2882).
      *
-     * Runs after [setFaultProfile] has returned, so the link may have closed in between; a frame that
-     * finds it closed is dropped rather than handed to a delegate that would refuse it with a throw
-     * nobody is waiting for.
+     * Runs after [setFaultProfile] has returned, so the link may close before or during a send.
+     * Guard the outbound send itself: a state pre-check cannot prevent a concurrent close from
+     * refusing it with a throw nobody is waiting for.
      */
     private suspend fun release(held: HeldFrames) {
         for (frame in held.outbound) {
-            if (delegate.state.value is SeamState.Torn) {
-                _framesDropped.incrementAndGet()
-            } else {
+            try {
                 sendHeld(frame)
+            } catch (refused: IllegalStateException) {
+                // CancellationException is an IllegalStateException too: our own cancellation
+                // must stop the release, not count as a drop and carry on with the next frame.
+                currentCoroutineContext().ensureActive()
+                if (delegate.state.value !is SeamState.Torn) throw refused
+                _framesDropped.incrementAndGet()
             }
         }
         for (frame in held.inbound) {
