@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestResult
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
@@ -44,6 +45,7 @@ import us.tractat.kuilt.session.RoomFrame
 import us.tractat.kuilt.session.RoomFramePrefix
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
+import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
@@ -63,7 +65,7 @@ import kotlin.time.Instant
 /**
  * Reusable contract test suite for [RoomFactory] implementations.
  *
- * Subclass and implement [newHarness] to bind any [RoomFactory] under test.
+ * Subclass and implement [newHarness] and [newResumeHarness] to bind a [RoomFactory] under test.
  * Every [Test] encodes a required invariant of the Room lifecycle state machine.
  *
  * Lives in `commonMain` of `:kuilt-conformance` (not a module's `commonTest`)
@@ -344,6 +346,123 @@ public abstract class RoomConformanceSuite {
      * a different fabric should override this method.
      */
     public open fun newHarness(scope: CoroutineScope): RoomHarness = defaultHarness(scope)
+
+    /**
+     * A resume rig that observes the host's actual verdict before its wire mapping.
+     *
+     * [prepare] puts the host into the requested state and returns the token to present. It must
+     * not manufacture a joiner outcome. [hostVerdicts] records only verdicts rendered in response
+     * to real resume requests; it must not echo the requested fixture state. [resumeRequests]
+     * counts the joiner's attempted resume sends, including sends that fail.
+     *
+     * These observations prove the rig ran independently of the code being asserted. They do not
+     * prove the controller's timing policy; that remains the controller's own obligation.
+     */
+    public data class ResumeHarness(
+        val hostFactory: RoomFactory,
+        val joinerFactory: RoomFactory,
+        val prepare: suspend (ResumeToken, ResumeResult.HostVerdict) -> ResumeToken,
+        val hostVerdicts: () -> List<ResumeResult.HostVerdict>,
+        val resumeRequests: () -> Int,
+    )
+
+    /**
+     * Bind the resume mapping properties to the implementation under test.
+     *
+     * Required and non-nullable: a default reference rig would let a different room pass by
+     * testing the reference instead of itself. There is no fault-injection opt-out for mappings.
+     */
+    public abstract fun newResumeHarness(scope: TestScope): ResumeHarness
+
+    /** An accepted host verdict must reach the joiner as an acknowledgement. */
+    @Test
+    public fun resumeSuccessIsAcknowledged(): TestResult =
+        assertResumeMapping(ResumeResult.Success, null)
+
+    /** A host that has not opened a window must return the retryable code for that state. */
+    @Test
+    public fun resumeNotYetOpenHasExactCode(): TestResult =
+        assertResumeMapping(ResumeResult.WindowNotYetOpen, RejectCode.ResumeWindowNotYetOpen)
+
+    /** A closed host window must arrive as a refusal, never the joiner's local WindowClosed. */
+    @Test
+    public fun resumeExpiredHasExactCode(): TestResult =
+        assertResumeMapping(ResumeResult.WindowClosed, RejectCode.ResumeWindowExpired)
+
+    /** Structural token rejection must retain its own code, even among terminal refusals. */
+    @Test
+    public fun resumeInvalidTokenHasExactCode(): TestResult =
+        assertResumeMapping(ResumeResult.TokenInvalid("session-mismatch"), RejectCode.ResumeTokenInvalid)
+
+    private fun assertResumeMapping(verdict: ResumeResult.HostVerdict, code: RejectCode?): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newResumeHarness(this)
+            val host = h.hostFactory.host(Pattern("Alice"))
+            val joiner = h.joinerFactory.join(InMemoryTag("Bob"))
+            try {
+                host.awaitRoster("the resume rig admitted the joiner") { it.size == 1 }
+                joiner.awaitRoster("the resume rig identified the host") { it.isNotEmpty() }
+                val token = h.prepare(joiner.requireResumeToken(), verdict)
+                assertEquals(emptyList(), h.hostVerdicts(), "preparing a rig must not record a verdict")
+                val result = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(token) }
+                assertAll(
+                    {
+                        val observed = h.hostVerdicts()
+                        assertEquals(1, observed.size, "the host must render exactly one verdict")
+                        if (verdict is ResumeResult.TokenInvalid) {
+                            assertIs<ResumeResult.TokenInvalid>(observed.single(),
+                                "resume rig must reach structural token rejection")
+                        } else {
+                            assertEquals(verdict, observed.single(),
+                                "resume rig must reach the requested host verdict before mapping it")
+                        }
+                    },
+                    { assertEquals(1, h.resumeRequests(), "the joiner must actually send its resume") },
+                    {
+                        if (code == null) {
+                            assertEquals(ResumeResult.Success, result, "host success must be acknowledged")
+                        } else {
+                            assertEquals(code, assertIs<ResumeResult.Refused>(result).code,
+                                "exact reject code for host verdict $verdict")
+                        }
+                    },
+                )
+            } finally {
+                joiner.leave()
+                host.leave()
+            }
+        }
+
+    /** A left joiner answers locally; the request counter is first proven live on a real refusal. */
+    @Test
+    public fun resumeAfterLeaveIsLocalWindowClosed(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newResumeHarness(this)
+            val host = h.hostFactory.host(Pattern("Alice"))
+            val joiner = h.joinerFactory.join(InMemoryTag("Bob"))
+            try {
+                host.awaitRoster("the resume rig admitted the joiner") { it.size == 1 }
+                joiner.awaitRoster("the resume rig identified the host") { it.isNotEmpty() }
+                val verdict = ResumeResult.WindowNotYetOpen
+                val token = h.prepare(joiner.requireResumeToken(), verdict)
+                val live = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(token) }
+                assertAll(
+                    { assertEquals(RejectCode.ResumeWindowNotYetOpen, assertIs<ResumeResult.Refused>(live).code) },
+                    { assertEquals(listOf(verdict), h.hostVerdicts(), "the host observation must be live") },
+                    { assertEquals(1, h.resumeRequests(), "the send observation must be live") },
+                )
+                joiner.leave()
+                val closed = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(token) }
+                assertAll(
+                    { assertEquals(ResumeResult.WindowClosed, closed) },
+                    { assertEquals(1, h.resumeRequests(), "a left joiner must not attempt a resume send") },
+                    { assertEquals(listOf(verdict), h.hostVerdicts(), "no host verdict after leave") },
+                )
+            } finally {
+                joiner.leave()
+                host.leave()
+            }
+        }
 
     // ── (1) host → role = Host, selfId is non-blank ──────────────────────────
 
@@ -1124,20 +1243,23 @@ public abstract class RoomConformanceSuite {
      * ([ResumeResult.HostVerdict]) that a joiner cannot receive at all — `refused is
      * ResumeResult.TokenInvalid` is now a *compile* error here, which is how this KDoc's own
      * warning stopped needing to be prose. So `Room.resume`'s reachable range is
-     * `{Success, Refused, TimedOut, WindowClosed}`, and this test asserts the strongest thing the
-     * surface admits: a refusal that is a **host verdict** (not local silence) and whose code is
+     * `{Success, Refused, TimedOut, WindowClosed}`, and this test asserts a refusal that is a
+     * **host verdict** (not local silence) and whose code is
      * **terminal**. It still excludes [ResumeResult.TimedOut], which is the rig receipt —
      * `TimedOut` means no verdict arrived at all, so a host that never saw the frame reds here
      * instead of passing as a refusal it never made — and now also excludes
      * [ResumeResult.WindowClosed], which after #2364 means the *joiner* gave up locally without
      * asking.
      *
-     * The code itself is left unpinned to one constant on purpose: a room may honestly answer
+     * This contrast property leaves the code unpinned: a room may honestly answer
      * [us.tractat.kuilt.session.admit.RejectCode.ResumeTokenInvalid] or
      * [us.tractat.kuilt.session.admit.RejectCode.RoomMismatch] for a token naming a room it
      * does not serve. What every implementation owes is that the answer is **not retryable** —
      * re-presenting that token can never work, and a room that said otherwise would send the
      * joiner into a doomed retry loop for its whole window.
+     * [resumeInvalidTokenHasExactCode] separately observes a [ResumeResult.TokenInvalid] verdict
+     * at the host and pins its exact mapping to [RejectCode.ResumeTokenInvalid]. The companion
+     * mapping properties cover the other host verdicts without inferring them from terminality.
      *
      * ### Mutation receipt
      *
