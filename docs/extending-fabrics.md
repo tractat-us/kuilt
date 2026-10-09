@@ -396,9 +396,9 @@ instead.)
 ## Prove it: `SeamConformanceSuite`
 
 Every new fabric passes the contract by subclassing `SeamConformanceSuite` and
-implementing `newLoomPair()`. The suite encodes all `Seam` invariants as tests
-(open, send, receive, peer membership, single-collection ordering, close
-idempotency, availability).
+implementing `newLoomPair()`. The suite tests open, send, receive, peer membership,
+single-collection ordering, and close idempotency. It does not test whether
+`Loom.availability()` verdicts are justified; fabric-specific tests must check that.
 
 `:kuilt-tcp`'s conformance test is the copy-paste template:
 
