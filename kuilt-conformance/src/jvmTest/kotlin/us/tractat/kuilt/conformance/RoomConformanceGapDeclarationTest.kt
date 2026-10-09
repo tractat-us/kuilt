@@ -1,6 +1,7 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.session.SeamRoomFactory
 import kotlin.test.Test
@@ -53,6 +54,9 @@ class RoomConformanceGapDeclarationTest {
      */
     private fun unsupported(trackingUrl: String): RoomConformanceSuite =
         object : RoomConformanceSuite() {
+            override fun newResumeHarness(scope: TestScope): ResumeHarness =
+                referenceResumeHarness(scope, fastHeartbeatConfig)
+
             override fun newHarness(scope: CoroutineScope): RoomHarness {
                 var clockMs = 0L
                 val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
@@ -148,12 +152,13 @@ class RoomConformanceGapDeclarationTest {
 
     /**
      * A declared fault-injection gap excuses **only** the obligations that need to break a link. The
-     * rest of the suite still runs against such a harness — checked here on four of them: one that
+     * rest of the suite still runs against such a harness — checked here on properties including one that
      * touches the resume surface ([RoomConformanceSuite.joinerLearnsHostRoomIdOnAdmission], which
      * asserts against `resumeToken?.roomId` and so is the test that made the old
      * `resumeToken ?: return@runTest` skip self-contradictory), one plain membership property, and
      * `Room.leave`'s two documented obligations, which are ungated core precisely because no fabric
-     * may excuse them (#2501).
+     * may excuse them (#2501). The resume mapping properties use their own required fixture and
+     * remain obligations even when link fault injection is unavailable.
      *
      * Without this, a future change that widened the gap to cover the whole suite would be green
      * here and nobody would notice that "declares a gap" had quietly become "opts out".
@@ -165,5 +170,10 @@ class RoomConformanceGapDeclarationTest {
         suite.leaveNormalFiresLeftEventAndShrinksRoster()
         suite.leaveIsIdempotent()
         suite.leaveDoesNotReportFailureAsCancellation()
+        suite.resumeSuccessIsAcknowledged()
+        suite.resumeNotYetOpenHasExactCode()
+        suite.resumeExpiredHasExactCode()
+        suite.resumeInvalidTokenHasExactCode()
+        suite.resumeAfterLeaveIsLocalWindowClosed()
     }
 }
