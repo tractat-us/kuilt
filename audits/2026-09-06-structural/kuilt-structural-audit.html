@@ -1,0 +1,311 @@
+<title>kuilt Structural Audit</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@87.5,500;87.5,700;100,400;100,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #f4f5f7;
+    --paper: #ffffff;
+    --ink: #1c2130;
+    --ink-2: #4b5268;
+    --ink-3: #7a8199;
+    --rule: #d9dce4;
+    --rule-2: #e9ebf0;
+    --dye: #37478f;
+    --dye-soft: #e6e9f6;
+    --madder: #a8403a;
+    --madder-soft: #f6e6e4;
+    --moss: #3f6f47;
+    --moss-soft: #e3efe4;
+    --ochre: #8a6a1f;
+    --ochre-soft: #f4ecd6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #151823;
+      --paper: #1c2030;
+      --ink: #e7e9f0;
+      --ink-2: #b4b9c9;
+      --ink-3: #848ba1;
+      --rule: #333a4e;
+      --rule-2: #272d3e;
+      --dye: #9aabf0;
+      --dye-soft: #262d48;
+      --madder: #e2857e;
+      --madder-soft: #3b2626;
+      --moss: #8fc493;
+      --moss-soft: #223328;
+      --ochre: #d8b25a;
+      --ochre-soft: #38311c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #151823;
+    --paper: #1c2030;
+    --ink: #e7e9f0;
+    --ink-2: #b4b9c9;
+    --ink-3: #848ba1;
+    --rule: #333a4e;
+    --rule-2: #272d3e;
+    --dye: #9aabf0;
+    --dye-soft: #262d48;
+    --madder: #e2857e;
+    --madder-soft: #3b2626;
+    --moss: #8fc493;
+    --moss-soft: #223328;
+    --ochre: #d8b25a;
+    --ochre-soft: #38311c;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 62rem; margin: 0 auto; padding: 3rem 1.5rem 5rem; }
+  header.masthead { display: grid; grid-template-columns: 1fr; gap: .75rem; padding-bottom: 1.5rem; border-bottom: 2px solid var(--ink); margin-bottom: 2rem; }
+  .eyebrow { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+  h1 { font-family: "Archivo", "Helvetica Neue", Arial, sans-serif; font-variation-settings: "wdth" 87.5; font-weight: 700; font-size: clamp(2rem, 4.5vw, 3rem); line-height: 1.05; margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+  .lede { max-width: 66ch; font-size: 1.08rem; color: var(--ink-2); margin: 0; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 0; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; margin-top: .5rem; }
+  .facts div { padding: .7rem .9rem; border-right: 1px solid var(--rule); background: var(--paper); }
+  .facts div:last-child { border-right: 0; }
+  .facts b { display: block; font-family: "Archivo", sans-serif; font-weight: 600; font-size: 1.35rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .facts span { font-size: .78rem; color: var(--ink-3); }
+
+  h2 { font-family: "Archivo", "Helvetica Neue", Arial, sans-serif; font-variation-settings: "wdth" 87.5; font-weight: 700; font-size: 1.55rem; line-height: 1.15; margin: 3rem 0 .75rem; letter-spacing: -.005em; text-wrap: balance; }
+  h2 .n { color: var(--dye); font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: .95rem; letter-spacing: .06em; margin-right: .6rem; vertical-align: .18em; }
+  h3 { font-family: "Archivo", sans-serif; font-weight: 600; font-size: 1.12rem; margin: 1.8rem 0 .5rem; text-wrap: balance; }
+  p { max-width: 66ch; margin: 0 0 .9rem; }
+  p.wide { max-width: none; }
+  ul, ol { max-width: 66ch; padding-left: 1.3rem; margin: 0 0 1rem; }
+  li { margin-bottom: .35rem; }
+  li::marker { color: var(--ink-3); }
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: .88em; }
+  code { background: var(--rule-2); padding: .05em .3em; border-radius: 3px; }
+  a { color: var(--dye); text-decoration: none; border-bottom: 1px solid var(--rule); }
+  a:hover, a:focus-visible { border-bottom-color: var(--dye); outline: none; }
+
+  .verdict { background: var(--paper); border-left: 4px solid var(--dye); padding: 1.1rem 1.3rem; margin: 1.5rem 0 2rem; max-width: 70ch; }
+  .verdict p { margin-bottom: .6rem; }
+  .verdict p:last-child { margin-bottom: 0; }
+
+  .tablewrap { overflow-x: auto; margin: .75rem 0 1.25rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: .55rem .75rem; border-bottom: 1px solid var(--rule-2); vertical-align: top; }
+  th { font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); background: var(--ground); border-bottom: 1px solid var(--rule); }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.k { font-weight: 600; white-space: nowrap; }
+  .caption { font-size: .8rem; color: var(--ink-3); margin: -.6rem 0 1.4rem; max-width: 70ch; }
+
+  .tag { display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: .7rem; letter-spacing: .05em; text-transform: uppercase; padding: .1rem .45rem; border-radius: 3px; white-space: nowrap; }
+  .ended { background: var(--moss-soft); color: var(--moss); }
+  .live { background: var(--madder-soft); color: var(--madder); }
+  .partial { background: var(--ochre-soft); color: var(--ochre); }
+  .neutral { background: var(--dye-soft); color: var(--dye); }
+
+  .lever { border-top: 1px solid var(--rule); padding-top: 1.2rem; margin-top: 2rem; }
+  .lever-head { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: start; }
+  .retires { font-size: .82rem; color: var(--ink-2); background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: .6rem .8rem; min-width: 14rem; max-width: 18rem; }
+  .retires b { display: block; font-family: "IBM Plex Mono", monospace; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin-bottom: .3rem; }
+  .retires ul { padding-left: 1rem; margin: 0; max-width: none; }
+  .retires li { margin-bottom: .15rem; }
+  @media (max-width: 40rem) { .lever-head { grid-template-columns: 1fr; } .retires { max-width: none; } }
+
+  .receipt { font-size: .92rem; border-left: 2px solid var(--rule); padding-left: .9rem; margin: .8rem 0 1rem; color: var(--ink-2); max-width: 66ch; }
+  .receipt b { color: var(--ink); }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem 2rem; }
+  .cols ul { max-width: none; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-size: .8rem; color: var(--ink-3); max-width: 70ch; }
+</style>
+
+<div class="page">
+<header class="masthead">
+  <div class="eyebrow">tractat-us / kuilt · measured 2026-09-06 · origin/main d5a632ba</div>
+  <h1>Where the burndown leaks, and the five changes that stop it</h1>
+  <p class="lede">Why the open-issue count stopped falling, which fixes actually ended their class, and where a structural change would replace a stream of instance fixes.</p>
+  <div class="facts">
+    <div><b>1,204</b><span>issues in 15 weeks</span></div>
+    <div><b>157</b><span>open today</span></div>
+    <div><b>28 h</b><span>median time to close</span></div>
+    <div><b>127k / 227k</b><span>production / test lines</span></div>
+    <div><b>8,246</b><span>lines of root build, 97% guards</span></div>
+    <div><b>13,200</b><span>words of CLAUDE.md</span></div>
+  </div>
+</header>
+
+<div class="verdict">
+  <p><strong>The backlog is not a plateau, and the fixes mostly are addressing roots.</strong> The open count was built by a four-week filing surge from three audits and has been draining since. Half of everything filed since late July is about the verification apparatus, not the library.</p>
+  <p><strong>The recurring root sits one level up.</strong> Where a defect class got a <em>type</em> (wire-width <code>init { require }</code> plus its TCK), the class ended. Where it got a <em>lexical guard, a paragraph, or a TCK obligation</em> for a property only a type can carry, the remedy's own blind spot became the next issue. That pattern accounts for 47 issues since week 31 and the whole cancellation and roster families.</p>
+  <p><strong>The lever is to stop paying for guards where a type would do.</strong> Five structural changes below retire two thirds of the guard file, the two largest issue families, and most of the exception-discipline prose.</p>
+</div>
+
+<h2><span class="n">01</span>The arithmetic the plateau hides</h2>
+<p>The open count reads as flat because it is the tail of one surge. Weeks 30 to 33 filed 405 issues and closed 265; three audits produced almost all of the excess: the Raft adversarial-input sweep, the peers-collapse obligation from #1816, and the conformance-vacuity audit #2247 with its 20 children.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Weeks</th><th class="num">Opened</th><th class="num">Closed</th><th class="num">Net</th><th class="num">Open at end</th></tr></thead>
+<tbody>
+<tr><td class="k">22–29</td><td class="num">653</td><td class="num">614</td><td class="num">+39</td><td class="num">39</td></tr>
+<tr><td class="k">30–33</td><td class="num">405</td><td class="num">265</td><td class="num">+140</td><td class="num">179</td></tr>
+<tr><td class="k">34–37</td><td class="num">146</td><td class="num">168</td><td class="num">−22</td><td class="num">157</td></tr>
+</tbody></table></div>
+<p>Two more numbers frame the rest. Of the 487 issues filed since week 31, 245 carry an explicit "found while / follow-up to / same class as" provenance, and 244 are about tests, guards, docs, or process rather than runtime behaviour. The two biggest parents are audits, not fixes. About 15% of the open issues are already satisfied on main (spot-check: 3 or 4 of the 20 oldest <code>ready</code> ones, including #1708 whose blocker was deleted by #2540 and #1768 whose option 2 landed in <code>ci.yml</code>).</p>
+
+<h2><span class="n">02</span>Which remedies ended their class</h2>
+<p>This is the direct test of "roots are not being addressed". For each recurring class: the remedy that shipped, and how many instances arrived after it.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Class</th><th>Remedy that shipped</th><th>Shape</th><th class="num">After it</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td class="k">Wire field width unenforced</td><td>#1822: <code>init { require }</code> on the wire type + <code>WireCodecConformanceSuite</code></td><td>type + TCK</td><td class="num">1</td><td><span class="tag ended">ended</span></td></tr>
+<tr><td class="k">Non-canonical encoding</td><td>#1957 golden digest, <code>CanonicalMap/SetSerializer</code></td><td>type</td><td class="num">4, all scope</td><td><span class="tag ended">ended in-module</span></td></tr>
+<tr><td class="k">Stale doc citation</td><td>#1792 <code>verifyDocCitations</code> + nightly staleness</td><td>scan</td><td class="num">21, all widening</td><td><span class="tag ended">converging</span></td></tr>
+<tr><td class="k">Roster collapse on Torn</td><td>#1816 TCK obligation; #2627 guard on bare state flow</td><td>obligation + guard</td><td class="num">20</td><td><span class="tag live">still producing</span></td></tr>
+<tr><td class="k">Cancellation swallowed</td><td>primitive, dead detekt ban, paragraph, three guards</td><td>prose + guards</td><td class="num">12</td><td><span class="tag live">still producing</span></td></tr>
+<tr><td class="k">Guard maintenance</td><td>each guard</td><td>scan</td><td class="num">≈0.6 per guard</td><td><span class="tag partial">tax</span></td></tr>
+<tr><td class="k">Test vacuity</td><td>five different mechanisms, none mandatory</td><td>mixed</td><td class="num">125 filed</td><td><span class="tag partial">unfinished</span></td></tr>
+</tbody></table></div>
+<p>Three receipts for the one-level-up pattern. #1835: the CLAUDE.md exception rule, followed literally, reintroduces the #1803 bug in a form the guard cannot see. #2648: <code>NwSeam.close</code> latches Torn before collapsing peers, the exact ordering violation that the <code>Seam.peers</code> KDoc predicts the TCK cannot detect. #2702: the lint-skew guard confirms itself on an unanchored alias match. In each case the property was type-shaped and the remedy was not.</p>
+
+<h2><span class="n">03</span>Five structural levers</h2>
+<p>Ranked by recurrence removed, not by size. Each one names the first PR and what it retires. Four of the five are corrections of scope rather than new machinery: the primitive already exists and was left optional.</p>
+
+<section class="lever">
+<div class="lever-head">
+<div>
+<h3>Lever 1 · Carry the contract obligations in types, not in prose</h3>
+<p>The <code>Seam</code> contract is 10 members and 28 "must/never" sentences, implemented 34 times. Five obligations are re-implemented per seam and each has a guard or a paragraph policing it. In five cases the un-bypassable form was a small edit away.</p>
+<ul>
+<li><strong><code>Seam.state: GatedStateFlow</code></strong> with a non-public constructor. A bare <code>MutableStateFlow&lt;SeamState&gt;</code> can then no longer satisfy the interface. Today <code>forbidBareSeamStateFlow</code> fires on nothing: all 9 production sites carry an <code>ALLOW</code> marker.</li>
+<li><strong><code>PeerRoster</code></strong> in <code>:kuilt-core</code> owning collapse-then-latch atomically with <code>selfId</code> non-removable, the way <code>SeamStateGate</code> owns the state write. Five mechanisms exist for this one invariant today; four sites write <code>.value=</code> unguarded. #2654 already argues for it.</li>
+<li><strong><code>Seam.trySendTo</code> / <code>tryBroadcast</code> returning a sealed <code>SendOutcome</code></strong>. 76 of 368 catch sites guard a best-effort send; 61 of those only log or discard. <code>broadcast</code> already made this choice in its KDoc. Two default methods, no fabric changes.</li>
+<li><strong><code>closeAll(items)</code> / <code>closeQuietly()</code></strong>, the loop discipline written once. Removes 55 sites and the four sites the audit found wrong by CLAUDE.md's own rules (<code>NwSeam.kt:2244</code>, <code>NwBridgeRuntime.kt:263</code>, <code>NwBridgeExports.kt:76</code>, <code>RaftEngine.kt:3819</code>).</li>
+<li><strong>Non-inline <code>withLockNoSuspend</code></strong>. A suspend call in the body becomes a compile error, replacing a 215-line scanner that admits it cannot tell <code>Seam.close()</code> from <code>Channel.close()</code>.</li>
+<li><strong><code>kuiltRunTest { }</code></strong> in <code>:kuilt-test</code> with no <code>timeout</code> parameter, replacing the 801-line ceiling guard.</li>
+</ul>
+</div>
+<aside class="retires"><b>Retires</b><ul><li>~200 catch sites (52% of 368)</li><li>6 guards, ~2,450 lines</li><li>the 132-line exception section of CLAUDE.md (14% of the file)</li><li>the #1816 family, 35 issues so far</li></ul></aside>
+</div>
+</section>
+
+<section class="lever">
+<div class="lever-head">
+<div>
+<h3>Lever 2 · Route the five radios through the skeleton that already exists</h3>
+<p>kuilt already has the shared seam skeleton, by composition: a fabric implements <code>Connection</code> (four members) and calls <code>identified()</code> or <code>peerMesh()</code>, which return a <code>LinkSeam</code> or <code>MeshSeam</code> owning gate, spool, pumps, roster, budget and the self-send guard. WebSocket, TCP and mDNS take that path. <code>NwSeam</code>, <code>NearbySeam</code>, <code>MCSessionLink</code>, <code>BridgePeerLink</code> and <code>WebRTCPeerLink</code> did not, and re-derived <code>MeshSeam</code> by hand: ~610 lines of load-bearing duplication, one byte-identical copy of a security-relevant function (<code>canonicalLinkNonce</code>), and 20 verbatim copies of the self-send <code>require</code>.</p>
+<p>The one recorded objection (the 2026-07-10 lifecycle design, Option B) rejects an inherited <em>teardown</em> protocol, and its own residual-seam note parks the roster half "not justified by five call sites". That count is twelve now. Composition through <code>Connection</code> keeps each seam's teardown, so the objection does not apply.</p>
+<p>Order: <code>WebRTCPeerLink</code> (smallest, its own KDoc points at the gate), then the two multipeer links together (near-copies), then Nearby, then Nw last because its drain window is richer than <code>MeshSeam</code>'s and may need to move up rather than down.</p>
+</div>
+<aside class="retires"><b>Retires</b><ul><li>~1,085 of 3,249 seam code lines</li><li>4 guards that exist only for this</li><li>5 of the 9 <code>ALLOW-bareSeamState</code> markers</li><li>the decorator budget divergence (#2642, a live bug)</li></ul></aside>
+</div>
+</section>
+
+<section class="lever">
+<div class="lever-head">
+<div>
+<h3>Lever 3 · One anti-vacuity mechanism, named, and mandatory</h3>
+<p>Five different mechanisms exist for "a suite must be able to fail": sealed two-armed fixtures (Bolt, DurableStore, Discovery, Room), <code>ObligationDeclaration</code> cross-checked against a hook (Seam, WireCodec), declared vacuity floors with a self-test (Lattice), a strength enum with both arms failing (CommutativeScheme), and an adversarial corpus (Wasm). Nothing in <code>:kuilt-conformance</code> names the concept, so each new suite author picks one by luck, and three suites are still reference-only (<code>Mesh</code>, <code>CloseableLifecycle</code>, <code>RaftStorage</code>, whose own KDoc says it discriminates nothing). <code>QuiltedConformanceSuite</code> keeps a nullable opt-out across 24 subclasses.</p>
+<p>The fault injector also already exists and is public: <code>FaultyLoom</code> in <code>:kuilt-test</code> is strictly stronger than the internal <code>ChaosSeam</code> on every axis but duplicate. Exactly one of 17 suites requires it. <code>SeamConformanceSuite</code>, with 38 harnesses, never imports it, so no fabric in kuilt is conformance-tested under drop, delay or reorder. #1819 (16 bytes leave a Nearby seam permanently deaf) is the cost.</p>
+<ul>
+<li>Generalise <code>ObligationDeclaration</code> out of the Seam suite; every published suite declares each unreachable failure as <code>Gap</code> or <code>InapplicableByDesign</code>, never null.</li>
+<li>Add a <code>FaultInjection</code> fixture to <code>SeamConformanceSuite</code> in <code>RoomConformanceSuite</code>'s shape; fold duplicate-delivery into <code>FaultProfile</code>; delete <code>ChaosSeam</code>.</li>
+<li>Rule: every suite ships an executable rig test that runs it against a broken fixture and asserts red. Twelve already do; the prose-table alternative in <code>RaftStorage</code> is what rots.</li>
+<li>Assert obligations on both roles. Sixteen of the Seam suite's obligations are host-only on a symmetric contract (#2591, #2601, #2697).</li>
+</ul>
+</div>
+<aside class="retires"><b>Retires</b><ul><li>the #2247 audit as a recurring activity</li><li>the "fixture cannot fail" class (125 filed since W31)</li><li>~1,000 lines of duplicated per-type law tests</li></ul></aside>
+</div>
+</section>
+
+<section class="lever">
+<div class="lever-head">
+<div>
+<h3>Lever 4 · Move the guards, test them, and change the minting rule</h3>
+<p>The root build file is 8,246 lines, of which 64 are build configuration. It grew ~340 lines a day in the week before this audit, across 65 commits in 60 days, and no guard can be run or debugged in isolation because <code>build-logic/</code> has no test source set. Four guards already carry <code>(name, source, expected)</code> case tables that run on every <code>check</code> and are directly portable to JUnit.</p>
+<p>Classifying the 30 guards by the strongest enforcement available: 10 are type-shaped, 9 need a type-resolving linter, 5 are process or tool config, 6 are genuinely lexical (citations, inventories, samples). The three cancellation guards together see 27 of 368 sites, about 7%. Two guards are exempted across their entire live population.</p>
+<ol>
+<li>Mechanical move of all 30 plus plumbing into <code>build-logic/src/main/kotlin/guards/</code>, one file per family, with the four case tables promoted to <code>src/test</code>. Zero behaviour change.</li>
+<li>Adopt detekt 2.x under <code>dev.detekt</code>. #2540 measured 1.23.8; the argument does not carry to 2.x, which pins this repo's Kotlin.</li>
+<li>Fold Dokka <code>failOnWarning</code>, a nightly for the two meta-premise guards, and a CI step for test-result parity.</li>
+<li>Before any new <code>check</code>-wired scan: classify it T/C/L/P and write why the stronger class was rejected. Every new guard ships a committed positive control.</li>
+</ol>
+</div>
+<aside class="retires"><b>Retires</b><ul><li>24 of 30 guards</li><li>8,246 → ~1,400 lines</li><li>the ~0.6 follow-up issues each guard has cost</li><li>most of the merge-conflict surface on one file</li></ul></aside>
+</div>
+</section>
+
+<section class="lever">
+<div class="lever-head">
+<div>
+<h3>Lever 5 · Reopen the decompositions where the fix class is a missing decision layer</h3>
+<p>Both decompositions closed on 2026-07-07 and both files have since regrown past them: <code>RaftEngine</code> 1,158 → 1,685 code lines (4,330 raw), <code>SeamRoom</code> 624 → 1,351 code lines (3,758 raw). Neither has an open tracker, and <code>WarpNode</code>, the third giant the cleanup spec says was filed, never got an issue at all. The regrowth is new concerns landing inside the class, and each file's dominant fix class is the same shape: a decision made inline with I/O.</p>
+<ul>
+<li><strong><code>RaftEngine</code></strong>: 24 of 53 fixes are "an inbound or restored value was not validated". The repo already named the remedy, <code>RefusalGate?</code>-returning pure validators, and applied it to four private functions. Make them <code>internal</code> (cluster tests become unit tests), extend the pattern to the remaining sites, and move the 8 log-throttling fields out into a diagnostics object.</li>
+<li><strong><code>SeamRoom</code></strong>: two near-identical per-recipient lane implementations whose KDoc cross-references the duplication (~550 → ~150 lines), then a <code>RelayPlane</code> with a pure <code>resolveRecipients</code>. Reuse the shared lock the resume machine already documents; do not mint a second.</li>
+<li><strong><code>NwSeam</code></strong>: the displacement drain and the wedge watchdog are already separate concurrency domains (~620 lines, watchdog read-only).</li>
+</ul>
+<p>Not god objects despite raw size: <code>EntitlementLedger</code> (zero mutable fields, lattice surface), <code>SeamConformanceSuite</code> (stateless by design, with a recorded rationale and #2439 as the only split with backing), <code>CompositeSeam</code> and <code>MeshSeam</code> (411 and 500 code lines; the volume is proof-comment, and they have the highest defect density per code line in the set).</p>
+</div>
+<aside class="retires"><b>Retires</b><ul><li>the validation fix class in Raft (≈45% of its fixes)</li><li>~400 duplicated lines in SeamRoom</li><li>the need for a simulated cluster to test a validator</li></ul></aside>
+</div>
+</section>
+
+<h2><span class="n">04</span>Cleanup ledger</h2>
+<p class="wide">Smaller items that fell out of the audits. None prevents a recorded incident; each removes a place where the next duplication would land.</p>
+<div class="cols">
+<div>
+<h3>Code</h3>
+<ul>
+<li><code>Seam.requireNotSelf(peer)</code> replaces 20 verbatim copies, 5 inside <code>:kuilt-core</code>.</li>
+<li>Hoist <code>canonicalLinkNonce</code> and <code>toHex</code>; <code>MeshSeam.kt:616</code> and <code>NwHello.kt:114</code> are byte-identical.</li>
+<li><code>Seam.filteredBy(peer)</code> replaces five hand-written per-peer view classes.</li>
+<li><code>PeerlessSeam.close</code> is a no-op and its <code>incoming</code> never completes.</li>
+<li>Extend the ISE guard's type set to <code>RuntimeException</code> and <code>Exception</code>: 8 more arms swallow cancellation the same way.</li>
+<li><code>:kuilt-otel-tap</code> still depends on the superseded <code>:kuilt-multipeer</code> in appleMain.</li>
+<li><code>:kuilt-conformance</code> is a hub with <code>api</code> deps on raft, session, store and crdt, so every module's test classpath pulls the stack.</li>
+</ul>
+</div>
+<div>
+<h3>Tests</h3>
+<ul>
+<li><code>schedulerClock</code> is byte-identical in 10 files across 4 modules.</li>
+<li><code>tick()</code> in 16 sites hand-syncs a second clock to virtual time; drift is silent.</li>
+<li>Six websocket tests hand-roll <code>connectPair</code> beside the shared helper.</li>
+<li>24 hand-written single-pair CRDT law functions duplicate what <code>LatticeLawSuite</code> covers with 32 seeds.</li>
+<li><code>:kuilt-quilter</code> has 242 real <code>advanceUntilIdle()</code> calls against a re-arming timer loop; no guard exists for it.</li>
+<li><code>ConcurrencyStressHarness</code> is jvmMain-only with one user while nine <code>ALLOW-realDispatcher</code> sites describe it.</li>
+</ul>
+</div>
+<div>
+<h3>Claims that are now false</h3>
+<ul>
+<li>CLAUDE.md says <code>CompositeSeam</code>/<code>CompositeLoom</code> confinement is "legacy being migrated". Zero <code>limitedParallelism</code> uses remain in either; the migration is done.</li>
+<li>CLAUDE.md says "nine flows are exempt" from the bare-state guard; that is the whole population, not a residue.</li>
+<li><code>RefusalGate.kt</code> KDoc lists <code>adoptLeaderForTerm</code> with three pure validators; it is suspend and mutates.</li>
+<li>The cleanup-epic spec says WarpNode's decomposition was filed. It was not.</li>
+<li>~24 open issues are already satisfied on main and can close on inspection.</li>
+</ul>
+</div>
+</div>
+
+<h2><span class="n">05</span>What to change about the process</h2>
+<ul>
+<li><strong>Label audit output.</strong> Half the backlog is findings from sweeps, not regressions. An <code>audit-finding</code> label lets the burndown count separate library defects from verification debt, which is the number the plateau worry was really about.</li>
+<li><strong>Type before guard.</strong> The reflex after an incident is a scan plus a paragraph. Seventeen of thirty guards protect a property with a stronger tool available, and in five the type already existed in <code>:kuilt-core</code>. Make "why not a type?" the first question, and a positive control the price of admission.</li>
+<li><strong>Put the why on the primitive.</strong> CLAUDE.md is 13,200 words with 72 commits touching it; much of it is rationale for disciplines that should be KDoc on the primitive that enforces them, or an ADR. Only six ADRs exist; the design specs under <code>docs/superpowers/specs/</code> are the de-facto ADRs and are not linked as such.</li>
+<li><strong>Reopen a decomposition when its file doubles.</strong> Closing the tracker removed the pressure; both giants regrew past their filing size within eight weeks.</li>
+</ul>
+
+<h2><span class="n">06</span>Suggested order</h2>
+<ol>
+<li>Move the 30 guards into <code>build-logic/</code> with the four case tables as tests. Zero behaviour change; unblocks every later guard edit.</li>
+<li><code>Seam.trySendTo</code> / <code>tryBroadcast</code> as default methods. Two methods, one sealed type, 76 sites migrate at leisure.</li>
+<li><code>GatedStateFlow</code> on the contract and the 9-marker sweep in the same PR.</li>
+<li><code>PeerRoster</code> in <code>:kuilt-core</code>, then <code>WebRTCPeerLink</code> onto <code>Connection</code> as the first radio migration and the template for the other four.</li>
+<li>Mandatory <code>FaultInjection</code> on <code>SeamConformanceSuite</code>; delete <code>ChaosSeam</code>.</li>
+<li>Reopen #1121 and #1122 at today's sizes; file the WarpNode tracker; make the four Raft validators <code>internal</code>.</li>
+</ol>
+
+<footer>Sources: six read-only audits over the worktree at <code>docs/2600-depart-carries-finals</code> (fabric duplication, root-build guards, test infrastructure, issue-history clustering of 487 issues since week 31 with bodies fetched, God-object churn, exception-catching population of 368 sites). Counts are code lines unless marked raw. Issue numbers refer to tractat-us/kuilt.</footer>
+</div>

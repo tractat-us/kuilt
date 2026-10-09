@@ -1,0 +1,2915 @@
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/AttachConnections.kt:53
+            val attached = mutableSetOf<PeerId>()
+            connectedPeers.collect { peers ->
+                for (peer in peers) {
+                    if (peer !in core && peer !in attached) {
+                        runCatchingCancellable { overlay.attachDirectoryOnly(peer) }
+                            .onSuccess { attached += peer }
+                    }
+                }
+                val gone = attached.filter { it !in peers }
+                for (peer in gone) {
+                    runCatchingCancellable { overlay.detachDirectoryOnly(peer) }
+                    attached -= peer
+                }
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/AttachConnections.kt:59
+                    }
+                }
+                val gone = attached.filter { it !in peers }
+                for (peer in gone) {
+                    runCatchingCancellable { overlay.detachDirectoryOnly(peer) }
+                    attached -= peer
+                }
+            }
+        }
+    }
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/CoreLearnerAdmission.kt:64
+                        .firstOrNull { it !in core && it !in membership.learners }
+                }.filterNotNull().first()
+    
+                val current = node.membership.value
+                runCatchingCancellable {
+                    node.changeMembershipWithRetry(
+                        ClusterConfig(voters = current.voters, learners = current.learners + next),
+                    )
+                }.onFailure { delay(CORE_ADMISSION_RETRY_BACKOFF) }
+            }
+        }
+    }
+    
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/CoreLearnerAdmission.kt:131
+        suspend fun publishLocalRosterTo(targets: Set<NodeId>) {
+            if (targets.isEmpty()) return
+            val payload = encodeRoster(seam.peers.value.mapTo(mutableSetOf()) { NodeId(it.value) }.apply { removeAll(core) })
+            for (member in targets) {
+                runCatchingCancellable { rosterChannel.sendTo(PeerId(member.value), payload) }
+            }
+        }
+    
+        // Send our current roster to every connected core member (used by the reactive re-publish path).
+        suspend fun publishLocalRoster() =
+            publishLocalRosterTo(seam.peers.value.mapTo(mutableSetOf()) { NodeId(it.value) }.filterTo(mutableSetOf()) { it in core && it != self })
+    
+        // Receive: accept a roster frame only from a core sender (first-hop authenticity); on genuinely
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/CoreLearnerAdmission.kt:144
+        // new information, re-publish our own roster to self-heal the best-effort subscribe-race. Wrapped
+        // in a retry-with-backoff loop so a transient throw does not permanently kill reception (M3).
+        launch {
+            while (true) {
+                val outcome = runCatchingCancellable {
+                    rosterChannel.incoming.collect { swatch ->
+                        val sender = swatch.sender?.let { NodeId(it.value) } ?: return@collect
+                        if (sender !in core) return@collect // a spoke must not be able to inject membership
+                        val roster = runCatchingCancellable { decodeRoster(swatch.toByteArray()) }.getOrNull()
+                            ?: return@collect
+                        if (remoteRosters.value[sender] == roster) return@collect // nothing new — no churn
+                        remoteRosters.update { it + (sender to roster) }
+                        publishLocalRoster()
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/CoreLearnerAdmission.kt:148
+                val outcome = runCatchingCancellable {
+                    rosterChannel.incoming.collect { swatch ->
+                        val sender = swatch.sender?.let { NodeId(it.value) } ?: return@collect
+                        if (sender !in core) return@collect // a spoke must not be able to inject membership
+                        val roster = runCatchingCancellable { decodeRoster(swatch.toByteArray()) }.getOrNull()
+                            ?: return@collect
+                        if (remoteRosters.value[sender] == roster) return@collect // nothing new — no churn
+                        remoteRosters.update { it + (sender to roster) }
+                        publishLocalRoster()
+                    }
+                }
+                // Clean completion means the channel closed (the seam tore) — stop. A transient failure is
+                // retried after a backoff, mirroring the admit loop, so this node keeps learning rosters.
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/CoreLearnerAdmission.kt:196
+                    candidates.firstOrNull { it !in core && it !in membership.learners }
+                }.filterNotNull().first()
+    
+                val current = node.membership.value
+                runCatchingCancellable {
+                    node.changeMembershipWithRetry(
+                        ClusterConfig(voters = current.voters, learners = current.learners + next),
+                    )
+                }.onFailure { delay(CORE_ADMISSION_RETRY_BACKOFF) }
+            }
+        }
+    }
+    
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/ManagedSeam.kt:102
+            if (seam == null) {
+                log.debug { "managed-seam: $selfId broadcast dropped — no backing seam yet" }
+                return
+            }
+            runCatchingCancellable { seam.broadcast(payload) }
+                .onFailure { log.debug { "managed-seam: $selfId broadcast dropped on tear" } }
+        }
+    
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            // Its OWN [selfId] — a constructor parameter, not a read of the backing seam — and ahead of
+            // everything else, for two independent reasons (#2428). The published identity is this one,
+            // so it is the id a caller can self-send to; and the delegation below swallows the backing
+            // seam's exceptions into a debug log, which would launder the refusal into a silent drop.
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/ManagedSeam.kt:117
+            if (seam == null) {
+                log.debug { "managed-seam: $selfId sendTo $peer dropped — no backing seam yet" }
+                return
+            }
+            runCatchingCancellable { seam.sendTo(peer, payload) }
+                .onFailure { log.debug { "managed-seam: $selfId sendTo $peer dropped on tear" } }
+        }
+    
+        /**
+         * Replace the backing seam with [newSeam].
+         *
+         * Cancels the current relay coroutine **first** (preserving single-collection —
+         * no two collectors of a backing seam ever overlap), installs [newSeam],
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/ManagedSeam.kt:201
+                // child of the relay job and is cancelled by the next swap / teardown.
+                // Re-attributed on every emission, not only at swap — the backing roster
+                // moves as peers come and go, and each move is a fresh chance to drop selfId.
+                launch { seam.peers.collect { publishRoster(seam, it) } }
+                runCatchingCancellable {
+                    seam.incoming.collect { _incoming.emit(it) }
+                }.onFailure { log.debug { "managed-seam: $selfId relay ended: ${it.message}" } }
+            }
+            relayJob.value = job
+        }
+    
+        /**
+         * Stop relaying the current backing seam and close it. Idempotent. The logical
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/ManagedSeam.kt:230
+                s
+            }
+            // Still cancelled, to stop the pump rather than to order the write.
+            relayJob.value?.cancel()
+            runCatchingCancellable { seam?.close(reason) }
+        }
+    }
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RaftRelayHub.kt:123
+            // Cancel the prior collector OUTSIDE the lock — a re-admit for the same
+            // learner must not leave the old spoke's collector draining.
+            priorJob?.cancel()
+            val job = scope.launch {
+                runCatchingCancellable {
+                    seam.incoming.collect { swatch ->
+                        val senderPeer = swatch.sender ?: return@collect
+                        val relay = runCatchingCancellable { RaftRelay.decode(swatch.toByteArray()) }.getOrNull()
+                        if (relay == null) {
+                            log.debug { "raft-relay-hub: undecodable frame from ${senderPeer.value} — dropping" }
+                            return@collect
+                        }
+                        val sender = NodeId(senderPeer.value)
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RaftRelayHub.kt:126
+            val job = scope.launch {
+                runCatchingCancellable {
+                    seam.incoming.collect { swatch ->
+                        val senderPeer = swatch.sender ?: return@collect
+                        val relay = runCatchingCancellable { RaftRelay.decode(swatch.toByteArray()) }.getOrNull()
+                        if (relay == null) {
+                            log.debug { "raft-relay-hub: undecodable frame from ${senderPeer.value} — dropping" }
+                            return@collect
+                        }
+                        val sender = NodeId(senderPeer.value)
+                        if (!validFirstHop(sender = sender, origin = relay.origin, trusted = voters)) {
+                            log.debug { "raft-relay-hub: rejected spoofed frame (origin=${relay.origin}, sender=$sender)" }
+                            return@collect
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RaftRelayHub.kt:186
+         */
+        suspend fun sendToLearner(fromVoter: NodeId, learnerId: NodeId, bytes: ByteArray) {
+            val seam = lock.withLock { spokeSeams[learnerId] } ?: return
+            val encoded = RaftRelay.encode(RaftRelay(origin = fromVoter, dest = learnerId, bytes = bytes))
+            runCatchingCancellable { seam.broadcast(encoded) }
+                .onFailure { log.debug { "raft-relay-hub: drop to learner $learnerId on tear" } }
+        }
+    }
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RoutedRaftTransport.kt:282
+                log.debug { "raft-relay: $selfId has no next hop for remote $peer — dropping (Raft retries)" }
+                return
+            }
+            val envelope = RaftRelay.encode(RaftRelay(origin = selfId, dest = peer, bytes = message))
+            runCatchingCancellable { relayChannel.sendTo(PeerId(hop.value), envelope) }
+                .onFailure { log.debug { "raft-relay: $selfId relay send to $hop for $peer failed" } }
+        }
+    
+        /**
+         * The one node to hand a message for a not-directly-reachable [peer] to:
+         * a server sends a remote core member straight to it and a remote player to
+         * the server it is behind ([attachment]); a player always sends to its single
+         * server (the sole non-self peer of [relayChannel]).
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RoutedRaftTransport.kt:335
+        }
+    
+        private suspend fun handleRelayFrame(swatch: Swatch) {
+            val senderPeer = swatch.sender ?: return
+            val relay = runCatchingCancellable { RaftRelay.decode(swatch.toByteArray()) }.getOrNull() ?: return
+            val sender = NodeId(senderPeer.value)
+            if (isServer) handleServerFrame(sender, relay) else handlePlayerFrame(relay)
+        }
+    
+        /**
+         * A **server**'s relay handling: sender-based first-hop validation, then
+         * deliver-local / one-core-hop / loop-guard-drop by [RaftRelay.dest].
+         */
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RoutedRaftTransport.kt:397
+        }
+    
+        /** Hand [relay] one hop onward to [hop], preserving its origin. Best-effort. */
+        private suspend fun forward(hop: NodeId, relay: RaftRelay) {
+            runCatchingCancellable { relayChannel.sendTo(PeerId(hop.value), RaftRelay.encode(relay)) }
+                .onFailure { log.debug { "raft-relay: $selfId forward to $hop failed" } }
+        }
+    
+        /**
+         * Stop relaying and release both inbound pumps. Idempotent.
+         *
+         * [innerPump] goes with [relayJob] because the two are now the only producers of [incoming]:
+         * leaving the inner one running would keep draining `inner.incoming` into a queue nothing will
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RoutedUnicastRouter.kt:118
+         * The relay: pull routing envelopes off the core seam and hand each one down to
+         * the single local player it names. Sole collector of [coreSeam]'s `incoming`.
+         */
+        private val relayJob: Job = scope.launch {
+            runCatchingCancellable {
+                coreSeam.incoming.collect { swatch ->
+                    val envelope = runCatchingCancellable { RoutingEnvelope.decode(swatch.toByteArray()) }.getOrNull()
+                        ?: return@collect
+                    deliverLocal(envelope.recipient, envelope.payload)
+                }
+            }.onFailure { log.debug { "routed-unicast: $self relay ended: ${it.message}" } }
+        }
+    
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RoutedUnicastRouter.kt:120
+         */
+        private val relayJob: Job = scope.launch {
+            runCatchingCancellable {
+                coreSeam.incoming.collect { swatch ->
+                    val envelope = runCatchingCancellable { RoutingEnvelope.decode(swatch.toByteArray()) }.getOrNull()
+                        ?: return@collect
+                    deliverLocal(envelope.recipient, envelope.payload)
+                }
+            }.onFailure { log.debug { "routed-unicast: $self relay ended: ${it.message}" } }
+        }
+    
+        /**
+         * Register a player attached to this server: [spoke]'s messages will be
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RoutedUnicastRouter.kt:162
+                }
+                self -> deliverLocal(recipient, payload)
+                else -> {
+                    val envelope = RoutingEnvelope.encode(RoutingEnvelope(recipient, payload))
+                    runCatchingCancellable { coreSeam.sendTo(server, envelope) }
+                        .onFailure { log.debug { "routed-unicast: $self cross-core send to $server for $recipient failed" } }
+                }
+            }
+        }
+    
+        /**
+         * Hand [payload] down the one local player [recipient]'s link, or drop if not
+         * local. The link is the **two-peer** server↔player seam registered for
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/RoutedUnicastRouter.kt:182
+            if (seam == null) {
+                log.debug { "routed-unicast: $self has no local spoke $recipient — dropping" }
+                return
+            }
+            runCatchingCancellable { seam.broadcast(payload) }
+                .onFailure { log.debug { "routed-unicast: $self local deliver to $recipient failed" } }
+        }
+    
+        /** Stop relaying and release the relay coroutine. Idempotent. */
+        public fun close() {
+            relayJob.cancel()
+        }
+    }
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/VoterReconnectionSupervisor.kt:86
+                                val conn = withTimeoutOrNull(dialTimeout) { dial(peer) }
+                                if (conn == null) {
+                                    onDialFailure(peer, DialTimeoutException(peer, dialTimeout))
+                                } else {
+                                    runCatchingCancellable { mesh.addLink(conn) }
+                                        .onFailure { failure ->
+                                            onDialFailure(peer, failure)
+                                            // Close the dialed conn on a failed admit so a rejected/errored
+                                            // redial does not leak a live WebSocket session (its ping would
+                                            // otherwise keep the orphaned socket alive indefinitely).
+                                            //
+                                            // The conn's failure to close must not cancel the redial that
+                                            // follows (#1834/#2286) — the same hazard the withTimeoutOrNull
+
+### kuilt-cluster/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/cluster/ServerCluster.kt:164
+                // cancelled (#2292). `ensureActive()` is the discriminator: it throws only when THIS
+                // job is genuinely cancelled, and falls through on the minted one.
+                currentCoroutineContext().ensureActive()
+                log.warn(e) { "server-cluster: roster wait failed" }
+                runCatchingCancellable { room.leave(LeaveReason.Normal) }
+                return
+            }
+    
+            val admittedPeer = admittedSet.first()
+            val learnerId = NodeId(admittedPeer.id.value)
+            log.info { "server-cluster: admitting learner $learnerId" }
+    
+            // Register the room Seam as a spoke so voter transports can route Raft messages
+
+### kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/WireCodecConformanceSuite.kt:537
+    
+        private fun deviatesAt(field: ExactWidthField, width: Int): Boolean =
+            !decodeOutcome(field.encodeAtWidth(width)).wasRejectedAsDeclared()
+    
+        private fun decodeOutcome(frame: ByteArray): Result<Any?> = runCatchingCancellable { decode(frame) }
+    
+        private fun Result<Any?>.wasAccepted(): Boolean = getOrNull() != null
+    
+        /**
+         * Refusal in the shape the harness declared — never merely "did not return a value".
+         *
+         * A codec declared [WireRejectionMode.ReturningNull] that throws has not rejected the frame: on
+         * a long-lived pump the throw ends the pump, which is a strictly worse outcome than accepting
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:719
+            // (#1803's sixth instance was exactly this shape) — plus the upstream half, which is the fatal one.
+            seam.state
+                .pumpIn(plyScope, plyPumpFailure(id), "composite-ply-announce-woven[${id.value}]") {
+                    if (it is SeamState.Woven) {
+                        runCatchingCancellable { seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId))) }
+                    }
+                }
+    
+            // The inbound pump — GUARDED, because this is the one pump whose input is bytes from another
+            // peer. "What if this throws" is therefore not a question about consumer code but about anything
+            // any peer can put on the wire: [PlyFrame.decode] rejects a malformed frame, the gate is keyed on
+            // peer-chosen origins and sequences, and `spool.deliver` can fail on a closing seam.
+            //
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:789
+            // already within contract, since the far side re-learns the mapping on the next Woven/peers event.
+            seam.peers
+                .pumpIn(plyScope, plyPumpFailure(id), "composite-ply-announce-peers[${id.value}]") { newPeers ->
+                    if (newPeers.size > 1 && seam.state.value is SeamState.Woven) {
+                        runCatchingCancellable { seam.broadcast(PlyFrame.encode(PlyFrame.Announce(selfId))) }
+                    }
+                }
+    
+            // Request a fold of this ply's roles. Belt-and-braces: the two pumps above each fire on
+            // subscription with the ply's current value and request one too, and the requests conflate.
+            recomputeCapability()
+            return true
+        }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:1250
+                .filter { it.seam.state.value !is SeamState.Torn }
+                // Best-effort per ply: a ply can tear between the filter and the send (the Seam
+                // contract throws on a Torn send), and the point of bonding plies is that one
+                // tearing must not fail a broadcast another ply can carry (#542).
+                .forEach { runCatchingCancellable { it.seam.broadcast(bytes) } }
+        }
+    
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            check(state.value !is SeamState.Torn) { "seam is Torn" }
+            // Checked HERE rather than left to the plies, because this seam rewrites the address: it
+            // resolves the caller's LOGICAL peer id through `idMap` to a per-ply transport id, and the
+            // composite's own `selfId` is a key no ply ever carries. Delegating would therefore have a
+            // ply refuse some *other* identity, or — as it did before #2428 — resolve nothing and fall
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:1268
+            // contract throws on a Torn send) — the point of bonding plies is that one ply tearing must
+            // not fail a sendTo another ply can carry, so fall through to the next candidate (#542).
+            val candidates = lock.withLock { resolveSendTargets(peer) }
+            for ((handle, transportId) in candidates) {
+                val sent = runCatchingCancellable {
+                    handle.seam.sendTo(transportId, bytes)
+                    true
+                }.getOrDefault(false)
+                if (sent) return
+            }
+            throw PeerNotConnected(peer)
+        }
+    
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/AcceptPump.kt:55
+        while (isActive) {
+            val conn = source.accept()
+            launch {
+                val completed = withTimeoutOrNull(handshakeTimeout) {
+                    runCatchingCancellable { handle(conn) }
+                        .onFailure { failure ->
+                            onFailure(failure)
+                            runCatchingCancellable { conn.close() }
+                        }
+                    true
+                }
+                if (completed == null) {   // handshake exceeded the timeout — abandon + close
+                    onFailure(HandshakeTimeoutException(handshakeTimeout))
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/AcceptPump.kt:58
+                val completed = withTimeoutOrNull(handshakeTimeout) {
+                    runCatchingCancellable { handle(conn) }
+                        .onFailure { failure ->
+                            onFailure(failure)
+                            runCatchingCancellable { conn.close() }
+                        }
+                    true
+                }
+                if (completed == null) {   // handshake exceeded the timeout — abandon + close
+                    onFailure(HandshakeTimeoutException(handshakeTimeout))
+                    runCatchingCancellable { conn.close() }
+                }
+            }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/AcceptPump.kt:64
+                    true
+                }
+                if (completed == null) {   // handshake exceeded the timeout — abandon + close
+                    onFailure(HandshakeTimeoutException(handshakeTimeout))
+                    runCatchingCancellable { conn.close() }
+                }
+            }
+        }
+    }
+    
+    /** Raised through [acceptPump]'s `onFailure` when a conn's `handle` does not finish within the timeout. */
+    public class HandshakeTimeoutException(timeout: Duration) :
+        Exception("accept-pump: handshake did not complete within $timeout")
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/LinkSeam.kt:147
+        // `outbox.send()` stays outside any guard (it suspends), so a concurrent teardown can close
+        // the channel between the pre-check and the send. Convert that into the same clean closed-seam
+        // error the pre-check produces; never leak a raw ClosedSendChannelException.
+        private suspend fun enqueue(payload: ByteArray) {
+            runCatchingCancellable { outbox.send(payload) }
+                .onFailure { if (it is ClosedSendChannelException) throw IllegalStateException(closedMessage) else throw it }
+        }
+    
+        override suspend fun close(reason: CloseReason) {
+            tearDown(reason)
+            conn.close()
+        }
+    
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/LinkSeam.kt:163
+                // drop). `conn.send` then throws (e.g. "Sink is closed"); left uncaught it escapes into
+                // this seam's scope and leaks across into a later coroutine. Treat a send failure as a
+                // remote drop — tear down (single-shot) and stop — exactly as `readLoop` handles a conn
+                // error. Cancellation is rethrown by runCatchingCancellable, never swallowed.
+                val sent = runCatchingCancellable { conn.send(frame) }
+                if (sent.isFailure) {
+                    tearDown(CloseReason.RemoteRequested)
+                    return
+                }
+            }
+        }
+    
+        private suspend fun readLoop() {
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:875
+            // running, which is why `getValue` is a fail-fast assertion here rather than a hazard.
+            displacedAtConstruction.forEach { loser ->
+                draining.getValue(loser).bound.start()
+                scope.launch { readLoop(loser) }
+                scope.launch { runCatchingCancellable { sayGoodbye(loser) } }
+            }
+    
+            // A2 born-dead: a peer-mesh that REQUESTED construction connections but had them all rejected
+            // by admission (or deduped away) is born with zero links. The drain latch only fires from
+            // `removePeer`, and there is nothing to remove — so without this the seam would sit `Woven`
+            // forever with `peers == {selfId}`, the exact contract violation the peer-mesh role exists to
+            // prevent. Latch `Torn` at birth. Consistent with "rejection never fails construction": a
+            // quiet born-`Torn`, not a thrown constructor. Keyed on "connections were requested but all
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:1005
+        private fun boundFor(loser: Link): Job = scope.launch(start = CoroutineStart.LAZY) {
+            delay(drainBound)
+            // Best-effort: nothing follows this, and a delivery-policy overflow while flushing the hold
+            // must not surface as an unhandled exception on the seam's supervisor scope.
+            runCatchingCancellable { endDrain(loser, MeshDisplacement.Outcome.Bound) }
+        }
+    
+        /**
+         * Republish [peers] and [attestedPrincipals] from the live link map. MUST be called with
+         * [lock] held, in the same critical section as the link mutation, so the published rosters
+         * can never desync from [links].
+         */
+        private fun publishRosters() {
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:1038
+            targets.forEach { (remoteId, conn) ->
+                // Best-effort by contract, and per link: a link too tight for this payload is skipped,
+                // while the links that can carry it still get it. Skipping is not a link failure.
+                if (conn.oversizeOrNull(payload, reservedBytes = MeshWire.TYPE_BYTES) != null) return@forEach
+                runCatchingCancellable { conn.send(frame) }
+                    .onFailure { removePeer(remoteId, conn) }
+            }
+        }
+    
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            check(state.value !is SeamState.Torn) { closedMessage }
+            // Ahead of the `links` lookup on purpose: `links` holds remotes only, so without this a
+            // self-send fell out as PeerNotConnected — false, since `peers` names selfId (#2428).
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:1050
+            // self-send fell out as PeerNotConnected — false, since `peers` names selfId (#2428).
+            require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+            val conn = lock.withLock { links[peer]?.conn } ?: throw PeerNotConnected(peer)
+            conn.oversizeOrNull(payload, reservedBytes = MeshWire.TYPE_BYTES)?.let { throw it }
+            runCatchingCancellable { conn.send(MeshWire.encodeData(payload)) }
+                .onFailure { removePeer(peer, conn) }
+        }
+    
+        override suspend fun close(reason: CloseReason) {
+            // Snapshot the connections to close under the lock; perform the suspending closes outside it.
+            // Per-conn best-effort (see [closeBestEffort]): one wedged or timing-out peer must not strand
+            // the rest of the roster half-open, and the roster is unbounded on a hub (#1834).
+            val toClose = tearDown(reason) ?: return
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:1156
+            drain.bound.start()
+            // Step 3 does NOT run in the caller: it touches the drained link, and a loser whose `send`
+            // wedges must not be able to keep the winner from being read, nor to hold `addLink`'s caller
+            // (an accept pump) open. Best-effort because nothing follows it.
+            scope.launch { runCatchingCancellable { sayGoodbye(loser) } }
+        }
+    
+        /** Step 3 of [startDrain] — the last frame this seam ever writes to [loser]. */
+        private suspend fun sayGoodbye(loser: Link) {
+            val sent = runCatchingCancellable { loser.conn.send(MeshWire.encodeGoodbye()) }
+            if (sent.isFailure) endDrain(loser, MeshDisplacement.Outcome.LinkLoss)
+        }
+    
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:1161
+        }
+    
+        /** Step 3 of [startDrain] — the last frame this seam ever writes to [loser]. */
+        private suspend fun sayGoodbye(loser: Link) {
+            val sent = runCatchingCancellable { loser.conn.send(MeshWire.encodeGoodbye()) }
+            if (sent.isFailure) endDrain(loser, MeshDisplacement.Outcome.LinkLoss)
+        }
+    
+        /**
+         * End the drain of [loser] and dispose of the link: close it, release its ordering-hold claim,
+         * and report.
+         *
+         * Idempotent and safe from every terminator — the remote's goodbye, [drainBound], a refused
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/SingleCollectionConnection.kt:61
+                // as a delegate completion or exception — treat end-of-stream as normal completion
+                // of incoming, but let CancellationException propagate. The spool is closed in
+                // `finally` so `incoming` completes on every exit path (completion or cancellation).
+                try {
+                    runCatchingCancellable { delegate.incoming.collect { inbox.deliver(it) } }
+                } finally {
+                    inbox.close()
+                }
+            }
+        }
+    
+        override suspend fun send(frame: ByteArray) = delegate.send(frame)
+    
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/SingleCollectionConnection.kt:80
+        // Best-effort teardown: cancel the pump, then close the delegate. close() is idempotent
+        // and must not propagate a delegate-close failure on an already-cancelled link.
+        override suspend fun close() {
+            scope.cancel()
+            runCatchingCancellable { delegate.close() }
+        }
+    }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/MuxServerLoom.kt:271
+         * is never masked by a lingering dead registration.
+         */
+        private suspend fun watchDrop(connPeerId: PeerId, record: ConnRecord) {
+            record.rawSeam.peers.first { connPeerId !in it }
+            runCatchingCancellable { record.rawSeam.close() }
+        }
+    
+        /** Deregister [record] from every room it joined and drop it from [connRecords] (if still current). */
+        private fun teardownConnection(connPeerId: PeerId, record: ConnRecord) {
+            val (snapshot, knownSenders) = lock.withLock {
+                rooms.toMap() to record.knownSenders()
+            }
+            knownSenders.forEach { (channelName, sender) ->
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/RoomHubSeam.kt:286
+        override suspend fun broadcast(payload: ByteArray) {
+            checkOpen()
+            val targets = lock.withLock { registered.values.toList() }
+            targets.forEach { sender ->
+                runCatchingCancellable { sender.send(payload) }
+                    .onFailure { /* best-effort: torn spoke — ignore */ }
+            }
+        }
+    
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            checkOpen()
+            // `registered` holds the spokes, never the hub itself, so without this a self-send fell out
+            // as PeerNotConnected for an id the hub's own `peers` names (#2428).
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/RoomHubSeam.kt:298
+            // as PeerNotConnected for an id the hub's own `peers` names (#2428).
+            require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+            val target = lock.withLock { registered[peer] }
+                ?: throw PeerNotConnected(peer)
+            runCatchingCancellable { target.send(payload) }
+                .onFailure { /* best-effort: torn spoke */ }
+        }
+    
+        override suspend fun close(reason: CloseReason) {
+            // Collapse the roster to { selfId } BEFORE latching Torn. [Seam.peers] makes that an ORDERED
+            // obligation — a consumer woken by the terminal state must already observe the collapse — and
+            // it is `{ selfId }`, not `emptySet()`: the hub is a peer in its own room roster, so an empty
+            // set overshoots the contract in the other direction (see the [_peers] note above).
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/RunCatchingCancellable.kt:26
+     * of that shape were found in this repo, one of them written by an author who had read the issues and
+     * cited them in the KDoc of the pump they were breaking. Use [pumpIn], which discriminates at runtime
+     * with `ensureActive()` and also guards the upstream half this helper cannot reach at all.
+     */
+    public inline fun <R> runCatchingCancellable(block: () -> R): Result<R> =
+        try {
+            Result.success(block())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/TieredSeam.kt:234
+            // Tee to BOTH tiers, independently. Best-effort per side: the point of bonding two tiers
+            // is that one failing must not stop the other from carrying the broadcast. kuilt-core is
+            // logger-free by contract, so a failed side is swallowed here (surfaced by the enclosing
+            // logging layer if a tier's own send path reports it).
+            runCatchingCancellable { localTier.broadcast(payload) }
+            runCatchingCancellable { peerTier.broadcast(payload) }
+        }
+    
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            check(state.value !is SeamState.Torn) { "TieredSeam is Torn" }
+            // Route to the owning tier — NEVER fan to both (that would breach the single-addressee
+            // leak boundary, ADR-005). Local is checked first, so a shared/overlapping id resolves
+            // there.
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/TieredSeam.kt:235
+            // is that one failing must not stop the other from carrying the broadcast. kuilt-core is
+            // logger-free by contract, so a failed side is swallowed here (surfaced by the enclosing
+            // logging layer if a tier's own send path reports it).
+            runCatchingCancellable { localTier.broadcast(payload) }
+            runCatchingCancellable { peerTier.broadcast(payload) }
+        }
+    
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            check(state.value !is SeamState.Torn) { "TieredSeam is Torn" }
+            // Route to the owning tier — NEVER fan to both (that would breach the single-addressee
+            // leak boundary, ADR-005). Local is checked first, so a shared/overlapping id resolves
+            // there.
+            //
+
+### kuilt-gossip/src/commonMain/kotlin/us/tractat/kuilt/gossip/GossipSeam.kt:335
+        private suspend fun answerUnwatchedPing(swatch: Swatch) {
+            if (!swatch.startsWithBytes(PING_PREFIX_BYTES)) return
+            val watcher = swatch.sender ?: return
+            if (watcher in view.active.value) return
+            runCatchingCancellable { base.sendTo(watcher, PONG_PAYLOAD) }
+                .onFailure { logger.debug { "gossip pong: dropping reply to $watcher — ${it.message}" } }
+        }
+    
+        /**
+         * Eager-flood to the active neighbours only. A defined no-op when the active
+         * view is empty (alone in the session, or the view has not reconciled yet),
+         * matching the [Seam] broadcast contract.
+         *
+
+### kuilt-gossip/src/commonMain/kotlin/us/tractat/kuilt/gossip/GossipSeam.kt:383
+        ) {
+            val encoded = frame.encode()
+            for (peer in view.active.value) {
+                if (peer == except) continue
+                runCatchingCancellable { base.sendTo(peer, encoded) }
+                    .onFailure { logger.debug { "gossip flood: dropping frame to $peer — ${it.message}" } }
+            }
+        }
+    
+        private fun nextSeq(): Long = seqLock.withLock { ++seqCounter }
+    
+        /** Tracked relay-dedup entries — O(origins). Test-only window onto the bound (#675). */
+        internal val trackedDedupEntries: Int get() = dedup.trackedEntryCount
+
+### kuilt-heddle/src/commonMain/kotlin/us/tractat/kuilt/heddle/ControlPlane.kt:538
+         * closed on a tagged-but-undecodable entry, are the louder options — deliberately **not** taken
+         * here and still open (#1738). Settle them before any schema evolution of the wire types.
+         */
+        private fun applyEntry(entry: LogEntry) {
+            val decoded = runCatchingCancellable {
+                Cbor.decodeFromByteArray(ControlEnvelope.serializer(), entry.command)
+            }
+            val envelope = decoded.getOrNull()
+            if (envelope == null) {
+                logger.warn {
+                    "[heddle:${self.value}] skipping undecodable committed entry at index ${entry.index} " +
+                        "(term ${entry.term}, ${entry.command.size} bytes) — expected for a non-heddle entry; " +
+                        "if this was a heddle act, its effect is now missing from the projection (#1717). " +
+
+### kuilt-heddle/src/commonMain/kotlin/us/tractat/kuilt/heddle/ControlPlane.kt:742
+                        // Proposing suspends, so it cannot happen inside the apply loop. The ack rides its
+                        // own act; a peer that fails to get it committed simply leaves the fence open,
+                        // which refuses the Reconcile — the safe direction.
+                        scope.launch {
+                            val outcome = runCatchingCancellable {
+                                submit(ControlCommand.QuiesceAck(command.edge, self, finals))
+                            }
+                            outcome.onFailure { e ->
+                                logger.warn(e) {
+                                    "[heddle:${self.value}] failed to submit QuiesceAck for ${command.edge.value} — " +
+                                        "the fence stays open and any Reconcile for that edge is refused until it lands"
+                                }
+                            }
+
+### kuilt-heddle/src/commonMain/kotlin/us/tractat/kuilt/heddle/HeddleGoverned.kt:409
+         */
+        public suspend fun reconcile(child: GroupId, timeout: Duration? = null): ControlOutcome {
+            // §9 #3 leader-authority courtesy check — cheap, and it keeps recovery driven from a node that
+            // still holds quorum. No longer load-bearing: the apply-derived magnitude fences correctness.
+            val fenced = runCatchingCancellable { control.fenceReadIndex() }
+            if (fenced.isFailure) {
+                return ControlOutcome.Conflict(
+                    ControlOutcome.NOT_COMMITTED,
+                    ControlConflict.Refused("reconcile refused: readIndex fence failed — recovery must be proposed by the current leader (§9 #3)"),
+                )
+            }
+            // Open a barrier over every RETIRED inbound edge that does not have one, read off the LOG-PURE
+            // projection (the same set the apply gate re-derives), never the gossip-merged data plane.
+
+### kuilt-heddle/src/commonMain/kotlin/us/tractat/kuilt/heddle/HeddleNode.kt:218
+        init {
+            // Demand board: single-collect our channel, fold each frame into the local TTL tracker.
+            scope.launch {
+                demandSeam.incoming.collect { swatch ->
+                    val update = runCatchingCancellable {
+                        Cbor.decodeFromByteArray(demandSerializer, swatch.toByteArray())
+                    }.getOrNull() ?: return@collect
+                    lock.withLock { demandTracker.received(update) }
+                }
+            }
+            // Liveness: single-collect the liveness channel; fan out to per-peer detectors.
+            scope.launch { livenessSeam.incoming.collect { rawLiveness.emit(it) } }
+            scope.launch {
+
+### kuilt-heddle/src/commonMain/kotlin/us/tractat/kuilt/heddle/HeddleNode.kt:549
+                demandTracker.received(u)
+                u
+            }
+            scopeRef.launch {
+                runCatchingCancellable {
+                    demandSeam.broadcast(Cbor.encodeToByteArray(demandSerializer, update))
+                }
+            }
+        }
+    
+        // ─────────────────────────────────────────────────────────────────────────────
+        // internals
+        // ─────────────────────────────────────────────────────────────────────────────
+
+### kuilt-liveness/src/commonMain/kotlin/us/tractat/kuilt/liveness/HeartbeatPartitionDetector.kt:317
+         * fires regardless, and a send failure typically means the link is already closed.
+         * [CancellationException] propagates so structured-concurrency cancellation is not hidden.
+         */
+        private suspend fun sendPing() {
+            runCatchingCancellable { link.sendTo(peerId, pingPayload()) }
+        }
+    
+        private suspend fun replyWithPong() {
+            runCatchingCancellable { link.sendTo(peerId, pongPayload()) }
+        }
+    
+        public companion object {
+            /** Reserved prefix for kuilt heartbeat ping frames. Applications must not use this namespace. */
+
+### kuilt-liveness/src/commonMain/kotlin/us/tractat/kuilt/liveness/HeartbeatPartitionDetector.kt:321
+            runCatchingCancellable { link.sendTo(peerId, pingPayload()) }
+        }
+    
+        private suspend fun replyWithPong() {
+            runCatchingCancellable { link.sendTo(peerId, pongPayload()) }
+        }
+    
+        public companion object {
+            /** Reserved prefix for kuilt heartbeat ping frames. Applications must not use this namespace. */
+            public const val PING_PREFIX: String = "kuilt.heartbeat.ping"
+    
+            /** Reserved prefix for kuilt heartbeat pong frames. Applications must not use this namespace. */
+            public const val PONG_PREFIX: String = "kuilt.heartbeat.pong"
+
+### kuilt-mdns/src/androidMain/kotlin/us/tractat/kuilt/mdns/MDNSServiceAdvertiser.kt:99
+         * if registration failed. Idempotent.
+         */
+        public fun unregister() {
+            registrationListener?.let {
+                runCatchingCancellable { nsdManager.unregisterService(it) }
+            }
+            registrationListener = null
+        }
+    
+        private fun buildServiceInfo(): NsdServiceInfo =
+            NsdServiceInfo().apply {
+                serviceName = displayName
+                serviceType = this@MDNSServiceAdvertiser.serviceType.forNsd()
+
+### kuilt-mdns/src/androidMain/kotlin/us/tractat/kuilt/mdns/MDNSServiceDiscoverer.kt:84
+                        },
+                    )
+    
+                awaitClose {
+                    runCatchingCancellable { handle.stop() }
+                        .onFailure { logger.debug(it) { "stopping NSD discovery failed" } }
+                }
+            }
+    
+        /**
+         * Returns a [Flow] that emits a peer key for each peer that de-registers from the local network.
+         *
+         * The peer key is the TXT `peerId` **remembered from that service's own resolution**, keyed by
+
+### kuilt-mdns/src/androidMain/kotlin/us/tractat/kuilt/mdns/MDNSServiceDiscoverer.kt:154
+                        },
+                    )
+    
+                awaitClose {
+                    runCatchingCancellable { handle.stop() }
+                        .onFailure { logger.debug(it) { "stopping NSD discovery failed" } }
+                }
+            }
+    }
+    
+    private val logger = KotlinLogging.logger("us.tractat.kuilt.mdns.MDNSServiceDiscoverer")
+    
+    /**
+
+### kuilt-mdns/src/iosMain/kotlin/us/tractat/kuilt/mdns/MDNSServiceDiscoverer.kt:88
+                        },
+                    )
+    
+                awaitClose {
+                    runCatchingCancellable { handle.stop() }
+                        .onFailure { logger.debug(it) { "stopping the Bonjour session failed" } }
+                }
+            }.flowOn(browseContext)
+    
+        /**
+         * Returns a [Flow] that emits a peer key for each peer that de-registers from the local network.
+         *
+         * The peer key is the TXT `peerId` **remembered from that service's own resolution**, keyed by
+
+### kuilt-mdns/src/iosMain/kotlin/us/tractat/kuilt/mdns/MDNSServiceDiscoverer.kt:155
+                        },
+                    )
+    
+                awaitClose {
+                    runCatchingCancellable { handle.stop() }
+                        .onFailure { logger.debug(it) { "stopping the Bonjour session failed" } }
+                }
+            }.flowOn(browseContext)
+    }
+    
+    private val logger = KotlinLogging.logger("us.tractat.kuilt.mdns.MDNSServiceDiscoverer")
+    
+    /**
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerCrossProcessProbe.kt:55
+            val t0 = nowMs()
+            return try {
+                runBlocking {
+                    val link =
+                        runCatchingCancellable { factory.host(Pattern(displayName)) }
+                            .getOrElse { e ->
+                                log("[host] factory.host failed: ${e::class.simpleName}: ${e.message}")
+                                return@runBlocking Result(passed = false, message = "host failed: ${e.message}")
+                            }
+                    log("[host] host opened in ${nowMs() - t0}ms; selfId=${link.selfId.value}; waiting for peers…")
+                    val peersJob =
+                        launch {
+                            link.peers.collect { current ->
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerCrossProcessProbe.kt:83
+                        log("[host] timeout after ${timeoutMs}ms — exiting cleanly")
+                    }
+                    peersJob.cancel()
+                    incomingJob.cancel()
+                    runCatchingCancellable { link.close() }
+                    Result(passed = true, message = "host ran cleanly for ${nowMs() - t0}ms")
+                }
+            } finally {
+                runCatchingCancellable { (factory as? MultipeerPeerLinkFactory)?.close() }
+            }
+        }
+    
+        /**
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerCrossProcessProbe.kt:87
+                    runCatchingCancellable { link.close() }
+                    Result(passed = true, message = "host ran cleanly for ${nowMs() - t0}ms")
+                }
+            } finally {
+                runCatchingCancellable { (factory as? MultipeerPeerLinkFactory)?.close() }
+            }
+        }
+    
+        /**
+         * Joiner role. Browses for peers, ignores anything not starting with
+         * [targetPrefix] (skips self if the host has a different prefix),
+         * invites the first match, logs every peer-set transition and incoming
+         * frame on the resulting link. The discoveries Flow stays collected
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerCrossProcessProbe.kt:140
+                    // `runCatchingCancellable` would RETHROW the very timeout this `getOrElse` handles
+                    // — the probe would die on an escaping cancellation instead of reporting a clean
+                    // `passed = false`, which is the one outcome it exists to produce.
+                    val ad =
+                        runCatchingCancellable {
+                            withTimeoutOrNull(discoveryTimeoutMs) { firstAd.await() }
+                                ?: error("no advertisement matching '$targetPrefix' within ${discoveryTimeoutMs}ms")
+                        }
+                            .getOrElse { e ->
+                                log("[joiner] discovery timeout: ${e::class.simpleName}: ${e.message}")
+                                browseJob.cancel()
+                                return@runBlocking Result(
+                                    passed = false,
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerCrossProcessProbe.kt:158
+                    val tInvite = nowMs()
+                    // Same as the discovery bound above (#2292) — a bare `withTimeout` here would make
+                    // this `getOrElse` dead for the join timeout it names.
+                    val link =
+                        runCatchingCancellable {
+                            withTimeoutOrNull(joinTimeoutMs) { factory.join(ad) }
+                                ?: error("factory.join did not complete within ${joinTimeoutMs}ms")
+                        }
+                            .getOrElse { e ->
+                                log("[joiner] factory.join failed: ${e::class.simpleName}: ${e.message}")
+                                browseJob.cancel()
+                                return@runBlocking Result(
+                                    passed = false,
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerCrossProcessProbe.kt:195
+                    }
+                    peersJob.cancel()
+                    incomingJob.cancel()
+                    browseJob.cancel()
+                    runCatchingCancellable { link.close() }
+                    Result(passed = true, message = "joiner ran cleanly for ${nowMs() - t0}ms")
+                }
+            } finally {
+                runCatchingCancellable { (factory as? MultipeerPeerLinkFactory)?.close() }
+            }
+        }
+    }
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerCrossProcessProbe.kt:199
+                    runCatchingCancellable { link.close() }
+                    Result(passed = true, message = "joiner ran cleanly for ${nowMs() - t0}ms")
+                }
+            } finally {
+                runCatchingCancellable { (factory as? MultipeerPeerLinkFactory)?.close() }
+            }
+        }
+    }
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerNativeLib.kt:264
+             * Not available on Linux/Windows: returns `null`.
+             */
+            fun load(): MultipeerNativeLib? {
+                if (!isMacOs) return null
+                return runCatchingCancellable { Native.load(LIBRARY_NAME, MultipeerNativeLib::class.java) }
+                    .getOrNull()
+            }
+    
+            private val isMacOs: Boolean
+                get() =
+                    System
+                        .getProperty("os.name")
+                        .orEmpty()
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerPeerLinkFactory.jvm.kt:226
+            // grabAndRelease nulls the slot before teardown, then delegate the native
+            // close to the link's CAS-latched closeNow — exactly one mc_session_close
+            // per handle even if the consumer's Seam.close() races this.
+            val link = slot.grabAndRelease() as BridgePeerLink?
+            link?.let { runCatchingCancellable { it.closeNow(CloseReason.Normal) } }
+            runCatchingCancellable { lib.mc_runtime_close(runtime) }
+        }
+    }
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerPeerLinkFactory.jvm.kt:227
+            // close to the link's CAS-latched closeNow — exactly one mc_session_close
+            // per handle even if the consumer's Seam.close() races this.
+            val link = slot.grabAndRelease() as BridgePeerLink?
+            link?.let { runCatchingCancellable { it.closeNow(CloseReason.Normal) } }
+            runCatchingCancellable { lib.mc_runtime_close(runtime) }
+        }
+    }
+
+### kuilt-multipeer/src/macosMain/kotlin/us/tractat/kuilt/multipeer/bridge/BridgeClient.kt:87
+                sessionName = handleStr,
+                serviceType = factory.serviceType,
+            )
+        val link =
+            runCatchingCancellable {
+                runBlocking { factory.join(advertisement) }
+            }.getOrElse { return null }
+        return StableRef.create(BridgeSessionState(link)).asCPointer()
+    }
+    
+    /**
+     * Attaches a data callback to the session. Cancels any previously-attached
+     * pump and starts a new one collecting `link.incoming` and invoking [cb].
+
+### kuilt-multipeer/src/macosMain/kotlin/us/tractat/kuilt/multipeer/bridge/BridgeClient.kt:195
+            bytes.usePinned { pinned ->
+                memcpy(pinned.addressOf(0), data, len.toULong())
+            }
+        }
+        return runCatchingCancellable {
+            runBlocking { state.link.sendTo(target, bytes) }
+            len
+        }.getOrDefault(-1)
+    }
+
+### kuilt-multipeer/src/macosMain/kotlin/us/tractat/kuilt/multipeer/bridge/BridgeHost.kt:45
+    public fun mc_runtime_open(handle: COpaquePointer?): COpaquePointer? {
+        if (handle == null) return null
+        val factory = handle.asStableRef<MultipeerPeerLinkFactory>().get()
+        val link =
+            runCatchingCancellable {
+                runBlocking { factory.host(Pattern(sessionName = factory.displayName)) }
+            }.getOrElse { return null }
+        return StableRef.create(BridgeSessionState(link)).asCPointer()
+    }
+    
+    /**
+     * Closes the session, cancels any data/peer-state pumps, and disposes the
+     * handle. Idempotent only across `null`; passing the same non-null pointer
+
+### kuilt-multipeer/src/macosMain/kotlin/us/tractat/kuilt/multipeer/bridge/BridgeHost.kt:64
+        if (session == null) return
+        val ref = session.asStableRef<BridgeSessionState>()
+        val state = ref.get()
+        state.cancelPumps()
+        runCatchingCancellable { runBlocking { state.link.close() } }
+        ref.dispose()
+    }
+    
+    /**
+     * Broadcasts a payload to every connected peer in the session. Returns the
+     * number of bytes sent (== [len] on success), or `-1` on null/invalid input.
+     *
+     * No connected peers is a non-error: returns `len`. The Apple-side
+
+### kuilt-multipeer/src/macosMain/kotlin/us/tractat/kuilt/multipeer/bridge/BridgeHost.kt:93
+            bytes.usePinned { pinned ->
+                memcpy(pinned.addressOf(0), data, len.toULong())
+            }
+        }
+        runCatchingCancellable { runBlocking { state.link.broadcast(bytes) } }
+        return len
+    }
+
+### kuilt-multipeer/src/macosMain/kotlin/us/tractat/kuilt/multipeer/bridge/BridgeRuntime.kt:85
+    @CName("mc_runtime_destroy")
+    @Suppress("ktlint:standard:function-naming")
+    public fun mc_runtime_destroy(handle: COpaquePointer?) {
+        val ref = handle?.asStableRef<MultipeerPeerLinkFactory>() ?: return
+        runCatchingCancellable { ref.get().close() }
+        ref.dispose()
+    }
+    
+    /**
+     * Stops advertising and disconnects any active session, but keeps the
+     * runtime handle alive (so callers can re-open against the same factory
+     * without re-creating its `MCPeerID`). For full lifecycle cleanup, pair
+     * with [mc_runtime_destroy].
+
+### kuilt-multipeer/src/macosMain/kotlin/us/tractat/kuilt/multipeer/bridge/BridgeRuntime.kt:100
+    @CName("mc_runtime_close")
+    @Suppress("ktlint:standard:function-naming")
+    public fun mc_runtime_close(handle: COpaquePointer?) {
+        val ref = handle?.asStableRef<MultipeerPeerLinkFactory>() ?: return
+        runCatchingCancellable { ref.get().close() }
+    }
+    
+    /**
+     * Copies the runtime's **wire display name** (the decorated `MCPeerID.displayName`,
+     * UTF-8) into [buf], NUL-terminated. This is the name every peer observes for this
+     * device — the wire identity is embedded in it — so the JVM side derives a `selfId`
+     * consistent with what remotes see (`MultipeerPeerId.peerId`, the part after the
+     * last `#`). Returns the number of bytes written (excluding the trailing NUL), or
+
+### kuilt-nearby/src/commonMain/kotlin/us/tractat/kuilt/nearby/NearbyLoom.kt:162
+            // Background: accept first joiner, exchange identity, update host seam.
+            // UNDISPATCHED so the host's handshake collectors subscribe synchronously
+            // during open() — before any joiner's requestConnection emits events.
+            seamScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                runCatchingCancellable {
+                    val machine = ConnectStateMachine(
+                        selfId = peerId,
+                        api = api,
+                        endpointId = null,
+                        serviceId = serviceId,
+                        handshakeTimeout = handshakeTimeout,
+                        registry = registry,
+                    )
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwLoom.kt:344
+            // `runCatchingCancellable` around the call; and a listen that throws synchronously must still start
+            // the campaign at attempt 1 rather than leave a supervisor parked on a verdict that never comes.
+            // One call site, one failure policy.
+            ListenSupervisor(api, seamScope, serviceName, serviceType, selfId).startSeededWithInitialListen()
+            runCatchingCancellable { api.startBrowsing(serviceType) }
+                .onFailure { log.debug { "nw.browse failed serviceType=$serviceType selfId=${selfId.value}" } }
+    
+            // Await the first resolved remote so the returned seam is already connected. On ANY exit before
+            // the seam is returned, the caller can never close() it — so we MUST close it here, or its scope
+            // (a parentless SupervisorJob, NOT cancelled by the caller) leaks the RedialCoordinator loops,
+            // which then dial every discovered endpoint at the backoff ceiling forever (#1513). Two exit paths:
+            //  - timeout: the fabric never wove → close Unreachable and throw NwUnreachableException (NOT the
+            //    raw TimeoutCancellationException, which a runCatchingCancellable caller would mistake for its
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwLoom.kt:1170
+                    }
+                    continue
+                }
+                val attempt = lock.withLock { redialers[endpointId]?.let { it.attempts += 1; it.attempts } } ?: return
+                runCatchingCancellable { api.connect(endpoint) }
+                    .onFailure {
+                        log.debug {
+                            "nw.loom.redial-failed endpoint=$endpointId self=${selfId.value} attempt=$attempt: ${it.message}"
+                        }
+                    }
+                // Snapshot the backoff, advance it (doubling to the ceiling), and draw the jitter — all under
+                // the lock so [jitterRandom] is never touched concurrently by another redial coroutine.
+                val step = lock.withLock {
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:581
+                // (#1566) — we no longer capture `connectionStates.value` here on the caller's thread, where it
+                // could go stale before the locked reconcile ran.
+                if (created) reconcileStates()
+                log.debug { "nw.seam.opened connId=${connId.value} self=${selfId.value} → sending NwHello" }
+                runCatchingCancellable { api.send(connId, encodeFrame(NwWire.encodeHello(selfId, cs.nonce), maxFrameBytes)) }
+                    .onFailure { log.debug { "nw.seam.identity-send-failed connId=${connId.value} self=${selfId.value}: ${it.message}" } }
+            }
+        }
+    
+        // ── loop 2: bytesReceived — demux + inline handshake ────────────────────────
+    
+        private suspend fun bytesReceivedLoop() {
+            api.bytesReceived.collect { event ->
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:869
+                    // fires a no-op disconnect/eviction against a connId the seam no longer tracks.
+                    is ResolveAction.Disconnect -> {
+                        val graceJob = lock.withLock { graceJobs.remove(action.connId) }
+                        graceJob?.cancel()
+                        runCatchingCancellable { api.disconnect(action.connId) }
+                            .onFailure { log.debug { "nw.dedup disconnect failed connId=${action.connId.value}" } }
+                    }
+                    // The dedup loser: drained, not cancelled (#2425).
+                    is ResolveAction.Drain -> startDrain(action.connId, action.peer)
+                }
+                // The remote has finished writing on this link (#2425).
+                is FrameOutcome.Goodbye -> if (outcome.endsDrain) {
+                    endDrain(connId, DrainOutcome.Goodbye)
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:942
+         * [registry]). A single refused frame can therefore never kill the receive loop. Suspends only
+         * OUTSIDE the lock, preserving the no-suspend-under-lock rule.
+         */
+        private suspend fun disconnectAndEvictConn(connId: NwConnectionId) {
+            runCatchingCancellable { api.disconnect(connId) }
+                .onFailure { log.debug { "nw.seam.refused.disconnect-failed connId=${connId.value}: ${it.message}" } }
+            removeByConn(connId)
+        }
+    
+        /**
+         * Resolve [connId]'s identity to [remoteId] under [lock]. Returns the [ResolveAction] the caller must
+         * perform outside the lock, or `null`. Adds the peer + flips Weaving→Woven when this is the first
+         * connection to [remoteId]; on a duplicate, keeps the canonical survivor (the smaller
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:1190
+                }
+                return
+            }
+            bound.start()
+            val sent = runCatchingCancellable {
+                api.send(connId, encodeFrame(NwWire.encodeGoodbye(), maxFrameBytes))
+            }
+            if (sent.isFailure) {
+                log.info {
+                    "nw.seam.drain.goodbye-refused connId=${connId.value} self=${selfId.value} peer=${peer.value} " +
+                        ": ${sent.exceptionOrNull()} → ending the drain now (#2425)"
+                }
+                endDrain(connId, DrainOutcome.LinkLoss)
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:1254
+                auditRegistryLocked("drain-end")
+                taken
+            } ?: return
+            graceJob?.cancel()
+            runCatchingCancellable { api.disconnect(connId) }
+                .onFailure { log.debug { "nw.seam.drain.disconnect-failed connId=${connId.value}: ${it.message}" } }
+            settleDrain(ended)
+        }
+    
+        /**
+         * Settle an [EndedDrain] outside [lock]: cancel its backstop, release the peer's ordering hold, report.
+         *
+         * The bound job is cancelled only when it is not the job currently running — the same deadline-race
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:1727
+                log.debug { "nw.seam.grace.expired.stale connId=${connId.value} self=${selfId.value} → superseded by recovery/close/re-arm; no tear" }
+                return
+            }
+            log.info { "nw.seam.grace.expired connId=${connId.value} self=${selfId.value} → disconnect + evict (reform to Weaving)" }
+            runCatchingCancellable { api.disconnect(connId) }
+                .onFailure { log.debug { "nw.seam.grace.disconnect-failed connId=${connId.value}: ${it.message}" } }
+            removeByConn(connId)
+        }
+    
+        // ── the wedge watchdog: diagnostics for a silent formation (#2420/#2425) ──
+    
+        /**
+         * Assert this seam's own bookkeeping invariant under [lock]: **every [registry] entry names a connId
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:2136
+                }
+            }
+            val frame = encodeFrame(NwWire.encodeData(payload), maxFrameBytes)
+            for (connId in targets) {
+                runCatchingCancellable { api.send(connId, frame) }
+                    .onFailure {
+                        log.info { "nw.seam.broadcast.send-failed connId=${connId.value} self=${selfId.value}: ${it.message} → removeByConn" }
+                        removeByConn(connId)
+                    }
+            }
+        }
+    
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:2168
+                if (oversize == null) conns[winner]?.let { it.outboundFrames += 1 }
+                winner
+            } ?: throw PeerNotConnected(peer)
+            oversize?.let { throw it }
+            runCatchingCancellable { api.send(connId, encodeFrame(NwWire.encodeData(payload), maxFrameBytes)) }
+                .onFailure {
+                    log.info { "nw.seam.sendTo.send-failed peer=${peer.value} connId=${connId.value} self=${selfId.value}: ${it.message} → removeByConn" }
+                    removeByConn(connId)
+                }
+        }
+    
+        /**
+         * Drop a connection after a send failure or a path-loss grace expiry, evicting its peer only if it
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:2245
+                // registry/conns clearing below cannot disturb the collapsed roster.
+                snapshot
+            }
+            for (connId in targets) {
+                runCatchingCancellable { api.disconnect(connId) }
+            }
+            // Drop whatever the ordering holds were carrying (#2425). [latchTorn] has already closed the spool,
+            // so there is nowhere left to deliver it; this just stops a torn seam retaining a hold's worth of
+            // payloads for as long as something keeps a reference to it.
+            stageMutex.withMutex { orderingHolds.clear() }
+            // #1419 (I3): the seam owns the close lifecycle and holds the [api] that `NwLoom.weave` started
+            // advertising + browsing on — so tearing the connections is not enough. Stop the advertiser and the
+            // browser too, AFTER the connections are down. On a real device an un-stopped `NWListener`/`NWBrowser`
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:2258
+            // keeps the Bonjour advertiser and AWDL up after the seam closes, and its ObjC block handlers capture
+            // `RealNwApi` — leaking the listener/browser/queue/`RealNwApi` per weave. `RealNwApi` already implements
+            // cancel-first-then-drop for both handles (and both are documented no-ops if not started); it just was
+            // never told to. Best-effort: a stop failure must not mask the close.
+            runCatchingCancellable { api.stopListening() }
+                .onFailure { log.debug { "nw.seam.close.stopListening-failed self=${selfId.value}: ${it.message}" } }
+            runCatchingCancellable { api.stopBrowsing() }
+                .onFailure { log.debug { "nw.seam.close.stopBrowsing-failed self=${selfId.value}: ${it.message}" } }
+        }
+    
+        /**
+         * Terminal teardown, latched exactly once via [closed]. Publishes [SeamState.Torn], completes
+         * [incoming] by closing the [spool], and cancels [scope] (stopping all collectors). Returns `false`
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:2260
+            // cancel-first-then-drop for both handles (and both are documented no-ops if not started); it just was
+            // never told to. Best-effort: a stop failure must not mask the close.
+            runCatchingCancellable { api.stopListening() }
+                .onFailure { log.debug { "nw.seam.close.stopListening-failed self=${selfId.value}: ${it.message}" } }
+            runCatchingCancellable { api.stopBrowsing() }
+                .onFailure { log.debug { "nw.seam.close.stopBrowsing-failed self=${selfId.value}: ${it.message}" } }
+        }
+    
+        /**
+         * Terminal teardown, latched exactly once via [closed]. Publishes [SeamState.Torn], completes
+         * [incoming] by closing the [spool], and cancels [scope] (stopping all collectors). Returns `false`
+         * if teardown already ran. Since #1513 its ONLY caller is [close] — an explicit consumer close or the
+         * `NwLoom.weave` timeout (which routes through [close] as [CloseReason.Unreachable]). Peer loss no
+
+### kuilt-nw/src/jvmMain/kotlin/us/tractat/kuilt/nw/NwCrossProcessProbe.kt:68
+            log("[host] hosting displayName=$displayName serviceType=$serviceType")
+            val t0 = nowMs()
+            return runBlocking {
+                val seam =
+                    runCatchingCancellable { nwHost(Pattern(sessionName = displayName, roomKey = roomKey), serviceType) }
+                        .getOrElse { e ->
+                            log("[host] nwHost failed: ${e::class.simpleName}: ${e.message}")
+                            return@runBlocking Result(passed = false, message = "host failed: ${e.message}")
+                        }
+                log("[host] wove in ${nowMs() - t0}ms; selfId=${seam.selfId.value}; observing…")
+                val peersJob = launch {
+                    seam.peers.collect { current ->
+                        log("[host] peers=${current.map { it.value }} (elapsed ${nowMs() - t0}ms)")
+
+### kuilt-nw/src/jvmMain/kotlin/us/tractat/kuilt/nw/NwCrossProcessProbe.kt:91
+                    log("[host] timeout after ${timeoutMs}ms — exiting cleanly")
+                }
+                peersJob.cancel()
+                incomingJob.cancel()
+                runCatchingCancellable { seam.close() }
+                Result(passed = true, message = "host ran cleanly for ${nowMs() - t0}ms")
+            }
+        }
+    
+        /**
+         * Joiner role. Enters the session scoped by [roomKey] + [serviceType] (the mesh
+         * auto-dials the host on discovery — no explicit invite), then observes peers
+         * and incoming frames until [runForMs].
+
+### kuilt-nw/src/jvmMain/kotlin/us/tractat/kuilt/nw/NwCrossProcessProbe.kt:122
+            val t0 = nowMs()
+            return runBlocking {
+                val tag = NwTag(sessionName = displayName, peerKey = displayName, roomKey = roomKey)
+                val seam =
+                    runCatchingCancellable { nwJoin(tag, serviceType) }
+                        .getOrElse { e ->
+                            log("[joiner] nwJoin failed: ${e::class.simpleName}: ${e.message}")
+                            return@runBlocking Result(passed = false, message = "join failed: ${e.message}")
+                        }
+                log("[joiner] wove in ${nowMs() - t0}ms; selfId=${seam.selfId.value}; observing…")
+                val peersJob = launch {
+                    seam.peers.collect { current ->
+                        log("[joiner] peers=${current.map { it.value }} (elapsed ${nowMs() - t0}ms)")
+
+### kuilt-nw/src/jvmMain/kotlin/us/tractat/kuilt/nw/NwCrossProcessProbe.kt:145
+                    log("[joiner] runForMs=${runForMs}ms elapsed — exiting cleanly")
+                }
+                peersJob.cancel()
+                incomingJob.cancel()
+                runCatchingCancellable { seam.close() }
+                Result(passed = true, message = "joiner ran cleanly for ${nowMs() - t0}ms")
+            }
+        }
+    
+        /** The bridge's unavailability reason, or `null` when the native fabric is usable on this JVM. */
+        private fun unavailableReason(): String? =
+            when (val a = NwNativeLib.jvmAvailability()) {
+                is FabricAvailability.Unavailable -> a.reason
+
+### kuilt-nw/src/jvmMain/kotlin/us/tractat/kuilt/nw/NwNativeLib.kt:215
+             * Linux/Windows (never even attempts the load).
+             */
+            fun load(): NwNativeLib? {
+                if (!isMacOs) return null
+                return runCatchingCancellable { Native.load(LIBRARY_NAME, NwNativeLib::class.java) }.getOrNull()
+            }
+    
+            /**
+             * Pure availability mapping: [FabricAvailability.Available] iff the dylib
+             * is [loaded], else [FabricAvailability.Unavailable]. Split out from
+             * [jvmAvailability] so both branches are testable without a real dylib.
+             */
+            fun availabilityFor(loaded: Boolean): FabricAvailability =
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeExports.kt:76
+    @CName("nw_runtime_destroy")
+    @Suppress("ktlint:standard:function-naming")
+    public fun nw_runtime_destroy(handle: COpaquePointer?) {
+        val ref = handle?.asStableRef<NwBridgeRuntime>() ?: return
+        runCatchingCancellable { ref.get().destroy() }
+        ref.dispose()
+    }
+    
+    // ── loopback conformance (JVM↔JVM SeamConformanceSuite over the real dylib) ───
+    
+    /**
+     * Creates an in-process [NwLoopbackRendezvous] and returns its opaque handle. The rendezvous is
+     * shared by exactly one host/joiner runtime pair built with [nw_runtime_create_loopback]: the host
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeExports.kt:201
+        serviceType: CPointer<ByteVar>?,
+    ): Int {
+        if (handle == null || serviceName == null || serviceType == null) return -1
+        val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+        return runCatchingCancellable {
+            runBlocking { runtime.startListening(serviceName.toKString(), serviceType.toKString()) }
+            0
+        }.getOrDefault(-1)
+    }
+    
+    @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+    @CName("nw_stop_listening")
+    @Suppress("ktlint:standard:function-naming")
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeExports.kt:213
+    @Suppress("ktlint:standard:function-naming")
+    public fun nw_stop_listening(handle: COpaquePointer?): Int {
+        if (handle == null) return -1
+        val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+        return runCatchingCancellable {
+            runBlocking { runtime.stopListening() }
+            0
+        }.getOrDefault(-1)
+    }
+    
+    @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+    @CName("nw_start_browsing")
+    @Suppress("ktlint:standard:function-naming")
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeExports.kt:225
+    @Suppress("ktlint:standard:function-naming")
+    public fun nw_start_browsing(handle: COpaquePointer?, serviceType: CPointer<ByteVar>?): Int {
+        if (handle == null || serviceType == null) return -1
+        val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+        return runCatchingCancellable {
+            runBlocking { runtime.startBrowsing(serviceType.toKString()) }
+            0
+        }.getOrDefault(-1)
+    }
+    
+    @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+    @CName("nw_stop_browsing")
+    @Suppress("ktlint:standard:function-naming")
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeExports.kt:237
+    @Suppress("ktlint:standard:function-naming")
+    public fun nw_stop_browsing(handle: COpaquePointer?): Int {
+        if (handle == null) return -1
+        val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+        return runCatchingCancellable {
+            runBlocking { runtime.stopBrowsing() }
+            0
+        }.getOrDefault(-1)
+    }
+    
+    @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+    @CName("nw_connect")
+    @Suppress("ktlint:standard:function-naming")
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeExports.kt:249
+    @Suppress("ktlint:standard:function-naming")
+    public fun nw_connect(handle: COpaquePointer?, endpointId: CPointer<ByteVar>?): Int {
+        if (handle == null || endpointId == null) return -1
+        val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+        return runCatchingCancellable {
+            runBlocking { runtime.connect(endpointId.toKString()) }
+            0
+        }.getOrDefault(-1)
+    }
+    
+    @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+    @CName("nw_disconnect")
+    @Suppress("ktlint:standard:function-naming")
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeExports.kt:261
+    @Suppress("ktlint:standard:function-naming")
+    public fun nw_disconnect(handle: COpaquePointer?, connectionId: CPointer<ByteVar>?): Int {
+        if (handle == null || connectionId == null) return -1
+        val runtime = handle.asStableRef<NwBridgeRuntime>().get()
+        return runCatchingCancellable {
+            runBlocking { runtime.disconnect(connectionId.toKString()) }
+            0
+        }.getOrDefault(-1)
+    }
+    
+    @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+    @CName("nw_send")
+    @Suppress("ktlint:standard:function-naming")
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeExports.kt:282
+        val bytes = ByteArray(len)
+        if (len > 0) {
+            bytes.usePinned { pinned -> memcpy(pinned.addressOf(0), data, len.toULong()) }
+        }
+        return runCatchingCancellable {
+            runBlocking { runtime.send(connectionId.toKString(), bytes) }
+            0
+        }.getOrDefault(-1)
+    }
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeRuntime.kt:260
+         * best-effort so a single failure never leaks the rest.
+         */
+        fun destroy() {
+            runBlocking {
+                runCatchingCancellable { api.stopListening() }
+                runCatchingCancellable { api.stopBrowsing() }
+                val targets = lock.withLock { openConnections.toList() }
+                for (id in targets) {
+                    runCatchingCancellable { api.disconnect(NwConnectionId(id.value)) }
+                }
+            }
+            scope.cancel()
+        }
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeRuntime.kt:261
+         */
+        fun destroy() {
+            runBlocking {
+                runCatchingCancellable { api.stopListening() }
+                runCatchingCancellable { api.stopBrowsing() }
+                val targets = lock.withLock { openConnections.toList() }
+                for (id in targets) {
+                    runCatchingCancellable { api.disconnect(NwConnectionId(id.value)) }
+                }
+            }
+            scope.cancel()
+        }
+    }
+
+### kuilt-nw/src/macosMain/kotlin/us/tractat/kuilt/nw/bridge/NwBridgeRuntime.kt:264
+                runCatchingCancellable { api.stopListening() }
+                runCatchingCancellable { api.stopBrowsing() }
+                val targets = lock.withLock { openConnections.toList() }
+                for (id in targets) {
+                    runCatchingCancellable { api.disconnect(NwConnectionId(id.value)) }
+                }
+            }
+            scope.cancel()
+        }
+    }
+
+### kuilt-otel-log4j2/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/otel/log4j2/KuiltLog4j2Appender.kt:69
+                for (event in events) {
+                    // Best-effort: a failed capture must never crash the app's logging
+                    // path, so a failure is dropped. runCatchingCancellable still
+                    // rethrows CancellationException for clean teardown.
+                    runCatchingCancellable { capture.capture(event) }
+                }
+            }
+        }
+    
+        override fun append(event: LogEvent) {
+            val normalized = event.normalize() ?: return
+            // Snapshot HERE, on the synchronous logging thread — the ambient
+            // TraceContextProvider is gone by drain time (#1034) and the attribute mapper's
+
+### kuilt-otel-logback/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/otel/logback/KuiltLogbackAppender.kt:66
+                for (event in events) {
+                    // Best-effort: a failed capture must never crash the app's logging
+                    // path, so a failure is dropped. runCatchingCancellable still
+                    // rethrows CancellationException for clean teardown.
+                    runCatchingCancellable { capture.capture(event) }
+                }
+            }
+        }
+    
+        protected override fun append(eventObject: ILoggingEvent) {
+            val normalized = eventObject.normalize() ?: return
+            // Resolve HERE — synchronously, on the caller that logged — and snapshot the
+            // result onto the event, so the drain-side gate honours an ambient trace
+
+### kuilt-otel-logging/src/commonMain/kotlin/us/tractat/kuilt/otel/logging/CapturingAppender.kt:149
+                // CancellationException for clean teardown.
+                //
+                // `batch` is safe to reuse: captureAll maps it to records and returns
+                // before this line does, so nothing downstream holds the list we clear.
+                runCatchingCancellable { capture.captureAll(batch) }
+                batch.clear()
+            }
+        }
+    
+        override fun log(loggingEvent: KLoggingEvent) {
+            if (closed.value) return
+            delegate.log(loggingEvent)
+            val normalized = loggingEvent.normalize() ?: return
+
+### kuilt-otel-logging/src/commonMain/kotlin/us/tractat/kuilt/otel/logging/LogCapture.kt:133
+            // thread. Both still resolve here, on the caller, so emit-time semantics are
+            // unchanged for either (#1034, #1630).
+            val trace = resolveTrace()
+            if (droppedByTraceGate(trace)) return null
+            val attributes = runCatchingCancellable { config.attributeMapper(event) }.getOrNull() ?: return null
+            return event.copy(
+                activeTrace = trace,
+                resolvedAttributes = withScopedContext(attributes),
+                emittedEpochNanos = event.emittedEpochNanos ?: nowEpochNanos(),
+            )
+        }
+    
+        /**
+
+### kuilt-otel-otlp/src/commonMain/kotlin/us/tractat/kuilt/otel/otlp/OtlpHttpEdge.kt:187
+        // ── Producer-local sent-set persistence (CBOR) ─────────────────────────────
+    
+        private suspend fun readIdSet(key: StoreKey): Set<String> {
+            val bytes = store.read(key) ?: return emptySet()
+            return runCatchingCancellable {
+                cbor.decodeFromByteArray(idSetSerializer, bytes)
+            }.getOrDefault(emptySet())
+        }
+    
+        private suspend fun recordIds(key: StoreKey, hexIds: List<String>) {
+            // Preserve insertion order for drop-oldest; new ids appended after existing.
+            val merged = LinkedHashSet(readIdSet(key))
+            merged.addAll(hexIds)
+
+### kuilt-otel-otlp/src/commonMain/kotlin/us/tractat/kuilt/otel/otlp/OtlpHttpEdge.kt:204
+        }
+    
+        private suspend fun readVersions(): Map<MetricKey, Long> {
+            val bytes = store.read(metricKey) ?: return emptyMap()
+            return runCatchingCancellable {
+                cbor.decodeFromByteArray(versionsSerializer, bytes)
+            }.getOrDefault(emptyMap())
+        }
+    
+        private suspend fun recordVersions(updates: Map<MetricKey, Long>) {
+            val merged = readVersions() + updates
+            store.write(metricKey, cbor.encodeToByteArray(versionsSerializer, merged))
+        }
+
+### kuilt-otel-sdk/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/otel/sdk/KuiltLogRecordExporter.kt:62
+                // `map` (not a short-circuiting `all`) so every record is exported
+                // even when an earlier one fails, then succeed only if all succeeded.
+                // toLogRecord() runs here — inside the single drain coroutine — so the
+                // non-thread-safe seeded `random` is never touched concurrently.
+                val outcome = runCatchingCancellable {
+                    batch.logs.map { exporter.export(it.toLogRecord()) }.all { it is ExportResult.Success }
+                }
+                if (outcome.getOrDefault(false)) batch.code.succeed() else batch.code.fail()
+            }
+        }
+    
+        override fun export(logs: Collection<LogRecordData>): CompletableResultCode {
+            val code = CompletableResultCode()
+
+### kuilt-otel-sdk/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/otel/sdk/KuiltMetricExporter.kt:67
+        private val queue = Channel<Batch>(Channel.UNLIMITED)
+    
+        private val drain = scope.launch {
+            for (batch in queue) {
+                val ok = runCatchingCancellable {
+                    batch.metrics.map { applyMetric(it) }.all { it }
+                }.getOrDefault(false)
+                if (ok) batch.code.succeed() else batch.code.fail()
+            }
+        }
+    
+        override fun export(metrics: Collection<MetricData>): CompletableResultCode {
+            val code = CompletableResultCode()
+
+### kuilt-otel-tap/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/admit/TapAdmitMessage.kt:121
+                if (!isAdmitFrame(bytes)) return null
+                // Non-suspend parse of an untrusted frame; runCatchingCancellable is used
+                // uniformly across the codebase and is behaviour-identical here (no coroutine
+                // context, so there is no CancellationException to rethrow).
+                return runCatchingCancellable {
+                    TapCbor.decodeFromByteArray<TapAdmitMessage>(bytes.copyOfRange(1, bytes.size))
+                }.getOrNull()
+            }
+    
+            /** True if [bytes] looks like an admit frame (starts with [PREFIX_BYTE]). */
+            public fun isAdmitFrame(bytes: ByteArray): Boolean =
+                bytes.isNotEmpty() && bytes[0] == PREFIX_BYTE
+        }
+
+### kuilt-otel-tap/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/admit/TokenGatedSeam.kt:134
+                // Fan out only to verified peers — never a plain inner.broadcast, which would
+                // reach an unverified peer.
+                is GateRole.Verifier -> {
+                    val targets = lock.withLock { verified.value - inner.selfId }
+                    for (peer in targets) runCatchingCancellable { inner.sendTo(peer, payload) }
+                        .onFailure { logger.debug { "gated broadcast to $peer failed: ${it.message}" } }
+                }
+            }
+        }
+    
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            // Ahead of the admission gate: `selfId` is never in `verified`, so the Verifier arm would
+            // classify a self-send as an unadmitted peer and DROP it with a debug line — the refusal
+
+### kuilt-otel-tap/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/admit/TokenGatedSeam.kt:162
+                if (peer in pendingNonces || peer in verified.value) return
+                ByteString(verifier.random.nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES))
+                    .also { pendingNonces[peer] = it }
+            }
+            runCatchingCancellable { inner.sendTo(peer, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce))) }
+                .onFailure { logger.debug { "challenge send to $peer failed: ${it.message}" } }
+        }
+    
+        private suspend fun handleFrame(swatch: Swatch) {
+            val sender = swatch.sender ?: return
+            val bytes = swatch.toByteArray()
+            val admit = TapAdmitMessage.decode(bytes)
+            if (admit == null && TapAdmitMessage.isAdmitFrame(bytes)) {
+
+### kuilt-otel-tap/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/admit/TokenGatedSeam.kt:209
+                logger.debug { "ignoring challenge from unexpected sender $host (bound to another host)" }
+                return
+            }
+            val tag = ByteString(hmacSha256(prover.code.encodeToByteArray(), challenge.nonce.toByteArray()))
+            runCatchingCancellable { inner.sendTo(host, TapAdmitMessage.encode(TapAdmitMessage.Proof(tag))) }
+                .onFailure { logger.debug { "proof send to $host failed: ${it.message}" } }
+        }
+    
+        private suspend fun verify(peer: PeerId, proof: TapAdmitMessage.Proof) {
+            val verifier = role as GateRole.Verifier
+            val admitted = lock.withLock {
+                val nonce = pendingNonces[peer] ?: return
+                val expected = hmacSha256(verifier.token.code.encodeToByteArray(), nonce.toByteArray())
+
+### kuilt-otel-tap/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/admit/TokenGatedSeam.kt:230
+            }
+            if (admitted) {
+                logger.debug { "admitted $peer to the log tap" }
+            } else {
+                runCatchingCancellable {
+                    inner.sendTo(peer, TapAdmitMessage.encode(TapAdmitMessage.Reject("invalid or expired join code")))
+                }.onFailure { logger.debug { "reject send to $peer failed: ${it.message}" } }
+            }
+        }
+    }
+    
+    /** Wrap [this] with the token gate for the given [role]; the gate's collectors run in [scope]. */
+    internal fun Seam.tokenGated(role: GateRole, scope: CoroutineScope): Seam = TokenGatedSeam(this, role, scope)
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpCausalClock.kt:107
+         * Reload `(seq, frontier)` from [store]. Call once at startup before any [tick];
+         * a missing or corrupt entry leaves the clock fresh (seq 0, empty frontier).
+         */
+        public suspend fun recover(store: DurableStore) {
+            val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
+                logger.error(cause) { "otel.causal.clock: store read failed, starting fresh" }
+                return
+            } ?: return
+            val state = runCatchingCancellable {
+                cbor.decodeFromByteArray(stateSerializer, bytes)
+            }.getOrElse { cause ->
+                logger.warn(cause) { "otel.causal.clock: corrupt store entry, starting fresh" }
+                return
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpCausalClock.kt:111
+            val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
+                logger.error(cause) { "otel.causal.clock: store read failed, starting fresh" }
+                return
+            } ?: return
+            val state = runCatchingCancellable {
+                cbor.decodeFromByteArray(stateSerializer, bytes)
+            }.getOrElse { cause ->
+                logger.warn(cause) { "otel.causal.clock: corrupt store entry, starting fresh" }
+                return
+            }
+            lock.withLock {
+                seq = state.seq
+                frontier = state.frontier
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:759
+         * process lifetime, on every launch, with nothing written and nothing
+         * logged (#1860).
+         */
+        public suspend fun recover() {
+            val recovered = runCatchingCancellable { loadPersistedState() }.getOrElse { cause ->
+                logger.error(cause) { "otel.logs: persisted state could not be read, starting fresh" }
+                recordRecoveryFailure(cause)
+                return
+            } ?: return
+            // The in-memory swap is guarded too: walking the recovered CRDT to derive
+            // tail/visibleCount/seenIds must not propagate out of recover() any more
+            // than the reads or the decodes may. The walk happens BEFORE the lock is
+            // taken — it is a pure function of `recovered` and touches no field — so a
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:772
+            // throw cannot leave `log` swapped with stale derived state. What runs
+            // under the lock is only the assignment, which cannot throw. Segmented
+            // recovery does strictly more work per key than the single blob did, so
+            // keeping the split matters more here, not less.
+            runCatchingCancellable {
+                val entries = recovered.log.entries()
+                lock.withLock { install(recovered, entries) }
+            }.onFailure { cause ->
+                logger.error(cause) { "otel.logs: recovered state could not be installed, starting fresh" }
+                // Start fresh on the RECORDS, never on the numbering. Leaving the segment
+                // numbers at their construction defaults would have the next export write an
+                // index naming only segment 0 and overwrite it, orphaning every other segment
+                // permanently — there is no key-enumeration API to find them again. Adopting
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:848
+         * This runs on every start, so a store whose `delete` throws would otherwise fail
+         * recovery forever, on every launch — the exact silent-death shape #1860 is about.
+         */
+        private suspend fun sweepLegacyKey() {
+            runCatchingCancellable { store.delete(LEGACY_KEY) }.onFailure { cause ->
+                logger.warn(cause) { "otel.logs: superseded legacy entry could not be deleted; retrying next start" }
+            }
+        }
+    
+        /**
+         * Union [segment] into [into], or `null` if the union threw — so the caller can tell "absorbed
+         * nothing" apart from "absorbed and it added nothing", which retirement has to know.
+         */
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:858
+         * Union [segment] into [into], or `null` if the union threw — so the caller can tell "absorbed
+         * nothing" apart from "absorbed and it added nothing", which retirement has to know.
+         */
+        private fun absorb(into: Rga<LogRecord>, segment: Rga<LogRecord>, number: Int): Rga<LogRecord>? =
+            runCatchingCancellable { into.piece(segment) }.getOrElse { cause ->
+                logger.warn(cause) { "otel.logs: segment $number could not be absorbed, dropping its records" }
+                null
+            }
+    
+        /**
+         * Read one segment, or `null` if the store cannot supply or decode it.
+         *
+         * Absence is **expected**, not corruption: the index is written before the
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:880
+         * One bad read must cost one segment's records, which is what this KDoc has always
+         * promised.
+         */
+        private suspend fun readSegment(number: Int): Rga<LogRecord>? =
+            runCatchingCancellable {
+                val bytes = store.read(segmentKey(number))
+                if (bytes == null) {
+                    logger.debug { "otel.logs: segment $number is named by the index but absent" }
+                    null
+                } else {
+                    cbor.decodeFromByteArray(logSerializer, bytes)
+                }
+            }.getOrElse { cause ->
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:1091
+        private suspend fun exportTurn(records: List<LogRecord>, from: Int): TurnOutcome {
+            var consumed = 0
+            var accepted = 0
+            var applied: List<RgaOp<LogRecord>> = emptyList()
+            val actions = runCatchingCancellable {
+                lock.withLock {
+                    val admitted = ArrayList<LogRecord>()
+                    // Dedup within the batch as well as against the log: `seenIds` is not
+                    // updated until the inserts are minted below, so two copies of one id
+                    // inside a single batch would otherwise both be admitted.
+                    val pending = HashSet<ByteString>()
+                    var evictions = 0
+                    while (from + consumed < records.size && fitsInTurn(consumed, evictions)) {
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:1317
+         * nor a store write in flight, and **before** the turn's durable write — see [AppliedOpSink].
+         */
+        private suspend fun publishApplied(ops: List<RgaOp<LogRecord>>) {
+            if (ops.isEmpty()) return
+            runCatchingCancellable { appliedOps.published(ops) }.onFailure { cause ->
+                logger.warn(cause) { "WarpLogRecordExporter: the applied-op sink threw; the export is unaffected" }
+            }
+        }
+    
+        /**
+         * Count a [BufferPolicy.DROP_NEWEST] refusal. Must hold [lock].
+         *
+         * Named for what it *does* rather than for the decision it records: it no longer logs, and a
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:1392
+        public suspend fun merge(remote: Rga<LogRecord>): ExportResult = writeMutex.withLock { mergeTurn(remote) }
+    
+        /** [merge]'s write turn: build the actions, then apply them. Must hold [writeMutex]. */
+        private suspend fun mergeTurn(remote: Rga<LogRecord>): ExportResult {
+            val actions = runCatchingCancellable {
+                lock.withLock {
+                    log = log.piece(remote)
+                    // A remote insert can land anywhere, including after the local tail.
+                    rebuildDerivedState()
+                    val adopted = adoptRemoteSegment(remote)
+                    // A merge is the only path that can push the buffer past the cap without
+                    // evicting (see [exportTurn]), and under DROP_NEWEST it is the ONLY path that can
+                    // grow the log at all — that policy never evicts, so the eviction counter
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:1482
+        public suspend fun clear(): ExportResult = writeMutex.withLock { clearTurn() }
+    
+        /** [clear]'s write turn: build the actions, then apply them. Must hold [writeMutex]. */
+        private suspend fun clearTurn(): ExportResult {
+            val actions = runCatchingCancellable {
+                lock.withLock {
+                    windowPass(retain = 0)
+                    // Unconditional, and NOT gated on whether the pass moved anything. Gating is
+                    // the obvious optimisation and it silently breaks the retry: a clear whose
+                    // commit failed has already dropped everything in memory, so the retry's pass
+                    // finds nothing left to drop, returns false, and a gated turn would write
+                    // NOTHING and report Success while the store still holds every sealed segment.
+                    //
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:1565
+         * data, and at one line per outage the trace is affordable.
+         */
+        private suspend fun commit(actions: List<StoreAction>, logFailure: (Throwable) -> Unit): ExportResult {
+            val swept = mutableListOf<Int>()
+            return runCatchingCancellable {
+                actions.forEach { action ->
+                    when (action) {
+                        is StoreAction.Put -> store.write(action.key, action.bytes)
+                        is StoreAction.CommitRetirement -> {
+                            store.write(INDEX_KEY, action.bytes)
+                            lock.withLock { applyRetirement(action.numbers) }
+                        }
+                        is StoreAction.CommitRoll -> {
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:1661
+         * unpinned by any test — a leak of one `Int` per ever-failed-then-succeeded segment would be
+         * silent. It is bounded by the ledger either way, so the cost of the gap is small.
+         */
+        private suspend fun sweep(number: Int): Boolean {
+            val cause = runCatchingCancellable { store.delete(segmentKey(number)) }.exceptionOrNull()
+            if (cause == null) {
+                // Keeps the memory bounded by the LEDGER rather than by "every segment whose delete ever
+                // failed" — not a re-arm; see the KDoc for why one is unreachable here.
+                lock.withLock { reportedSweepFailures.remove(number) }
+                return true
+            }
+            if (lock.withLock { reportedSweepFailures.add(number) }) {
+                logger.warn { "otel.logs: retired segment $number could not be deleted; retrying: $cause" }
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpLogRecordExporter.kt:1868
+         * never a missing entry that a later change could read as "empty, therefore retirable". This
+         * also honours [loadPersistedState]'s "nothing past this point may throw".
+         */
+        private fun contentOf(segment: Rga<LogRecord>, number: Int): SegmentContent =
+            runCatchingCancellable {
+                if (segment.compactOpCount > 0) {
+                    SegmentContent.Pinned
+                } else {
+                    // Every op in a Compact-free log is an Insert or a Remove, and `sequence` holds
+                    // every Insert's id while `tombstones` holds every Remove's, so the union is
+                    // exactly the ids this segment could contribute to a recovered log.
+                    SegmentContent.Ids(segment.sequence.toSet() + segment.tombstones)
+                }
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpMetricExporter.kt:281
+            recoverHistograms()
+        }
+    
+        private suspend fun recoverHistograms() {
+            val bytes = runCatchingCancellable { store.read(HISTOGRAM_STORE_KEY) }.getOrElse { cause ->
+                logger.error(cause) { "otel.metrics.histograms: store read failed, starting fresh" }
+                return
+            } ?: return
+            val recovered = runCatchingCancellable<Map<MetricKey, DDSketch>> {
+                cbor.decodeFromByteArray(histogramsSerializer, bytes)
+            }.getOrElse { cause ->
+                logger.warn(cause) { "otel.metrics.histograms: corrupt store entry, starting fresh" }
+                return
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpMetricExporter.kt:295
+            lock.withLock { recovered.forEach { (k, v) -> histograms[k] = v } }
+        }
+    
+        private suspend fun recoverSumsDouble() {
+            val bytes = runCatchingCancellable { store.read(SUM_DOUBLE_STORE_KEY) }.getOrElse { cause ->
+                logger.error(cause) { "otel.metrics.sums.double: store read failed, starting fresh" }
+                return
+            } ?: return
+            val recovered = runCatchingCancellable<Map<MetricKey, GCounterDouble>> {
+                cbor.decodeFromByteArray(sumsDoubleSerializer, bytes)
+            }.getOrElse { cause ->
+                logger.warn(cause) { "otel.metrics.sums.double: corrupt store entry, starting fresh" }
+                return
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpMetricExporter.kt:309
+            lock.withLock { recovered.forEach { (k, v) -> sumsDouble[k] = v } }
+        }
+    
+        private suspend fun recoverSums() {
+            val bytes = runCatchingCancellable { store.read(SUM_STORE_KEY) }.getOrElse { cause ->
+                logger.error(cause) { "otel.metrics.sums: store read failed, starting fresh" }
+                return
+            } ?: return
+            val recovered = runCatchingCancellable<Map<MetricKey, GCounter>> {
+                cbor.decodeFromByteArray(sumsSerializer, bytes)
+            }.getOrElse { cause ->
+                logger.warn(cause) { "otel.metrics.sums: corrupt store entry, starting fresh" }
+                return
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpMetricExporter.kt:323
+            lock.withLock { recovered.forEach { (k, v) -> sums[k] = v } }
+        }
+    
+        private suspend fun recoverGauges() {
+            val bytes = runCatchingCancellable { store.read(GAUGE_STORE_KEY) }.getOrElse { cause ->
+                logger.error(cause) { "otel.metrics.gauges: store read failed, starting fresh" }
+                return
+            } ?: return
+            val recovered = runCatchingCancellable<Map<MetricKey, LWWRegister<Double>>> {
+                cbor.decodeFromByteArray(gaugesSerializer, bytes)
+            }.getOrElse { cause ->
+                logger.warn(cause) { "otel.metrics.gauges: corrupt store entry, starting fresh" }
+                return
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpMetricExporter.kt:337
+            lock.withLock { recovered.forEach { (k, v) -> gauges[k] = v } }
+        }
+    
+        private suspend fun recoverCardinalities() {
+            val bytes = runCatchingCancellable { store.read(CARDINALITY_STORE_KEY) }.getOrElse { cause ->
+                logger.error(cause) { "otel.metrics.cardinalities: store read failed, starting fresh" }
+                return
+            } ?: return
+            val recovered = runCatchingCancellable<Map<MetricKey, HyperLogLog>> {
+                cbor.decodeFromByteArray(cardinalitiesSerializer, bytes)
+            }.getOrElse { cause ->
+                logger.warn(cause) { "otel.metrics.cardinalities: corrupt store entry, starting fresh" }
+                return
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpMetricExporter.kt:387
+                gauges.clear()
+                cardinalities.clear()
+                histograms.clear()
+            }
+            runCatchingCancellable {
+                store.delete(SUM_STORE_KEY)
+                store.delete(SUM_DOUBLE_STORE_KEY)
+                store.delete(GAUGE_STORE_KEY)
+                store.delete(CARDINALITY_STORE_KEY)
+                store.delete(HISTOGRAM_STORE_KEY)
+            }.fold(
+                onSuccess = { MetricExportResult.Success },
+                onFailure = { cause ->
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpMetricExporter.kt:731
+         * [MetricExportResult.Failure] carrying the cause regardless, so deduplicating the *line* hides
+         * nothing from a programmatic reader.
+         */
+        private suspend fun persist(storeKey: StoreKey, encoded: ByteArray, metricKey: MetricKey): MetricExportResult =
+            runCatchingCancellable { store.write(storeKey, encoded) }
+                .fold(
+                    onSuccess = {
+                        // The store took THIS key back. It says nothing about the others, so only this
+                        // one leaves the set; the outage stays open while any key is still refused.
+                        durableWriteOutage.update { it - storeKey }
+                        MetricExportResult.Success
+                    },
+                    onFailure = { cause ->
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpOtlpBridge.kt:72
+            val spanSnapshot = telemetry.spans.snapshot().elements
+            var spansSent = 0
+            if (spanSnapshot.isNotEmpty()) {
+                anyAttempted = true
+                val r = runCatchingCancellable {
+                    val digest = edge.digest()
+                    val delta = spanSnapshot.filterTo(mutableSetOf()) { it.spanId !in digest.spanIds }
+                    if (delta.isNotEmpty()) {
+                        val deltaIds = delta.mapTo(mutableSetOf()) { it.spanId }
+                        val links = inferCausalLinks(spanSnapshot).filter { it.fromSpanId in deltaIds }
+                        edge.send(delta, links)
+                        spansSent = delta.size
+                    }
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpOtlpBridge.kt:96
+            val logSnapshot = telemetry.logs.snapshot().toList()
+            var logsSent = 0
+            if (logSnapshot.isNotEmpty()) {
+                anyAttempted = true
+                val r = runCatchingCancellable {
+                    val digest = edge.logDigest()
+                    val delta = logSnapshot.filterTo(mutableSetOf()) { it.recordId !in digest.recordIds }
+                    if (delta.isNotEmpty()) { edge.sendLogs(delta); logsSent = delta.size }
+                }
+                if (r.isFailure) { anyFailed = true; logger.debug { "WarpOtlpBridge: log drain failed: ${r.exceptionOrNull()}" } }
+            }
+    
+            // ── Metrics ──────────────────────────────────────────────────────────
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpOtlpBridge.kt:109
+            val points = renderMetricPoints(telemetry.metrics.snapshotAll(), nowEpochNanos())
+            var metricsSent = 0
+            if (points.isNotEmpty()) {
+                anyAttempted = true
+                val r = runCatchingCancellable {
+                    val digest = edge.metricDigest()
+                    val delta = points.filterTo(mutableSetOf()) { digest.versions[it.key] != it.valueHash() }
+                    if (delta.isNotEmpty()) { edge.sendMetrics(delta); metricsSent = delta.size }
+                }
+                if (r.isFailure) { anyFailed = true; logger.debug { "WarpOtlpBridge: metric drain failed: ${r.exceptionOrNull()}" } }
+            }
+    
+            return if (anyAttempted && anyFailed && spansSent == 0 && logsSent == 0 && metricsSent == 0) {
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpSpanExporter.kt:176
+         *
+         * If no persisted state exists, the exporter starts with an empty set.
+         */
+        public suspend fun recover() {
+            val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
+                logger.error(cause) { "otel.spans: store read failed, starting fresh" }
+                return
+            } ?: return
+            val recovered = runCatchingCancellable<ORSet<SpanRecord>> {
+                cbor.decodeFromByteArray(spanSerializer, bytes)
+            }.getOrElse { cause ->
+                logger.warn(cause) { "otel.spans: corrupt store entry, starting fresh" }
+                return
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpSpanExporter.kt:244
+            }
+            // Serialize the durable-write section across concurrent export()/merge() so the
+            // clock persist and the span write are one ordered unit (#1053).
+            return ioMutex.withLock {
+                runCatchingCancellable {
+                    // Re-encode the *latest* spans inside the section so no concurrent add is
+                    // dropped by a stale snapshot; encoding before the persist keeps the
+                    // persisted seq ≥ every dot in this snapshot (seq is monotonic).
+                    val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
+                    // Persist the clock BEFORE the span so the durable clock seq is always ≥
+                    // every durable span's dot — a crash between the two writes can only lose
+                    // the span, never re-mint its dot on recover (#1053).
+                    causalClock?.persist(store)
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpSpanExporter.kt:302
+            lock.withLock { spans = spans.piece(remote) }
+            // Share the durable-write section with export() so a concurrent export()+merge()
+            // cannot lost-update the STORE_KEY snapshot (#1053).
+            return ioMutex.withLock {
+                runCatchingCancellable {
+                    val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
+                    store.write(STORE_KEY, encoded)
+                }.fold(
+                    onSuccess = {
+                        durableWriteSucceeded()
+                        ExportResult.Success
+                    },
+                    onFailure = { cause ->
+
+### kuilt-otel/src/commonMain/kotlin/us/tractat/kuilt/otel/WarpSpanExporter.kt:363
+         * unknown* rather than as zero. On success the count reads zero synchronously, because the
+         * drop precedes the write.
+         */
+        public suspend fun clear(): ExportResult = ioMutex.withLock {
+            runCatchingCancellable {
+                val encoded = lock.withLock {
+                    spans = spans.piece { it.removeAll(it.elements) }
+                    cbor.encodeToByteArray(spanSerializer, spans)
+                }
+                // The frontier belongs to this method, not to the facade — so a caller reaching this
+                // exporter directly, rather than through WarpTelemetry.clear(), gets it too. It names
+                // dots of spans that no longer exist, and stamping the next span with predecessors
+                // that can never resolve produces links to deliberately forgotten spans.
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/BoundedCounterTransferCoordinator.kt:214
+                val reachable = coordSeam.peers.value - PeerId(self.value)
+                if (reachable.isEmpty()) return
+                val targets = topSurplusPeers(state.value, reachable)
+                targets.forEach { target ->
+                    runCatchingCancellable { coordSeam.sendTo(target, encoded) }
+                        .onFailure { /* send failed — retry or degrade on next iteration */ }
+                }
+                // check if quota improved (a donor may have responded already)
+                if (state.value.quota(self) > config.lowWaterThreshold) return
+                if (attempt < config.maxRetries - 1) {
+                    delay(delay)
+                    delay = delay * 2
+                }
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/BoundedCounterTransferCoordinator.kt:248
+                .onEach { swatch -> swatch.sender?.let { dispatch(it, swatch) } }
+                .launchIn(scope)
+    
+        private fun dispatch(sender: PeerId, swatch: Swatch) {
+            val msg = runCatchingCancellable { swatch.decode(Cbor, serializer) }.getOrNull() ?: return
+            when (msg) {
+                is BoundedCounterCoordMessage.TransferRequest -> onTransferRequest(msg, sender)
+            }
+        }
+    
+        private fun onTransferRequest(
+            msg: BoundedCounterCoordMessage.TransferRequest,
+            sender: PeerId,
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/BoundedCounterTransferCoordinator.kt:285
+                    delay(cfg.cadence)
+                    // A transient transfer/broadcast failure in one tick must not kill the
+                    // periodic loop; runCatchingCancellable still rethrows CancellationException
+                    // so the loop cancels cleanly on close(). Rebalance retries next tick.
+                    runCatchingCancellable { equalizeTick(cfg) }
+                        .onFailure { /* transient rebalance failure — retry next tick */ }
+                }
+            }
+    
+        private fun equalizeTick(cfg: BoundedCounterEqualizerConfig) {
+            val bc = state.value
+            val reachablePeers = coordSeam.peers.value - PeerId(self.value)
+            if (reachablePeers.isEmpty()) return
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:590
+            if (vector.entries.isEmpty()) return
+            val msg = QuiltMessage.Delivered<S>(sender = replica, vector = vector)
+            val bytes = encode(msg)
+            scope.launch {
+                runCatchingCancellable { seam.broadcast(bytes) }
+                    .onFailure { logger.debug { "gossipDelivered broadcast failed: ${it.message}" } }
+            }
+        }
+    
+        private fun touch(peer: PeerId): Unit = lock.withLock {
+            lastSeenAt[peer] = clock.now()
+        }
+    
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:692
+         */
+        private fun sendUnprovenPeerFullState(peer: PeerId) {
+            val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
+            scope.launch {
+                runCatchingCancellable { seam.sendTo(peer, bytes) }
+                    .onFailure { logger.debug { "unproven-peer fullState to $peer failed: ${it.message}" } }
+            }
+        }
+    
+        /**
+         * FNV-1a 64 over the state as it would appear on the wire. Must be called under [lock].
+         *
+         * There is no `KSerializer<S>` on this class — the primary constructor takes only
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:732
+        private fun sendRootDigestTo(peer: PeerId, armGrant: Boolean = true) {
+            val bytes = encode(QuiltMessage.RootDigest(sender = replica, root = stateRoot(), upThrough = nextSeq))
+            if (armGrant) digestOutstanding.add(peer)
+            scope.launch {
+                runCatchingCancellable { seam.sendTo(peer, bytes) }
+                    .onFailure { logger.debug { "rootDigest to $peer failed: ${it.message}" } }
+            }
+        }
+    
+        private fun evictStalePeers() {
+            val currentPeers = seam.peers.value
+            val now = clock.now()
+            val toEvict = knownPeers
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:776
+        private fun broadcastDelta(seq: Long, delta: S) {
+            val msg = QuiltMessage.Delta(sender = replica, seq = seq, delta = delta)
+            val bytes = encode(msg)
+            scope.launch {
+                runCatchingCancellable { seam.broadcast(bytes) }
+                    .onFailure { logger.debug { "broadcastDelta failed: ${it.message}" } }
+            }
+        }
+    
+        private fun onPeersChanged(currentPeers: Set<PeerId>): Unit = lock.withLock {
+            val newPeers = currentPeers - seam.selfId - knownPeers
+            knownPeers += currentPeers - seam.selfId
+            newPeers.forEach { peer ->
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:821
+        private fun sendFullStateTo(peer: PeerId) {
+            val msg = QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq)
+            val bytes = encode(msg)
+            scope.launch {
+                runCatchingCancellable { seam.sendTo(peer, bytes) }
+                    .onFailure { logger.debug { "sendFullStateTo $peer failed: ${it.message}" } }
+            }
+            scheduleFullStateRetry(peer, config.fullStateRetryLimit)
+        }
+    
+        private fun scheduleFullStateRetry(peer: PeerId, attemptsLeft: Int) {
+            if (attemptsLeft <= 0) {
+                pendingFullStateJobs.remove(peer)
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:841
+                val bytes = lock.withLock {
+                    if (peer !in knownPeers) return@launch
+                    encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
+                }
+                runCatchingCancellable { seam.sendTo(peer, bytes) }
+                    .onFailure { logger.debug { "fullStateRetry sendTo $peer failed: ${it.message}" } }
+                lock.withLock { scheduleFullStateRetry(peer, attemptsLeft - 1) }
+            }
+        }
+    
+        private fun cancelFullStateRetry(peer: PeerId) {
+            pendingFullStateJobs.remove(peer)?.cancel()
+        }
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:856
+            cancelFullStateRetry(sender)
+            // Log the drop. A peer running a build that predates #1955 cannot decode `rootDigest` or
+            // `fullStateRequest`, and silence is then the *only* symptom of a mixed-version rollout
+            // (#2006) — every send site in this file already logs its failure; so does this one.
+            val msg = runCatchingCancellable { swatch.decode(binaryFormat, messageSerializer) }
+                .onFailure { failure -> logger.debug { "undecodable frame from $sender dropped: $failure" } }
+                .getOrNull() ?: return@withLock
+            when (msg) {
+                is QuiltMessage.Delta -> onDelta(sender, msg)
+                is QuiltMessage.Ack -> onAck(sender, msg)
+                is QuiltMessage.FullState -> onFullState(sender, msg)
+                is QuiltMessage.Resend -> onResend(sender, msg)
+                is QuiltMessage.Delivered -> onDelivered(sender, msg)
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:939
+                toSeq = toSeq,
+            )
+            val bytes = encode(msg)
+            scope.launch {
+                runCatchingCancellable { seam.sendTo(to, bytes) }
+                    .onFailure { logger.debug { "sendResend to $to failed: ${it.message}" } }
+            }
+        }
+    
+        private fun scheduleResendRetry(to: PeerId, sender: ReplicaId, fromSeq: Long, toSeq: Long) {
+            pendingResendJobs[sender]?.cancel()
+            pendingResendJobs[sender] = scope.launch {
+                delay(config.resendRetryInterval)
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:969
+        private fun sendAck(to: PeerId, originalSender: ReplicaId, seq: Long) {
+            val msg = QuiltMessage.Ack<S>(acker = replica, sender = originalSender, seq = seq)
+            val bytes = encode(msg)
+            scope.launch {
+                runCatchingCancellable { seam.sendTo(to, bytes) }
+                    .onFailure { logger.debug { "sendAck to $to failed: ${it.message}" } }
+            }
+        }
+    
+        /**
+         * Records the acker's progress on MY deltas, keyed by [acker] — the transport-level
+         * [PeerId] the ack arrived from. It must never be a PeerId fabricated from the wire
+         * message's [ReplicaId]: the two identity domains are decoupled (the convenience
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:1080
+                return
+            }
+            val bytes = encode(QuiltMessage.FullStateRequest<S>(requester = replica, sender = msg.sender))
+            scope.launch {
+                runCatchingCancellable { seam.sendTo(sender, bytes) }
+                    .onFailure { logger.debug { "fullStateRequest to $sender failed: ${it.message}" } }
+            }
+        }
+    
+        /**
+         * A peer's reply to our digest, asking for the state. Ships it directly rather than via
+         * [sendFullStateTo]: that helper arms [scheduleFullStateRetry], which exists for the
+         * first-contact path, and running it here would put two independent retry machines on one
+
+### kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt:1105
+                return
+            }
+            val bytes = encode(QuiltMessage.FullState(sender = replica, state = _state.value, upThrough = nextSeq))
+            scope.launch {
+                runCatchingCancellable { seam.sendTo(sender, bytes) }
+                    .onFailure { logger.debug { "fullState reply to $sender failed: ${it.message}" } }
+            }
+        }
+    
+        /**
+         * Fast-forwards the per-sender receive cursor past the history [upThrough] already covers
+         * (#1266). Called from both [onFullState] and [onRootDigest] — an anti-entropy round must
+         * resync the cursor whether or not it ships state. Without this, a receiver whose gap
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/internal/RaftEngine.kt:874
+         * Non-suspend and side-effect-free apart from the log, so the pump stays a pure decode; the drop
+         * is *reported* from the actor loop — see [EngineCommand.UndecodableMessage] for why.
+         */
+        private fun decodeInbound(envelope: RaftEnvelope): EngineCommand =
+            runCatchingCancellable { raftCbor.decodeFromByteArray<RaftMessage>(envelope.bytes) }.fold(
+                onSuccess = { EngineCommand.IncomingMessage(envelope.from, it) },
+                onFailure = { failure ->
+                    // The exception is the most informative thing about the frame and the one thing the
+                    // trace event deliberately does not carry (its wording is a library detail and varies
+                    // by target, so it cannot be asserted on). Debug is where that belongs.
+                    debug {
+                        "inbound: DROP ${envelope.bytes.size} undecodable bytes from " +
+                            "${envelope.from.value} — $failure"
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/internal/RaftEngine.kt:3824
+                    if (e is NotLeaderException || e is LeadershipLostException) ForwardOutcome.NotLeader
+                    else ForwardOutcome.Failed
+                }
+                // Best-effort reply; transport may be tearing down on close.
+                runCatchingCancellable { send(from, RaftMessage.ForwardResponse(m.clientRequestId, outcome)) }
+            }
+        }
+    
+        /**
+         * Follower handles the leader's reply to a forward it sent.
+         *
+         * §8 provenance (#1911): a `ForwardResponse` carries no term and no leader identity, and its
+         * correlation id is a follower-local nonce starting at `0` on every node — so [from] is the only
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/admit/AdmitMessage.kt:264
+             */
+            @OptIn(ExperimentalSerializationApi::class)
+            public fun decode(bytes: ByteArray): AdmitMessage? {
+                if (bytes.isEmpty() || bytes[0] != PREFIX_BYTE) return null
+                return runCatchingCancellable {
+                    cbor.decodeFromByteArray<AdmitMessage>(bytes.copyOfRange(1, bytes.size))
+                }.getOrNull()
+            }
+    
+            /** Returns true if [bytes] looks like an admit frame (starts with [PREFIX_BYTE]). */
+            public fun isAdmitFrame(bytes: ByteArray): Boolean = bytes.isNotEmpty() && bytes[0] == PREFIX_BYTE
+        }
+    }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/LobbyMessage.kt:64
+            /** Decode bytes as a [LobbyMessage]; null if the prefix mismatches or decoding fails. */
+            @OptIn(ExperimentalSerializationApi::class)
+            public fun decode(bytes: ByteArray): LobbyMessage? {
+                if (bytes.isEmpty() || bytes[0] != PREFIX_BYTE) return null
+                return runCatchingCancellable {
+                    cbor.decodeFromByteArray<LobbyMessage>(bytes.copyOfRange(1, bytes.size))
+                }.getOrNull()
+            }
+    
+            /** True if [bytes] looks like a lobby frame (starts with [PREFIX_BYTE]). */
+            public fun isLobbyFrame(bytes: ByteArray): Boolean = bytes.isNotEmpty() && bytes[0] == PREFIX_BYTE
+        }
+    }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:176
+                // FreezeAck landing in the replay-0 gap between broadcast and subscribe is never lost.
+                val committed = withTimeoutOrNull(freezeTimeout) { awaitUnanimousAck(roster, members, myEpoch) } ?: false
+                logger.info { "lobby.freeze-round self=${selfId.value} epoch=$myEpoch members=${members.map { it.value }} committed=$committed" }
+                if (committed) {
+                    runCatchingCancellable {
+                        seam.broadcast(LobbyMessage.encode(LobbyMessage.Commit(selfId.value, myEpoch)))
+                    }
+                    return
+                }
+                // Aborted (membership changed, lost host, or timed out): reopen and retry.
+                runCatchingCancellable { seam.broadcast(LobbyMessage.encode(LobbyMessage.Reopen(myEpoch))) }
+            }
+        }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:182
+                    }
+                    return
+                }
+                // Aborted (membership changed, lost host, or timed out): reopen and retry.
+                runCatchingCancellable { seam.broadcast(LobbyMessage.encode(LobbyMessage.Reopen(myEpoch))) }
+            }
+        }
+    
+        /**
+         * Broadcast the [LobbyMessage.Freeze] for [ackEpoch] and await a [LobbyMessage.FreezeAck] from
+         * every peer in [members]. Returns true on unanimous ack; false (abort) if the peer set drifts
+         * from [roster] (the set the Freeze advertised) or this peer stops being the elected host.
+         *
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:218
+                    host.collect { if (it != selfId) outcome.complete(false) }
+                }
+                // Subscriptions are now live (UNDISPATCHED ran each collector to its first suspend) — only
+                // now broadcast the Freeze, so no FreezeAck can land in the replay-0 gap before we listen.
+                runCatchingCancellable {
+                    seam.broadcast(
+                        LobbyMessage.encode(
+                            LobbyMessage.Freeze(selfId.value, roster.map { it.value }.toSet(), ackEpoch),
+                        ),
+                    )
+                }
+                if (needed.isEmpty()) outcome.complete(true) // no members → immediate commit
+                val result = outcome.await()
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:353
+                                    (msg is LobbyMessage.Reopen && msg.epoch == freeze.epoch)
+                            }.second
+                        }
+                    }
+                    runCatchingCancellable {
+                        seam.broadcast(LobbyMessage.encode(LobbyMessage.FreezeAck(freeze.hostId, freeze.epoch)))
+                    }
+                    resolved.await()
+                }
+                logger.info { "lobby.resolution self=${selfId.value} epoch=${freeze.epoch} → ${resolution?.let { it::class.simpleName } ?: "TIMEOUT (retry for fresh Freeze)"}" }
+                if (resolution is LobbyMessage.Commit) {
+                    return
+                }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/partition/JoinerResumeMachine.kt:485
+                    // the cancellation of this job hasn't propagated yet — so we never re-weave
+                    // (which for a resumable loom would REOPEN the channel leave() just closed)
+                    // after teardown begins.
+                    if (host.isTerminal()) return@withTimeoutOrNull false
+                    val reweaved = runCatchingCancellable { reweaveFn() }
+                    if (reweaved.isFailure) {
+                        // Transient re-weave failure (base not back yet) — retry until the deadline.
+                        delay(heartbeatConfig.interval)
+                        continue
+                    }
+                    if (seam.state.value is SeamState.Torn) {
+                        // Non-conforming Loom: [reweaveFn] minted an unrelated seam and left THIS
+                        // one torn, so there is nothing to resume onto. Close the throwaway seam
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/partition/JoinerResumeMachine.kt:515
+                        }
+                        failureReason = FailureReason.Unrecoverable
+                        return@withTimeoutOrNull false
+                    }
+                    val result = runCatchingCancellable {
+                        seam.state.first { it is SeamState.Woven }
+                        host.restartIncomingCollect()
+                        resume(token)
+                    }.getOrNull()
+                    if (result is ResumeResult.Success) {
+                        // #1618 evidence capture: the resume landed — this tear recovered without
+                        // going terminal. Identities, not sizes — no behavior change.
+                        logger.info { "resume.ok host=$hostId roomId=${token.roomId.value}" }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/partition/JoinerResumeMachine.kt:710
+            // Suspend send outside the lock. A genuine CancellationException propagates (correct),
+            // but must still resolve the shared deferred — a joined caller would otherwise hang.
+            // A non-cancellation send failure becomes WindowClosed for every caller of this flight.
+            val sendResult = try {
+                runCatchingCancellable { seam.broadcast(resumeMsg) }
+            } catch (e: CancellationException) {
+                abandonFlight(deferred)
+                throw e
+            }
+            if (sendResult.isFailure) {
+                abandonFlight(deferred)
+                // A reply may have raced the failure and resolved the flight first — honor it.
+                return awaitFlightBounded(deferred)
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/RelayEnvelope.kt:152
+             * and a throw there would kill the room's single inbound collector.
+             */
+            fun decode(bytes: ByteArray): RelayEnvelope? {
+                if (!isRelayFrame(bytes)) return null
+                return runCatchingCancellable {
+                    cbor.decodeFromByteArray<RelayEnvelope>(bytes.copyOfRange(1, bytes.size))
+                }.getOrNull()
+            }
+    
+            /** Whether [bytes] claims the relay prefix. Does not decode. */
+            fun isRelayFrame(bytes: ByteArray): Boolean = RoomFramePrefix.Relay.matches(bytes)
+        }
+    }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:1220
+        private suspend fun handleReconnectResumed(peerId: PeerId) {
+            val updated = lock.withLock { updateMemberLiveness(peerId, Liveness.Connected) } ?: return
+            emitEvent(MembershipEvent.Resumed(updated.id))
+            val ackBytes = AdmitMessage.encode(AdmitMessage.ResumeAck)
+            runCatchingCancellable { seam.sendTo(peerId, ackBytes) }
+        }
+    
+        // ── Main loop ──────────────────────────────────────────────────────────────
+    
+        /**
+         * Sends [AdmitMessage.Hello] (joiner) once the fabric is [SeamState.Woven], then launches the
+         * single [seam]-`incoming` collector via [restartIncomingCollect].
+         *
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:1387
+                                            "${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.MAX_SUPPORTED}",
+                                        RejectCode.ProtocolMismatch,
+                                    ),
+                                )
+                                runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
+                            }
+                        } else if (target != null && roomKey != null && target != roomKey) {
+                            // Room-bound admission gate (A2, #1172). Reject only a *positive*
+                            // mismatch — both sides name a room and they differ. A null target
+                            // (transport already bound the room) or a host without a declared
+                            // room key stays permissive, preserving existing single-room fabrics.
+                            logger.debug {
+                                "Rejecting Hello from $sender: room-mismatch ($target != $roomKey)"
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:1404
+                                        "room-mismatch: $target != $roomKey",
+                                        RejectCode.RoomMismatch,
+                                    ),
+                                )
+                                runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
+                            }
+                        } else {
+                            scope.launch { admitPeer(sender, msg) }
+                        }
+                    }
+                }
+                is AdmitMessage.Welcome -> {
+                    if (_role.value == SessionRole.Joiner) {
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:1515
+    
+            // Send welcome directly to the joiner. Stays INLINE — it addresses the joiner, not the
+            // bystanders, so it shares no recipient with any queued fan-out and has no order to keep
+            // against one. Same for the two joiner-directed loops below.
+            runCatchingCancellable { seam.sendTo(joinerPeerId, welcomeBytes) }
+    
+            // Tell the existing members about the joiner (roster sync) — through the per-recipient
+            // fan-out lanes (#1781/#2048), not a loop of direct sends. This is a host-authoritative
+            // membership announcement to bystanders, structurally identical to propagateFarewell, so it
+            // needs the same ordering: a slow bystander link could leave `Welcome(X)` in flight while X
+            // drops and its window expires, and the `Farewell(X)` queued behind it on THAT bystander's
+            // lane would then arrive FIRST. handleFarewell removes a peer that bystander does not hold
+            // yet — a no-op — and the late Welcome then ADDS X to its roster. On a
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:1540
+                        sessionId = existing.identity.sessionId,
+                        deviceId = existing.identity.deviceId,
+                    ),
+                )
+                runCatchingCancellable { seam.sendTo(joinerPeerId, existingWelcome) }
+            }
+    
+            // Send self-introduction (host introduces itself to the new joiner)
+            val hostIntro = AdmitMessage.encode(
+                AdmitMessage.Welcome(
+                    assignedPeerId = selfId.value,
+                    displayName = resolvedMemberName,
+                    sessionId = selfId.value,
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:1551
+                    displayName = resolvedMemberName,
+                    sessionId = selfId.value,
+                ),
+            )
+            runCatchingCancellable { seam.sendTo(joinerPeerId, hostIntro) }
+        }
+    
+        private suspend fun sendHello() {
+            val hello = AdmitMessage.Hello(
+                displayName = resolvedMemberName,
+                sessionId = selfId.value,
+                targetRoom = roomKey,
+                protocolVersion = ProtocolVersion.CURRENT,
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:1561
+                sessionId = selfId.value,
+                targetRoom = roomKey,
+                protocolVersion = ProtocolVersion.CURRENT,
+            )
+            runCatchingCancellable { seam.broadcast(AdmitMessage.encode(hello)) }
+        }
+    
+        /**
+         * Host-side handler for [AdmitMessage.Resume].
+         *
+         * Validates the token against the [reconnectController]. On [ResumeResult.Success],
+         * [handleReconnectResumed] sends a [AdmitMessage.Welcome] confirmation to the joiner
+         * via the reconnect controller's event stream. On failure, replies with [AdmitMessage.Reject]
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:1598
+                // it. This `when` used to carry a hand-written `error("… not a host verdict")` for a
+                // case the type now excludes.
+            }
+            if (reject != null) {
+                runCatchingCancellable { seam.sendTo(sender, AdmitMessage.encode(reject)) }
+            }
+            // On Success: handleReconnectResumed fires via the controller's event stream
+            // (runReconnectEventLoop collects JoinerReconnectEvent.Resumed and calls it).
+        }
+    
+        /**
+         * Joiner-side: handle a [AdmitMessage.Welcome].
+         *
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:3662
+            resumeMachine?.takePendingFlight()?.complete(ResumeResult.WindowClosed)
+            // Announce a graceful leave on the still-live seam before tearing it down, so the
+            // host evicts with Normal rather than treating the close as a transport drop.
+            if (announce) {
+                runCatchingCancellable { seam.broadcast(AdmitMessage.encode(AdmitMessage.Goodbye)) }
+            }
+            // Close EVERY fan-out lane rather than cancelling its writer (#1781, per-recipient since
+            // #2048), so each [runAdmitFanOutWriter] / [runRelayForwardWriter] completes when its lane
+            // drains instead of dying mid-item. Anything already enqueued MAY still be attempted,
+            // best-effort, before the seam tears — but do not read that as a guarantee: the writers are
+            // separate coroutines and `seam.close` below is reached without necessarily yielding to them,
+            // so in practice they typically do not resume until the seam is already `Torn` and their
+            // remaining sends fail fast. That matches the pre-existing behaviour, where [leave] never
+
+### kuilt-warp-compiler/src/jvmMain/kotlin/us/tractat/kuilt/warp/BinaryenWasmOptimizer.kt:65
+    
+        override suspend fun optimize(bytes: ByteArray, optLevel: OptLevel): ByteArray {
+            val flag = optLevel.wasmOptFlag ?: return bytes // O0 — nothing worth shipping.
+            return withContext(ioDispatcher) {
+                runCatchingCancellable { runWasmOpt(bytes, flag) }
+                    .getOrElse { cause ->
+                        throw WasmOptimizationException("wasm-opt $flag failed: ${cause.message}", cause)
+                    }
+            }
+        }
+    
+        private fun runWasmOpt(bytes: ByteArray, flag: String): ByteArray {
+            val wasmOpt = extractedBinary()
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/BobbinExchange.kt:157
+    
+            // Serve loop — single collection of fetchSeam.incoming (ADR-034).
+            scope.launch {
+                fetchSeam.incoming.collect { swatch ->
+                    val msg = runCatchingCancellable {
+                        swatch.decode(Cbor, serializer<FetchMessage>())
+                    }.getOrNull() ?: return@collect
+                    when (msg) {
+                        is FetchMessage.Request -> serveRequest(msg.hash, swatch.sender ?: return@collect)
+                        is FetchMessage.Response -> completeWaiter(msg.hash, msg.bytes)
+                    }
+                }
+            }
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/BobbinExchange.kt:265
+            }
+    
+        private suspend fun sendRequest(hash: BobbinHash) {
+            val payload = Cbor.encodeToByteArray(serializer<FetchMessage>(), FetchMessage.Request(hash))
+            runCatchingCancellable { fetchSeam.broadcast(payload) }
+                .onFailure { logger.debug { "Failed to broadcast fetch request for ${hash.value}: $it" } }
+        }
+    
+        private suspend fun serveRequest(hash: BobbinHash, requester: PeerId) {
+            val bytes = creel.get(hash) ?: return
+            val payload = Cbor.encodeToByteArray(serializer<FetchMessage>(), FetchMessage.Response(hash, bytes))
+            runCatchingCancellable { fetchSeam.sendTo(requester, payload) }
+                .onFailure { logger.debug { "Failed to send fetch response for ${hash.value} to $requester: $it" } }
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/BobbinExchange.kt:272
+    
+        private suspend fun serveRequest(hash: BobbinHash, requester: PeerId) {
+            val bytes = creel.get(hash) ?: return
+            val payload = Cbor.encodeToByteArray(serializer<FetchMessage>(), FetchMessage.Response(hash, bytes))
+            runCatchingCancellable { fetchSeam.sendTo(requester, payload) }
+                .onFailure { logger.debug { "Failed to send fetch response for ${hash.value} to $requester: $it" } }
+        }
+    
+        /**
+         * Completes any pending [fetch] waiters for [hash] with the raw response [bytes].
+         *
+         * The deferred is removed from [inFlight] before completing it so subsequent [fetch]
+         * calls after the bytes are cached hit [Creel.get] directly rather than re-joining
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:564
+            // Capability board: single-collect our reserved channel, fold each frame into the local
+            // TTL tracker, then re-evaluate ownership (a fresher eligible set may re-home a task).
+            ownScope.launch {
+                capabilitySeam.incoming.collect { swatch ->
+                    val update = runCatchingCancellable {
+                        Cbor.decodeFromByteArray(capabilitySerializer, swatch.toByteArray())
+                    }.getOrNull() ?: return@collect
+                    lock.withLock { capabilityTracker.received(update) }
+                    claimOwned(queueQuilter.state.value.keys, CoordinationKind.Free)
+                }
+            }
+    
+            // Rebuild the ring whenever the roster changes, then re-evaluate ownership.
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:688
+            }
+            // Re-evaluate ownership immediately: our own updated view may make us the eligible owner.
+            claimOwned(queueQuilter.state.value.keys, CoordinationKind.Free)
+            ownScope.launch {
+                runCatchingCancellable {
+                    capabilitySeam.broadcast(Cbor.encodeToByteArray(capabilitySerializer, update))
+                }
+            }
+        }
+    
+        /**
+         * The current **live** capability view converged on this node — each peer that has a
+         * non-expired advertisement mapped to its [CapSet]. A peer absent from this map has either
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1147
+                        }
+                    }
+                    stoodDown = !execute
+                    if (execute) {
+                        runCatchingCancellable { doExecute(taskId, kind) }
+                            .onFailure { e ->
+                                logger.warn(e) { "WarpNode($selfId): executor failed for $taskId — unclaiming" }
+                                lock.withLock { claimed.remove(taskId) }
+                            }
+                    }
+                } finally {
+                    val followThrough = lock.withLock {
+                        inFlight.remove(taskId)
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1188
+        }
+    
+        private fun executeAsync(taskId: TaskId, kind: CoordinationKind) {
+            ownScope.launch {
+                runCatchingCancellable { doExecute(taskId, kind) }
+                    .onFailure { e ->
+                        logger.warn(e) { "WarpNode($selfId): executor failed for $taskId — unclaiming" }
+                        lock.withLock { claimed.remove(taskId) }
+                    }
+            }
+        }
+    
+        /**
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1444
+            val entry = (committed as? Committed.Entry)?.entry ?: return
+            val raft = raftNode ?: return
+            if (raft.role.value !is RaftRole.Leader) return
+    
+            val taskId = runCatchingCancellable { TaskId(entry.command.decodeToString()) }.getOrNull() ?: return
+    
+            // Quick gate before paying for a quorum round: skip entries whose task has already
+            // been executed here or is no longer queued. Re-checked under the lock after the fence.
+            val worthFencing = lock.withLock {
+                taskId in coordQueueQuilter.state.value.elements && taskId !in coordinatedApplied
+            }
+            if (!worthFencing) return
+    
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1454
+            }
+            if (!worthFencing) return
+    
+            ownScope.launch {
+                val fence = runCatchingCancellable { raft.readIndex() }
+                if (fence.isFailure) {
+                    logger.debug {
+                        "WarpNode($selfId): quorum fence failed for $taskId — deposed; standing down " +
+                            "(${fence.exceptionOrNull()?.message})"
+                    }
+                    return@launch
+                }
+                val shouldExecute = lock.withLock {
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1468
+                        resultsQuilter.state.value[taskId] == null &&
+                        coordinatedApplied.add(taskId)
+                }
+                if (!shouldExecute) return@launch
+                runCatchingCancellable {
+                    val result = coordinatedExecutor(taskId).encodeToByteArray()
+                    recordResult(taskId, result)
+                    removeFromQueue(taskId, CoordinationKind.Coordinated)
+                    lock.withLock { _executions = _executions.piece(_executions.inc(replica).delta) }
+                }.onFailure { e ->
+                    logger.warn(e) { "WarpNode($selfId): coordinatedExecutor failed for $taskId — resetting" }
+                    lock.withLock { coordinatedApplied.remove(taskId) }
+                }
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1503
+         */
+        private fun redriveStrandedCoordinated() {
+            val raft = raftNode ?: return
+            ownScope.launch {
+                val fence = runCatchingCancellable { raft.readIndex() }
+                if (fence.isFailure) return@launch
+                val stranded = lock.withLock {
+                    coordQueueQuilter.state.value.elements.filter { taskId ->
+                        taskId !in coordinatedApplied && resultsQuilter.state.value[taskId] == null
+                    }
+                }
+                stranded.forEach { taskId ->
+                    logger.info { "WarpNode($selfId): re-driving stranded coordinated task $taskId" }
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1512
+                    }
+                }
+                stranded.forEach { taskId ->
+                    logger.info { "WarpNode($selfId): re-driving stranded coordinated task $taskId" }
+                    runCatchingCancellable { executeViaRaft(taskId) }
+                        .onFailure { e ->
+                            logger.debug { "WarpNode($selfId): re-drive propose failed for $taskId: ${e.message}" }
+                        }
+                }
+            }
+        }
+    
+        private fun recordResult(taskId: TaskId, result: ByteArray) = putResult(taskId, OpResult(result))
+
+### kuilt-webrtc/src/wasmJsMain/kotlin/us/tractat/kuilt/webrtc/WebSocketSignalingChannel.kt:58
+                log.debug { "signaling ws.onclose room=$room — closing inboundChannel" }
+                incoming.close()
+            }
+            wsSetOnMessage(ws) { text ->
+                runCatchingCancellable { SignalingMessageCodec.decode(text) }
+                    .onSuccess { msg ->
+                        log.debug { "signaling ws.onmessage room=$room type=${msg::class.simpleName}" }
+                        incoming.trySend(msg)
+                    }
+            }
+    
+            openDeferred.await()
+            log.debug { "signaling open complete room=$room" }
+
