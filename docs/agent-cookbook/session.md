@@ -43,13 +43,26 @@ public suspend fun callerSuppliedRoomIdSample(
 **Intent:** rejoin / reconnect after a dropped connection; "hold the slot open" for a grace window.
 **Primitive:** `ResumeToken` (`us.tractat.kuilt.session.partition`) presented to `Room.resume` — `Room.resumeToken` mints it, `Room` is the whole public surface. (`SeamRoom`, which this entry used to name, is `internal`; `SeamRoomFactory` builds it.) Don't re-track the grace window yourself.
 
+Keep the existing room. After a transport tear, a joiner built by `SeamRoomFactory` attempts
+resume automatically within the reconnect window; the explicit call below is for manual control.
+This requires a loom that heals the **same seam instance** the room already holds, with the
+**same `selfId`**. `MuxClientLoom` provides that stable handle. The host keys the held seat by
+`token.peerId`, so a new transport identity cannot take it over.
+
+A loom that returns a new seam on each join leaves the old room's seam torn: reconnect ends in
+`HostLost`, and a later `resume` on that room returns `WindowClosed` without asking the host.
+Rebuilding the room sends `Hello` for fresh admission; it does not restore the held seat.
+Presenting a saved token when rebuilding is the separate
+[cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
+
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#resumeAfterDropSample -->
 ```kotlin
 public suspend fun resumeAfterDropSample(room: Room): Boolean {
     // After the admit handshake the joiner holds a reconnect credential — save it.
     val token: ResumeToken = room.resumeToken ?: return false
-    // ... transport drops; you redial the fabric and rebuild the room ...
-    // Present the saved token to re-enter within the leader's grace window.
+    // Keep this room: its loom must heal the SAME seam with the SAME selfId (e.g. MuxClientLoom).
+    // SeamRoomFactory joiners attempt resume automatically after a tear; this is manual control.
+    // Once that seam is usable again, present the token within the host's reconnect window.
     return when (val outcome = room.resume(token)) {
         ResumeResult.Success -> false // back in the room; state resync follows
         // The host answered, and said no. WHY is in the code, never in the message: an elapsed
