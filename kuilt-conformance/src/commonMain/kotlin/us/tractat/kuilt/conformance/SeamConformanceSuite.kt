@@ -2325,11 +2325,11 @@ public abstract class SeamConformanceSuite {
                             "never loop back to it attributed to selfId",
                     )
                 },
-                { assertEquals(hostPeersBefore, host.peers.value, "a rejected self-dial must not change peers (self never registered as a remote)") },
+                { assertEquals(hostPeersBefore, host.peers.value, "peers must be unchanged after the self-dial") },
                 {
                     assertIs<SeamState.Woven>(
                         host.state.value,
-                        "a rejected self-dial must not re-flip Weaving→Woven nor tear the seam — state stays Woven",
+                        "state must be Woven when sampled after the probes (no tear, no stall in Weaving)",
                     )
                 },
                 {
@@ -2344,15 +2344,15 @@ public abstract class SeamConformanceSuite {
                     assertEquals(
                         joinerPeersBefore,
                         joiner.peers.value,
-                        "a rejected self-dial must not change the JOINER's peers either (self never " +
-                            "registered as a remote there)",
+                        "a rejected self-dial must not change the JOINER's peers either " +
+                            "when sampled after the probes",
                     )
                 },
                 {
                     assertIs<SeamState.Woven>(
                         joiner.state.value,
-                        "the JOINER's state must stay Woven through a rejected self-dial too — no re-flip " +
-                            "Weaving→Woven, no tear",
+                        "the JOINER's state must be Woven when sampled after the probes " +
+                            "(no tear, no stall in Weaving)",
                     )
                 },
             )

@@ -129,7 +129,7 @@ class SymmetricSelfDialObligationRigTest {
             brokenJoinerHarness(::SeamThatReWeavesOnASelfDial).runSelfDialIsRejected(this)
         }
         assertAll(
-            { assertRedOn("the JOINER's state must stay Woven through a rejected self-dial too", failure) },
+            { assertRedOn("the JOINER's state must be Woven when sampled after the probes", failure) },
             { assertArmCount(1, failure) },
         )
     }
