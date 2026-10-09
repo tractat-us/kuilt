@@ -4,7 +4,9 @@ import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -111,7 +113,8 @@ public class FaultySeam(
      * a window the new profile will never fill (#2882): each outbound frame goes to its own route,
      * each inbound frame to [incoming], in the order they arrived. This function cannot suspend, so
      * the release runs in the seam's scope — a frame sent straight after the swap can overtake it. A
-     * released frame that finds the link already closed counts in [framesDropped].
+     * released outbound frame refused because the link closed, including during the send, counts
+     * in [framesDropped]. Cancellation of the release coroutine still propagates.
      */
     public fun setFaultProfile(profile: FaultProfile) {
         val held =
@@ -248,16 +251,19 @@ public class FaultySeam(
     /**
      * Deliver frames a profile swap drained out of the reorder windows (#2882).
      *
-     * Runs after [setFaultProfile] has returned, so the link may have closed in between; a frame that
-     * finds it closed is dropped rather than handed to a delegate that would refuse it with a throw
-     * nobody is waiting for.
+     * Runs after [setFaultProfile] has returned, so the link may close before or during a send.
+     * Guard the outbound send itself: a state pre-check cannot prevent a concurrent close from
+     * refusing it with a throw nobody is waiting for.
      */
     private suspend fun release(held: HeldFrames) {
         for (frame in held.outbound) {
-            if (delegate.state.value is SeamState.Torn) {
-                _framesDropped.incrementAndGet()
-            } else {
+            try {
                 sendHeld(frame)
+            } catch (_: IllegalStateException) {
+                // CancellationException is an IllegalStateException too: our own cancellation
+                // must stop the release, not count as a drop and carry on with the next frame.
+                currentCoroutineContext().ensureActive()
+                _framesDropped.incrementAndGet()
             }
         }
         for (frame in held.inbound) {
