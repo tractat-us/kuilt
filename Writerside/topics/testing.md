@@ -156,39 +156,36 @@ sequence that led there.
 
 ### Traces: the blow-by-blow {id="traces"}
 
-Where a metric is a milestone, a **trace** is every step in between — each vote, each
-heartbeat, each commit — in order. A peer exposes them as a stream you collect:
+Where a metric is a milestone, a **trace** records the steps in between — votes,
+heartbeats, and commits. The cluster harness collects these events for you. Assert
+that a proposal appears before its commit:
 
-<!-- verbatim from kuilt-raft/src/commonTest/kotlin/us/tractat/kuilt/raft/TraceTest.kt#proposal_emits_ClientRequest_then_AdvanceCommitIndex -->
+<!-- verbatim from kuilt-raft-test/src/commonTest/kotlin/us/tractat/kuilt/raft/test/TraceTest.kt#proposal_emits_ClientRequest_then_AdvanceCommitIndex -->
 
 ```kotlin
-    @Test fun proposal_emits_ClientRequest_then_AdvanceCommitIndex() = raftRunTest {
-        val sim = raftSim(this, backgroundScope)
-        val leader = awaitLeader(sim)
-        val events = mutableListOf<RaftTraceEvent>()
-        val job = launch { leader.trace.collect { events.add(it) } }
-        leader.propose(byteArrayOf(42))
-        delay(20)
-        job.cancel()
-
-        val clientReqs = events.filterIsInstance<RaftTraceEvent.ClientRequest>()
-        val advances = events.filterIsInstance<RaftTraceEvent.AdvanceCommitIndex>()
-        assertTrue(clientReqs.isNotEmpty(), "Expected ClientRequest event")
-        assertTrue(advances.isNotEmpty(), "Expected AdvanceCommitIndex event")
-        // ClientRequest must precede AdvanceCommitIndex
-        val firstReq = clientReqs.minBy { it.clock }
-        val firstAdvance = advances.minBy { it.clock }
-        assertTrue(
-            firstReq.clock < firstAdvance.clock,
-            "ClientRequest(clock=${firstReq.clock}) must precede AdvanceCommitIndex(clock=${firstAdvance.clock})",
+    @Test fun proposal_emits_ClientRequest_then_AdvanceCommitIndex() = raftSimTest { sim ->
+        val leader = sim.awaitLeader()
+        val id = sim.nodes.entries.first { it.value === leader }.key
+        val index = leader.propose(byteArrayOf(42)).index
+        sim.awaitCommit(index)
+        sim.settle()
+        sim.assertTracedInOrder(id,
+            { it is RaftTraceEvent.ClientRequest && it.index == index },
+            { it is RaftTraceEvent.AdvanceCommitIndex && it.newCommitIndex >= index },
+            message = "proposal must precede its commit",
         )
     }
 ```
 
-Each event carries a monotonic `clock`, so you can assert not just that things happened
-but that they happened *in the right order*. The cluster harness keeps a rolling buffer
-of these events per peer and prints them in its failure dump — which is why a stuck
-cluster tells you *which* peer was thrashing and *what* it was doing.
+`traceOf` returns a snapshot of a peer's recent events. `assertTraced` looks for a
+matching event; `assertNotTraced` checks its absence. `assertTracedInOrder` matches
+separate events in order, allowing other events between them. Failures print the
+peer's recent transcript.
+
+These assertions inspect what the collector has already received. Call `settle`
+after driving the scenario. The buffer is bounded, and the trace stream can drop
+events, so absence proves only that an event is missing from the retained snapshot.
+For a live export, collect the public `RaftNode.trace` stream directly.
 
 ### Logs: the running commentary {id="logs"}
 
