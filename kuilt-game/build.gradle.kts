@@ -24,6 +24,7 @@ kotlin {
             implementation(project(":kuilt-quilter"))
             implementation(project(":kuilt-crdt"))
             implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.serialization.core)
             implementation(libs.kotlinx.serialization.cbor)
         }

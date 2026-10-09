@@ -1,5 +1,7 @@
 package us.tractat.kuilt.game
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +40,9 @@ import us.tractat.kuilt.raft.Snapshot
  *
  * ## Constraints
  *
+ * - **Concurrent callers.** Optimistic apply, rollback, commit processing and snapshot reset
+ *   share one lock. State-transition calls into [SpeculativeGame] run under that lock; the suspending
+ *   [TurnSequencer.propose] call runs outside it.
  * - [SpeculativeGame.apply] must be **deterministic and pure** — replay correctness depends
  *   on it. See [SpeculativeGame] KDoc.
  * - **Log compaction rehydrates.** A snapshot install from Raft surfaces as a [TurnEvent.Reset] on
@@ -85,6 +90,9 @@ public class SpeculativeSequencer<S, A>(
     initialState: S,
     scope: CoroutineScope,
 ) {
+    // Guards the pending buffer, authoritative snapshot, dedup table and compound state updates.
+    private val stateLock = reentrantLock()
+
     /** Pending inputs submitted locally but not yet confirmed by the committed log. */
     private val pendingBuffer = ArrayDeque<A>()
 
@@ -121,7 +129,7 @@ public class SpeculativeSequencer<S, A>(
      * Exposed as a diagnostic and for test assertions. A count of 0 means the speculative
      * state is fully authoritative — no pending inputs have been applied on top.
      */
-    public val pendingCount: Int get() = pendingBuffer.size
+    public val pendingCount: Int get() = stateLock.withLock { pendingBuffer.size }
 
     init {
         scope.launch { collectCommitted() }
@@ -175,12 +183,12 @@ public class SpeculativeSequencer<S, A>(
 
     // ── Private: speculative apply and rollback ───────────────────────────────
 
-    private fun applySpeculatively(action: A) {
+    private fun applySpeculatively(action: A) = stateLock.withLock {
         pendingBuffer.addLast(action)
         _speculativeState.value = game.apply(_speculativeState.value, action)
     }
 
-    private fun rollbackSpeculative() {
+    private fun rollbackSpeculative() = stateLock.withLock {
         pendingBuffer.removeLastOrNull()
         _speculativeState.value = replayPendingOnSnapshot()
     }
@@ -210,7 +218,7 @@ public class SpeculativeSequencer<S, A>(
      * snapshot but never seen by this lagging node can double-apply, because this node cannot recover
      * the marks embedded in the consumer's opaque snapshot envelope.
      */
-    private fun onReset(snapshot: Snapshot) {
+    private fun onReset(snapshot: Snapshot): Unit = stateLock.withLock {
         pendingBuffer.clear()
         authoritativeSnapshot = game.snapshot(game.fromSnapshot(snapshot.state))
         _speculativeState.value = replayPendingOnSnapshot()
@@ -233,7 +241,7 @@ public class SpeculativeSequencer<S, A>(
      * Distinct legitimate actions never collide here: the auto-serial [propose] draws a fresh serial
      * per call, so only an explicit same-`requestId` retry shares a key — exactly what dedup drops.
      */
-    private fun onCommit(indexed: IndexedAction<A>) {
+    private fun onCommit(indexed: IndexedAction<A>): Unit = stateLock.withLock {
         val fresh = dedupTable.shouldApply(indexed.dedupKey)
         val oldest = pendingBuffer.firstOrNull()
         val matchesPending = oldest != null && actionsMatch(oldest, indexed.action)
@@ -255,6 +263,7 @@ public class SpeculativeSequencer<S, A>(
      *
      * The speculative state already reflects this action (it was applied optimistically),
      * so no re-computation is needed — just pop the buffer and advance the snapshot.
+     * Caller holds [stateLock].
      */
     private fun confirmOldestPending(committed: A) {
         pendingBuffer.removeFirst()
@@ -268,6 +277,7 @@ public class SpeculativeSequencer<S, A>(
      *
      * This is the rollback path: the authoritative snapshot advances, and speculative
      * state is recomputed from scratch by replaying the pending buffer.
+     * Caller holds [stateLock].
      */
     private fun applyForeignAndReplay(foreign: A) {
         authoritativeSnapshot = game.snapshot(game.apply(authoritativeSnapshot, foreign))
@@ -277,6 +287,7 @@ public class SpeculativeSequencer<S, A>(
     /**
      * Returns the state produced by replaying all pending inputs on top of the
      * current authoritative snapshot.
+     * Caller holds [stateLock].
      */
     private fun replayPendingOnSnapshot(): S =
         pendingBuffer.fold(game.restore(authoritativeSnapshot)) { state, action ->
