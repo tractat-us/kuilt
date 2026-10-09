@@ -124,12 +124,15 @@ the host drops permanently, the room emits `MembershipEvent.HostLost` and
 `broadcast`/`sendTo` become silent no-ops. The room does not promote a new host;
 the consumer decides what to do (tear down, start a new session, etc.).
 
-**Reconnect/resume.** A joiner's `room.resumeToken` (non-null once admitted)
-is a credential it can save and present to `room.resume(token)` after a
-transport drop, to re-enter the same room within the host's reconnect window.
-The token carries the `RoomId`, not the host's identity, so it survives a host
-change. Resume drives `MembershipEvent.WindowOpened` → `Resumed` (or `Left` with
-`LeaveReason.PartitionExpired` if the window closes first).
+**Reconnect/resume.** Keep the existing room after a transport tear. A
+`SeamRoomFactory` joiner attempts resume automatically within the host's reconnect
+window, using its `room.resumeToken` (non-null once admitted). The loom must heal
+the same seam instance with the same `selfId`; `MuxClientLoom` provides this.
+`room.resume(token)` is for manual control once that seam is usable again.
+A loom that returns a new seam leaves the old room torn and reconnect ends in
+`HostLost`; a later resume on that room returns `WindowClosed`. Rebuilding the room
+admits it fresh. See the [resume recipe](agent-cookbook/session.md#rejoin--reconnect)
+and the [cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
 
 `SeamRoomFactory` takes an injectable `clock: () -> Instant` and a
 `HeartbeatConfig`; tests pass virtual time and tight intervals, production uses

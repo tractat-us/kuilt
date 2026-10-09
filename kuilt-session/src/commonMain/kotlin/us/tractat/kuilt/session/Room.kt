@@ -320,15 +320,28 @@ public interface Room {
      * the Welcome frame. Null on a [SessionRole.Host] room (the host does not reconnect
      * to itself) and null on a joiner room whose handshake has not yet completed.
      *
-     * Callers that need to reconnect after a transport drop should save this token.
-     * Present it to [resume] to attempt re-entry within the reconnect window.
+     * [SeamRoomFactory] joiners use this token automatically after a transport tear when the
+     * loom can heal the existing seam. Save it only if you need manual [resume] control; see
+     * that method's same-seam and stable-identity requirements before attempting re-entry.
      */
     public val resumeToken: ResumeToken?
 
     /**
      * Attempt to resume this room from a [ResumeToken] after a transport drop.
      *
-     * Wired via [us.tractat.kuilt.session.partition.JoinerReconnectController] (1D).
+     * Keep this room and its underlying [Seam]. The loom must heal that **same seam instance**
+     * with its [Seam.selfId] unchanged; [us.tractat.kuilt.core.MuxClientLoom] provides this stable,
+     * resumable handle. The host keys the reconnect window by [ResumeToken.peerId].
+     *
+     * A joiner built by [SeamRoomFactory] attempts resume automatically after a transport tear,
+     * within the reconnect window. This explicit call is for manual control once the existing
+     * seam is usable again; it does not redial the fabric or replace the room's seam.
+     *
+     * If the loom returns a new seam instead of healing the existing one, reconnect ends in
+     * [MembershipEvent.HostLost]. A later call on that terminal room returns
+     * [ResumeResult.WindowClosed] without asking the host. Rebuilding a room sends `Hello` for
+     * fresh admission, not a resume; presenting a saved token during rebuild is the
+     * [cold-start rejoin gap (#1593)](https://github.com/tractat-us/kuilt/issues/1593).
      *
      * Returns a [ResumeResult.JoinerOutcome], never the whole [ResumeResult] hierarchy: the host's
      * own verdicts ([ResumeResult.WindowNotYetOpen], [ResumeResult.TokenInvalid]) do not travel as

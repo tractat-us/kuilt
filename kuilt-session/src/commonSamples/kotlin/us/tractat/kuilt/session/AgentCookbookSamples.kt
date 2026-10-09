@@ -104,8 +104,9 @@ public suspend fun callerSuppliedRoomIdSample(
 }
 
 /**
- * Reconnect after a transport drop by presenting the saved [ResumeToken], instead of
- * re-joining fresh (which would reset the slot). Don't re-track the grace window yourself.
+ * Manually resume the existing room after its loom heals the same seam with an unchanged selfId.
+ * [us.tractat.kuilt.core.MuxClientLoom] provides this; [SeamRoomFactory] joiners attempt resume
+ * automatically after a tear. Rebuilding a room admits it fresh; cold-start rejoin is #1593.
  *
  * The four arms below are the whole of [ResumeResult.JoinerOutcome] — the host's own verdicts are
  * a different half of the hierarchy and never reach a joiner as values, so a branch on one is a
@@ -114,8 +115,9 @@ public suspend fun callerSuppliedRoomIdSample(
 public suspend fun resumeAfterDropSample(room: Room): Boolean {
     // After the admit handshake the joiner holds a reconnect credential — save it.
     val token: ResumeToken = room.resumeToken ?: return false
-    // ... transport drops; you redial the fabric and rebuild the room ...
-    // Present the saved token to re-enter within the leader's grace window.
+    // Keep this room: its loom must heal the SAME seam with the SAME selfId (e.g. MuxClientLoom).
+    // SeamRoomFactory joiners attempt resume automatically after a tear; this is manual control.
+    // Once that seam is usable again, present the token within the host's reconnect window.
     return when (val outcome = room.resume(token)) {
         ResumeResult.Success -> false // back in the room; state resync follows
         // The host answered, and said no. WHY is in the code, never in the message: an elapsed
