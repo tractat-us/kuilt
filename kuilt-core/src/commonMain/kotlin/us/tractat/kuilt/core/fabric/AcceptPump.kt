@@ -2,11 +2,19 @@ package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.time.Duration
+
+// Retry brief source failures promptly without spinning while a listener remains unavailable.
+private const val INITIAL_ACCEPT_RETRY_DELAY_MILLIS: Long = 10
+// Bound recovery latency after a prolonged outage while limiting repeated failures to once per second.
+private const val MAX_ACCEPT_RETRY_DELAY_MILLIS: Long = 1_000
 
 /**
  * Persistent, concurrent, handshake-timed accept loop. Drains [source] forever; each accepted
@@ -16,7 +24,14 @@ import kotlin.time.Duration
  *
  * On success the conn is left live (owned by [handle] — e.g. now published into a mesh). On [handle]
  * failure or a handshake timeout, [onFailure] is invoked and the conn is closed. `kuilt-core` is
- * logger-free, so [onFailure] is how a host surfaces a per-link rejection/timeout to its own logger.
+ * logger-free, so [onFailure] surfaces accept-source failures and per-link rejections/timeouts to a host's logger.
+ *
+ * An [Exception] from [ConnectionSource.accept] is reported through [onFailure], then the pump delays
+ * before accepting again: 10 ms initially, doubling on consecutive failures up to 1 s. A successful
+ * accept resets the delay. Source-minted cancellation is retried while the pump remains active;
+ * cancellation of the pump itself always propagates. An [Error] escapes. No conn was returned on this
+ * path, so the source owns cleanup of any partially accepted conn. Exceptions from [onFailure] while
+ * reporting an accept failure are absorbed too; an [Error] from the callback still escapes.
  *
  * **Cancelling the pump [Job] is a third exit, and it is [handle]'s to clean up — not this pump's**
  * (#2587). Both closes above are keyed on a *failure*: [runCatchingCancellable] rethrows a
@@ -36,8 +51,8 @@ import kotlin.time.Duration
  * @param source the accept source drained forever until the pump [Job] is cancelled.
  * @param handshakeTimeout the ceiling on a single conn's [handle]; a conn whose handling exceeds it is
  *   abandoned (its child coroutine cancelled) and closed, and [onFailure] sees a [HandshakeTimeoutException].
- * @param onFailure invoked with the failure whenever a conn's [handle] throws or times out. Best-effort,
- *   non-suspending; defaults to a silent absorb.
+ * @param onFailure invoked with a recoverable accept failure, or whenever a conn's [handle] throws or
+ *   times out. Best-effort, non-suspending; defaults to a silent absorb.
  * @param handle handles one accepted conn to completion (the handshake + publication). Runs in its own
  *   child coroutine under [handshakeTimeout].
  * @return the pump [Job] (a child of the receiver scope); cancel it to stop accepting.
@@ -48,8 +63,22 @@ public fun CoroutineScope.acceptPump(
     onFailure: (Throwable) -> Unit = {},
     handle: suspend (Connection) -> Unit,
 ): Job = launch {
+    var retryDelayMillis = INITIAL_ACCEPT_RETRY_DELAY_MILLIS
     while (isActive) {
-        val conn = source.accept()
+        val conn = try {
+            source.accept()
+        } catch (failure: Exception) {
+            currentCoroutineContext().ensureActive()
+            try {
+                onFailure(failure)
+            } catch (_: Exception) {
+                currentCoroutineContext().ensureActive()
+            }
+            delay(retryDelayMillis)
+            retryDelayMillis = (retryDelayMillis * 2).coerceAtMost(MAX_ACCEPT_RETRY_DELAY_MILLIS)
+            continue
+        }
+        retryDelayMillis = INITIAL_ACCEPT_RETRY_DELAY_MILLIS
         launch {
             val completed = withTimeoutOrNull(handshakeTimeout) {
                 runCatchingCancellable { handle(conn) }
