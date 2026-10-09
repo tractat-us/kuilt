@@ -3,6 +3,13 @@
 package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -10,6 +17,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -23,6 +31,79 @@ private class FakeConnection(val id: String) : Connection {
 }
 
 class AcceptPumpTest {
+
+    @Test
+    fun aFailedAcceptDoesNotStopLaterConnections() = assertAcceptRecovery(IllegalStateException("accept failed"))
+
+    @Test
+    fun aCalleeMintedCancellationDoesNotStopLaterConnections() =
+        assertAcceptRecovery(CancellationException("source cancelled only its own operation"))
+
+    @Test
+    fun aThrowingFailureReporterDoesNotStopLaterConnections() =
+        assertAcceptRecovery(IllegalStateException("accept failed"), reporterThrows = true)
+
+    private fun assertAcceptRecovery(failure: Exception, reporterThrows: Boolean = false) =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val unhandled = mutableListOf<Throwable>()
+            val supervisor = SupervisorJob()
+            val scope = CoroutineScope(coroutineContext + supervisor + CoroutineExceptionHandler { _, e -> unhandled += e })
+            val connection = FakeConnection("after-failure")
+            val handled = mutableListOf<Connection>()
+            val reported = mutableListOf<Throwable>()
+            var attempts = 0
+            val source = object : ConnectionSource {
+                override suspend fun accept(): Connection = when (++attempts) {
+                    1 -> throw failure
+                    2 -> connection
+                    else -> awaitCancellation()
+                }
+            }
+            try {
+                val job = scope.acceptPump(source, handshakeTimeout = 2.seconds, onFailure = {
+                    reported += it
+                    if (reporterThrows) throw CancellationException("reporter failed")
+                }) { handled += it }
+                runCurrent()
+                assertAll(
+                    { assertEquals(listOf<Connection>(connection), handled, "the connection after the failed accept must be handled") },
+                    { assertEquals(listOf<Throwable>(failure), reported, "the accept failure must be reported once") },
+                    { assertEquals(3, attempts, "the pump must reach the next suspended accept") },
+                    { assertTrue(job.isActive, "the pump must survive the failed accept") },
+                    { assertTrue(unhandled.isEmpty(), "no recoverable failure may escape to the scope handler") },
+                )
+                job.cancel()
+                runCurrent()
+                assertAll(
+                    { assertTrue(job.isCompleted && job.isCancelled, "cancellation must finish the suspended pump") },
+                    { assertEquals(3, attempts, "cancellation must not retry accept") },
+                    { assertEquals(listOf<Throwable>(failure), reported, "cancellation must not be reported as an accept failure") },
+                )
+            } finally {
+                supervisor.cancel()
+            }
+        }
+
+    @Test
+    fun cancellationDuringAFailedAcceptIsNotReportedOrRetried() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            var attempts = 0
+            val failures = mutableListOf<Throwable>()
+            val source = object : ConnectionSource {
+                override suspend fun accept(): Connection {
+                    attempts++
+                    currentCoroutineContext().cancel()
+                    throw IllegalStateException("accept failed while the pump was cancelled")
+                }
+            }
+            val job = backgroundScope.acceptPump(source, handshakeTimeout = 2.seconds, onFailure = { failures += it }) {}
+            runCurrent()
+            assertAll(
+                { assertTrue(job.isCompleted && job.isCancelled, "the cancelled pump must finish") },
+                { assertEquals(1, attempts, "a cancelled accept must not be retried") },
+                { assertTrue(failures.isEmpty(), "the pump's cancellation must propagate before reporting") },
+            )
+        }
 
     /** A conn whose handling hangs must not block a later conn's handling (concurrency), and must be
      *  abandoned after the handshake timeout (no permanent wedge). */
