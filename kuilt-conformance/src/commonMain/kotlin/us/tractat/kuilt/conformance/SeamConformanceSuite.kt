@@ -148,6 +148,9 @@ import kotlin.test.fail
  * {theOtherPeer} while it stays Woven) is reliably caught, but a purely transient sub-scheduling drop that
  * is overwritten before the collector resumes may be missed. There is no stronger primitive against a
  * StateFlow; the monitor raises the floor from "sampled once" to "sampled continuously".
+ * It checks the published roster, not the remote bindings: a fabric that always publishes
+ * `registry.peers + selfId` satisfies it even if a defect binds self as a remote. See
+ * [selfDialIsRejected] for the corresponding roster and state-observation limits.
  *
  * This suite is deliberately fixed at **two** Looms (ADR-001) and has no positive
  * N-peer/mesh obligation; roster convergence, sender-attributed broadcast, directed
@@ -364,6 +367,9 @@ public abstract class SeamConformanceSuite {
      * the same reason [selfDialDeclaration] has no refutation for its `NotConstructible` arm. A
      * harness that dials the host twice and returns `true` is indistinguishable from one that dials
      * both. What the signature buys is that the joiner is *named* — an omission has to be written.
+     * The hook receives the pair after hosting and joining, not a fresh, peerless seam. A green
+     * [selfDialIsRejected] therefore does not prove that self-dial cannot cause the first
+     * [SeamState.Weaving] to [SeamState.Woven] transition; its KDoc also names the roster blind spot.
      *
      * This is a **harness** capability, not a fabric [SeamCapabilities] flag — mirroring
      * [injectMidSessionDeath]. Only a harness that can make a live seam see a connection to its own
@@ -466,6 +472,9 @@ public abstract class SeamConformanceSuite {
      * [block]. Hosts and joins **concurrently** — a role-split server Loom's host() suspends
      * until a joiner connects, so the two must run at once; in-process (loom, loom) fabrics
      * are unaffected. [block] runs inside the connecting `coroutineScope`.
+     * It receives the seams only after both calls return; neither the block nor the monitors can
+     * observe their earlier state transitions. This is not a fixture for self-dial before a real
+     * peer joins (see [selfDialIsRejected]).
      */
     protected suspend fun TestScope.connectedPair(
         block: suspend CoroutineScope.(host: Seam, joiner: Seam) -> Unit,
@@ -2211,7 +2220,7 @@ public abstract class SeamConformanceSuite {
             }
         }
 
-    // ── (13d) a self-dial is REJECTED — self never joins the roster, never echoes ──
+    // ── (13d) self-dial rejection — observable roster changes and broadcast echoes ──
     //
     // The #1466 class as a first-class obligation: a symmetric advertise+browse fabric dials its own
     // advertisement (real Bonjour/mDNS returns a device its own service), so a live seam sees a
@@ -2229,13 +2238,14 @@ public abstract class SeamConformanceSuite {
     //   (b) **live self-loopback** — self is registered AND its link stays live, so the host's own
     //       broadcast is delivered back to it stamped `sender == selfId` (a healthy seam never loops a
     //       peer's own broadcast to itself). Caught by the broadcast-echo assertion below.
-    // Both are asserted so the obligation has teeth regardless of which shape a given fabric produces. A
+    // Both are asserted, but each needs its own observable consequence (see the KDoc below). A
     // *passive* "no self-frame arrives" check (no broadcast) would be near-vacuous — a self-link's only
     // frames are the identity `NwHello`s, consumed as identity and never surfaced to `incoming` — so we
     // broadcast to force a live self-loopback (shape b) to reveal itself. (For the reference `NwSeam`
     // fake a self-dial's two connection ends share one radio link and tear each other, so a broken guard
     // there surfaces as shape (a), the roster eviction; a fabric whose self-link is a durable loopback
-    // surfaces as shape (b).) State-stays-Woven backstops both (no re-flip, no tear).
+    // surfaces as shape (b).) The state assertions backstop both by sampling Woven at the end;
+    // they cannot rule out an earlier transition that has already returned to Woven.
     //
     // Gated on a HARNESS hook, not a SeamCapabilities flag: only a harness that can make a live seam see
     // a connection to its own `selfId` (e.g. the `FakeNwRadio` self-endpoint path, #1485) can inject it.
@@ -2260,11 +2270,30 @@ public abstract class SeamConformanceSuite {
     // sharing an implementation rather than by two independent guards agreeing. That is worth writing
     // down rather than counting as proof: the row's value is that a fabric which later splits its ends
     // — or gains a joiner whose guard lives elsewhere — cannot regress on the joining device while the
-    // host keeps looking healthy. Two of the three joiner arms are also weaker than they read: the
-    // roster arm is structurally blind on a fabric that republishes `registry.peers + selfId`
-    // (`MCSessionLink` does), and the literal #1466 direction — evicting *self* — reds
-    // [connectedPair]'s continuous monitor before this arm is reached.
+    // host keeps looking healthy, within the observation limits below. The literal #1466 direction
+    // — evicting *self* — can red [connectedPair]'s continuous monitor before the roster arm is reached.
 
+    /**
+     * Probe a connected pair for roster changes, broadcast echoes attributed to self, and a final
+     * state other than [SeamState.Woven] after [injectSelfDial].
+     *
+     * **Roster-union blindness, at either end (#2538).** If a fabric publishes
+     * `registry.peers + selfId` (as `MCSessionLink` does), adding or removing a binding for self alone
+     * leaves that set unchanged. The roster-equality arm cannot distinguish a rejected self-dial
+     * from an incorrectly bound self-peer. [monitorSelfAlwaysInPeers] is blind to that binding too:
+     * the union always includes self. The echo probe can detect a live self-link only if it carries
+     * the broadcast back to `incoming`; it does not prove that the registry refused the binding.
+     *
+     * **No pre-Woven observation.** [connectedPair] supplies seams after hosting and joining, so
+     * injection into a healthy pair starts with real peers already connected. This cannot test
+     * whether self-dial makes a fresh, peerless seam flip from [SeamState.Weaving] to [SeamState.Woven].
+     * The state arms only sample after the echo probes; even a later transient re-weave can be missed
+     * if it returns to Woven before that sample. A fabric-specific fresh-link test must cover the
+     * first-transition case; `MCSessionLinkSelfDialTest.aSelfDialNeverWeavesTheSeam` shows that fixture.
+     *
+     * When binding a fabric, ask: **on which conforming implementations is this arm unable to fail?**
+     * A green result establishes only the observations above, not absence of an internal self-binding.
+     */
     @Test
     public fun selfDialIsRejected(): TestResult = runTest { runSelfDialIsRejected(this) }
 
@@ -2335,9 +2364,10 @@ public abstract class SeamConformanceSuite {
      * `selfId`, or `null` if none did within the window.
      *
      * Subscribes the sole `incoming` collector first, then lets the injected self-dial fully
-     * resolve-or-drop, then broadcasts. A self-registered link echoes the broadcast back attributed to
-     * `selfId` (non-null ⇒ the caller's arm fails); a healthy seam never does (window elapses ⇒ null ⇒
-     * pass). One collector per seam, so ADR-034's single-collection contract holds at both ends.
+     * resolve-or-drop, then broadcasts. A live self-link that carries this broadcast back attributed
+     * to `selfId` fails the caller's arm (non-null); a healthy seam never does (window elapses ⇒ null ⇒
+     * pass). A self-binding with no observable echo is outside this probe's reach. One collector per
+     * seam, so ADR-034's single-collection contract holds at both ends.
      */
     private suspend fun CoroutineScope.probeForSelfEcho(seam: Seam): Swatch? {
         val selfEcho = async {
