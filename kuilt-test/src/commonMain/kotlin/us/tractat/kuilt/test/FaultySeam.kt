@@ -112,9 +112,10 @@ public class FaultySeam(
      * Frames held in a [FaultProfile.ReorderWindow] are released by the swap rather than stranded in
      * a window the new profile will never fill (#2882): each outbound frame goes to its own route,
      * each inbound frame to [incoming], in the order they arrived. This function cannot suspend, so
-     * the release runs in the seam's scope — a frame sent straight after the swap can overtake it. A
-     * released outbound frame refused because the link closed, including during the send, counts
-     * in [framesDropped]. Cancellation of the release coroutine still propagates.
+     * the release runs in the seam's scope — a frame sent straight after the swap can overtake it.
+     * An outbound [IllegalStateException] counts in [framesDropped] only if the delegate is
+     * [SeamState.Torn] when the failure is handled; otherwise it is rethrown in the seam's scope.
+     * Cancellation of the release coroutine is checked first and still propagates.
      */
     public fun setFaultProfile(profile: FaultProfile) {
         val held =
@@ -259,10 +260,11 @@ public class FaultySeam(
         for (frame in held.outbound) {
             try {
                 sendHeld(frame)
-            } catch (_: IllegalStateException) {
+            } catch (refused: IllegalStateException) {
                 // CancellationException is an IllegalStateException too: our own cancellation
                 // must stop the release, not count as a drop and carry on with the next frame.
                 currentCoroutineContext().ensureActive()
+                if (delegate.state.value !is SeamState.Torn) throw refused
                 _framesDropped.incrementAndGet()
             }
         }

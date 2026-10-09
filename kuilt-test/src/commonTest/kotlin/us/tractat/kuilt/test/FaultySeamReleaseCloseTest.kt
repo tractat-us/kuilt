@@ -32,6 +32,56 @@ class FaultySeamReleaseCloseTest {
     @Test
     fun cancelledReleasedSendToDoesNotCountDropsOrContinue() = cancelDuringRelease(addressed = true)
 
+    @Test
+    fun wovenBroadcastFailureEscapesWithoutCountingDrop() = wovenFailureDuringRelease(addressed = false)
+
+    @Test
+    fun wovenSendToFailureEscapesWithoutCountingDrop() = wovenFailureDuringRelease(addressed = true)
+
+    private fun wovenFailureDuringRelease(addressed: Boolean) = runTest {
+        val loom = InMemoryLoom()
+        val inner = loom.host(Pattern("sender"))
+        val peer = loom.join(InMemoryTag("sender"))
+        val refused = IllegalStateException("unexpected send")
+        var attempts = 0
+        val failing = object : Seam by inner {
+            override suspend fun broadcast(payload: ByteArray) {
+                attempts++
+                throw refused
+            }
+
+            override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+                attempts++
+                throw refused
+            }
+        }
+        val failures = mutableListOf<Throwable>()
+        val scope = CoroutineScope(
+            backgroundScope.coroutineContext +
+                SupervisorJob(backgroundScope.coroutineContext[Job]) +
+                CoroutineExceptionHandler { _, failure -> failures += failure },
+        )
+        val faulty = FaultySeam(
+            failing,
+            scope,
+            FaultProfile.ReorderWindow(windowSize = 2, seed = 0L, direction = Direction.Outbound),
+        )
+        send(faulty, peer.selfId, addressed)
+        assertEquals(1L, faulty.framesDelayed, "precondition: the frame is held")
+
+        faulty.heal()
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(1, attempts, "rig: the released send threw") },
+            { assertTrue(inner.state.value is SeamState.Woven, "rig: the delegate stayed live") },
+            { assertEquals(listOf<Throwable>(refused), failures, "a live delegate's failure must reach the scope handler") },
+            { assertEquals(0L, faulty.framesDropped, "an unrelated failure is not a closed-link drop") },
+            { assertEquals(0L, faulty.framesDelivered) },
+        )
+        faulty.close()
+    }
+
     private fun closeDuringRelease(addressed: Boolean) = runTest {
         val loom = InMemoryLoom()
         val inner = loom.host(Pattern("sender"))
