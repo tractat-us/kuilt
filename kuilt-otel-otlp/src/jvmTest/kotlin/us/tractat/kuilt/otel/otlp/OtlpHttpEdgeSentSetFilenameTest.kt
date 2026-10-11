@@ -28,11 +28,12 @@ import kotlin.test.assertTrue
  * - `FileChannelDurableStore.read` guards on `File.exists()`, which answers `false` for
  *   a too-long name rather than throwing, so the read degrades to an empty digest;
  * - the matching `write` *does* throw, but `WarpOtlpBridge.drain` catches it, logs at
- *   debug, and reports only a generic failure.
+ *   debug, and reports it as that signal's failure — which reads like a routine offline
+ *   collector.
  *
- * Steady state is every drain re-POSTing the whole buffer, forever, visible only at debug
- * level — and in the band where one key fits and another does not, `drain` returns
- * `DrainResult.Success` while a signal's sent-set silently never persists. A fixed-width
+ * Steady state is every drain re-POSTing the whole buffer, forever — and in the band where
+ * one key fits and another does not, `drain` returns `DrainResult.Partial` on every call
+ * while a signal's sent-set never persists. A fixed-width
  * tag removes the class, and this test is what reds if the key ever becomes
  * endpoint-shaped again.
  *

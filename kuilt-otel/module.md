@@ -99,7 +99,7 @@ see that module's documentation for the durability contract and the four backend
 | `WarpOtlpBridge` | Drains converged CRDTs to an OTLP edge, reconciling by digest. |
 | `OtlpEdge` | Interface your backend implements to receive spans. |
 | `SpanDigest` | Compact set of span ids the edge already holds; drives delta computation. |
-| `DrainResult` | Typed result of `WarpOtlpBridge.drain`: spans sent or failure. |
+| `DrainResult` | Typed result of `WarpOtlpBridge.drain`: `Success` with per-signal counts, `Partial` (counts plus the signals that failed), or `Failure` (every attempted signal failed). Each failure is a `SignalFailure` naming its `OtlpSignal` and the edge's own exception. |
 | `SpanRecord` | OTLP-shaped span data model. |
 | `LogRecord` | OTLP-shaped log-record data model with optional trace correlation. |
 | `MetricKey` | Identity of one metric time series (name + kind + label set). |

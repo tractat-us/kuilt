@@ -33,7 +33,8 @@ public interface OtlpEdge {
      * delta: only spans absent from the digest are sent over the wire.
      *
      * Throws on connectivity failure; [WarpOtlpBridge] wraps the call with
-     * [runCatchingCancellable] and surfaces the error as [DrainResult.Failure].
+     * [runCatchingCancellable] and reports the exception, tagged [OtlpSignal.SPANS], in a
+     * [DrainResult.Partial] or [DrainResult.Failure].
      */
     public suspend fun digest(): SpanDigest
 
@@ -53,7 +54,8 @@ public interface OtlpEdge {
      * [spans] is non-empty when called by the bridge (an empty delta is never sent).
      *
      * Throws on send failure; [WarpOtlpBridge] wraps the call with
-     * [runCatchingCancellable] and surfaces the error as [DrainResult.Failure].
+     * [runCatchingCancellable] and reports the exception, tagged [OtlpSignal.SPANS], in a
+     * [DrainResult.Partial] or [DrainResult.Failure].
      */
     public suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink> = emptyList())
 

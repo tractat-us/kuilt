@@ -6,9 +6,12 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.store.InMemoryDurableStore
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -121,41 +124,158 @@ class WarpOtlpBridgeTest {
         assertTrue(edge.sentLinks.any { it.fromSpanId == sId(2) && it.linkedSpanId == sId(1) })
     }
 
+    // ---- per-signal outcome: Success / Partial / Failure (#2524) ----
+
+    private suspend fun telemetryWithAllThreeSignals() = telemetry().apply {
+        spans.export(span(1))
+        logs.export(LogRecord(recordId = recId(1), body = "hi"))
+        metrics.incrementSum(MetricKey("req", MetricKind.SUM), by = 2L)
+    }
+
     @Test
     fun partialFailureIsolatesSignals() = runTest {
         val t = telemetry()
         t.spans.export(span(1))
         t.logs.export(LogRecord(recordId = recId(1), body = "hi"))
+        val logsDown = RuntimeException("logs down")
         val edge = object : FakeEdge() {
-            override suspend fun sendLogs(logs: Set<LogRecord>): Unit = throw RuntimeException("logs down")
+            override suspend fun sendLogs(logs: Set<LogRecord>): Unit = throw logsDown
         }
-        // spans still delivered despite logs failing; drain does not throw.
+
         val result = bridge(t).drain(edge)
-        assertEquals(1, edge.sentSpans.size)
-        // A partial success still reports what got through.
-        assertIs<DrainResult.Success>(result)
-        assertEquals(1, result.spansSent)
-        assertEquals(0, result.logsSent)
+
+        val partial = assertIs<DrainResult.Partial>(result)
+        assertAll(
+            { assertEquals(1, edge.sentSpans.size, "spans are delivered despite logs failing") },
+            { assertEquals(1, partial.spansSent, "a partial result reports what got through") },
+            { assertEquals(0, partial.logsSent) },
+            { assertEquals(listOf(OtlpSignal.LOGS), partial.failures.map { it.signal }) },
+            { assertSame(logsDown, partial.failures.single().cause, "the edge's own exception, unwrapped") },
+        )
     }
 
     @Test
-    fun drainSurvivesSpanDigestFailure() = runTest {
+    fun mixedFailureAttributesEachCauseToItsSignal() = runTest {
+        val spanDigestDown = RuntimeException("span digest down")
+        val metricsDown = IllegalStateException("metrics down")
+        val edge = object : FakeEdge() {
+            override suspend fun digest(): SpanDigest = throw spanDigestDown
+            override suspend fun sendMetrics(points: Set<MetricPoint>): Unit = throw metricsDown
+        }
+
+        val result = bridge(telemetryWithAllThreeSignals()).drain(edge)
+
+        val partial = assertIs<DrainResult.Partial>(result)
+        assertAll(
+            { assertEquals(0, partial.spansSent) },
+            { assertEquals(1, partial.logsSent, "the surviving signal is delivered and counted") },
+            { assertEquals(0, partial.metricPointsSent) },
+            { assertEquals(listOf(OtlpSignal.SPANS, OtlpSignal.METRICS), partial.failures.map { it.signal }) },
+            // Throwable equality is identity, so this compares the edge's own instances.
+            { assertEquals(listOf<Throwable>(spanDigestDown, metricsDown), partial.failures.map { it.cause }) },
+        )
+    }
+
+    @Test
+    fun allSignalsFailingKeepsEveryCause() = runTest {
+        val spansDown = RuntimeException("spans down")
+        val logsDown = RuntimeException("logs down")
+        val metricsDown = RuntimeException("metrics down")
+        val edge = object : FakeEdge() {
+            override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>): Unit = throw spansDown
+            override suspend fun logDigest(): LogDigest = throw logsDown
+            override suspend fun metricDigest(): MetricDigest = throw metricsDown
+        }
+
+        val result = bridge(telemetryWithAllThreeSignals()).drain(edge)
+
+        val failure = assertIs<DrainResult.Failure>(result)
+        assertAll(
+            {
+                assertEquals(
+                    listOf(OtlpSignal.SPANS, OtlpSignal.LOGS, OtlpSignal.METRICS),
+                    failure.failures.map { it.signal },
+                )
+            },
+            // Throwable equality is identity, so this compares the edge's own instances.
+            { assertEquals(listOf<Throwable>(spansDown, logsDown, metricsDown), failure.failures.map { it.cause }) },
+        )
+    }
+
+    @Test
+    fun aLoneFailingSignalIsAFailureNamingIt() = runTest {
         val t = telemetry()
         t.spans.export(span(1))
+        val digestDown = RuntimeException("digest down")
         val edge = object : FakeEdge() {
-            override suspend fun digest(): SpanDigest = throw RuntimeException("digest down")
+            override suspend fun digest(): SpanDigest = throw digestDown
         }
-        // Must not throw; span leg fails, others still run.
-        bridge(t).drain(edge)
+
+        // Must not throw; unbuffered logs and metrics are not attempted, so they cannot count as succeeding.
+        val result = bridge(t).drain(edge)
+
+        assertEquals(DrainResult.Failure(listOf(SignalFailure(OtlpSignal.SPANS, digestDown))), result)
+    }
+
+    @Test
+    fun upToDateSignalPlusAFailureIsPartialNotFailure() = runTest {
+        val t = telemetry()
+        t.spans.export(span(1))
+        t.logs.export(LogRecord(recordId = recId(1), body = "hi"))
+        val logsDown = RuntimeException("logs down")
+        val edge = object : FakeEdge() {
+            override suspend fun sendLogs(logs: Set<LogRecord>): Unit = throw logsDown
+        }
+        edge.knownSpans += sId(1) // the edge already holds the span, so the span leg sends nothing
+
+        val result = bridge(t).drain(edge)
+
+        // Zero records sent is not a failure: the span leg succeeded, it was simply up to date.
+        assertAll(
+            { assertEquals(0, edge.sentSpans.size) },
+            {
+                assertEquals(
+                    DrainResult.Partial(
+                        spansSent = 0,
+                        logsSent = 0,
+                        metricPointsSent = 0,
+                        failures = listOf(SignalFailure(OtlpSignal.LOGS, logsDown)),
+                    ),
+                    result,
+                )
+            },
+        )
     }
 
     @Test
     fun drainResultSuccessWhenNothingBuffered() = runTest {
-        val result = bridge(telemetry()).drain(FakeEdge())
-        assertIs<DrainResult.Success>(result)
-        assertEquals(0, result.spansSent)
-        assertEquals(0, result.logsSent)
-        assertEquals(0, result.metricPointsSent)
+        var edgeCalls = 0
+        val edge = object : FakeEdge() {
+            override suspend fun digest(): SpanDigest = super.digest().also { edgeCalls++ }
+            override suspend fun logDigest(): LogDigest = super.logDigest().also { edgeCalls++ }
+            override suspend fun metricDigest(): MetricDigest = super.metricDigest().also { edgeCalls++ }
+        }
+
+        val result = bridge(telemetry()).drain(edge)
+
+        assertAll(
+            { assertEquals(DrainResult.Success(spansSent = 0, logsSent = 0, metricPointsSent = 0), result) },
+            { assertEquals(0, edgeCalls, "an empty buffer attempts no signal") },
+        )
+    }
+
+    @Test
+    fun aFailureResultMustNameAFailedSignalOnce() {
+        val boom = RuntimeException("boom")
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { DrainResult.Failure(emptyList()) } },
+            { assertFailsWith<IllegalArgumentException> { DrainResult.Partial(1, 0, 0, emptyList()) } },
+            {
+                assertFailsWith<IllegalArgumentException> {
+                    DrainResult.Failure(listOf(SignalFailure(OtlpSignal.LOGS, boom), SignalFailure(OtlpSignal.LOGS, boom)))
+                }
+            },
+        )
     }
 
     @Test
