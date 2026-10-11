@@ -32,8 +32,9 @@ import kotlin.test.assertTrue
  *
  * ### Why the controls are here
  * `require(false)` in [FakeSeam.removePeer] would satisfy every refusal below while deleting the
- * helper's entire purpose, and `_peers = MutableStateFlow(setOf(selfId))` would satisfy both door-2
- * arms while discarding the caller's remotes. [removePeerStillRemovesARemote],
+ * helper's entire purpose, and a roster seeded as `MutableStateFlow(setOf(selfId))` instead of from the
+ * caller's copy ([SelfContainingRoster]) would satisfy both door-2 arms while discarding the caller's
+ * remotes. [removePeerStillRemovesARemote],
  * [removingAPeerTheRosterNeverHeldStaysASilentNoOp] and
  * [aRosterPassedAsAMutableSetIsStillTheRosterTheSeamReports] are what stop that.
  */
@@ -243,7 +244,8 @@ class FakeSeamRosterHoleAfterConstructionTest {
         assertEquals(
             setOf(alice, bob, carol),
             seam.peers.value,
-            "`_peers = MutableStateFlow(setOf(selfId))` would satisfy both door-2 arms above while " +
+            "a roster seeded as `MutableStateFlow(setOf(selfId))` instead of from the caller's copy " +
+                "would satisfy both door-2 arms above while " +
                 "silently throwing the caller's remotes away",
         )
     }
