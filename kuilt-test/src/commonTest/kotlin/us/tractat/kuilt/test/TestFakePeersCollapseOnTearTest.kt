@@ -71,7 +71,7 @@ class TestFakePeersCollapseOnTearTest {
     //
     // The fake is constructed with a remote already in `initialPeers`. Without one a frozen roster is
     // structurally undetectable: `{ selfId }` frozen and `{ selfId }` collapsed are the same set, and
-    // the property would be green against a `tear()` that touches `_peers` not at all.
+    // the property would be green against a `tear()` that never collapses the roster.
 
     @Test
     fun aTornFakeSeamAdvertisesExactlyItsOwnId() = runTest {
