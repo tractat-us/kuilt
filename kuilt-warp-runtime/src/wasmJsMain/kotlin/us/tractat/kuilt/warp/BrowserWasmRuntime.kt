@@ -76,32 +76,12 @@ public class BrowserWasmRuntime(
 ) : WasmRuntime {
 
     override fun load(bytes: ByteArray): Op {
-        val module = compileModule(bytes)
-        rejectImports(module)
-        rejectOversizeMemory(bytes)
-        requireWarpAbi(module)
+        val compiled = CompiledModule.compile(bytes)
+        rejectImports(compiled.module)
+        rejectOversizeMemory(compiled)
+        requireWarpAbi(compiled.module)
         return WorkerBackedOp(bytes.toUint8Array(), config)
     }
-
-    /**
-     * Compiles [bytes], converting any engine error into a terminal [WasmLoadException].
-     *
-     * The catch is deliberately `Throwable` — the JS engine's rejection arrives as an opaque
-     * `JsException`, and nothing narrower would cover it — so structured-concurrency
-     * cancellation is rethrown first rather than being converted into a *terminal* load
-     * failure. `load` is not a suspend function and `wasmCompile` is a synchronous JS call, so
-     * this is a guard rather than a live path; it is here because the conversion is exactly the
-     * shape in which a cancellation gets eaten, and it keeps parity with
-     * [ChicoryWasmRuntime]'s guards.
-     */
-    private fun compileModule(bytes: ByteArray): JsAny =
-        try {
-            wasmCompile(bytes.toUint8Array())
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            throw WasmLoadException("malformed WASM module: ${e.message}", e)
-        }
 
     private fun rejectImports(module: JsAny) {
         if (wasmImportCount(module) > 0) {
@@ -109,8 +89,8 @@ public class BrowserWasmRuntime(
         }
     }
 
-    private fun rejectOversizeMemory(bytes: ByteArray) {
-        val limits = declaredMemoryLimits(bytes) ?: return
+    private fun rejectOversizeMemory(compiled: CompiledModule) {
+        val limits = declaredMemoryLimits(compiled) ?: return
         if (limits.initialPages > config.maxMemoryPages) {
             throw WasmLoadException(
                 "module initial memory ${limits.initialPages} pages exceeds sandbox cap " +
@@ -186,8 +166,49 @@ private const val LIMITS_HAS_MAX_FLAG = 0x01
 
 private class DeclaredMemoryLimits(val initialPages: Int, val maxPages: Int?)
 
-/** Walks the section list for the memory section, returning its first memory's declared limits. */
-private fun declaredMemoryLimits(bytes: ByteArray): DeclaredMemoryLimits? {
+/**
+ * Bytes `WebAssembly.Module` has accepted, with the module it compiled from them. The constructor
+ * is private, so [compile] is the only way to get one, and [declaredMemoryLimits] (whose section
+ * walk terminates only on validated bytes) cannot be handed bytes the engine never saw.
+ */
+private class CompiledModule private constructor(val module: JsAny, val bytes: ByteArray) {
+    companion object {
+        /**
+         * Compiles [bytes], converting any engine error into a terminal [WasmLoadException].
+         *
+         * The catch is deliberately `Throwable` — the JS engine's rejection arrives as an opaque
+         * `JsException`, and nothing narrower would cover it — so structured-concurrency
+         * cancellation is rethrown first rather than being converted into a *terminal* load
+         * failure. `load` is not a suspend function and `wasmCompile` is a synchronous JS call,
+         * so this is a guard rather than a live path; it is here because the conversion is
+         * exactly the shape in which a cancellation gets eaten, and it keeps parity with
+         * [ChicoryWasmRuntime]'s guards.
+         */
+        fun compile(bytes: ByteArray): CompiledModule {
+            val module = try {
+                wasmCompile(bytes.toUint8Array())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                throw WasmLoadException("malformed WASM module: ${e.message}", e)
+            }
+            return CompiledModule(module, bytes)
+        }
+    }
+}
+
+/**
+ * Walks the section list for the memory section, returning its first memory's declared limits.
+ *
+ * Takes a [CompiledModule] rather than raw bytes because termination depends on it. Each
+ * [WasmByteReader.leb] read ends, at the latest, when [WasmByteReader.u8] runs off the end of the
+ * bytes. The walk relies on the engine's validation: a section size of 2^31 or more decodes to a
+ * negative `Int`, and `skip` would move the cursor backwards, so a header such as
+ * `00 FA FF FF FF 0F` would re-read itself forever. A validated module cannot contain one, because
+ * every section size must fit in the bytes that follow it (#2816).
+ */
+private fun declaredMemoryLimits(compiled: CompiledModule): DeclaredMemoryLimits? {
+    val bytes = compiled.bytes
     if (bytes.size < WASM_HEADER_SIZE) return null
     val reader = WasmByteReader(bytes, WASM_HEADER_SIZE)
     while (reader.hasMore()) {

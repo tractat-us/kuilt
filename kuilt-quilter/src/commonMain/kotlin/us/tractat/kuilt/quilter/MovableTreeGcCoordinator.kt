@@ -39,7 +39,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.MovableTreeGcCo
  * Compaction runs in a loop until [MovableTree.compact] returns `null`. A single pass
  * may unlock a second (e.g., removing a superseded move reveals another). [Quilter.apply]
  * updates [state] synchronously, so `state.value` reflects each application before the next
- * iteration.
+ * iteration. A callback that leaves [state] unchanged fails the GC job instead of repeating
+ * the same compaction forever; see `checkCompactionApplied` for why the loop ends.
  *
  * ## Triggering
  *
@@ -53,7 +54,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.MovableTreeGcCo
  *   [Quilter.cutFrontier].
  * @param delivered this replica's contiguous delivered VV from [Quilter.deliveredLocal].
  * @param applyCompaction called with each compaction [Patch]; wire this to [Quilter.apply]
- *   so the delta propagates to all peers.
+ *   so the delta propagates to all peers. It must update [state] before it returns; one
+ *   that leaves [state] unchanged throws [IllegalStateException].
+ *   The [IllegalStateException] escapes the GC pump: on the JVM it reaches the scope's
+ *   handler; on Kotlin/Native, with no handler installed, it aborts the process.
  * @param scope the [CoroutineScope] for background coroutines.
  *
  * @see MovableTree.compact
@@ -106,6 +110,7 @@ public class MovableTreeGcCoordinator<V>(
                     "stableCut=${cut.stableCut} frontierMax=${cut.frontierMax}"
             }
             applyCompaction(compactDelta(compactOp))
+            checkCompactionApplied(state, current)
         }
     }
 

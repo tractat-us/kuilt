@@ -52,7 +52,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.RgaGcCoordinato
  * This handles the two-pass chain case: removing a tombstone may unblock a structural
  * predecessor, making it eligible on the next pass. [Quilter.apply] updates [state]
  * synchronously via `StateFlow.update`, so `state.value` reflects each [applyCompaction] before
- * the next loop iteration — `loop-until-null` is therefore safe.
+ * the next loop iteration. A callback that leaves [state] unchanged fails the GC job instead of
+ * repeating the same compaction forever; see `checkCompactionApplied` for why the loop ends.
  *
  * Each resulting [RgaOp.Compact] is bridged into a [Patch]`<`[Rga]`<V>>` via
  * `Rga.empty<V>().apply(compactOp)` — a minimal single-op delta that any peer merges via
@@ -68,7 +69,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.RgaGcCoordinato
  *   [Quilter.cutFrontier].
  * @param delivered this replica's contiguous delivered VV from [Quilter.deliveredLocal].
  * @param applyCompaction called with each compaction [Patch]; the caller wires this to
- *   [Quilter.apply] so the delta propagates to all peers.
+ *   [Quilter.apply] so the delta propagates to all peers. It must update [state] before it
+ *   returns; one that leaves [state] unchanged throws [IllegalStateException].
+ *   The [IllegalStateException] escapes the GC pump: on the JVM it reaches the scope's
+ *   handler; on Kotlin/Native, with no handler installed, it aborts the process.
  * @param windowPolicy optional history-windowing policy (default [WindowPolicy.never]).
  * @param scope the [CoroutineScope] for background coroutines.
  *
@@ -132,9 +136,10 @@ public class RgaGcCoordinator<V>(
      * inside [Rga.compact] is what holds the two paths apart.
      *
      * [Quilter.apply] updates [StateFlow] synchronously via `StateFlow.update`, so
-     * `state.value` reflects each compaction before the next loop iteration. This makes the
-     * loop-until-null safe: each iteration reads fresh state and terminates when nothing
-     * further can be compacted (windowing shrinks its own candidate set as it drops the prefix).
+     * `state.value` reflects each compaction before the next loop iteration: each iteration
+     * reads fresh state and terminates when nothing further can be compacted (windowing shrinks
+     * its own candidate set as it drops the prefix). A callback that leaves [state] unchanged
+     * fails the GC job rather than looping on the same compaction.
      */
     private fun compactUntilStable(cut: CutFrontier, delivered: VersionVector) {
         while (true) {
@@ -149,6 +154,7 @@ public class RgaGcCoordinator<V>(
                     "stableCut=${cut.stableCut} frontierMax=${cut.frontierMax}"
             }
             applyCompaction(Patch(Rga.empty<V>().apply(compactOp)))
+            checkCompactionApplied(state, current)
         }
     }
 
