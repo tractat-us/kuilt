@@ -295,7 +295,8 @@ public class ChicoryWasmRuntime(
                 timedRunner.run(config.executionTimeout, Callable { runAbi(memory, allocFn, runFn, args) })
             } catch (e: CancellationException) {
                 // Structured-concurrency cancellation must propagate, never be swallowed into a
-                // WasmExecutionException (the same guard BrowserWasmRuntime.compileModule keeps).
+                // WasmExecutionException (the same guard BrowserWasmRuntime's
+                // CompiledModule.compile keeps).
                 throw e
             } catch (e: WasmException) {
                 // Already terminal — the common decoder's bounds rejection ([requireInBounds])
