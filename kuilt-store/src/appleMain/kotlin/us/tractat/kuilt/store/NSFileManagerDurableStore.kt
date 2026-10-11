@@ -70,9 +70,10 @@ import platform.posix.unlink
  * What power loss **can** still do is undo the *rename*: the parent directory is
  * not flushed after step 3, so a power cut just after [write] returns may come back
  * to the **previous** complete record rather than the new one. Old or new, never
- * torn. `FileChannelDurableStore` makes exactly the same trade — it forces the file
- * before its rename and does not force the directory after — so the two file
- * backends promise the same thing.
+ * torn. The two file backends do **not** promise the same thing here:
+ * `FileChannelDurableStore` forces the directory after its rename on Linux, macOS
+ * and Android, so there a returned write cannot be undone. Only on Windows, where
+ * the JVM cannot open a directory to force it, does it make this store's trade.
  *
  * The flush has a cost on every write, which matters because this store sits on a
  * telemetry exporter's per-export path (#1860, #2126). Measured on a Mac's internal

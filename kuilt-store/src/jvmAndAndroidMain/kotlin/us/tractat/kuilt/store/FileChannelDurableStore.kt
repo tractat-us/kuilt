@@ -1,34 +1,46 @@
 package us.tractat.kuilt.store
 
 import java.io.File
-import java.io.FileOutputStream
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 
 /**
  * A crash-safe [DurableStore] for JVM and Android.
  *
- * Each [StoreKey] maps to a single file under [dir]. Writes use an atomic
- * write-temp-then-rename strategy:
+ * Each [StoreKey] maps to a single file under [dir]. A [write] commits in three steps. Each one
+ * throws on failure; none reports it through a flag the store could ignore:
  *
- * 1. Write bytes to a sibling `.tmp` file.
- * 2. Call `FileChannel.force(true)` to flush data **and** metadata to the
- *    underlying storage device (equivalent to `fsync`).
- * 3. Atomically rename the temp file to the final name (POSIX atomic rename;
- *    on Android this uses `Files.move` with `ATOMIC_MOVE` on API 26+ or a
- *    best-effort fallback on older APIs).
+ * 1. Write the bytes to a sibling `.tmp` file and call `FileChannel.force(true)`, which flushes data
+ *    **and** metadata to the device (`fsync`).
+ * 2. Replace the destination with the temp file using `Files.move` with `ATOMIC_MOVE` — `rename(2)`
+ *    on Linux, macOS and Android. If the filesystem cannot move atomically the JDK throws
+ *    `AtomicMoveNotSupportedException`, and so does [write]: there is no copying fallback.
+ * 3. Force the directory, so the rename itself is on the device before [write] returns.
  *
- * A crash after step 3 returns means the renamed file is on disk; the next
- * [read] returns the committed bytes. A crash before step 3 completes leaves
- * the `.tmp` file, which is ignored on the next open. There is no window
- * where neither the old nor the new value is visible.
+ * [delete] removes the file with `Files.deleteIfExists` (a file that is present and cannot be
+ * removed throws) and then forces the directory the same way. Creating [dir] forces each newly
+ * created directory's parent, outermost first, so a store whose directory did not exist yet cannot
+ * lose that directory, and everything in it, to a power cut after its first [write] returns.
  *
- * Under **power loss** the forced file cannot come back empty or torn, but the
- * parent directory is not forced after the rename, so a power cut just after
- * [write] returns may bring back the *previous* record rather than the new one —
- * old or new, never torn. `NSFileManagerDurableStore` makes the same trade with
- * `F_FULLFSYNC` in place of `force(true)`, so the two file backends promise the
- * same thing.
+ * ## What survives what
+ *
+ * **Process** death cannot lose a committed record: the kernel's buffer cache outlives the process.
+ * A crash before step 2 completes leaves only the `.tmp` file, which nothing reads. The destination
+ * always names *some* complete record: the previous one until the rename, the new one after.
+ *
+ * **Power loss on Linux, macOS and Android:** once [write] returns, the new record is the one that
+ * comes back. Step 1 means the renamed file cannot come back empty or torn, and step 3 means the
+ * rename cannot be undone. The same holds for a [delete] that has returned. If the directory cannot
+ * be forced, the call throws instead of returning.
+ *
+ * **Power loss on Windows is weaker.** The JVM cannot open a directory there at all (it never asks
+ * `CreateFileW` for `FILE_FLAG_BACKUP_SEMANTICS`), and its atomic move is `MoveFileEx` without
+ * `MOVEFILE_WRITE_THROUGH`, so step 3 has nothing to call and is skipped. The rename then rests on
+ * NTFS's metadata journal: a power cut just after [write] returns can bring back the **previous**
+ * complete record rather than the new one (old or new, never torn), and a [delete] can come undone
+ * the same way. No native code is used to close this. That is reasoning about NTFS, not something
+ * any test here observes.
+ *
+ * `NSFileManagerDurableStore` forces the file before its rename but not the directory after it, so
+ * on Apple platforms the guarantee is the Windows one, not the Linux one.
  *
  * The filename is [encodeStoreKeyName] of the key's name — a lossless, path-safe
  * percent-encoding shared with `NSFileManagerDurableStore`, so **distinct keys are
@@ -51,13 +63,22 @@ import java.nio.file.StandardCopyOption
  * are normally fixed literals, where the question does not arise; it arises when
  * they are built from data.
  *
- * @param dir The directory that holds the store's files. Created if it does
- *   not exist. Must be writable.
+ * Needs `java.nio.file`: Android API 26, or a desugared `java.nio.file` below it.
+ *
+ * @param dir The directory that holds the store's files. Created, with any missing ancestors, if it
+ *   does not exist; must be a directory if it does. Must be writable.
  */
-public class FileChannelDurableStore(private val dir: File) : DurableStore {
+public class FileChannelDurableStore internal constructor(
+    private val dir: File,
+    private val fs: StoreFileSystem,
+    private val directorySync: DirectorySync,
+) : DurableStore {
+
+    public constructor(dir: File) : this(dir, NioStoreFileSystem, DirectorySync.forHost())
 
     init {
-        dir.mkdirs()
+        createWithAncestry(dir)
+        require(dir.isDirectory) { "$dir exists and is not a directory" }
     }
 
     override suspend fun read(key: StoreKey): ByteArray? {
@@ -78,7 +99,10 @@ public class FileChannelDurableStore(private val dir: File) : DurableStore {
     override suspend fun delete(key: StoreKey) {
         val file = fileFor(key)
         synchronized(lockFor(key)) {
-            file.delete()
+            fs.deleteIfExists(file)
+            // Even when nothing was there: an earlier delete may have unlinked and then failed to
+            // sync, and this call returning promises that the absence is durable.
+            directorySync.after(fs, dir)
         }
     }
 
@@ -89,24 +113,24 @@ public class FileChannelDurableStore(private val dir: File) : DurableStore {
     private fun tmpFileFor(key: StoreKey): File = File(dir, key.filename + ".tmp")
 
     private fun writeAtomically(tmp: File, dest: File, bytes: ByteArray) {
-        FileOutputStream(tmp).use { fos ->
-            fos.write(bytes)
-            fos.channel.force(true)
-        }
-        moveAtomically(tmp, dest)
+        fs.writeAndForce(tmp, bytes)
+        fs.moveAtomically(tmp, dest)
+        directorySync.after(fs, dir)
     }
 
     /**
-     * Moves [src] to [dest] atomically. Uses [Files.move] with
-     * [StandardCopyOption.ATOMIC_MOVE] where supported; falls back to
-     * [File.renameTo] for environments where `ATOMIC_MOVE` is not available.
+     * Creates every missing directory from the outermost down to [target], forcing each one's parent
+     * as it goes: a new directory is an entry in its parent, and a power cut can lose an entry nobody
+     * forced just as it can lose a rename.
      */
-    private fun moveAtomically(src: File, dest: File) {
-        try {
-            Files.move(src.toPath(), dest.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-        } catch (_: UnsupportedOperationException) {
-            // Android < API 26 or some non-POSIX filesystem: best-effort rename.
-            src.renameTo(dest)
+    private fun createWithAncestry(target: File) {
+        val missing = generateSequence(target.absoluteFile) { it.parentFile }
+            .takeWhile { !fs.exists(it) }
+            .toList()
+            .asReversed()
+        for (created in missing) {
+            fs.createDirectory(created)
+            directorySync.after(fs, checkNotNull(created.parentFile) { "no filesystem root above $target" })
         }
     }
 
