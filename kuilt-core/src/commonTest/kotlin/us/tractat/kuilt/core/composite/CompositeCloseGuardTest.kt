@@ -37,7 +37,8 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * `CompositeSeam.close` must close **every** ply, whatever any one of them does on the way down (#1861).
+ * Ordinary ply failures must not skip later close attempts in `CompositeSeam.close` (#1861).
+ * An `Error` or the caller's own cancellation can stop cleanup before the remaining plies close.
  *
  * ### The defect
  * The per-ply loop was `toClose.forEach { it.seam.close(reason) }` — completely unguarded — and it is the

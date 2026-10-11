@@ -1311,7 +1311,7 @@ internal class CompositeSeam(
         }
 
     /**
-     * Publish the terminal [SeamState.Torn] and tear down every ply.
+     * Publish the terminal [SeamState.Torn] and start best-effort ply teardown.
      *
      * **Correct by construction, not by ordering.** This seam *derives* its aggregate [state] from a
      * live collector — the `init` block's `_plies.onEach { stateGate.update(rollup(...)) }`. The
@@ -1329,9 +1329,11 @@ internal class CompositeSeam(
      * consumer woken by the terminal state already sees the collapse. That is why the tear is not the
      * first statement of this method. See [collapseAndTear] (#1816).
      *
-     * **Every ply is closed, whatever any one of them does.** This method is the plies' last holder — it
+     * **Ordinary ply failures do not skip later close attempts.** This method is the plies' last holder — it
      * drains `live` and is single-shot — so the per-ply close goes through [closePlyBestEffort] and the
-     * statements before it sit in a `try`/`finally`. See [closePlyBestEffort] (#1861).
+     * statements before it sit in a `try`/`finally`. An [Error] from closing or reporting escapes
+     * immediately and can leave later plies unclosed; retrying cannot reclaim them after `live` has
+     * been drained. The caller's own cancellation can also stop cleanup. See [closePlyBestEffort] (#1861).
      */
     override suspend fun close(reason: CloseReason) {
         // Collapse the roster and latch Torn as ONE ordered step, and single-shot on its verdict — a
@@ -1345,8 +1347,9 @@ internal class CompositeSeam(
             live.clear()
             snapshot
         }
-        // In a `finally` so the plies below are closed UNCONDITIONALLY, rather than resting on the two
-        // statements above it never throwing. Both are ours, non-suspending and cannot throw today
+        // The `finally` enters the close loop even if either statement in the `try` throws. An Error
+        // or the caller's cancellation can still stop the loop before later plies close.
+        // Both statements are ours, non-suspending and cannot throw today
         // (`Spool.close` delegates to `Channel.close`, which returns a Boolean; [Job.cancel] is a state
         // transition), but that is a property of a collaborator and this method is the plies' only holder —
         // so the guarantee is written into the control flow instead of resting on it. Deliberately NOT a
