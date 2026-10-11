@@ -18,6 +18,8 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.TransportCapability
 import kotlin.random.Random
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Establishes a [Seam] over a WebRTC `RTCDataChannel`. Signaling
@@ -51,19 +53,13 @@ import kotlin.random.Random
  *   weaves is pinned to [DeliveryPolicy.Reliable] whatever the consumer asked for — the same
  *   defect `:kuilt-nearby` found and fixed. The `handshaking` barrier that blocked the knob on
  *   `:kuilt-tcp` is not in the way here: this fabric builds its seam directly.
- * - **`weaveTimeout` — real wiring, unreachable, and the gap is user-visible.** Apply the
- *   discriminator the `:kuilt-nearby` slice established — *what does the clock start and stop
- *   on?* — and this fabric reaches the **opposite** verdict from Nearby's. `HandshakeRunner` wraps
- *   the data-channel wait in a `withTimeout`, and the wait for the far peer to appear is *inside*
- *   it: a weave nobody ever joins fails at 30 s rather than hanging. That is exactly the bound
- *   [us.tractat.kuilt.core.LoomDefaults.WEAVE_TIMEOUT] describes, and the value already matches;
- *   only the relay dial (`signaling.open(room)`) sits outside the clock. But [weave] calls
- *   `connect` without a timeout, so it always takes the default, and the one public surface that
- *   can widen it is [openWithServerRoleResult] — which additionally requires a
- *   [WebSocketSignalingChannel] and server-assigned roles. So a consumer arriving through the
- *   plain [Loom] contract cannot change it, even though `DEFAULT_HANDSHAKE_TIMEOUT_MS`'s own
- *   documentation says two WASM tabs may stagger by 30–60 s during bundle load and that such
- *   callers *should* pass a larger value.
+ * - **`weaveTimeout` — not offered; the narrower `handshakeTimeout` is (#2695).** `HandshakeRunner`
+ *   wraps the data-channel wait in a `withTimeout`, and the wait for the far peer is inside it, so a
+ *   weave nobody joins fails at the deadline rather than hanging. But the relay dial
+ *   (`signaling.open(room)`), the host's offer creation and send, signaling cleanup and the peer-id
+ *   exchange all sit outside that clock. Naming it `weaveTimeout` would promise the bound
+ *   [us.tractat.kuilt.core.LoomDefaults.WEAVE_TIMEOUT] describes, which this fabric does not keep,
+ *   so the constructor exposes the clock under its real name instead.
  * - **`dispatcher` — omitted, following the convention as amended.** The 2026-07-13 second review
  *   dropped `dispatcher` from the universal set: new fabrics inherit caller context at weave time
  *   and dispatcher params stay fabric-specific, which is why `:kuilt-nearby` omits it too.
@@ -71,8 +67,14 @@ import kotlin.random.Random
  *   one, pinning it to [kotlinx.coroutines.Dispatchers.Default] — worth knowing, but not a knob
  *   this convention asks for.
  *
- * Closing the two reachability gaps means adding parameters to a public constructor, so it is left
- * as a follow-up rather than folded in here.
+ * The policy reachability gap remains a separate follow-up.
+ *
+ * @param handshakeTimeout positive, finite deadline for the data-channel connection wait.
+ *   Defaults to 30 seconds. Increase it when a peer may be slow to boot, for example
+ *   `WebRTCPeerLinkFactory(signaling, room, handshakeTimeout = 90.seconds)`.
+ *   Rounded up to whole milliseconds, so the deadline never fires before the configured time.
+ *   [openWithServerRoleResult] uses it as its default too; an explicit per-call timeout there
+ *   takes precedence.
  */
 public class WebRTCPeerLinkFactory
     internal constructor(
@@ -81,7 +83,19 @@ public class WebRTCPeerLinkFactory
         private val iceConfig: IceConfig = IceConfig.DefaultStun,
         private val facadeFactory: RtcPeerConnectionFacadeFactory,
         private val random: Random = Random.Default,
+        handshakeTimeout: Duration = DEFAULT_HANDSHAKE_TIMEOUT_MS.milliseconds,
     ) : Loom {
+        init {
+            require(handshakeTimeout.isPositive() && handshakeTimeout.isFinite()) {
+                "handshakeTimeout must be positive and finite, was $handshakeTimeout"
+            }
+        }
+
+        private val handshakeTimeoutMs: Long =
+            handshakeTimeout.inWholeMilliseconds.let { whole ->
+                if (handshakeTimeout > whole.milliseconds) whole + 1 else whole
+            }
+
         /**
          * The fabric's **static** self-report: what a WebRTC data channel can do on this runtime.
          * Deliberately not the live signal — that is a woven seam's
@@ -95,14 +109,25 @@ public class WebRTCPeerLinkFactory
             room: String,
             iceConfig: IceConfig = IceConfig.DefaultStun,
             random: Random = Random.Default,
-        ) : this(signaling, room, iceConfig, BrowserRtcFacadeFactory(), random)
+            handshakeTimeout: Duration = DEFAULT_HANDSHAKE_TIMEOUT_MS.milliseconds,
+        ) : this(signaling, room, iceConfig, BrowserRtcFacadeFactory(), random, handshakeTimeout)
 
         override suspend fun weave(rendezvous: Rendezvous): Seam =
             when (rendezvous) {
                 is Rendezvous.New ->
-                    connect(isHost = true, displayName = rendezvous.pattern.sessionName, session = signaling.open(room))
+                    connect(
+                        isHost = true,
+                        displayName = rendezvous.pattern.sessionName,
+                        session = signaling.open(room),
+                        handshakeTimeoutMs = handshakeTimeoutMs,
+                    )
                 is Rendezvous.Existing ->
-                    connect(isHost = false, displayName = rendezvous.tag.sessionName, session = signaling.open(room))
+                    connect(
+                        isHost = false,
+                        displayName = rendezvous.tag.sessionName,
+                        session = signaling.open(room),
+                        handshakeTimeoutMs = handshakeTimeoutMs,
+                    )
             }
 
         /**
@@ -116,7 +141,7 @@ public class WebRTCPeerLinkFactory
             isHost: Boolean,
             displayName: String,
             session: SignalingSession,
-            handshakeTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+            handshakeTimeoutMs: Long,
         ): Seam {
             val selfId = PeerId(randomToken(displayName.ifBlank { if (isHost) "host" else "peer" }))
             val facade = facadeFactory.create(iceConfig, hostInitiated = isHost)
@@ -207,15 +232,13 @@ public class WebRTCPeerLinkFactory
          *
          * Requires [signaling] to be a [WebSocketSignalingChannel].
          *
-         * @param handshakeTimeoutMs overall deadline for the WebRTC offer/answer/ICE
-         *   exchange. Defaults to [DEFAULT_HANDSHAKE_TIMEOUT_MS] (30 s). Increase for
-         *   environments where the peer tab may take longer to boot before joining the
-         *   room (e.g. 90 s on a slow connection). Passing a short value in tests
-         *   enables fast timeout-failure coverage.
+         * @param handshakeTimeoutMs overrides the constructor's handshake deadline for this call.
+         *   Bounds only the data-channel connection wait; opening signaling, receiving the role,
+         *   the host's initial offer creation/send, cleanup and peer-id exchange are outside it.
          */
         public suspend fun openWithServerRoleResult(
             config: Pattern,
-            handshakeTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+            handshakeTimeoutMs: Long = this.handshakeTimeoutMs,
         ): Pair<Boolean, Seam> {
             val wsChannel =
                 signaling as? WebSocketSignalingChannel

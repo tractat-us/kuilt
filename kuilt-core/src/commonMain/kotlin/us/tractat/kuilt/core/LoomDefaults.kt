@@ -27,15 +27,15 @@ public object LoomDefaults {
      * can take seconds on its own. A "wait for a friend to join" lobby wants a much larger
      * value and should pass one explicitly.
      *
-     * The value is the one every fabric that bounds a weave already converged on
-     * independently: `NwLoom.DEFAULT_WEAVE_TIMEOUT` and `:kuilt-webrtc`'s handshake runner
-     * both chose it before this constant existed. It is a shared default, not a measured
-     * optimum.
+     * The value is the one `NwLoom.DEFAULT_WEAVE_TIMEOUT` chose for its weave before this
+     * constant existed. It is a shared default, not a measured optimum.
      *
      * A fabric carrying the same number is not automatically a client of this constant.
      * `:kuilt-nearby`'s connect state machine also uses 30 s, but it bounds one connection's
      * handshake with discovery *outside* the clock — `NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT`,
-     * a different population that moves independently (#1430). Check what a candidate's clock
+     * a different population that moves independently (#1430). `:kuilt-webrtc`'s
+     * `handshakeTimeout` also defaults to 30 s, but bounds only the data-channel wait, with the
+     * relay dial and the host's offer outside it (#2695). Check what a candidate's clock
      * actually starts and stops on before folding it in here.
      */
     public val WEAVE_TIMEOUT: Duration = 30.seconds
