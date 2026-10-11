@@ -61,12 +61,7 @@ class RoomFramePrefixTest {
         )
     }
 
-    /**
-     * `0x72` was legal application data before this track. Nothing in the registry can make an
-     * application payload safe — this pins only that the *reservation* is what a relay frame is
-     * recognised by, so the v2 release note ("a `Room.broadcast` payload starting `0x72` is now
-     * swallowed as a relay frame") is truthful.
-     */
+    /** Pins the relay byte reservation; send-time refusal is covered by [RoomReservedPrefixTest]. */
     @Test
     fun `Relay reserves 0x72`() {
         assertEquals(0x72.toByte(), RoomFramePrefix.Relay.byte)

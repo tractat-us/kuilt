@@ -214,11 +214,11 @@ Order matters if you are catching: the `Torn` check runs first, so a self-send o
 ## Payload limits
 
 **Intent:** pick a chunk size for a big payload — or explain a `FrameTooLargeException` that appears only after somebody drops out.
-**Primitive:** `Room.maxPayloadBytes` (`:kuilt-session`), and `Seam.maxPayloadBytes` (`:kuilt-core`) one layer down. Size to that, not to the fabric's frame limit.
+**Primitive:** `Room.channel("blob")` (`:kuilt-session`) and the returned `Seam.maxPayloadBytes` (`:kuilt-core`). Send arbitrary chunks through the channel and size them to its budget, which already subtracts the channel header.
 
 `null` means **unknown, not unbounded** — the honest answer from a fabric that names no ceiling. A non-null value is a promise: a payload that size or smaller will not be refused for being too big, *whatever route the frame takes*.
 
-That last clause is the whole point. On a star, a spoke's frame reaches only the host, so once the roster diverges from what the transport can address the payload is wrapped in a relay envelope and forwarded — and the wrapper costs bytes. The budget holds them back **unconditionally**, even while no relay is in use, because routing flips the instant a member enters its reconnect window: a limit that moved with the route would be a trap for a caller that checked it and then sent. A `room.channel(id)` view reports a further-reduced budget, since its own framing costs bytes too.
+That last clause is the whole point. On a star, a spoke's frame reaches only the host, so once the roster diverges from what the transport can address the payload is wrapped in a relay envelope and forwarded — and the wrapper costs bytes. The budget holds them back **unconditionally**, even while no relay is in use, because routing flips the instant a member enters its reconnect window: a limit that moved with the route would be a trap for a caller that checked it and then sent. A `room.channel(id)` view reports a further-reduced budget, since its own framing costs bytes too. A relayed member's channel budget is currently over-reported and can still produce `PayloadTooLarge` ([#2958](https://github.com/tractat-us/kuilt/issues/2958)).
 
 Every layer that wraps a seam answers the same way, so read the budget off the seam you actually hold rather than the fabric at the bottom. A `MuxSeam`/`NamedMux` channel view subtracts its channel header; a `CompositeSeam` reports the tightest of its **live** plies less its own envelope, so the number moves as plies attach and detach; a tiered union reports the tighter of its two tiers; a gossip overlay subtracts its relay header even on the `sendTo` route that does not pay it. Where several routes are folded, a member that names no ceiling is skipped rather than collapsing the answer — a bond of one bounded and one unknown transport is still bounded by what it does know — and `0` is a real answer, not a bug: it means the framing above you has eaten the whole ceiling underneath.
 
@@ -230,20 +230,21 @@ When a frame genuinely will not fit, each call keeps its own contract: `sendTo` 
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#chunkToTheRoomsBudgetSample -->
 ```kotlin
+val ch = room.channel("blob")
 var start = 0
 while (start < blob.size) {
     // Re-read per chunk, not once for the loop: the budget is a reading, not a lease. On a mesh
     // it is the minimum across live links, so a peer attaching over a tighter transport lowers
     // it under you mid-blob. null means "this fabric names no ceiling" — unknown, not
     // unbounded; floored at 1 because the budget is legitimately 0 on a fabric whose ceiling is
-    // under the relay reservation.
-    val budget = (room.maxPayloadBytes ?: DEFAULT_CHUNK_BYTES).coerceAtLeast(1)
+    // under the relay and channel reservations.
+    val budget = (ch.maxPayloadBytes ?: DEFAULT_CHUNK_BYTES).coerceAtLeast(1)
     val end = minOf(start + budget, blob.size)
     // Index arithmetic, not `asSequence().chunked()` — the latter boxes every byte and builds
     // an ArrayList<Byte> per chunk. On a blob big enough to need chunking that is the point.
     // Past the budget, sendTo reports PayloadTooLarge (addressed sends do) while broadcast
     // drops with a log (lossy by contract) — neither surfaces the fabric's own oversize error.
-    room.sendTo(peer, blob.copyOfRange(start, end))
+    ch.sendTo(peer, blob.copyOfRange(start, end))
     start = end
 }
 ```

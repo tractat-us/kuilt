@@ -59,7 +59,7 @@ import kotlin.time.Instant
  * A plain-text payload is relayable only because [RoomFramePrefix] does not *classify* it. The
  * lowercase letters `a`, `c`, `e`, `k`, `r` **are** the five reserved bytes `0x61`, `0x63`, `0x65`,
  * `0x6b`, `0x72`, and three of the five families classify on that byte alone — so a payload
- * starting with `a`, `e`, or `r` is **not** a plain application frame and will not be relayed.
+ * starting with `a`, `e`, or `r` is refused by a live room at send, before any direct or relayed transmission.
  *
  * The other two are narrower than their byte, and the gap is deliberate rather than incidental:
  * `Channel` also requires a 3-byte header and `Heartbeat` requires the whole
@@ -67,9 +67,9 @@ import kotlin.time.Instant
  * ordinary application data on both the direct and the relayed plane. Getting *that* wrong is the
  * defect §T17/§T18 exist to pin, and those two tests choose their payloads on purpose.
  *
- * So: safe to add a payload starting with `c` or `k` (as long as it is not literally a heartbeat
- * frame); **never** add one starting with `a`, `e`, or `r` unless the test is about it being
- * refused. The plain strings in use are "hello", "legit", "plain", "nested", "for-b", "for-host",
+ * So: a payload starting with `c` is safe only below the channel header length; one starting
+ * with `k` is safe unless it matches a heartbeat prefix. Add one starting with `a`, `e`, or `r`
+ * only when testing send-time refusal. The plain strings in use are "hello", "legit", "plain", "nested", "for-b", "for-host",
  * "somewhere", "honest", "forged", "nowhere", "unadmitted", "to-host", "keepalive".
  */
 internal fun appPayload(text: String): ByteArray = text.encodeToByteArray()
@@ -624,6 +624,9 @@ internal class WireTapSeam(
         val max = frameLimit.value ?: return
         if (payload.size > max) throw FabricFrameTooLarge(payload.size, max)
     }
+
+    /** All send attempts, including protocol frames, for send-time refusal assertions. */
+    fun sentFrameCount(): Int = sent.value.size
 
     fun clearSentLog() {
         sent.value = emptyList()

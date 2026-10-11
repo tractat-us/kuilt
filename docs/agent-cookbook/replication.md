@@ -228,7 +228,9 @@ Use plain `mutate { … }` when the transform always writes.
 
 The distinction that decides it: a fabric `Seam` from `Loom.host`/`Loom.join` reports the peers it holds a **direct link** to, which on a star is just the host. A `Room`'s channel view reports the **admitted roster**, and `Room.broadcast` / `Room.sendTo` wrap anything the transport cannot address directly and send it to the host to forward. So run replicators over `room.channel(...)`, never over the fabric seam the room was built on. (`Seam.sendTo` to a co-spoke still throws `PeerNotConnected` on those fabrics, and that is correct — the link really is absent.)
 
-Two things the relay deliberately does not do. Presence is not relayed: a co-member with no direct link is watched by the host, not by you, so read `Room.roster` / `Room.events` rather than expecting a heartbeat to answer. And relayed delivery is best-effort past the first hop — `Room.broadcast` never throws, and `Room.sendTo` reports only the hop *this* member makes, naming the **host** when that is the hop that failed.
+Two things the relay deliberately does not do. Presence is not relayed: a co-member with no direct link is watched by the host, not by you, so read `Room.roster` / `Room.events` rather than expecting a heartbeat to answer. For valid application payloads, `Room.broadcast` does not throw for delivery failures; `Room.sendTo` reports only the hop *this* member makes, naming the **host** when that is the hop that failed. Relayed delivery past that hop is best-effort.
+
+A live room refuses raw payloads that match a reserved protocol prefix with `ReservedRoomPrefix` before either send. Use `Room.channel(id)` to carry arbitrary application bytes inside channel framing.
 
 <!-- verbatim from kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/StarQuilterConvergenceTest.kt#setReplicator -->
 ```kotlin

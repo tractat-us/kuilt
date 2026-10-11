@@ -93,7 +93,8 @@ class HostAuthoritativeLeaveTest {
 
             val hostRoom = factory.host(Pattern("Host"))
             val joiner1Room = factory.join(InMemoryTag("Joiner1"))
-            val joiner2Room = factory.join(InMemoryTag("Joiner2"))
+            val joiner2Seam = loom.join(InMemoryTag("Joiner2"))
+            val joiner2Room = factory.adopt(joiner2Seam, SessionRole.Joiner)
 
             hostRoom.roster.first { it.size == 2 }
             joiner1Room.roster.first { it.size == 2 }
@@ -102,7 +103,8 @@ class HostAuthoritativeLeaveTest {
             // Host-authoritative gate: a Farewell is honored only from the identified host.
             // joiner2 forges one naming the host — joiner1 must NOT evict anyone on it.
             val forged = AdmitMessage.encode(AdmitMessage.Farewell(hostRoom.selfId.value))
-            joiner2Room.broadcast(forged)
+            // Protocol forgery bypasses the raw Room API's send-time refusal.
+            joiner2Seam.broadcast(forged)
             testScheduler.advanceTimeBy(fastConfig.interval)
             testScheduler.runCurrent()
 

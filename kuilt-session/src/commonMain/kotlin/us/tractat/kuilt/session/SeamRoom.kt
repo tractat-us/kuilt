@@ -3523,8 +3523,8 @@ internal class SeamRoom(
      *
      * On a star fabric a spoke's frame reaches only the host, so once this member's roster diverges
      * from what the transport can address, the frame is wrapped and **relayed via the host**
-     * (#1994). [RoomChannelSeam] therefore needs no change: it already delegates here, so
-     * `peers = room.rosterPeers` becomes honest for free.
+     * (#1994). [RoomChannelSeam] uses the same routing through [broadcastChannel], after adding
+     * its channel header. Raw application bytes are checked before reaching that shared route.
      *
      * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
      *
@@ -3547,9 +3547,21 @@ internal class SeamRoom(
      * timer-driven broadcast that threw here would kill the coroutine that drives anti-entropy,
      * which is precisely the mechanism that heals the gap once the host returns.
      *
-     * Contrast [sendTo], which is addressed and therefore **does** throw.
+     * Contrast [sendTo], which is addressed and therefore **does** report an unreachable hop.
+     *
+     * @throws ReservedRoomPrefix if a non-terminal room would classify [bytes] as protocol traffic.
      */
     override suspend fun broadcast(bytes: ByteArray) {
+        if (lock.withLock { hostLost || closed }) return
+        refuseReservedPrefix(bytes)
+        broadcastFrame(bytes)
+    }
+
+    internal suspend fun broadcastChannel(subId: Short, payload: ByteArray) {
+        broadcastFrame(RoomChannel.frame(subId, payload))
+    }
+
+    private suspend fun broadcastFrame(bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }
         if (terminal) return
         val host = relayHostOrNull()
@@ -3590,8 +3602,8 @@ internal class SeamRoom(
      *
      * Silent no-op when the room is terminal (after [MembershipEvent.HostLost] or [leave]).
      *
-     * **Throws, unlike [broadcast].** An addressed send that cannot be delivered is reported: this
-     * is [Seam.sendTo]'s documented contract, and swallowing it would re-create #1994's own symptom
+     * **Reports an undeliverable hop, unlike [broadcast].** An addressed send that cannot be
+     * delivered is reported: this is [Seam.sendTo]'s documented contract, and swallowing it would re-create #1994's own symptom
      * — silent non-delivery — at the send side. The two methods differ deliberately because their
      * contracts differ; a caller that wants best-effort semantics for an addressed send wraps this
      * in `runCatchingCancellable`.
@@ -3600,6 +3612,7 @@ internal class SeamRoom(
      * unresolvable destination or a wedged recipient is dropped with a debug log and nothing is
      * reported back. Only the hop this member performs itself can throw.
      *
+     * @throws ReservedRoomPrefix if a non-terminal room would classify [bytes] as protocol traffic.
      * @throws PayloadTooLarge if the encoded frame will not fit the fabric — measured on the frame,
      *   so a direct send is charged no envelope and a relayed one is charged exactly what its own
      *   envelope cost. See [oversizeOrNull].
@@ -3608,6 +3621,21 @@ internal class SeamRoom(
      *   this member has no direct route to by construction.
      */
     override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
+        if (lock.withLock { hostLost || closed }) return
+        refuseReservedPrefix(bytes)
+        sendFrameTo(peer, bytes)
+    }
+
+    internal suspend fun sendChannelTo(peer: PeerId, subId: Short, payload: ByteArray) {
+        sendFrameTo(peer, RoomChannel.frame(subId, payload))
+    }
+
+    private fun refuseReservedPrefix(bytes: ByteArray) {
+        val prefix = RoomFramePrefix.entries.firstOrNull { it.classifies(bytes) } ?: return
+        throw ReservedRoomPrefix(prefix)
+    }
+
+    private suspend fun sendFrameTo(peer: PeerId, bytes: ByteArray) {
         val terminal = lock.withLock { hostLost || closed }
         if (terminal) return
         val host = relayHostOrNull()

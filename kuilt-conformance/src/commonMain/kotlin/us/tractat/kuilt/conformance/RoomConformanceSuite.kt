@@ -742,7 +742,7 @@ public abstract class RoomConformanceSuite {
             advanceTimeBy(200L)
             val late = hostRoom.incomingFrom(joinerId)
             // Routed after the claim, and counted: `dropped` is read when the reader reaches the end, not
-            // when the loss began. Its first byte must be unreserved or the room never routes it at all —
+            // when the loss began. Its first byte must be unreserved or a live room refuses it at send —
             // see [applicationPayload], which is why this assertion used to pin the wrong number.
             joinerRoom.broadcast(applicationPayload("late-after-claim"))
             advanceTimeBy(100L)
@@ -1369,7 +1369,7 @@ public abstract class RoomConformanceSuite {
 
             // Nothing is asserted about this frame — the property is that the call itself is a no-op rather
             // than a throw or a wedge — but it goes through [applicationPayload] like every other payload
-            // in this suite, so no rig here can be built on a frame a room would swallow.
+            // in this suite, so the fixture also works on a live room, which refuses reserved payloads at send.
             joinerRoom.broadcast(applicationPayload("post-host-lost"))
         }
 
@@ -1966,25 +1966,23 @@ public abstract class RoomConformanceSuite {
     /**
      * [text] as an application payload, refusing text a [RoomFramePrefix] family would claim.
      *
-     * A room dispatches on a frame's **first byte** before any application routing, so a payload leading
-     * with a reserved one never reaches a member's inbox — it is handled as an admit, channel, lobby,
-     * heartbeat or relay frame, silently (#2806). A rig built on such a payload does not fail: it asserts
-     * about a frame that was never routed, and passes by measuring nothing. That is what made (4d) vacuous
-     * — `"after-claim"` leads with `0x61`, the admit byte, and `AdmitMessage.isAdmitFrame` is exactly that
-     * byte test — so its count pinned the *old* contract, and a mutation moving the count back to claim
-     * time stayed green across the whole suite.
+     * A live room now refuses protocol-classified raw payloads at send with
+     * [us.tractat.kuilt.session.ReservedRoomPrefix] (#2806). Previously, dispatch consumed them before
+     * application routing: `"after-claim"` was treated as an admit frame, making the dropped-frame
+     * count assertion in (4d) vacuous.
      *
-     * Refusing the byte here makes the next instance a loud failure in the suite that owns the rig, rather
-     * than a number no one can tell from a real one. [RoomFramePrefix.matches] is the right predicate even
-     * though it is weaker than [RoomFramePrefix.classifies]: heartbeat reserves its byte one-directionally,
-     * so a payload can claim a family's byte without being a frame of it and still be routed oddly.
+     * Keep this fixture guard for third-party [Room] implementations and for its stricter payload
+     * selection: [RoomFramePrefix.matches] rejects every reserved leading byte, whereas
+     * [RoomFramePrefix.classifies] also checks the channel header length or heartbeat prefix.
+     * Even short channel-leading payloads and ordinary `k` text, which live rooms accept, are excluded
+     * here so the conformance rig uses unambiguously application-only text across implementations.
      */
     private fun applicationPayload(text: String): ByteArray {
         val bytes = text.encodeToByteArray()
         val reserved = RoomFramePrefix.entries.filter { it.matches(bytes) }
         require(reserved.isEmpty()) {
-            "conformance payload \"$text\" leads with a byte reserved by $reserved, which a room dispatches " +
-                "away from application routing before it can reach a member — choose unreserved text"
+            "conformance payload \"$text\" leads with a byte reserved by $reserved, so it is not an " +
+                "unambiguously application-only fixture — choose unreserved text"
         }
         return bytes
     }

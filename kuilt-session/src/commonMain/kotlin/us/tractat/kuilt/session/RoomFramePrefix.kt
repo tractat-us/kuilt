@@ -27,10 +27,12 @@ import us.tractat.kuilt.session.election.LobbyMessage
  * | 11-char string | `0x6b` | [Heartbeat] |
  * | 18-char string | `0x72` | [Relay] |
  *
- * The codebase lives with this because room payloads are **framed**, not bare — an application
- * payload is wrapped by the channel header before it reaches the wire. This registry's job is
- * single-source-of-truth for the byte space and **distinctness**; it is deliberately *not* a
- * safety proof, because no registry can make one.
+ * [Room.channel] wraps application payloads in a channel header. Raw [Room.broadcast] and
+ * [Room.sendTo] payloads have no such header: a live [SeamRoom] refuses any payload classified
+ * by this registry with [ReservedRoomPrefix] before sending it. The check uses [classifies],
+ * not [matches], so short channel-like payloads and ordinary `k` payloads remain valid.
+ * This registry owns the byte space and distinctness; channel framing makes arbitrary
+ * application bytes safe to send.
  *
  * @property byte the first byte of every frame in this family.
  */
@@ -78,8 +80,8 @@ public enum class RoomFramePrefix(public val byte: Byte) {
      * `RelayEnvelope.isRelayFrame` is *defined* as `Relay.matches`, so this entry inherits the
      * default rather than delegating back into a definition that would only point here again.
      *
-     * **Release note:** an application payload sent via `Room.broadcast` whose first byte is `0x72`
-     * was previously legal and is now swallowed as a relay frame.
+     * Raw application sends beginning with `0x72` are refused with [ReservedRoomPrefix].
+     * A [Room.channel] payload may begin with any byte, including this one.
      */
     Relay(0x72),
     ;

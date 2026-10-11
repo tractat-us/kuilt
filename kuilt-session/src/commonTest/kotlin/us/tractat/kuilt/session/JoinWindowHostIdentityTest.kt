@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
@@ -148,7 +149,7 @@ class JoinWindowHostIdentityTest {
         /** The joiner admitted LAST — the only one whose admit burst has bootstrap sends. */
         val lastJoiner: Room,
         /** A co-joiner of [lastJoiner], used to forge frames at it. */
-        private val coJoiner: Room,
+        private val coJoiner: Seam,
         /** [lastJoiner]'s roster additions, each paired with the host identity of that moment. */
         val joinSamples: List<JoinSample>,
     ) {
@@ -159,6 +160,7 @@ class JoinWindowHostIdentityTest {
          * which is precisely the shape that used to capture `hostPeerId`.
          */
         suspend fun forgeWelcomeFromCoJoiner() {
+            // Protocol forgery bypasses the raw Room API's send-time refusal.
             coJoiner.broadcast(
                 AdmitMessage.encode(
                     AdmitMessage.Welcome(
@@ -183,17 +185,21 @@ class JoinWindowHostIdentityTest {
             val loom = fabric.clientLoom(PeerId("joiner-$index"), Random(index.toLong() + 1L))
             // `adopt` (rather than `join`) mirrors LivenessRouteGateTest.star(): the spoke's own
             // client loom is its single edge, and the room is built over that seam.
-            SeamRoomFactory(loom, backgroundScope, clock)
-                .adopt(loom.join(InMemoryTag(ROOM)), SessionRole.Joiner)
+            val seam = loom.join(InMemoryTag(ROOM))
+            SeamRoomFactory(loom, backgroundScope, clock).adopt(seam, SessionRole.Joiner) to seam
         }
     }
 
     /** The same membership shape on a flat [InMemoryLoom], where every member can address every other. */
     private suspend fun TestScope.flatMesh(coJoiners: Int): Fixture {
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock)
+        val loom = InMemoryLoom()
+        val factory = SeamRoomFactory(loom, backgroundScope, clock)
         val hostRoom = factory.host(Pattern(ROOM))
-        return admitSequentially(hostRoom, coJoiners) { index -> factory.join(InMemoryTag("joiner-$index")) }
+        return admitSequentially(hostRoom, coJoiners) { index ->
+            val seam = loom.join(InMemoryTag("joiner-$index"))
+            factory.adopt(seam, SessionRole.Joiner) to seam
+        }
     }
 
     /**
@@ -207,22 +213,23 @@ class JoinWindowHostIdentityTest {
     private suspend fun TestScope.admitSequentially(
         hostRoom: Room,
         coJoiners: Int,
-        newJoiner: suspend (Int) -> Room,
+        newJoiner: suspend (Int) -> Pair<Room, Seam>,
     ): Fixture {
         require(coJoiners >= 2) {
             "the window only exists for a joiner admitted with pre-existing members to bootstrap"
         }
-        val joiners = mutableListOf<Room>()
+        val joiners = mutableListOf<Pair<Room, Seam>>()
         val samples = mutableListOf<JoinSample>()
         repeat(coJoiners) { index ->
-            val joiner = newJoiner(index)
-            joiners += joiner
+            val joined = newJoiner(index)
+            val joiner = joined.first
+            joiners += joined
             if (index == coJoiners - 1) sampleJoins(joiner, samples) else hostRoom.roster.first { it.size == index + 1 }
         }
         return Fixture(
             hostId = hostRoom.selfId,
-            lastJoiner = joiners.last(),
-            coJoiner = joiners.first(),
+            lastJoiner = joiners.last().first,
+            coJoiner = joiners.first().second,
             joinSamples = samples,
         )
     }
