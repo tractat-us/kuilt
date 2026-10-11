@@ -179,7 +179,7 @@ public interface Room {
     /**
      * Broadcast [bytes] to all other admitted members.
      *
-     * **Best-effort: never throws for an undeliverable frame.** A member the transport cannot
+     * **Best-effort for valid application payloads.** A member the transport cannot
      * currently reach — including, on a star, the relaying host itself — is silently skipped, and
      * so is a payload over [maxPayloadBytes]. Use the roster and the membership events to reason
      * about who is present; do not read a returned `Unit` as delivery. Deliberately weaker than
@@ -189,12 +189,13 @@ public interface Room {
      *
      * The room protocol discriminates its own frames by the payload's **first byte**, so five
      * values are spoken for — `0x61`, `0x63`, `0x65`, `0x6b`, `0x72`, ASCII `a c e k r`
-     * ([RoomFramePrefix]). A raw payload sent here or via [sendTo] that begins with one of them may
-     * be classified as a protocol frame at the far end and never surface on [incoming].
+     * ([RoomFramePrefix]). A live [SeamRoom] refuses raw payloads classified as protocol traffic
+     * with [ReservedRoomPrefix], naming the family, before any direct or relayed send.
+     * Terminal rooms retain their silent no-op behaviour.
      *
      * The reservation is **not** uniform, because each family's real classifier differs:
      *
-     * | Byte | Family | What is actually swallowed |
+     * | Byte | Family | What is refused |
      * |---|---|---|
      * | `0x61` | admit handshake | **every** payload leading with it |
      * | `0x65` | host election | **every** payload leading with it |
@@ -202,11 +203,12 @@ public interface Room {
      * | `0x63` | channel framing | only payloads of **3 bytes or more** |
      * | `0x6b` | liveness ping/pong | only the literal `"kuilt.heartbeat.ping"` / `"…pong"` prefixes |
      *
-     * So a payload leading with `0x6b` is not necessarily swallowed — a bare `"keepalive"` is
-     * delivered — but relying on the two conditional rows trades a byte of payload space for a
-     * failure mode with no error attached: the classifiers may tighten or widen, and a frame that
-     * stops matching simply vanishes. Prefix your own payloads, or send them over a [channel] view,
-     * which frames them for you.
+     * Empty payloads, 1- or 2-byte payloads beginning with `c`, and ordinary `k` payloads such as
+     * `"keepalive"` remain valid. The check uses [RoomFramePrefix.classifies], matching inbound
+     * routing. Use a [channel] view to carry arbitrary bytes inside channel framing.
+     *
+     * @throws ReservedRoomPrefix if a non-terminal room classifies [bytes] as protocol traffic.
+     * @sample us.tractat.kuilt.session.arbitraryRoomPayloadSample
      */
     public suspend fun broadcast(bytes: ByteArray)
 
@@ -269,8 +271,10 @@ public interface Room {
      * so failing to reach it is information the caller asked for. Wrap in `runCatchingCancellable`
      * for best-effort semantics.
      *
-     * The reserved leading bytes documented on [broadcast] apply here identically — the far end
-     * classifies every inbound frame the same way regardless of how it was addressed.
+     * The send-time refusal documented on [broadcast] applies here identically. Use [channel]
+     * for arbitrary application bytes. Terminal rooms retain their silent no-op behaviour.
+     *
+     * @throws ReservedRoomPrefix if a non-terminal room classifies [bytes] as protocol traffic.
      *
      * @throws us.tractat.kuilt.core.PayloadTooLarge if [bytes] exceeds [maxPayloadBytes]. Raised
      *   before the frame is built, so the caller gets the budget it should have respected rather
@@ -394,10 +398,9 @@ public interface Room {
      * are theoretically possible (1/65536 per pair) but negligible for typical usage
      * (< 100 channels).
      *
-     * Applications **must not** emit payloads of 3 bytes or more starting with
-     * [RoomChannel.CHANNEL_PREFIX] on the Room's raw [broadcast] / [sendTo] — that byte is reserved
-     * for channel framing. It is one of five reserved leading bytes; see [broadcast] for the whole
-     * set and for which of them are conditional.
+     * Raw [broadcast] / [sendTo] refuse payloads of 3 bytes or more starting with
+     * [RoomChannel.CHANNEL_PREFIX]. This channel view supplies that framing internally, so its
+     * application payload may contain any bytes. See [broadcast] for the full reserved set.
      *
      * ## Idempotency
      *

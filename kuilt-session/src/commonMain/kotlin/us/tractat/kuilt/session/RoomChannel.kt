@@ -27,14 +27,12 @@ import us.tractat.kuilt.core.Swatch
  * CBOR text-string headers are `0x60 or len`, so a bare 3-character CBOR string
  * begins `0x63` — and the same is true of every other prefix in the registry. The
  * real collision band is `0x60..0x7f`; see [RoomFramePrefix] for the full table.
- * The codebase lives with it because room payloads are framed, not bare.
+ * Channel views add framing; raw Room sends do not.
  *
- * Applications **must not** emit raw payloads starting with `0x63` via [Room.broadcast]
- * or [Room.sendTo] — that byte is reserved for channel framing. An application frame of
- * 3 bytes or more starting with `0x63` is misclassified as a channel frame and routed
- * (or silently dropped); a 1- or 2-byte one survives, on the strength of the classifier's
- * length test alone. Do not build on that. [Room.broadcast] carries the whole reserved
- * byte space and which of it is conditional.
+ * Raw [Room.broadcast] and [Room.sendTo] refuse payloads of 3 bytes or more starting with
+ * `0x63` with [ReservedRoomPrefix]. A 1- or 2-byte payload starting with `0x63` remains ordinary
+ * application data. Channel views supply their header through an internal send path, so any
+ * application payload is valid inside it. [Room.broadcast] documents all reserved families.
  *
  * ## Wire format
  *
@@ -199,7 +197,7 @@ internal class RoomChannelSeam(
         .map { swatch -> RoomChannel.stripped(swatch) }
 
     override suspend fun broadcast(payload: ByteArray) =
-        room.broadcast(RoomChannel.frame(subId, payload))
+        room.broadcastChannel(subId, payload)
 
     /**
      * The room decides whether the frame fits — it is the layer that knows the route and therefore
@@ -220,7 +218,7 @@ internal class RoomChannelSeam(
         // has to be made here; there is nothing under this call to inherit it from.
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
         try {
-            room.sendTo(peer, RoomChannel.frame(subId, payload))
+            room.sendChannelTo(peer, subId, payload)
         } catch (tooLarge: PayloadTooLarge) {
             throw PayloadTooLarge(
                 payloadBytes = payload.size,

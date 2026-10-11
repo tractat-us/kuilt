@@ -625,6 +625,9 @@ internal class WireTapSeam(
         if (payload.size > max) throw FabricFrameTooLarge(payload.size, max)
     }
 
+    /** All send attempts, including protocol frames, for send-time refusal assertions. */
+    fun sentFrameCount(): Int = sent.value.size
+
     fun clearSentLog() {
         sent.value = emptyList()
     }

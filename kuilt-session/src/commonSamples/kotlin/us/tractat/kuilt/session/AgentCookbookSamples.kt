@@ -299,3 +299,8 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
         // A genuine mid-2PC collapse: the co-electors are gone. Retryable — re-run electLobby(...).
         is ElectionOutcome.Torn -> null
     }
+
+/** Send arbitrary bytes, including reserved Room prefixes, inside a named channel. */
+public suspend fun arbitraryRoomPayloadSample(room: Room, peer: PeerId, payload: ByteArray) {
+    room.channel("data").sendTo(peer, payload)
+}
