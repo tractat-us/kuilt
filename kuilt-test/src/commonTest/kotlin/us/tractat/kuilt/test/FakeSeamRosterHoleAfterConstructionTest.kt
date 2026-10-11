@@ -13,12 +13,12 @@ import kotlin.test.assertTrue
 /**
  * `selfId ∈ peers` is an **invariant**, not a construction-time snapshot (#2546).
  *
- * [FakeSeamRosterAlwaysHoldsSelfIdTest] pins the constructor's `require` (#2536). That guard reads
- * the roster once, at construction, and then never again — so two doors reach the *bit-identical*
- * state it refuses, from a consumer's test **body** instead of its fixture:
+ * [FakeSeamRosterAlwaysHoldsSelfIdTest] pins constructor rejection (#2536). The original guard read
+ * the roster only at construction, leaving these routes to the same invalid state from a consumer's
+ * test **body** instead of its fixture. The internal roster type now owns validation and copying:
  *
  * - **[FakeSeam.removePeer] applied to `selfId`.** `FakeSeam(selfId = a, initialPeers = setOf(a, b))`
- *   followed by `removePeer(a)` leaves `peers == { b }` with [SeamState.Woven] still latched. The
+ *   followed by an unchecked `removePeer(a)` left `peers == { b }` with [SeamState.Woven] still latched. The
  *   inversion #2536 exists to prevent fires exactly as it describes: one live remote, and
  *   `peers.value.size > 1` — the contract's documented sentinel for "at least one remote is
  *   connected" — reads `false`, so the seam reads *alone*.
@@ -120,9 +120,8 @@ class FakeSeamRosterHoleAfterConstructionTest {
     }
 
     /**
-     * [FakeSeam.sendTo] has refused `selfId` since #2428. Until [FakeSeam.removePeer] does too, the
-     * fake disagrees with itself on the same axis in two places: it refuses to *address* self and
-     * accepts *forgetting* self.
+     * [FakeSeam.sendTo] and [FakeSeam.removePeer] both refuse `selfId`: the fake must agree
+     * with itself about refusing to *address* self and refusing to *forget* self.
      */
     @Test
     fun sendToAndRemovePeerAgreeThatSelfIsNotARemote() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -231,7 +230,7 @@ class FakeSeamRosterHoleAfterConstructionTest {
         callersRoster.add(carol)
 
         assertFailsWith<PeerNotConnected>(
-            "sendTo consults _peers, so a peer smuggled in after construction would be accepted and " +
+            "sendTo consults peers, so a peer smuggled in after construction would be accepted and " +
                 "recorded in `directed` — a delivered frame to a peer that was never admitted",
         ) { seam.sendTo(carol, byteArrayOf(1)) }
     }

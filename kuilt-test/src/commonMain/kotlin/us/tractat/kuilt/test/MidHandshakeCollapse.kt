@@ -21,7 +21,7 @@ import kotlin.time.Duration.Companion.seconds
  * while `Seam.state` stays [us.tractat.kuilt.core.SeamState.Woven] — the co-elector simply left
  * the roster, no `close()` and no `Torn` latch. A consumer that only wakes on a seam **tear**
  * (the transport-death half) silently suspends forever on this event; that is exactly how #1466
- * shipped green. [FakeSeam.removePeer] reproduces the drain precisely (drops `_peers`, leaves
+ * shipped green. [FakeSeam.removePeer] reproduces the drain precisely (removes a remote from `peers`, leaves
  * `state` [us.tractat.kuilt.core.SeamState.Woven]) — this helper drives it.
  *
  * ## The protocol it drives

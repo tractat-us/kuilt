@@ -4,7 +4,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
@@ -13,6 +12,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.test.internal.SelfContainingRoster
 
 /**
  * A test double for [Seam] with test-driver helpers for state mutation, frame
@@ -45,10 +45,9 @@ import us.tractat.kuilt.core.Swatch
  * connected", so a roster without [selfId] under-counts by one and a seam holding one remote reads as
  * alone. Passing one throws [IllegalArgumentException].
  *
- * **That obligation is an invariant, not a construction-time snapshot** (#2546). Two doors used to
- * reach the identical state the `require` refuses: [removePeer] applied to [selfId] now throws rather
- * than holing the roster, and `initialPeers` is **copied** rather than retained, so a caller holding a
- * `MutableSet` reference cannot edit the seam's roster out from under it after construction.
+ * An internal roster type owns the mutable flow and validates a copy before publishing any roster.
+ * This fake receives only its read-only flow and invariant-preserving operations: [removePeer]
+ * applied to [selfId] throws, and a caller's `MutableSet` cannot edit the roster after construction.
  *
  * **Constructing one already `Torn` is allowed, but only in the shape a real seam reaches**:
  * `initialPeers` must be `setOf(selfId)` (the default), because [Seam.peers] requires a torn seam's
@@ -65,13 +64,8 @@ public class FakeSeam(
     initialState: SeamState = SeamState.Woven,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
 ) : Seam {
-    // Copied, not retained (#2546). `MutableStateFlow(initialPeers)` holds the caller's own instance,
-    // so a caller passing a `MutableSet` could drop `selfId` from it one line after the `require`
-    // below had passed — reaching the refused state with no FakeSeam method called at all. The copy is
-    // also what the `init` guards read (`_peers.value`, not the parameter), so what is validated and
-    // what is retained are the same object rather than two reads of a set the caller can still edit.
-    private val _peers = MutableStateFlow(initialPeers.toSet())
-    override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
+    private val roster = SelfContainingRoster(selfId, initialPeers)
+    override val peers: StateFlow<Set<PeerId>> = roster.peers
 
     private val _state = MutableStateFlow(initialState)
     override val state: StateFlow<SeamState> = _state.asStateFlow()
@@ -84,20 +78,6 @@ public class FakeSeam(
     private var sequenceCounter = 0L
 
     init {
-        // `Seam.peers` holds `selfId` from construction onward, in EVERY state — a strictly broader
-        // obligation than the `Torn` one below, and independent of it (#2536). `initialPeers` is its own
-        // parameter, so a caller could hand the fake a roster naming only a remote, or nobody at all, and
-        // both read backwards in the direction consumer tests turn on: `peers.value.size > 1` is the
-        // contract's sentinel for "a remote is connected", so a roster missing `selfId` under-counts by
-        // one and a seam with one live remote reads as alone. The fake would also disagree with itself
-        // about who `selfId` is — `sendTo` refuses a self-send before consulting the roster (#2428).
-        require(selfId in _peers.value) {
-            "A Seam's peers always contains selfId, from construction onward (Seam.peers, #2536) — " +
-                "`peers.value.size > 1` is the contract's sentinel for \"at least one remote is " +
-                "connected\", and a roster without selfId under-counts by one, so a seam holding one " +
-                "remote reads as alone. Pass initialPeers containing selfId (setOf(selfId) is the " +
-                "default). Got selfId=${selfId.value}, peers=${_peers.value.map { it.value }}"
-        }
         // The constructor is the OTHER entry into `Torn`, and fixing `tear()` left it open (#2432).
         // `initialState` and `initialPeers` are independent parameters, so a caller could *start* in
         // the state the transition can no longer reach: `Torn` alongside a roster naming a remote.
@@ -108,16 +88,16 @@ public class FakeSeam(
         // Refused loudly rather than rewritten silently: deriving the roster from the state would
         // discard what the caller wrote and teach a reader the wrong model of the contract.
         //
-        // This COMPOSES with the guard above rather than subsuming it or being subsumed by it: `Torn`
+        // This COMPOSES with the roster type's selfId guard: `Torn`
         // demands the roster be exactly `{ selfId }` and says nothing about any other state; `#2536`
         // demands `selfId ∈ peers` and says nothing about remotes. Folding either into the other loses
         // a shape — `FakeSeamRosterAlwaysHoldsSelfIdTest.tornAndLiveGuardsStayDistinct` is the check.
         val torn = initialState as? SeamState.Torn
-        require(torn == null || _peers.value == setOf(selfId)) {
+        require(torn == null || peers.value == setOf(selfId)) {
             "A Torn seam's peers is exactly { selfId } (Seam.peers, #1816) — a torn fabric can reach " +
                 "nobody, and selfId is never absent. Construct with initialPeers = setOf(selfId) (the " +
                 "default), or start Woven/Weaving and call tear(). Got state=$initialState, " +
-                "peers=${_peers.value.map { it.value }}, selfId=${selfId.value}"
+                "peers=${peers.value.map { it.value }}, selfId=${selfId.value}"
         }
         // The spool dimension of the same obligation: every real seam completes `incoming` on tear, and
         // `tear()` below closes the spool for exactly that reason. A seam that starts `Torn` with an
@@ -149,10 +129,10 @@ public class FakeSeam(
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
         checkNotTorn()
         // A fake that accepts what production refuses makes every consumer test that exercises the
-        // refusal vacuous — `_peers` includes selfId, so without this a self-send was recorded in
+        // refusal vacuous — `peers` includes selfId, so without this a self-send was recorded in
         // `directed` and the consumer's mistake read back as a delivered frame (#2428).
         require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
-        if (peer !in _peers.value) throw PeerNotConnected(peer)
+        if (peer !in peers.value) throw PeerNotConnected(peer)
         _directed.add(peer to payload)
     }
 
@@ -164,7 +144,7 @@ public class FakeSeam(
 
     /** Add [peer] to the live peers set. */
     public fun addPeer(peer: PeerId) {
-        _peers.update { it + peer }
+        roster.add(peer)
     }
 
     /**
@@ -184,14 +164,7 @@ public class FakeSeam(
      * no-op — the guard is on `selfId`, not on membership.
      */
     public fun removePeer(peer: PeerId) {
-        require(peer != selfId) {
-            "A Seam's peers always contains selfId, in every state (Seam.peers, #2536/#2546) — " +
-                "removing it holes the roster: `peers.value.size > 1` is the contract's sentinel for " +
-                "\"at least one remote is connected\", so a seam still holding one live remote would " +
-                "read as alone. To model a membership drain, remove the remote; to collapse the roster " +
-                "to { selfId }, call tear(). Got selfId=${selfId.value}, peer=${peer.value}"
-        }
-        _peers.update { it - peer }
+        roster.remove(peer)
     }
 
     /**
@@ -237,7 +210,7 @@ public class FakeSeam(
      * processes frames after Torn) can't pass against this fake but fail in production.
      *
      * **The roster:** [Seam.peers] requires a `Torn` seam's roster to be exactly `{ selfId }`,
-     * published *before* the terminal latch — hence the `_peers` write ahead of `_state` below. Read
+     * published *before* the terminal latch — hence the roster collapse ahead of `_state` below. Read
      * the seams named above as a model for the **spool dimension only**. On the roster one they now
      * all collapse to `{ selfId }` (#1849 fixed `InMemorySeam`, whose `peers` derives the collapse
      * from its close latch), but they do **not** all publish it *before* the latch: `NwSeam.close`
@@ -247,7 +220,7 @@ public class FakeSeam(
      */
     public fun tear(reason: CloseReason = CloseReason.Normal) {
         if (_state.value is SeamState.Torn) return
-        _peers.value = setOf(selfId)
+        roster.collapseToSelf()
         _state.value = SeamState.Torn(reason)
         spool.close()
     }
