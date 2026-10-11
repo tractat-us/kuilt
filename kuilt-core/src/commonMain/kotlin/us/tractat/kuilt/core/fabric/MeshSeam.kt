@@ -220,8 +220,9 @@ private class Link(
  *
  * For each [Connection] in [connections], [meshSeam] exchanges a [MeshHello] preamble (this peer's id plus a
  * random per-connection nonce) to learn the remote [PeerId]. Both sides of a link exchange their
- * preamble concurrently, so all exchanges in [connections] run in parallel — this function suspends
- * until every handshake completes.
+ * preamble concurrently. Each exchange starts in the caller until its first suspension; a buffered
+ * send may complete inline before the next exchange starts. Suspended exchanges overlap, and this
+ * function waits until every handshake completes.
  *
  * **Dedup (cross-node agreement):** if two connections resolve the same remote id (duplicate links from
  * a simultaneous dial), both ends keep the link with the lexicographically smallest *link nonce* —
@@ -427,7 +428,13 @@ private suspend fun buildMesh(
             "disables the mesh's send-order guarantee across a dedup swap rather than tuning it"
     }
     val handshaked = coroutineScope {
-        connections.map { conn -> async { handshakeLink(selfId, conn, dispatcher, random) } }.awaitAll()
+        // Enter each handshake's cleanup guard before cancellation can skip a queued body (#2711).
+        // The prefix runs inline; after its first suspension each child resumes on the caller's
+        // dispatcher. The singleCollection pump still uses the supplied dispatcher and is closed
+        // by handshakeLink on failure, or owned by the returned mesh on success.
+        connections.map { conn ->
+            async(start = CoroutineStart.UNDISPATCHED) { handshakeLink(selfId, conn, dispatcher, random) }
+        }.awaitAll()
     }
     // Reject-and-continue: drop (and close) the links the policy declines; keep the survivors. A
     // rejected link never reaches the dedup lottery below or publication, and a rejection neither
