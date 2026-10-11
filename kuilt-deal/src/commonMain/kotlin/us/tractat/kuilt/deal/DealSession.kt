@@ -72,13 +72,15 @@ public class DealSession(
     internal val incomingJobForTest: Job get() = incomingJob
 
     /**
-     * Apply a remote op, growing the deck with placeholder cards if the op references
-     * an index beyond the current deck size. Ops can arrive before local shuffle
-     * initialises the deck (the seam cross-wires delivery synchronously in tests).
+     * Apply a remote op to an existing card or the next deck slot. Shuffle sends
+     * cards in index order, and per-sender FIFO delivery lets a peer initialise
+     * the deck one card at a time before its local shuffle. Drop negative indices
+     * and gaps before allocating: a peer's index must not size a placeholder list.
      */
     private fun DeckState.applyRemote(cardIndex: Int, op: CardOp): DeckState {
+        if (cardIndex < 0 || cardIndex > cards.size) return this
         val cards = cards.toMutableList()
-        while (cards.size <= cardIndex) {
+        if (cardIndex == cards.size) {
             cards.add(emptyCard())
         }
         val next = cards[cardIndex].applyOp(op) ?: return this
