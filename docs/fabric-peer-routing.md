@@ -77,7 +77,7 @@ fabric itself decides.
 | `:kuilt-webrtc` | 2-peer data channel | **N/A** | [`WebRTCPeerLink.kt:116`](../kuilt-webrtc/src/wasmJsMain/kotlin/us/tractat/kuilt/webrtc/internal/WebRTCPeerLink.kt#L116) | `resolvedRoster()` is literally `setOf(selfId, remote)`. Point-to-point. |
 | `:kuilt-tcp` | 2-peer link | **N/A** | [`TcpLoom.kt` `weave`](../kuilt-tcp/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/tcp/TcpLoom.kt) | `handshaking(...)` yields a `LinkSeam`. Multi-peer TCP is assembled by the *caller* out of `hubMesh`/`peerMesh`, which then decides the answer. |
 | `:kuilt-nw` | Full mesh | **Yes** | [`NwSeam.kt:865`](../kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt#L865), [`NwLoom.kt:50`](../kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwLoom.kt#L50) | Every peer advertises, browses **and** auto-dials every other, so each pair forms its own connection; `registry[peer]` always resolves for a peer in the roster. |
-| `:kuilt-gossip` — `GossipSeam` | Decorator | **Unchanged** | [`GossipSeam.kt:411`](../kuilt-gossip/src/commonMain/kotlin/us/tractat/kuilt/gossip/GossipSeam.kt#L411) | `sendTo` is a bare delegation to the base seam — gossip flooding applies to `broadcast` only. It neither creates nor removes a peer-addressed route; it also presumes a full-membership base seam. |
+| `:kuilt-gossip` — `GossipSeam` | Decorator | **Unchanged** | [`GossipSeam.kt:415`](../kuilt-gossip/src/commonMain/kotlin/us/tractat/kuilt/gossip/GossipSeam.kt#L415) | `sendTo` is a bare delegation to the base seam — gossip flooding applies to `broadcast` only. It neither creates nor removes a peer-addressed route; it also presumes a full-membership base seam. |
 
 ## Data is relayed; liveness is not
 

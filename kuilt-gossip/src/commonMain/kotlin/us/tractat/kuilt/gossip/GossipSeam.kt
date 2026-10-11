@@ -4,6 +4,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -77,8 +78,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipSeam")
  * every asymmetric edge down, collapsing the overlay to mutual-only edges.
  *
  * **Lifecycle.** Call [start] once with a scope you own; it launches the inbound
- * loop and the [GossipView] under a seam-owned child job. Closing this seam or
- * completing the base's inbound flow cancels that job, including view workers
+ * loop and the [GossipView] under a seam-owned child coroutine. Closing this seam or
+ * completing the base's inbound flow cancels that coroutine, including view workers
  * and neighbour detectors, without cancelling the caller's scope. Scheduling
  * inherits that scope; randomness uses [random], time uses [clock].
  *
@@ -246,42 +247,45 @@ public class GossipSeam(
         val job = lifecycleLock.withLock {
             if (stopped) return
             check(workerJob == null) { "GossipSeam.start must be called exactly once" }
-            Job(scope.coroutineContext[Job]).also { workerJob = it }
+            // A coroutine owner reports failures refused by a supervisor parent;
+            // a plain Job can absorb them. LAZY publishes the handle before execution.
+            scope.launch(start = CoroutineStart.LAZY) { runWorkers() }.also { workerJob = it }
         }
         // Cancellation can precede the inbound launch's first dispatch, in which
         // case its finally never runs. Completion still closes the app surface.
         job.invokeOnCompletion { spool.close() }
-        val workerScope = CoroutineScope(scope.coroutineContext + job)
-        view.start(workerScope)
-        workerScope.launch {
-            val frames =
-                flow {
-                    base.incoming.collect { swatch -> emit(InboundEvent.Frame(swatch)) }
-                    emit(InboundEvent.BaseCompleted)
-                }
-            val sweeps =
-                flow {
-                    while (true) {
-                        delay(reorderGrace / 2)
-                        emit(InboundEvent.Sweep)
-                    }
-                }
-            try {
-                merge(frames, sweeps)
-                    .takeWhile { it !is InboundEvent.BaseCompleted }
-                    .collect { event ->
-                        when (event) {
-                            is InboundEvent.Frame -> dispatchInbound(event.swatch)
-                            is InboundEvent.Sweep -> {
-                                dedupNowMs += (reorderGrace / 2).inWholeMilliseconds
-                                deliver(dedup.releaseExpired(dedupNowMs, reorderGrace.inWholeMilliseconds))
-                            }
-                            is InboundEvent.BaseCompleted -> Unit
-                        }
-                    }
-            } finally {
-                stopWorkers()
+        job.start()
+    }
+
+    private suspend fun CoroutineScope.runWorkers() {
+        view.start(this)
+        val frames =
+            flow {
+                base.incoming.collect { swatch -> emit(InboundEvent.Frame(swatch)) }
+                emit(InboundEvent.BaseCompleted)
             }
+        val sweeps =
+            flow {
+                while (true) {
+                    delay(reorderGrace / 2)
+                    emit(InboundEvent.Sweep)
+                }
+            }
+        try {
+            merge(frames, sweeps)
+                .takeWhile { it !is InboundEvent.BaseCompleted }
+                .collect { event ->
+                    when (event) {
+                        is InboundEvent.Frame -> dispatchInbound(event.swatch)
+                        is InboundEvent.Sweep -> {
+                            dedupNowMs += (reorderGrace / 2).inWholeMilliseconds
+                            deliver(dedup.releaseExpired(dedupNowMs, reorderGrace.inWholeMilliseconds))
+                        }
+                        is InboundEvent.BaseCompleted -> Unit
+                    }
+                }
+        } finally {
+            stopWorkers()
         }
     }
 
@@ -414,8 +418,11 @@ public class GossipSeam(
     ): Unit = base.sendTo(peer, payload)
 
     override suspend fun close(reason: CloseReason) {
-        stopWorkers()
-        base.close(reason)
+        try {
+            base.close(reason)
+        } finally {
+            stopWorkers()
+        }
     }
 
     private fun stopWorkers() {
