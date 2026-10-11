@@ -667,8 +667,11 @@ internal class RaftEngine(
      * (#1880). Closing it needs the mechanism tracked in #1907, not a better local check.
      *
      * Where the forger must be a **current voter** — i.e. wherever [onMessage]'s §5.2/§8 gate is armed
-     * — that costs nothing against the behaviour this rule replaced: before it, such a peer simply
-     * overwrote the belief whenever it liked, and additionally unlocked [onTimeoutNow].
+     * — the pin protects an established leader belief from later replacement and keeps
+     * [onTimeoutNow] tied to that identity. This is an **integrity/liveness tradeoff**: under the
+     * previous last-write-wins behaviour, an honest frame arriving after a false claim could restore
+     * progress; with the pin, that frame is refused for the term. Preventing belief hijacking does
+     * not remove this liveness cost.
      * The ruling in #2674 retains this armed first-claim-wins rule and accepts the term-scoped denial:
      * a restart retains the pin,
      * while a term change re-opens adoption. `ArmedLeaderPinTest` covers both arrival orders,
@@ -676,13 +679,13 @@ internal class RaftEngine(
      * claimant. Replacing the pin would restore belief hijacking and change [onTimeoutNow]
      * authorization; authenticated election evidence needs a separate protocol design.
      *
-     * **The unarmed window is the exception, and the comparison inverts in it (#2674).** While
+     * **The unarmed window buys no protective benefit from taking a pin (#2674).** While
      * `state.membershipState.voters` is empty this node holds no witness at all: [onMessage]'s gate
      * carves itself out so a pre-bootstrap learner seed can be caught up by a leader it has no way to
      * recognise, and *every* peer that can put a frame on the fabric is therefore eligible to be
      * first. A pin taken there would be a durable commitment made on no evidence whatsoever, and the
-     * damage is not the mild belief-corruption the paragraph above weighs — it is a **denial of the
-     * join**: the seed drops the honest leader's every frame for the term, never applies a config,
+     * damage is the same durable **denial of progress** the armed case accepts: the seed drops the
+     * honest leader's every frame for the term, never completes its join, never applies a config,
      * never arms the gate, and (the pin being written through to [RaftStorage.saveLeaderForTerm])
      * comes back holding the same refusal after a restart. Only a *cluster* term advance ends it,
      * which is precisely what a healthy cluster is built never to do. Measured on this repo's own
