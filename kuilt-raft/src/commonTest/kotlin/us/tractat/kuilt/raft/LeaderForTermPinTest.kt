@@ -22,8 +22,8 @@ import kotlin.test.assertTrue
  *
  * - **It rejects the forgery** — [sameTermAppendEntriesFromAnotherVoterDoesNotSeizeLeaderBelief] and
  *   the composed [forgedLeaderBeliefThenSameTermTimeoutNowStartsNoElection].
- * - **It rejects nothing honest** — the load-bearing half. Write-once is only sound if every
- *   legitimate `null → L` adoption still happens: on first contact in a term, again in the *next*
+ * - **With honest claimants, it rejects no legitimate adoption** — the load-bearing half.
+ *   Write-once is only sound if every legitimate `null → L` adoption still happens: on first contact in a term, again in the *next*
  *   term, from a Candidate that lost, and after a restart. Those four are pinned positively below,
  *   because the Election-Safety argument that they are safe was established by reading guards, not
  *   by driving them (#1906's decision comment).
@@ -255,7 +255,7 @@ class LeaderForTermPinTest {
         transfer.cancelAndJoin()
     }
 
-    // ── Write-once rejects nothing honest ────────────────────────────────────
+    // ── Write-once admits honest elections ────────────────────────────────────
     // Four legitimate `null → L` adoptions. If any of these goes red the DESIGN is wrong, not the
     // test: a write-once rule that blocks an honest adoption costs liveness on every path that
     // depends on recognising a leader.
@@ -345,10 +345,9 @@ class LeaderForTermPinTest {
     }
 
     /**
-     * After a restart the node restores a durable term without ever having pinned a leader for it —
-     * the init-restore path writes `state.currentTerm` directly and touches neither `_leader` nor the
-     * pin. A restarted node must therefore still adopt the sitting leader, at the very term it
-     * restored.
+     * After a restart inside a term, the node restores the durable leader pin but starts with no
+     * live leader pointer. The sitting leader still matches that pin and must be adopted at the
+     * restored term. `ArmedLeaderPinTest` covers the converse: a different claimant is refused.
      */
     @Test
     fun aRestartedNodeAdoptsTheSittingLeaderAtTheTermItRestored() = raftRunTest {

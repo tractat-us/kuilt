@@ -234,15 +234,18 @@ third (surviving a liar), are in
   keeps its own meaning — *a live leader I can talk to*, cleared when one steps down — because
   proposal forwarding must not route to a leader that has just stood down. The term scoping is
   the whole of the rule's safety: a pin belongs to a term, so any term change re-opens adoption
-  and nothing honest is refused. What it does **not** do is decide *which* of two claimants is
-  the real one — the pin is first-claim-wins, so a forger that lands the first leader-contact of
+  and, with honest claimants, no legitimate adoption is refused. What it does **not** do is decide
+  *which* of two claimants is the real one — the pin is first-claim-wins, so a forger that lands the first leader-contact of
   a term pins itself and the honest leader's frames are the ones dropped for that term. It is not
   fixable here: the attack value is also a reachable legitimate value, so no predicate over local
   state separates them. Where the forger must already be a **voter** — i.e. wherever the §5.2/§8
   gate above is armed — that is no worse than the pre-fix behaviour, since such a peer previously
-  overwrote the belief at will *and* unlocked `TimeoutNow`; it is an **accepted exposure** pending
-  the authorization mechanism in #1907, and whether first-come is the right disposition even there
-  is reopened by #2674.
+  overwrote the belief at will *and* unlocked `TimeoutNow`. **The ruling in #2674 retains armed
+  first-claim-wins and accepts this term-scoped denial.** Restarting the victim retains the refusal,
+  even though its live leader pointer starts empty; a term change re-opens adoption. Reversing the
+  arrival order protects the elected leader instead. This is conflict detection, not authorization:
+  replacing the pin would restore belief hijacking and affect `TimeoutNow`, while authenticated
+  election evidence needs a separate protocol design (#1907).
   ⚠ **The comparison inverts while the gate is unarmed, and that half was a regression** (#2674).
   With `voters` empty every peer is eligible to be first, so a stranger's single empty
   `AppendEntries` pinned itself on a pre-bootstrap joiner and the honest leader was refused for the

@@ -636,9 +636,9 @@ internal class RaftEngine(
      * (it reads this pin instead since #1900), so the poisoned belief turned a second frame into a
      * pre-vote-less election on demand. Two frames, from a peer that was never leader.
      *
-     * **The rule rejects nothing honest**, which is the load-bearing claim and is driven rather than
-     * argued (`LeaderForTermPinTest`): a term's pin is set exactly once, on the first leader-contact
-     * of that term or on winning it, and a term change invalidates it. So every legitimate `null → L`
+     * **With honest claimants, the rule rejects no legitimate adoption** (`LeaderForTermPinTest`):
+     * a term's pin is set exactly once, on the first armed leader-contact of that term or on winning
+     * it, and a term change invalidates it. So every legitimate `null → L`
      * adoption still happens — on first contact, in the next term, and from a Candidate that lost (a
      * Candidate at term `T` got there by bumping to `T`, so it holds no pin for `T`). A mismatch
      * requires two same-term leaders, which Election Safety forbids.
@@ -660,17 +660,21 @@ internal class RaftEngine(
      * **Residual exposure: the pin is first-claim-wins, and that is not authorization.** Which of the
      * two candidates gets established is decided by arrival order, not by evidence. A forger that lands
      * the *first* leader-contact of a term pins itself, and this node then drops the real leader's
-     * frames for the rest of that term — quietly, since neither side is told. It is inherent to
+     * frames for the rest of that term. [RaftMetric.LeaderPinDenial] reports a sustained refusal run
+     * locally; neither claimant receives a refusal reply. It is inherent to
      * deciding between two unauthenticated claims from local state alone: **a local predicate cannot
      * substitute for authorization** when the attack value is also a reachable legitimate value
      * (#1880). Closing it needs the mechanism tracked in #1907, not a better local check.
      *
      * Where the forger must be a **current voter** — i.e. wherever [onMessage]'s §5.2/§8 gate is armed
      * — that costs nothing against the behaviour this rule replaced: before it, such a peer simply
-     * overwrote the belief whenever it liked, and additionally unlocked [onTimeoutNow]. Whether
-     * first-come is nevertheless the right disposition *there* is a live §5.2 question and stays open
-     * under #2674; §5.2 at least makes the conflict locally **detectable**, which is what this rule
-     * spends.
+     * overwrote the belief whenever it liked, and additionally unlocked [onTimeoutNow].
+     * The ruling in #2674 retains this armed first-claim-wins rule and accepts the term-scoped denial:
+     * a restart retains the pin,
+     * while a term change re-opens adoption. `ArmedLeaderPinTest` covers both arrival orders,
+     * durable restore and recovery. This detects a conflict; it does not authenticate either
+     * claimant. Replacing the pin would restore belief hijacking and change [onTimeoutNow]
+     * authorization; authenticated election evidence needs a separate protocol design.
      *
      * **The unarmed window is the exception, and the comparison inverts in it (#2674).** While
      * `state.membershipState.voters` is empty this node holds no witness at all: [onMessage]'s gate
@@ -698,8 +702,8 @@ internal class RaftEngine(
      *
      * Logged at `debug`, like its sibling drops, deliberately: the caller is an unauthenticated remote
      * peer that can repeat the frame at will, so a `warn` here would be a log-flood lever. Since #2033
-     * the drop also names itself on the trace, which is where its only *machine-readable* observable
-     * lives: [demoteToFollowerOnLeaderContact] runs immediately above and emits
+     * the drop also names itself on the trace, so isolated refusals remain visible too:
+     * [demoteToFollowerOnLeaderContact] runs immediately above and emits
      * `BecomeFollower(AppendEntriesFromLeader)` **only** when this node was still Leader or Candidate,
      * so reached as an ordinary Follower — the common case — the refusal used to produce nothing at all
      * and was indistinguishable from a §5.3 consistency-check drop a screen later.
