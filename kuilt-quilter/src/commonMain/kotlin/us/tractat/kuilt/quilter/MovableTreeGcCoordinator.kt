@@ -55,7 +55,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.crdt.MovableTreeGcCo
  * @param delivered this replica's contiguous delivered VV from [Quilter.deliveredLocal].
  * @param applyCompaction called with each compaction [Patch]; wire this to [Quilter.apply]
  *   so the delta propagates to all peers. It must update [state] before it returns; one
- *   that leaves [state] unchanged fails the GC job with [IllegalStateException].
+ *   that leaves [state] unchanged throws [IllegalStateException].
+ *   The [IllegalStateException] escapes the GC pump: on the JVM it reaches the scope's
+ *   handler; on Kotlin/Native, with no handler installed, it aborts the process.
  * @param scope the [CoroutineScope] for background coroutines.
  *
  * @see MovableTree.compact
