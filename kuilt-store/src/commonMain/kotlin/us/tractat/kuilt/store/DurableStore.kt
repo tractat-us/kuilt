@@ -27,7 +27,7 @@ package us.tractat.kuilt.store
  * | Platform | Implementation | Mechanism |
  * |---|---|---|
  * | any | [InMemoryDurableStore] | none — **not** crash-safe; for tests and ephemeral use |
- * | JVM / Android | `FileChannelDurableStore` | `FileChannel.force(true)` + atomic rename |
+ * | JVM / Android | `FileChannelDurableStore` | `FileChannel.force(true)` + atomic rename + directory force (not on Windows) |
  * | iOS / macOS | `NSFileManagerDurableStore` | `fcntl(F_FULLFSYNC)` + POSIX `rename(2)` |
  * | wasmJs | `IndexedDbDurableStore` | IndexedDB transaction `complete` |
  *
