@@ -54,7 +54,8 @@ import kotlin.coroutines.CoroutineContext
  *   plies still reconcile, a failed attach is retried on the next [plies] emission, and a ply whose
  *   inbound frame failed drops that frame and keeps delivering. `kuilt-core` is logger-free, so this is
  *   how that surfaces to a consumer's own logger. Best-effort and non-suspending; defaults to a silent
- *   absorb. See [PlyReconcileException].
+ *   absorb. An [Error] from the guarded operation or callback escapes unchanged, without being
+ *   reported. See [PlyReconcileException].
  */
 public class CompositeLoom(
     private val plies: StateFlow<List<Pair<PlyId, Loom>>>,
@@ -112,8 +113,10 @@ public class CompositeLoom(
                 // [NonCancellable], so a `CancellationException` arriving here can only be one the
                 // consumer's `close` minted itself (a close-handshake `withTimeout`), never our own.
                 // `runCatchingCancellable` rethrows exactly that case — defeating the "one ply must not
-                // stop its siblings" half of the paragraph above (#1803). Same shape, same reason, as
-                // `CompositeSeam.discardOrphanedPly`.
+                // stop its siblings" half of the paragraph above (#1803). The choice of `catch (Throwable)`
+                // over `runCatchingCancellable`, and the cancellation reason, are shared with
+                // `CompositeSeam.discardOrphanedPly`. Unlike that guard, this cleanup does not yet rethrow
+                // an Error from a ply's close; it is swallowed here. Tracked by #2956.
                 woven.forEach {
                     try {
                         it.seam.close(CloseReason.Normal)

@@ -155,7 +155,8 @@ internal class PeersStrand(
  * **Receive:** Inbound [PlyFrame.Data] frames are de-duplicated and reordered per
  * origin by a [PlyInboundGate]; application payloads emerge as [Swatch] values. A frame that cannot be
  * processed — a malformed [PlyFrame] from a peer being the reachable case — is **dropped and reported**
- * through [onPlyFailure]; it never kills the ply's inbound pump (see [attachPly], #1788).
+ * through [onPlyFailure] (see [attachPly], #1788). An [Error] from processing or reporting
+ * escapes and fails the pump, as in [pumpIn].
  *
  * **Thread-safety.** This type is correct under a *multi-threaded* dispatcher — the
  * injected [dispatcher] is only the scope for the internal coroutines (the reconcile,
@@ -196,7 +197,7 @@ internal class PeersStrand(
  *   virtual clock as the test, driving reconciliation eagerly.
  * @param onPlyFailure Raised whenever one ply fails to attach, detach, or process an inbound frame —
  *   see [reconcile], [attachPly] and [PlyReconcileException]. Best-effort and non-suspending; defaults
- *   to a silent absorb.
+ *   to a silent absorb. An [Error] from a ply or this callback escapes without being reported.
  */
 internal class CompositeSeam(
     initial: List<InitialPly>,
@@ -411,7 +412,7 @@ internal class CompositeSeam(
         // [desired] is handed to [CompositeLoom] by the CONSUMER, so it is a foreign flow like any ply's,
         // and a throw from the flow itself ends this collector — the seam then never attaches or detaches
         // another ply, and on Kotlin/Native the throw aborts the process (#1788). [reconcile]'s own body
-        // is already total per ply, so it is the upstream half that is uncovered here; the guard is the
+        // isolates ordinary failures per ply; [Error] escapes. The upstream guard is the
         // same one either way.
         desired.pumpIn(scope, ::absorbDesiredFailure, "composite-desired") { reconcile(it) }
     }
@@ -458,7 +459,7 @@ internal class CompositeSeam(
      * Reconcile the live ply set against [desiredSet]: detach what is no longer desired, weave and attach
      * what newly is.
      *
-     * ### This must not throw (#1784)
+     * ### Ordinary failures must not escape (#1784)
      * It runs on the seam's **single long-lived reconcile collector** (`desired.onEach { reconcile(it) }`
      * in `init`), and every ply call it makes — `Loom.capability()`, `Loom.weave()`, the ply `Seam`'s
      * `close()` — is *consumer-authored*. An escaping exception cancels that collector, and because
@@ -471,7 +472,8 @@ internal class CompositeSeam(
      *
      * So each ply is guarded **independently**: one failure neither stops its siblings in the same pass
      * nor reaches the collector, and it is raised through [onPlyFailure] with the ply's identity and the
-     * exception rather than absorbed in silence.
+     * exception rather than absorbed in silence. An [Error] is rethrown before reporting or checking
+     * cancellation, even when cleanup runs after the owner was cancelled, just as in [pumpIn].
      *
      * ### `runCatchingCancellable` is not enough — the callee's OWN cancellation (#1784)
      * The guard here deliberately catches [Throwable] and then re-checks *this* coroutine, rather than
@@ -509,6 +511,8 @@ internal class CompositeSeam(
             if (id in desiredIds) continue
             try {
                 detachPly(id)
+            } catch (error: Error) {
+                throw error
             } catch (failure: Throwable) {
                 // Genuinely our own cancellation → rethrow; anything else (including a
                 // CancellationException the callee minted itself) is this ply's failure. See the KDoc.
@@ -532,6 +536,8 @@ internal class CompositeSeam(
             if (state.value is SeamState.Torn) return
             try {
                 attachDesiredPly(id, loom)
+            } catch (error: Error) {
+                throw error
             } catch (failure: Throwable) {
                 // Genuinely our own cancellation → rethrow; anything else (including a
                 // CancellationException the callee minted itself — a dial `withTimeout` is the common
@@ -543,6 +549,8 @@ internal class CompositeSeam(
                 // closes a consumer seam — so the next emission retries from a clean slate.
                 try {
                     detachPly(id)
+                } catch (error: Error) {
+                    throw error
                 } catch (_: Throwable) {
                     // Same discriminator; the purge's own failure is already reported by [detachPly].
                     currentCoroutineContext().ensureActive()
@@ -590,9 +598,11 @@ internal class CompositeSeam(
         withContext(NonCancellable) {
             try {
                 seam.close(CloseReason.Normal)
+            } catch (error: Error) {
+                throw error
             } catch (failure: Throwable) {
                 // Inside the shield there is no "our own cancellation" left to preserve — this block's Job
-                // is parented to [NonCancellable] — so `ensureActive` cannot fire and every throwable,
+                // is parented to [NonCancellable] — so `ensureActive` cannot fire and every remaining throwable,
                 // including a `CancellationException` the consumer's `close` minted itself (a close
                 // handshake `withTimeout`), is this ply's failure. `runCatchingCancellable` here would
                 // instead rethrow that one case straight past the guard. See [reconcile].
@@ -607,9 +617,10 @@ internal class CompositeSeam(
 
     /**
      * Raise one ply's failure to the consumer. Best-effort: a throwing observer is absorbed — **including**
-     * one that throws a [kotlin.coroutines.cancellation.CancellationException].
+     * one that throws a [kotlin.coroutines.cancellation.CancellationException]. An [Error] escapes
+     * unchanged and fails the caller instead, as in [pumpIn].
      *
-     * That total absorption is why this is `catch (Throwable)` and not `runCatchingCancellable` (#1788).
+     * That absorption short of [Error] is why this is `catch (Throwable)` and not `runCatchingCancellable` (#1788).
      * [onPlyFailure] is a **non-suspending** consumer callback, invoked outside any cancellation contract:
      * there is no cancellation of ours for it to be reporting, so a `CancellationException` arriving from it
      * can only be one it minted itself and there is nothing to preserve by rethrowing. Rethrowing is
@@ -621,8 +632,10 @@ internal class CompositeSeam(
     private fun raisePlyFailure(id: PlyId, phase: PlyReconcileException.Phase, cause: Throwable) {
         try {
             onPlyFailure(PlyReconcileException(id, phase, cause))
+        } catch (error: Error) {
+            throw error
         } catch (_: Throwable) {
-            // Deliberately total — see the KDoc. A consumer's logger must never be able to kill a pump.
+            // Absorb ordinary observer failures; an Error deliberately escapes. See the KDoc.
         }
     }
 
@@ -809,14 +822,15 @@ internal class CompositeSeam(
      * [NonCancellable] — the identical argument, for the identical reason, as [discardOrphanedPly]. It is
      * bounded, not open-ended: the only wait is joining pumps that have just been cancelled.
      *
-     * ### The foreign close is the guarded step, so the recomputes always run
+     * ### Ordinary close failures cannot skip the recomputes
      * `Seam.close` is consumer-authored and may throw. Letting it escape would skip [recomputePeers] and
      * [recomputeCapability] *after* `idMap` was already purged — so [peers] would keep advertising a
      * composite peer reachable only through this now-detached ply (`sendTo` throwing [PeerNotConnected]
      * for a peer `peers` calls reachable) and [capability] would keep this ply's roles in the union. Every
      * trigger that could correct either is gone with this ply's cancelled pumps, so both would stay stale
      * **indefinitely**. Absorbing the close and raising it through [onPlyFailure] keeps the recomputes on
-     * the only path that always executes.
+     * the normal continuation path. An [Error] from closing or reporting escapes instead, before
+     * either recompute, and fails the reconcile pump.
      */
     private suspend fun detachPly(id: PlyId) {
         // Remove from the live map under the lock; the suspending teardown runs outside it.
@@ -836,7 +850,7 @@ internal class CompositeSeam(
                 idMap.keys.removeAll { it.first == id }
                 refusedAnnounces.keys.removeAll { it.first == id }
             }
-            // Guarded so the two recomputes below are unconditional — see the KDoc. `catch (Throwable)`
+            // Guarded so ordinary close failures cannot skip the recomputes — see the KDoc. `catch (Throwable)`
             // rather than `runCatchingCancellable`: inside the shield this block's Job is parented to
             // [NonCancellable], so a `CancellationException` arriving here can only be one the consumer's
             // `close` minted itself, and rethrowing it would skip the very recomputes this guard exists
@@ -844,6 +858,8 @@ internal class CompositeSeam(
             // fire here.
             try {
                 handle.seam.close(CloseReason.Normal)
+            } catch (error: Error) {
+                throw error
             } catch (failure: Throwable) {
                 currentCoroutineContext().ensureActive()
                 raisePlyFailure(id, PlyReconcileException.Phase.DETACH, failure)
@@ -1295,7 +1311,7 @@ internal class CompositeSeam(
         }
 
     /**
-     * Publish the terminal [SeamState.Torn] and tear down every ply.
+     * Publish the terminal [SeamState.Torn] and start best-effort ply teardown.
      *
      * **Correct by construction, not by ordering.** This seam *derives* its aggregate [state] from a
      * live collector — the `init` block's `_plies.onEach { stateGate.update(rollup(...)) }`. The
@@ -1313,9 +1329,11 @@ internal class CompositeSeam(
      * consumer woken by the terminal state already sees the collapse. That is why the tear is not the
      * first statement of this method. See [collapseAndTear] (#1816).
      *
-     * **Every ply is closed, whatever any one of them does.** This method is the plies' last holder — it
+     * **Ordinary ply failures do not skip later close attempts.** This method is the plies' last holder — it
      * drains `live` and is single-shot — so the per-ply close goes through [closePlyBestEffort] and the
-     * statements before it sit in a `try`/`finally`. See [closePlyBestEffort] (#1861).
+     * statements before it sit in a `try`/`finally`. An [Error] from closing or reporting escapes
+     * immediately and can leave later plies unclosed; retrying cannot reclaim them after `live` has
+     * been drained. The caller's own cancellation can also stop cleanup. See [closePlyBestEffort] (#1861).
      */
     override suspend fun close(reason: CloseReason) {
         // Collapse the roster and latch Torn as ONE ordered step, and single-shot on its verdict — a
@@ -1329,8 +1347,9 @@ internal class CompositeSeam(
             live.clear()
             snapshot
         }
-        // In a `finally` so the plies below are closed UNCONDITIONALLY, rather than resting on the two
-        // statements above it never throwing. Both are ours, non-suspending and cannot throw today
+        // The `finally` enters the close loop even if either statement in the `try` throws. An Error
+        // or the caller's cancellation can still stop the loop before later plies close.
+        // Both statements are ours, non-suspending and cannot throw today
         // (`Spool.close` delegates to `Channel.close`, which returns a Boolean; [Job.cancel] is a state
         // transition), but that is a property of a collaborator and this method is the plies' only holder —
         // so the guarantee is written into the control flow instead of resting on it. Deliberately NOT a
@@ -1346,7 +1365,8 @@ internal class CompositeSeam(
 
     /**
      * Close one ply on the [close] path, best-effort: **this ply's** failure to close must not skip the
-     * plies after it (#1861).
+     * plies after it (#1861). An [Error] from closing or reporting escapes to the caller immediately;
+     * the remaining plies are not guaranteed cleanup in that fatal case.
      *
      * ### Why it is per-ply, and why the loop is the wrong axis to think about
      * [close] has already drained `live` and is single-shot, so after it returns nothing else will ever
@@ -1384,6 +1404,8 @@ internal class CompositeSeam(
     private suspend fun closePlyBestEffort(id: PlyId, handle: PlyHandle, reason: CloseReason) {
         try {
             handle.seam.close(reason)
+        } catch (error: Error) {
+            throw error
         } catch (failure: Throwable) {
             currentCoroutineContext().ensureActive()
             raisePlyFailure(id, PlyReconcileException.Phase.DETACH, failure)
