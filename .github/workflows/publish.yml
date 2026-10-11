@@ -221,8 +221,8 @@ jobs:
     runs-on: macos-latest    # same cinterop constraint as the publish job — Apple klibs need a Mac host
     timeout-minutes: 30
     permissions:
-      contents: write       # push the readme-coords branch
-      pull-requests: write  # open the PR
+      contents: write       # create the GitHub Release
+      pull-requests: write
     env:
       # vanniktech reads these as Gradle properties via the ORG_GRADLE_PROJECT_ prefix.
       ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
@@ -295,36 +295,5 @@ jobs:
             --title "v${{ env.PUBLISH_VERSION }}" \
             --generate-notes \
             $PRE_FLAG
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Update README coordinates to released version
-        # Rewrites every us.tractat.kuilt:<module>:<old-version> coordinate AND the
-        # backticked prose version in README.md to the new version, then opens a PR
-        # (branch protection prevents direct main push from Actions even with
-        # contents:write). Uses perl, not `sed -i`: this job runs on a macOS runner
-        # whose BSD sed treats the arg after `-i` as an in-place backup suffix, so
-        # `sed -i -E` never enables extended regex and the capture groups error out.
-        # perl is preinstalled on GitHub macOS runners and behaves identically to the
-        # manual bump.
-        run: |
-          set -eu
-          perl -0pi -e "s|(us\.tractat\.kuilt:[a-z-]+:)[0-9A-Za-z._-]+|\${1}${{ env.PUBLISH_VERSION }}|g" README.md
-          perl -0pi -e "s|Replace \`[0-9]+\.[0-9]+\.[0-9]+\`|Replace \`${{ env.PUBLISH_VERSION }}\`|g" README.md
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          BRANCH="docs/readme-coords-${{ env.PUBLISH_VERSION }}"
-          git checkout -b "$BRANCH"
-          git add README.md
-          if git diff --staged --quiet; then
-            echo "README already up to date — nothing to commit"
-            exit 0
-          fi
-          git commit -m "docs: update README coordinates to ${{ env.PUBLISH_VERSION }}"
-          git push origin "$BRANCH"
-          gh pr create \
-            --title "docs: update README coordinates to ${{ env.PUBLISH_VERSION }}" \
-            --body "Automated bump from the Maven Central release workflow." \
-            --base main \
-            --head "$BRANCH"
         env:
           GH_TOKEN: ${{ github.token }}
