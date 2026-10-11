@@ -4,6 +4,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -76,8 +77,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.gossip.GossipSeam")
  * every asymmetric edge down, collapsing the overlay to mutual-only edges.
  *
  * **Lifecycle.** Call [start] once with a scope you own; it launches the inbound
- * loop and the [GossipView]. All timing/scheduling runs on that scope, all
- * randomness on the injected seeded [random], time via the injected [clock].
+ * loop and the [GossipView] under a seam-owned child job. Closing this seam or
+ * completing the base's inbound flow cancels that job, including view workers
+ * and neighbour detectors, without cancelling the caller's scope. Scheduling
+ * inherits that scope; randomness uses [random], time uses [clock].
  *
  * @param base the underlying full-membership seam.
  * @param random seeded RNG, seeded per-peer by the caller (drives view-recompute jitter;
@@ -129,6 +132,12 @@ public class GossipSeam(
     // rely on to self-clean. Delivery is bounded/backpressured (no UNLIMITED inbound queue);
     // `deliver` runs on the single base.incoming collector, so it holds no lock.
     private val spool = Spool<Swatch>(policy)
+
+    // Publish the child job atomically with respect to close: a concurrent start
+    // must either be refused or launch into the job that close cancels.
+    private val lifecycleLock = reentrantLock()
+    private var workerJob: Job? = null
+    private var stopped = false
 
     // Per-origin broadcast sequence counter. Guarded by a lock (not dispatcher
     // confinement) so concurrent broadcast() callers get distinct sequence numbers
@@ -222,20 +231,29 @@ public class GossipSeam(
     }
 
     /**
-     * Starts the inbound event loop and the [GossipView]. Idempotent only if
-     * called once per scope; call exactly once.
+     * Starts the inbound event loop and the [GossipView]. Call exactly once;
+     * starting after [close] does nothing.
      *
      * The loop is the sole collector of `base.incoming` (ADR-034), merged with a
      * periodic reorder-grace sweep tick so **all** dedup/reorder mutation and all
      * [spool] delivery happen on one coroutine — no second mutator, no lock, and
      * released frames can never interleave out of order. When the base seam tears
-     * its `incoming` completes, the loop ends (cancelling the sweep ticker), and
-     * [spool] is closed so this seam's own [incoming] completes too — propagating
-     * Torn to our consumers.
+     * its `incoming` completes, the loop ends and cancels all seam workers,
+     * including the sweep ticker and view detectors. [spool] is closed so this
+     * seam's own [incoming] completes too — propagating Torn to our consumers.
      */
     public fun start(scope: CoroutineScope) {
-        view.start(scope)
-        scope.launch {
+        val job = lifecycleLock.withLock {
+            if (stopped) return
+            check(workerJob == null) { "GossipSeam.start must be called exactly once" }
+            Job(scope.coroutineContext[Job]).also { workerJob = it }
+        }
+        // Cancellation can precede the inbound launch's first dispatch, in which
+        // case its finally never runs. Completion still closes the app surface.
+        job.invokeOnCompletion { spool.close() }
+        val workerScope = CoroutineScope(scope.coroutineContext + job)
+        view.start(workerScope)
+        workerScope.launch {
             val frames =
                 flow {
                     base.incoming.collect { swatch -> emit(InboundEvent.Frame(swatch)) }
@@ -262,7 +280,7 @@ public class GossipSeam(
                         }
                     }
             } finally {
-                spool.close()
+                stopWorkers()
             }
         }
     }
@@ -395,7 +413,20 @@ public class GossipSeam(
         payload: ByteArray,
     ): Unit = base.sendTo(peer, payload)
 
-    override suspend fun close(reason: CloseReason): Unit = base.close(reason)
+    override suspend fun close(reason: CloseReason) {
+        stopWorkers()
+        base.close(reason)
+    }
+
+    private fun stopWorkers() {
+        val job = lifecycleLock.withLock {
+            stopped = true
+            workerJob
+        }
+        // Cancel outside the lock: completion handlers can run inline.
+        job?.cancel()
+        spool.close()
+    }
 
     private fun Swatch.isHeartbeat(): Boolean =
         startsWithBytes(PING_PREFIX_BYTES) || startsWithBytes(PONG_PREFIX_BYTES)
