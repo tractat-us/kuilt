@@ -262,6 +262,8 @@ An `Error` is the one throw `pumpIn` does not absorb. One raised by the body, by
 
 `name` is **required**, and it is not decoration. `launchIn` keeps the `onEach` lambda out of the suspended continuation chain, so every pump of this shape parks at the same frame with no library frame in its stack at all — a coroutine dump renders your whole pump set as one indistinguishable blob, which looks the same whether they are healthy or one of them is wedged. `pumpIn` attaches the name as a `CoroutineName` on the launch, so anything reading `CoroutineInfo.context` can attribute a parked pump to the pump it belongs to. Make it distinct **per pump instance**, not per call site: where several pumps of one kind run side by side, qualify it (`"room-peers[$roomId]"`) so a census can group by kind and still name the instance.
 
+If the pump must be listening before `pumpIn` returns, pass `start = CoroutineStart.UNDISPATCHED`. By default the pump has not yet subscribed when the call returns, so a hot flow with no replay drops anything emitted in that gap — a reply a peer sends the instant it reads your hello, say. `UNDISPATCHED` runs the pump in your frame up to its first suspension, which for a `SharedFlow` is after it subscribes. It is only as good as that first suspension: a flow that suspends before it subscribes to its source is still not listening when the call returns.
+
 <!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/PumpInSamples.kt#samplePumpIn -->
 ```kotlin
 // A consumer-authored flow that hands over one item the body cannot apply, and then fails outright.

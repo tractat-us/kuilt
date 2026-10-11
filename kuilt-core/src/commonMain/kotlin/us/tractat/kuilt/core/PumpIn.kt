@@ -2,6 +2,7 @@ package us.tractat.kuilt.core
 
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -109,6 +110,30 @@ public enum class PumpFailure {
  * so an `internal` helper here is a known-failed design. `:kuilt-core` is the lowest module every one of
  * them already depends on.
  *
+ * ### Subscribing before the call returns: [start]
+ * By default the pump is launched like any other coroutine, so it has not collected anything — has not
+ * even *subscribed* — when `pumpIn` returns. Over a hot flow with no replay, such as a
+ * `MutableSharedFlow(replay = 0)`, whatever is emitted in that gap is gone. A caller that must be
+ * listening before it hands control back (a channel relaying `Room.incoming` from its `init`, so a reply
+ * sent the instant a peer reads its hello is not lost) passes [CoroutineStart.UNDISPATCHED]: the pump then
+ * runs in the caller's frame up to its first suspension, which for a `SharedFlow` is *after* it has
+ * subscribed (#2826).
+ *
+ * That guarantee is only as strong as the flow's own first suspension. `UNDISPATCHED` runs the
+ * collection up to wherever the flow first suspends; a flow that suspends **before** it subscribes to
+ * its source (a `flow { delay(…); emitAll(shared) }`, an operator that hands collection to another
+ * coroutine) need not be subscribed when `pumpIn` returns, and nothing here can make it so.
+ *
+ * [start] means exactly what it means for `launch`, including the part that is easy to forget: an
+ * `UNDISPATCHED` pump in an **already-cancelled** scope still runs up to its first suspension, so a
+ * cold flow that never suspends is consumed in full before the pump ends cancelled. Nothing about the
+ * exception discipline changes with [start]: a failure raised during the undispatched stretch goes
+ * through the same two guards, our own cancellation is still never reported, and an [Error] still
+ * fails the pump's [Job] rather than being thrown at the caller of `pumpIn`.
+ *
+ * Unlike [onFailure] and [name], [start] has a default, because no discipline rides on it: forgetting it
+ * loses the early items of a hot flow, and never kills a pump in silence.
+ *
  * ### What it does NOT do
  * It cannot make a pump exist. Nothing stops a new site being written as a bare
  * `onEach { … }.launchIn(scope)`; that is a separate, lexical guard ("no bare `launchIn` outside a pump
@@ -139,6 +164,8 @@ public enum class PumpFailure {
  *   **distinct per pump instance**, not per call site: where several pumps of one kind run side by side,
  *   qualify it with whatever tells them apart (`"composite-ply-peers[$plyId]"`), so a census can
  *   group by kind *and* still name the instance.
+ * @param start how the pump's coroutine is started — see the section above. It exists for
+ *   [CoroutineStart.UNDISPATCHED], which leaves the pump subscribed to a hot flow before `pumpIn` returns.
  * @param body the per-item work.
  * @return the pump's [Job]. After [PumpFailure.UPSTREAM] it completes **normally** — the pump is over,
  *   but it ended with a diagnosis rather than a `SIGABRT`. After an [Error] it **fails** with that error.
@@ -147,6 +174,7 @@ public fun <T> Flow<T>.pumpIn(
     scope: CoroutineScope,
     onFailure: (PumpFailure, Throwable) -> Unit,
     name: String,
+    start: CoroutineStart = CoroutineStart.DEFAULT,
     body: suspend (T) -> Unit,
 ): Job {
     val guarded = onEach { value ->
@@ -175,9 +203,24 @@ public fun <T> Flow<T>.pumpIn(
     // `launchIn(scope)` is exactly `scope.launch { collect() }` — with no context parameter, which is
     // why the launch is spelled out here instead: [name] has to land on the launched coroutine's OWN
     // context, the only place a dump or census can read it back from (#1811). Nothing else about the
-    // launch changes.
-    return scope.launch(CoroutineName(name)) { guarded.collect() }
+    // launch changes except [start], which is the caller's to choose (#2826).
+    return scope.launch(CoroutineName(name), start) { guarded.collect() }
 }
+
+/**
+ * The signature [pumpIn] had before it took a [CoroutineStart], kept so a binary compiled against it
+ * still links. Hidden, so source sees one `pumpIn`; it is [pumpIn] with [CoroutineStart.DEFAULT].
+ */
+@Deprecated(
+    "Kept for binary compatibility; call pumpIn, whose start defaults to DEFAULT.",
+    level = DeprecationLevel.HIDDEN,
+)
+public fun <T> Flow<T>.pumpIn(
+    scope: CoroutineScope,
+    onFailure: (PumpFailure, Throwable) -> Unit,
+    name: String,
+    body: suspend (T) -> Unit,
+): Job = pumpIn(scope, onFailure, name, CoroutineStart.DEFAULT, body)
 
 /**
  * Hand a pump failure to a consumer callback, absorbing whatever the callback throws short of an [Error]
