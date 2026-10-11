@@ -35,10 +35,10 @@ import kotlin.test.assertTrue
  * divergence cannot; term equality, so term inflation and `maxTermJump` cannot.
  *
  * **What this suite does not touch, deliberately.** With the gate *armed*, an ordinary voter that is
- * not the leader seizes the pin the same way. Whether that should change is a live §5.2 design
- * question — first-come at least *detects* the one-leader-per-term conflict — and #2674 keeps it
- * open. [anArmedNodeStillRefusesASecondSameTermLeader] pins the armed behaviour as unchanged, so a
- * later relaxation of it has to be a deliberate edit rather than a side effect of this one.
+ * not the leader seizes the pin the same way. The ruling in #2674 retains that
+ * limitation: first-come detects a conflict but cannot authenticate either claimant.
+ * [ArmedLeaderPinTest] covers both arrival orders, restart refusal and term-change recovery.
+ * [anArmedNodeStillRefusesASecondSameTermLeader] pins the armed behaviour as unchanged, so a later relaxation of it has to be a deliberate edit rather than a side effect of this one.
  *
  * Every scenario only [RaftSimulation.settle]s after an injection (yields at the current virtual
  * instant without advancing the clock), so nothing else can run between the frame and the assertion.
@@ -219,8 +219,8 @@ class LeaderPinUnarmedWindowTest {
      * fire. [RaftMetric.LeaderPinDenial] carries its own counter for that reason.
      *
      * Driven in the **armed** window, which is where the denial remains reachable after this change
-     * (#2674's open half): a plain voter that is not the leader seizes the pin, and thereafter the
-     * honest leader is refused. Adding the report changes no decision there — the frame is dropped
+     * (#2674's accepted limitation): a plain voter that is not the leader seizes the pin, and
+     * thereafter the honest leader is refused. Adding the report changes no decision there — the frame is dropped
      * exactly as before.
      *
      * ### The reset is pinned, not assumed
@@ -303,9 +303,9 @@ class LeaderPinUnarmedWindowTest {
      * The blast-radius bound, and the main risk this change carries: **armed** behaviour is unchanged.
      *
      * A node that knows its voters and has already pinned this term's leader still refuses a second
-     * same-term leader→peer sender, exactly as [LeaderForTermPinTest] pins it. #2674's armed half —
-     * that an ordinary non-leader *voter* can seize the pin that way — is a genuine §5.2 design
-     * question and stays open; this test is what makes changing it a deliberate edit.
+     * same-term leader→peer sender, exactly as [LeaderForTermPinTest] pins it. #2674 retains this
+     * behaviour even when an ordinary non-leader voter arrives first; [ArmedLeaderPinTest] covers
+     * that denial explicitly.
      *
      * Only [RaftSimulation.settle]s after the injection, so no honest heartbeat can repair the belief
      * behind the assertion.
