@@ -29,7 +29,7 @@ dependencyResolutionManagement {
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation(platform("us.tractat.kuilt:kuilt-bom:0.4.0"))
+    implementation(platform("us.tractat.kuilt:kuilt-bom:<version>"))
     implementation("us.tractat.kuilt:kuilt-core")
     // kuilt-crdt, kuilt-raft, kuilt-session, kuilt-websocket, …
 }
@@ -40,7 +40,7 @@ dependencies {
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("us.tractat.kuilt:kuilt-core:0.4.0")
+    implementation("us.tractat.kuilt:kuilt-core:<version>")
     // pick the modules you need:
     // kuilt-crdt, kuilt-raft, kuilt-session, kuilt-websocket, …
 }

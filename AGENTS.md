@@ -721,9 +721,9 @@ bump on a deliberate breaking-API release; or a manual dispatch with
 `release_to_central=true`), **never** on a plain main push. The
 `maven-central` job derives the version from the tag (`v<x.y.z>` → `<x.y.z>`),
 publishes signed artifacts as a **PENDING** deployment to the Central Portal that
-a human then releases by hand at central.sonatype.com, and commits the README
-version bump back to `main` (so the README is the one place a concrete version
-number is allowed — it's release-managed, not hand-edited). This is the
+a human then releases by hand at central.sonatype.com. The README carries no
+concrete version: its snippets say `<version>` and its Maven Central badge shows
+the latest (#2321). This is the
 consumer-facing channel — the README's `mavenCentral()` setup and version badge
 resolve here.
 
