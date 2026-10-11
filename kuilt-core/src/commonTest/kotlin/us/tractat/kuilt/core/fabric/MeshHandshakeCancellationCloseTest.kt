@@ -5,11 +5,15 @@ package us.tractat.kuilt.core.fabric
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
@@ -24,6 +28,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * A mesh handshake abandoned by **cancellation** must still close the connection it was handed (#2587).
@@ -229,6 +234,115 @@ class MeshHandshakeCancellationCloseTest {
 
             pump.cancelAndJoin()
         }
+
+    /**
+     * Accept-pump path, one step earlier (#2954): the pump is cancelled after `accept()` has returned a
+     * conn but before the per-connection child has run.
+     *
+     * With a default-start child that conn is in a dispatch queue, not inside `handle`, so cancelling the
+     * pump cancels the child before its body runs: no handshake, so none of the closes above is
+     * reached. The source cancels the pump from inside its **second** `accept`, the first point
+     * the pump reaches after launching the child, so no dispatch can run in between.
+     */
+    @Test
+    fun cancellingTheAcceptPumpBeforeItsChildRunsClosesTheConn() =
+        assertPumpCancelledBeforeDispatchClosesTheConn(PumpCancel.OnSecondAccept)
+
+    /**
+     * Same window, reached the other way: the pump is already cancelled when `accept()` returns the conn,
+     * as when `VoterMesh.close` lands from another thread mid-accept. A default-start child launched
+     * from a cancelled job never runs at all.
+     */
+    @Test
+    fun anAcceptPumpCancelledAsItAcceptsStillClosesTheConn() =
+        assertPumpCancelledBeforeDispatchClosesTheConn(PumpCancel.OnFirstAccept)
+
+    private fun assertPumpCancelledBeforeDispatchClosesTheConn(cancel: PumpCancel) =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val hub = hubMesh(PeerId("hub"), emptyList(), dispatcher, Random(7))
+            val (_, mine) = connectionPair()
+            val accepted = CloseCountingConnection(mine)
+            val source = OneConnSource(accepted, cancel)
+            var handled = 0
+
+            val pump = acceptPump(source, handshakeTimeout = HANDSHAKE_CEILING) { conn ->
+                handled++
+                hub.addLink(conn)
+            }
+            runCurrent()
+
+            assertAll(
+                { assertEquals(cancel.expectedAccepts, source.accepts, "rig: the source reached its cancelling accept") },
+                { assertTrue(pump.isCompleted && pump.isCancelled, "rig: the pump was cancelled and finished") },
+                { assertEquals(1, handled, "handle must be handed the conn the pump accepted") },
+                {
+                    assertEquals(
+                        1,
+                        accepted.closeCalls,
+                        "a conn accepted just before the pump's cancellation must be closed exactly once, " +
+                            "by the handshake's shielded close; HANDSHAKE_CEILING rules out the timeout close",
+                    )
+                },
+                { assertTrue(accepted.collectionEnded.isCompleted, "the singleCollection wrapper's pump must stop") },
+            )
+        }
+
+    /**
+     * Control for the two arms above: the same source with the cancel switched off, and a short ceiling.
+     * The conn is handled and its handshake times out, so the close counter sees **two** closes: the
+     * handshake's own, then the pump's timeout close. A zero above is therefore the
+     * cancellation's doing, not a rig that cannot observe a close.
+     */
+    @Test
+    fun withoutTheCancelTheSameConnIsHandledAndClosedOnTimeout() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val hub = hubMesh(PeerId("hub"), emptyList(), dispatcher, Random(7))
+            val (_, mine) = connectionPair()
+            val accepted = CloseCountingConnection(mine)
+            val source = OneConnSource(accepted, PumpCancel.Never)
+            val failures = mutableListOf<Throwable>()
+            var handled = 0
+            val timeout = 1.seconds
+
+            val pump = acceptPump(source, handshakeTimeout = timeout, onFailure = { failures += it }) { conn ->
+                handled++
+                hub.addLink(conn)
+            }
+            advanceTimeBy(timeout * 2)
+            runCurrent()
+
+            assertAll(
+                { assertEquals(2, source.accepts, "rig: the pump went back to accept") },
+                { assertTrue(pump.isActive, "rig: nothing cancelled the pump") },
+                { assertEquals(1, handled, "the conn was handled") },
+                { assertTrue(failures.single() is HandshakeTimeoutException, "the handshake timed out: $failures") },
+                { assertEquals(2, accepted.closeCalls, "the handshake's close, then the pump's timeout close") },
+            )
+            pump.cancelAndJoin()
+        }
+
+    private enum class PumpCancel(val expectedAccepts: Int) { OnFirstAccept(1), OnSecondAccept(2), Never(2) }
+
+    /**
+     * Returns [conn] from its first [accept] and suspends forever on any later one. [cancel] says when it
+     * cancels the calling pump: just before returning [conn], inside the second accept, or never.
+     */
+    private class OneConnSource(private val conn: Connection, private val cancel: PumpCancel) : ConnectionSource {
+        var accepts = 0
+            private set
+
+        override suspend fun accept(): Connection {
+            accepts++
+            if (accepts == 1) {
+                if (cancel == PumpCancel.OnFirstAccept) currentCoroutineContext().cancel()
+                return conn
+            }
+            if (cancel == PumpCancel.OnSecondAccept) currentCoroutineContext().cancel()
+            awaitCancellation()
+        }
+    }
 
     private companion object {
         /**

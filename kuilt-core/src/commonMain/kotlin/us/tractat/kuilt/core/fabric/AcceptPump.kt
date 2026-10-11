@@ -1,6 +1,7 @@
 package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -37,8 +38,11 @@ private const val MAX_ACCEPT_RETRY_DELAY_MILLIS: Long = 1_000
  * (#2587). Both closes above are keyed on a *failure*: [runCatchingCancellable] rethrows a
  * `CancellationException` by construction so `onFailure` never runs, and [withTimeoutOrNull] converts
  * only the timeout it minted itself, so an external cancellation escapes the child `launch` with the
- * conn untouched. Nothing here can close it, because at that instant the conn is suspended somewhere
- * inside [handle] and only [handle] knows what it has already taken ownership of. Every in-tree
+ * conn untouched. Nothing here can close it, because only [handle] knows what it has already taken
+ * ownership of — and **[handle] is always handed the conn**: the child starts
+ * [UNDISPATCHED][kotlinx.coroutines.CoroutineStart.UNDISPATCHED], which runs its body even on an
+ * already-cancelled [Job], so [handle] is entered before the pump next suspends and a cancellation
+ * surfaces at a suspension point inside [handle], not in a dispatch queue ahead of it (#2954). Every in-tree
  * [handle] discharges the **mid-preamble half** of this by going through the mesh handshake, which
  * closes a conn abandoned during the `MeshHello` exchange under a `NonCancellable` shield; **a
  * third-party [handle] that suspends while holding a conn owes the same guarantee.**
@@ -54,7 +58,9 @@ private const val MAX_ACCEPT_RETRY_DELAY_MILLIS: Long = 1_000
  * @param onFailure invoked with a recoverable accept failure, or whenever a conn's [handle] throws or
  *   times out. Best-effort, non-suspending; defaults to a silent absorb.
  * @param handle handles one accepted conn to completion (the handshake + publication). Runs in its own
- *   child coroutine under [handshakeTimeout].
+ *   child coroutine under [handshakeTimeout], started undispatched: everything before its first
+ *   suspension runs inline on the pump, ahead of the next accept, and [handshakeTimeout] cannot
+ *   interrupt it. A [handle] that blocks before suspending therefore delays later accepts.
  * @return the pump [Job] (a child of the receiver scope); cancel it to stop accepting.
  */
 public fun CoroutineScope.acceptPump(
@@ -79,7 +85,9 @@ public fun CoroutineScope.acceptPump(
             continue
         }
         retryDelayMillis = INITIAL_ACCEPT_RETRY_DELAY_MILLIS
-        launch {
+        // UNDISPATCHED: [handle] receives the conn before the pump can next observe its own cancellation.
+        // A queued DEFAULT child cancelled before dispatch never runs, so nothing would close the conn (#2954).
+        launch(start = CoroutineStart.UNDISPATCHED) {
             val completed = withTimeoutOrNull(handshakeTimeout) {
                 runCatchingCancellable { handle(conn) }
                     .onFailure { failure ->
