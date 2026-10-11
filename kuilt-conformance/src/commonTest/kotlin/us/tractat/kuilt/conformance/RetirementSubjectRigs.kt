@@ -1,6 +1,7 @@
 package us.tractat.kuilt.conformance
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -27,8 +28,8 @@ import kotlin.test.assertTrue
  *
  * **This pins the hole; it does not close it.** Closing it structurally would mean inspecting a
  * lambda, which the suite cannot do. What closes it in practice is the KDoc on
- * [RetirementReAssertion.shows] plus the mandatory [RetirementReAssertion.subject] beside it — and
- * [RetirementSubjectSelfTest.aBlankSubjectPassesToo] measures how much the second of those is worth.
+ * [RetirementReAssertion.shows] plus the nonblank [RetirementReAssertion.subject] beside it.
+ * Nonblank text still cannot establish that the predicate describes its subject.
  */
 internal class SiblingReferencingShowsRigTest : QuiltedConformanceSuite<IntMax>() {
 
@@ -37,8 +38,7 @@ internal class SiblingReferencingShowsRigTest : QuiltedConformanceSuite<IntMax>(
     override val retirementIsMeaningful: Boolean get() = true
 
     override fun retirementReAssertion(): RetirementReAssertion<IntMax> = RetirementReAssertion(
-        // Free text: no assertion in the suite reads it, which is the point of
-        // `RetirementSubjectSelfTest.aBlankSubjectPassesToo`.
+        // Nonblank text, but the suite cannot check that the predicate describes it.
         subject = "nothing — this predicate is about the sibling samples",
         asserted = ASSERTED,
         retired = RETIRED,
@@ -72,8 +72,8 @@ internal class SiblingReferencingShowsRigTest : QuiltedConformanceSuite<IntMax>(
  *    nothing is not a detector.
  * 2. **The hole is real.** A predicate written against the sibling samples passes every arm, on a
  *    lattice with no retirement in it at all.
- * 3. **What the hole rests on.** [RetirementReAssertion.subject] is the field that makes such a
- *    predicate conspicuous to a reviewer, and it is unconstrained — a blank one passes too.
+ * 3. **The type boundary.** [RetirementReAssertion.subject] must be nonblank at construction,
+ *    but a reviewer still has to check that the predicate describes it.
  *
  * The rigs below are **anonymous objects** rather than top-level classes, deliberately: a concrete
  * [QuiltedConformanceSuite] subclass is a discovered test class on every target (which is exactly
@@ -146,19 +146,31 @@ internal class RetirementSubjectSelfTest {
         )
     }
 
-    /**
-     * **What the hole rests on.** [RetirementReAssertion.subject] carries no constraint — a blank
-     * one passes every arm — so its whole value is that a reviewer reads it beside the predicate.
-     *
-     * Worth asserting rather than assuming, because #2184's reason for calling the hole
-     * unreachable-by-accident is precisely that the mandatory `subject` field makes a
-     * sibling-referencing predicate conspicuous in review. That reason is a claim about a *human*
-     * reading a field the machine never looks at, and this arm is what says so out loud.
-     */
+    /** Construction must reject an empty subject without needing to run the suite. */
     @Test
-    fun aBlankSubjectPassesToo() {
-        rigShowing(subject = "") { it != SiblingReferencingShowsRigTest.RETIRED }
-            .samplesReAssertAfterRetirement()
+    fun aBlankSubjectIsRefused() {
+        assertFailsWith<IllegalArgumentException> {
+            rigShowing(subject = "") { it != SiblingReferencingShowsRigTest.RETIRED }
+                .retirementReAssertion()
+        }
+    }
+
+    /** Nonempty whitespace must not stand in for a subject either. */
+    @Test
+    fun aWhitespaceOnlySubjectIsRefused() {
+        assertFailsWith<IllegalArgumentException> {
+            rigShowing(subject = " \t\n\r") { it != SiblingReferencingShowsRigTest.RETIRED }
+                .retirementReAssertion()
+        }
+    }
+
+    /** Valid text is retained verbatim, including surrounding whitespace. */
+    @Test
+    fun aNonblankSubjectIsPreserved() {
+        val subject = "  the subject under test  "
+        val shape = rigShowing(subject = subject) { it != SiblingReferencingShowsRigTest.RETIRED }
+            .retirementReAssertion()
+        assertEquals(subject, shape?.subject)
     }
 
     /**

@@ -21,12 +21,14 @@ import kotlin.test.assertTrue
  * "[retired] stopped showing what [asserted] showed, and [reAsserted] shows it again".
  *
  * @param S the lattice type under test.
+ * @throws IllegalArgumentException if [subject] is empty or contains only whitespace.
  */
 public class RetirementReAssertion<S : Quilted<S>>(
     /**
      * What the three states are about, in one short phrase — `key "votes"`, `element "x"`,
      * `the register's value`. Appears in the failure message, and forces the binding author to say
-     * out loud what it is that gets retired.
+     * out loud what it is that gets retired. Must be nonblank; construction rejects an empty or
+     * whitespace-only subject. This cannot check whether [shows] describes the subject.
      */
     public val subject: String,
     /** A sample that **shows** [subject]. */
@@ -62,7 +64,11 @@ public class RetirementReAssertion<S : Quilted<S>>(
      * predicate is written in terms of, not how many keys it mentions.
      */
     public val shows: (S) -> Boolean,
-)
+) {
+    init {
+        require(subject.isNotBlank()) { "retirement subject must not be blank" }
+    }
+}
 
 /**
  * The least number of pairwise-distinct [QuiltedConformanceSuite.samples] the four laws need before
