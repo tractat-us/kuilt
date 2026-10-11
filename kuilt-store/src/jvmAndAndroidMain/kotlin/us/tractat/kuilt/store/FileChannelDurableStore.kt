@@ -63,7 +63,9 @@ import java.io.File
  * are normally fixed literals, where the question does not arise; it arises when
  * they are built from data.
  *
- * Needs `java.nio.file`: Android API 26, or a desugared `java.nio.file` below it.
+ * Needs Android API 26. Core-library desugaring of `java.nio.file` is **not** supported: its
+ * provider cannot open a directory as a channel, and its move and delete ignore the
+ * `File.renameTo` / `File.delete` results this store depends on.
  *
  * @param dir The directory that holds the store's files. Created, with any missing ancestors, if it
  *   does not exist; must be a directory if it does. Must be writable.
