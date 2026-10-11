@@ -270,6 +270,9 @@ public interface RaftNode {
      *
      * @throws LeadershipLostException if a forwarded proposal is rejected by the target leader
      *   (e.g. the leader stepped down); the caller may retry on the new leader.
+     * @throws ForwardedProposalFailedException if the leader a proposal was forwarded to reports it
+     *   failed for a non-retryable reason. Do not retry the same command. No leader in this release
+     *   reports one (#2922).
      * @throws NotLeaderException only in terminal cases: the node is [close]d, or the leader
      *   is rejecting proposals because a leadership transfer is in flight.
      * @throws PayloadTooLarge if [command] exceeds the transport's published payload budget less an

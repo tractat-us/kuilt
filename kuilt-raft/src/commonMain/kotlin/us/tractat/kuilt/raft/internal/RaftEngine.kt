@@ -35,6 +35,7 @@ import us.tractat.kuilt.raft.ConfigPayload
 import us.tractat.kuilt.raft.CorruptDurableStateException
 import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.DenyReason
+import us.tractat.kuilt.raft.ForwardedProposalFailedException
 import us.tractat.kuilt.raft.LeaderForTerm
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LeadershipTransferAbandonReason
@@ -4296,9 +4297,12 @@ internal class RaftEngine(
             // The same exception, with the same numbers, as a local propose over the budget throws.
             is ForwardOutcome.PayloadTooLarge ->
                 pf.deferred.completeExceptionally(PayloadTooLarge(o.payloadBytes, o.budgetBytes, o.reservedBytes))
-            // `Failed` has no producer yet, but is documented non-retryable; the split is tracked by #2922.
-            ForwardOutcome.NotLeader, ForwardOutcome.Failed ->
+            ForwardOutcome.NotLeader ->
                 pf.deferred.completeExceptionally(LeadershipLostException("forwarded proposal was not committed; retry"))
+            // Not retryable, so deliberately not a LeadershipLostException: a retry loop catching that
+            // type must not resend a command the leader judged permanently failed (#2922).
+            ForwardOutcome.Failed ->
+                pf.deferred.completeExceptionally(ForwardedProposalFailedException())
         }
     }
 

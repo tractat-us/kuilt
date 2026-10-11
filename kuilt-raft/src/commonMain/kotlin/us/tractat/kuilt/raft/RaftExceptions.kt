@@ -20,6 +20,22 @@ public class NotLeaderException(message: String = "not the current leader") : Ex
 public class LeadershipLostException(message: String = "leadership lost while proposal was in flight") : Exception(message)
 
 /**
+ * Thrown by [RaftNode.propose] on a non-leader when the leader the proposal was forwarded to
+ * reports that it failed for a **non-retryable** reason (#2922).
+ *
+ * It is deliberately not a [LeadershipLostException], so a retry loop that catches that type does
+ * not catch this one: the leader judged the failure permanent, and sending the same command again
+ * would fail the same way. Surface it to the caller instead of retrying.
+ *
+ * No leader in this release reports such a failure — every failure a forwarded proposal can meet
+ * on the leader today is a loss of leadership, which arrives as [LeadershipLostException]. This type
+ * exists so that the receiving side already honours the wire's meaning when a leader does.
+ */
+public class ForwardedProposalFailedException(
+    message: String = "the leader reported the forwarded proposal failed for a non-retryable reason",
+) : Exception(message)
+
+/**
  * Thrown by [RaftNode.changeMembership] when a membership change is already in progress
  * (a config entry is uncommitted), and by [RaftNode.transferLeadership] for the reverse
  * direction of the same §3.10 exclusion.
