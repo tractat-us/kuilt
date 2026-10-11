@@ -113,8 +113,10 @@ public class CompositeLoom(
                 // [NonCancellable], so a `CancellationException` arriving here can only be one the
                 // consumer's `close` minted itself (a close-handshake `withTimeout`), never our own.
                 // `runCatchingCancellable` rethrows exactly that case — defeating the "one ply must not
-                // stop its siblings" half of the paragraph above (#1803). Same shape, same reason, as
-                // `CompositeSeam.discardOrphanedPly`.
+                // stop its siblings" half of the paragraph above (#1803). The choice of `catch (Throwable)`
+                // over `runCatchingCancellable`, and the cancellation reason, are shared with
+                // `CompositeSeam.discardOrphanedPly`. Unlike that guard, this cleanup does not yet rethrow
+                // an Error from a ply's close; it is swallowed here. Tracked by #2956.
                 woven.forEach {
                     try {
                         it.seam.close(CloseReason.Normal)
