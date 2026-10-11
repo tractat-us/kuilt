@@ -123,10 +123,17 @@ public class GossipView(
      * Starts the view manager on [scope]. Launches the command processor (sole
      * mutator of view state) and the roster watcher (jittered recompute trigger).
      * The view stays empty until the first jittered recompute completes.
+     * When the command processor terminates, it empties the active and spare
+     * views after its last reconciliation, so no in-flight update can restore them.
      */
     public fun start(scope: CoroutineScope) {
         scope.launch {
-            for (command in commands) handle(scope, command)
+            try {
+                for (command in commands) handle(scope, command)
+            } finally {
+                _spares.value = emptyList()
+                _active.value = emptySet()
+            }
         }
         scope.launch {
             roster.collectLatest { current ->
