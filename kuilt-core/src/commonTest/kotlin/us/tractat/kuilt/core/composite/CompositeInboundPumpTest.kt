@@ -220,7 +220,7 @@ class CompositeInboundPumpTest {
      * `CancellationException` escaping an `onEach` body **cancels that coroutine silently**: pump dead, ply
      * still `Woven`, nothing reported. #1788 item 1 verbatim, reached through the hook that exists to fix
      * it. `onPlyFailure` is non-suspending and outside any cancellation contract, so there is no
-     * cancellation of ours to preserve and the absorption is total.
+     * cancellation of ours to preserve. Only an Error escapes the observer guard.
      */
     @Test
     fun anObserverThatThrowsCancellationDoesNotKillThePump() = runTest {

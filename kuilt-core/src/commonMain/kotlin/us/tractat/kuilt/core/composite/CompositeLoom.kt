@@ -54,7 +54,8 @@ import kotlin.coroutines.CoroutineContext
  *   plies still reconcile, a failed attach is retried on the next [plies] emission, and a ply whose
  *   inbound frame failed drops that frame and keeps delivering. `kuilt-core` is logger-free, so this is
  *   how that surfaces to a consumer's own logger. Best-effort and non-suspending; defaults to a silent
- *   absorb. See [PlyReconcileException].
+ *   absorb. An [Error] from the guarded operation or callback escapes unchanged, without being
+ *   reported. See [PlyReconcileException].
  */
 public class CompositeLoom(
     private val plies: StateFlow<List<Pair<PlyId, Loom>>>,

@@ -15,7 +15,9 @@ import us.tractat.kuilt.core.Seam
  * the life of the seam (#1784), and no peer may crash the process with a short frame (#1788) — but
  * absorbing them *silently* would leave a consumer with a ply that never appears, or frames that quietly
  * vanish, and nothing at all to look at. `kuilt-core` is logger-free by contract, so this is the signal:
- * the composite raises it, and the consumer's own logger records it.
+ * the composite raises it, and the consumer's own logger records it. An [Error] is excluded: it
+ * escapes the owner unchanged rather than being wrapped in this report. An [Error] thrown by the
+ * observer also escapes, so the continuation guarantees below apply to ordinary failures only.
  *
  * It carries the ply's [plyId], which [phase] failed, and the originating [cause] — identity and
  * exception, never a bare count, because "a ply failed" is not a diagnosis and "which ply, doing what,

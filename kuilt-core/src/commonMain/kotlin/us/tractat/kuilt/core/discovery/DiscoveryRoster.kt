@@ -27,13 +27,14 @@ import us.tractat.kuilt.core.Tag
  * safe election input. Pick a host from [us.tractat.kuilt.core.Seam.peers] once connected — never
  * from a discovery roster. See `docs/discovery-bootstrap.md`.
  *
- * **One feed's failure costs you that feed, and nothing else.** Each source's `discoveries()` and
+ * **One feed's ordinary failure costs you that feed, and nothing else.** Each source's `discoveries()` and
  * `departures()` are isolated separately, so a transport that dies mid-session degrades to *"that
  * feed stopped reporting"* rather than taking the whole fold down with it. Without the isolation a
  * single throw cancels the merged flow, kills the one backing coroutine, and freezes this
  * [StateFlow] at its last value **permanently** — every healthy source silently stops being
  * observed too, with the roster still looking plausible (#1904). A failed feed cannot be restarted:
- * a source is asked for its flow exactly once.
+ * a source is asked for its flow exactly once. An [Error] from a feed or the reporting callback
+ * escapes instead: it fails the backing coroutine and never reaches [onSourceFailure].
  *
  * **A failed feed's peers linger — the roster is best-view, not liveness.** When a source's
  * `discoveries()` dies, the peers it already contributed stay in the set. They are not synthesised
@@ -61,8 +62,8 @@ import us.tractat.kuilt.core.Tag
  *   than the freeze it replaces (a freeze at least reaches the scope's `CoroutineExceptionHandler`).
  *   The throwable is passed whole rather than summarised: it came out of the consumer's own source
  *   implementation, so its trace *is* the diagnosis — including which of the two feeds died, which
- *   is why that is not a separate parameter. Best-effort and non-suspending; whatever it throws is
- *   absorbed, since a consumer's logger must never be able to kill the fold this exists to protect.
+ *   is why that is not a separate parameter. Best-effort and non-suspending; anything it throws short of an
+ *   [Error] is absorbed, so an ordinary logger failure cannot kill the fold.
  *   Defaulted for the same reason [us.tractat.kuilt.core.fabric.acceptPump]'s is — this is a
  *   diagnostic hook on an existing primitive, not a new obligation on its callers. Whether a failed
  *   source should be observable in the roster's own *type*, so a lobby can render "mDNS is down",
@@ -102,7 +103,7 @@ public fun discoveryRoster(
 /**
  * Complete this one feed on failure instead of failing the merge, reporting the cause to [onFailure].
  *
- * Applied **after** the `map`, not before it, so nothing this per-feed branch does can escape into
+ * Applied **after** the `map`, not before it, so ordinary failures in this per-feed branch cannot escape into
  * the merge — the mapping is total today, and a guard placed where the future non-total version
  * would need it costs nothing.
  *
@@ -122,15 +123,17 @@ private fun Flow<RosterEvent>.isolate(
     source: PeerDiscoverySource,
     onFailure: (PeerDiscoverySource, Throwable) -> Unit,
 ): Flow<RosterEvent> = catch { failure ->
+    if (failure is Error) throw failure
     try {
         onFailure(source, failure)
+    } catch (error: Error) {
+        throw error
     } catch (_: Throwable) {
-        // Deliberately total, `CancellationException` included: this runs *inside* the guard that
+        // Deliberately total short of Error, `CancellationException` included: this runs *inside* the guard that
         // keeps the fold alive, so a rethrow escapes it and kills every other source — the exact
         // defect the hook reports on.
         // Nothing suspends in the callback's contract, so there is no cancellation of ours here for
-        // `ensureActive()` to find. Unlike `pumpIn`'s `reportPumpFailure`, this still absorbs an
-        // `Error` — tracked by #2892. ALLOW-ise: a consumer's logger must not be able to kill the fold.
+        // `ensureActive()` to find. The Error carve-out matches `pumpIn`'s `reportPumpFailure`.
     }
 }
 
