@@ -500,9 +500,10 @@ public class GovernedHeddleNode internal constructor(
      * or the peer keeps a promise it has already broken. Recovering an **absent** peer's authority
      * needs the fenced [revocation] seam, which v1 does not ship.
      *
-     * Departing also closes this node's [isWritable] boot gate: the promise a departure makes is "I
-     * will never author another slot", and a node that kept writing after making it would break the
-     * very quantifier the fence rests on. Re-[enroll] to become writable again.
+     * Departing also closes this node's [isWritable] boot gate, unless a later self-[enroll] has
+     * already reopened it: the gate follows applied index, not return order. The promise a departure
+     * makes is "I will never author another slot", and a node that kept writing after making it
+     * would break the very quantifier the fence rests on. Re-[enroll] to become writable again.
      */
     public suspend fun depart(timeout: Duration? = null): ControlOutcome {
         val outcome = control.submit(ControlCommand.Depart(self), timeout)
