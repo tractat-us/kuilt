@@ -33,8 +33,10 @@ import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.ReconnectReason
+import us.tractat.kuilt.session.ReservedRoomPrefix
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomFrame
+import us.tractat.kuilt.session.RoomFramePrefix
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
@@ -84,6 +86,8 @@ internal fun mintFakeRoomId(selfId: PeerId): RoomId = RoomId("${selfId.value}-ro
  * broadcast delivery between two rooms.
  *
  * **Send semantics** (matching the [Room] contract):
+ * - Before [leave], raw [broadcast] and [sendTo] refuse protocol-classified payloads with
+ *   [ReservedRoomPrefix]. Channel views accept arbitrary payload bytes.
  * - [broadcast] and [sendTo] after [leave] are silent no-ops (matching the
  *   contract's behaviour after [MembershipEvent.HostLost]).
  *
@@ -358,10 +362,10 @@ public class FakeRoom(
     /** Channel views keyed by channel id. Created on demand and cached via [channel]. */
     private val channelViews = mutableMapOf<String, Seam>()
 
-    /** All payloads passed to [broadcast], in call order. */
+    /** Accepted raw and channel broadcast payloads, in call order. */
     public val broadcasts: List<ByteArray> get() = _broadcasts.toList()
 
-    /** All (peer, payload) pairs passed to [sendTo], in call order. */
+    /** Accepted raw and channel (peer, payload) pairs, in call order. */
     public val directed: List<Pair<PeerId, ByteArray>> get() = _directed.toList()
 
     /**
@@ -384,11 +388,30 @@ public class FakeRoom(
 
     override suspend fun broadcast(bytes: ByteArray) {
         if (left.value) return
+        refuseReservedPrefix(bytes)
+        recordBroadcast(bytes)
+    }
+
+    override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
+        if (left.value) return
+        refuseReservedPrefix(bytes)
+        recordSendTo(peer, bytes)
+    }
+
+    private fun refuseReservedPrefix(bytes: ByteArray) {
+        val prefix = RoomFramePrefix.entries.firstOrNull { it.classifies(bytes) } ?: return
+        throw ReservedRoomPrefix(prefix)
+    }
+
+    // Channels do not add framing in this fake, so record their arbitrary bytes without applying
+    // the raw Room prefix guard. Keep the terminal no-op and delivery hook shared with raw sends.
+    private suspend fun recordBroadcast(bytes: ByteArray) {
+        if (left.value) return
         _broadcasts.add(bytes)
         onBroadcast?.invoke(bytes)
     }
 
-    override suspend fun sendTo(peer: PeerId, bytes: ByteArray) {
+    private fun recordSendTo(peer: PeerId, bytes: ByteArray) {
         if (left.value) return
         _directed.add(peer to bytes)
     }
@@ -616,8 +639,8 @@ public class FakeRoom(
      * - `peers` reflects the admitted roster (+ self) via [_rosterPeers].
      * - `incoming` is driven by test-driver [deliver] calls, buffered via a
      *   bounded [Spool] (policy from [FakeRoom.channelPolicy]).
-     * - `broadcast`/`sendTo` delegate to [FakeRoom.broadcast]/[sendTo] with raw
-     *   payloads (no channel framing added — the Fake is not a protocol layer).
+     * - `broadcast`/`sendTo` record arbitrary payloads through the room's private recording helpers,
+     *   bypassing raw-send prefix refusal (no channel framing added — the fake is not a protocol layer).
      * - `state` forwards [_seamState].
      * - `close` is a no-op — the [FakeRoom] owns the lifecycle.
      */
@@ -629,17 +652,17 @@ public class FakeRoom(
         private val spool = Spool<Swatch>(channelPolicy)
         override val incoming: Flow<Swatch> = spool.incoming
 
-        override suspend fun broadcast(payload: ByteArray): Unit = this@FakeRoom.broadcast(payload)
+        override suspend fun broadcast(payload: ByteArray): Unit = recordBroadcast(payload)
 
         /**
-         * Refused for `selfId` (#2428), then delegated. The delegate is a **Room**, and `Room.sendTo`
+         * Refused for `selfId` (#2428), then recorded. The raw `Room.sendTo` contract
          * carries no such refusal — the real [us.tractat.kuilt.session.RoomChannel] is guarded at
          * exactly this position for exactly that reason, and a fake that accepts what the real
          * channel refuses is how a consumer test goes green on a call production would reject.
          */
         override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
             require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
-            this@FakeRoom.sendTo(peer, payload)
+            recordSendTo(peer, payload)
         }
 
         /** No-op — [FakeRoom] owns the lifecycle. */

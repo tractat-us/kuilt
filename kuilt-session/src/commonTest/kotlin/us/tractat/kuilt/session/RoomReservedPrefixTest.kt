@@ -11,6 +11,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class RoomReservedPrefixTest {
@@ -68,6 +69,29 @@ class RoomReservedPrefixTest {
             testScheduler.runCurrent()
             assertEquals(payloads.flatMap { listOf(it, it) }, star.joinerB.appFramesFrom(sender.id))
         }
+    }
+
+    @Test
+    fun chunkingSampleUsesChannelBudgetOnDirectRoute() = runTest(StandardTestDispatcher()) {
+        val star = relayStar()
+        // The host sends directly; relay budget accuracy is tracked separately in #2958.
+        star.host.wire.limitFrames(1024)
+        val budget = assertNotNull(star.host.room.channel("blob").maxPayloadBytes)
+        val received = mutableListOf<ByteArray>()
+        val channel = star.joinerB.room.channel("blob")
+        backgroundScope.launch { channel.incoming.collect { received += it.toByteArray() } }
+        testScheduler.runCurrent()
+        // Every chunk begins with a reserved byte, including the final short chunk.
+        val blob = ByteArray(budget * 2 + 1) { 'a'.code.toByte() }
+        val sent = runCatchingCancellable {
+            chunkToTheRoomsBudgetSample(star.host.room, star.joinerBId, blob)
+        }
+        testScheduler.runCurrent()
+        assertAll(
+            { assertTrue(sent.isSuccess, "chunking sample refused arbitrary bytes: ${sent.exceptionOrNull()}") },
+            { assertEquals(listOf(budget, budget, 1), received.map { it.size }) },
+            { assertEquals(blob.toList(), received.flatMap { it.toList() }) },
+        )
     }
 
     @Test

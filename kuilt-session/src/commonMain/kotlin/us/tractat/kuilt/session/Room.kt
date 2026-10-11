@@ -189,7 +189,7 @@ public interface Room {
      *
      * The room protocol discriminates its own frames by the payload's **first byte**, so five
      * values are spoken for — `0x61`, `0x63`, `0x65`, `0x6b`, `0x72`, ASCII `a c e k r`
-     * ([RoomFramePrefix]). A live [SeamRoom] refuses raw payloads classified as protocol traffic
+     * ([RoomFramePrefix]). A non-terminal room refuses raw payloads classified as protocol traffic
      * with [ReservedRoomPrefix], naming the family, before any direct or relayed send.
      * Terminal rooms retain their silent no-op behaviour.
      *

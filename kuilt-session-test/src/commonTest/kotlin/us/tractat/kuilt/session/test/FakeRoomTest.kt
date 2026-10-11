@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
@@ -23,6 +24,8 @@ import us.tractat.kuilt.session.FramesLost
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.ReconnectReason
 import us.tractat.kuilt.session.RoomFrame
+import us.tractat.kuilt.session.RoomFramePrefix
+import us.tractat.kuilt.session.ReservedRoomPrefix
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.partition.ResumeResult
@@ -50,6 +53,102 @@ private val AT = Instant.fromEpochMilliseconds(1_000L)
 private const val FAKE_INBOX_CAPACITY = 64
 
 class FakeRoomTest {
+    @Test
+    fun admitPayloadIsRefused() = refuses(RoomFramePrefix.Admit, "a")
+
+    @Test
+    fun channelPayloadIsRefused() = refuses(RoomFramePrefix.Channel, "c\u0000\u0001")
+
+    @Test
+    fun lobbyPayloadIsRefused() = refuses(RoomFramePrefix.Lobby, "e")
+
+    @Test
+    fun relayPayloadIsRefused() = refuses(RoomFramePrefix.Relay, "r")
+
+    @Test
+    fun heartbeatPingPayloadIsRefused() = refuses(RoomFramePrefix.Heartbeat, "kuilt.heartbeat.ping")
+
+    @Test
+    fun heartbeatPongPayloadIsRefused() = refuses(RoomFramePrefix.Heartbeat, "kuilt.heartbeat.pong")
+
+    private fun refuses(prefix: RoomFramePrefix, text: String) = runTest {
+        val room = FakeRoom()
+        var delivered = false
+        room.onBroadcast = { delivered = true }
+        for (broadcast in listOf(true, false)) {
+            val failure = assertFailsWith<ReservedRoomPrefix>("$prefix, broadcast=$broadcast") {
+                if (broadcast) room.broadcast(text.encodeToByteArray())
+                else room.sendTo(PeerId("other"), text.encodeToByteArray())
+            }
+            assertAll(
+                { assertEquals(prefix, failure.prefix) },
+                { assertTrue(room.broadcasts.isEmpty(), "refusal must precede recording") },
+                { assertTrue(room.directed.isEmpty(), "refusal must precede recording") },
+                { assertFalse(delivered, "refusal must precede delivery") },
+            )
+        }
+    }
+
+    @Test
+    fun channelSendsRecordReservedPayloads() = runTest {
+        val room = FakeRoom()
+        val channel = room.channel("blob")
+        val peer = PeerId("other")
+        val payloads = listOf("a", "c\u0000\u0001", "e", "r", "kuilt.heartbeat.ping", "kuilt.heartbeat.pong")
+        val delivered = mutableListOf<String>()
+        room.onBroadcast = { delivered += it.decodeToString() }
+        val result = runCatchingCancellable {
+            for (text in payloads) {
+                channel.broadcast(text.encodeToByteArray())
+                channel.sendTo(peer, text.encodeToByteArray())
+            }
+        }
+        assertAll(
+            { assertTrue(result.isSuccess, "channel payload refused: ${result.exceptionOrNull()}") },
+            { assertEquals(payloads, room.broadcasts.map { it.decodeToString() }) },
+            { assertEquals(payloads.map { peer to it }, room.directed.map { it.first to it.second.decodeToString() }) },
+            { assertEquals(payloads, delivered) },
+        )
+    }
+
+    @Test
+    fun rawSendsAcceptConditionallyUnreservedPayloads() = runTest {
+        val room = FakeRoom()
+        val peer = PeerId("other")
+        val payloads = listOf("", "plain", "c", "c\u0001", "keepalive", "kuilt.heartbeat.pin")
+        for (text in payloads) {
+            room.broadcast(text.encodeToByteArray())
+            room.sendTo(peer, text.encodeToByteArray())
+        }
+        assertAll(
+            { assertEquals(payloads, room.broadcasts.map { it.decodeToString() }) },
+            { assertEquals(payloads.map { peer to it }, room.directed.map { it.first to it.second.decodeToString() }) },
+        )
+    }
+
+    @Test
+    fun reservedSendsAfterLeaveRemainNoOps() = runTest {
+        val room = FakeRoom()
+        val channel = room.channel("blob")
+        var delivered = false
+        room.onBroadcast = { delivered = true }
+        room.leave()
+        val result = runCatchingCancellable {
+            val payload = "a".encodeToByteArray()
+            val peer = PeerId("other")
+            room.broadcast(payload)
+            room.sendTo(peer, payload)
+            channel.broadcast(payload)
+            channel.sendTo(peer, payload)
+        }
+        assertAll(
+            { assertTrue(result.isSuccess, "terminal send threw: ${result.exceptionOrNull()}") },
+            { assertTrue(room.broadcasts.isEmpty()) },
+            { assertTrue(room.directed.isEmpty()) },
+            { assertFalse(delivered) },
+        )
+    }
+
     // ── Defaults ─────────────────────────────────────────────────────────────
 
     @Test
