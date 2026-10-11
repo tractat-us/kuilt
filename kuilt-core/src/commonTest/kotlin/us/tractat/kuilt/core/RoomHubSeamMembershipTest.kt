@@ -68,9 +68,13 @@ class RoomHubSeamMembershipTest {
             "peer registered on first connection (roster includes the hub's own selfId, #1506)",
         )
 
-        // Drop the first connection.
+        // Drop the first connection, and wait for the server to deregister it. Without this wait the
+        // await below can be satisfied by the STALE registration: `contains(peer)` cannot tell the
+        // dropped link's entry from the resumed one's, and the broadcast then goes to the dead link.
+        // Which comes first, the old teardown or the new handshake, is scheduling, not contract (#2954).
         seam1.close()
         client1.close()
+        serverRoom7.peers.first { peer !in it }
 
         // Reconnect over a fresh connection with the SAME PeerId; re-emit the tag.
         val (server2, client2) = connectionPair()
