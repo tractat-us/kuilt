@@ -14,9 +14,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.webrtc.internal.Handsha
 /**
  * Default deadline for the offer/answer/ICE exchange to bring a data channel up.
  *
- * On WASM, the two tabs may stagger by 30–60 s during bundle load, so callers that
- * know the peer may be slow-booting should pass a larger [handshakeTimeoutMs] to
- * [HandshakeRunner.runHost] / [HandshakeRunner.runJoiner].
+ * For a slow-booting peer, callers can increase `handshakeTimeout` on
+ * [us.tractat.kuilt.webrtc.WebRTCPeerLinkFactory]. This clock covers only the
+ * data-channel connection wait, after the host's initial offer creation/send;
+ * signaling open, cleanup and peer-id exchange are outside it.
  */
 internal const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000L
 
@@ -36,9 +37,8 @@ internal object HandshakeRunner {
      * fails before the data channel opens, the handshake exceeds
      * [handshakeTimeoutMs], or signaling drops.
      *
-     * @param handshakeTimeoutMs overall deadline for the entire handshake. Defaults to
-     *   [DEFAULT_HANDSHAKE_TIMEOUT_MS] (30 s). Increase for environments where the peer
-     *   may take longer to boot before joining the room (e.g. WASM bundle load: 30–60 s).
+     * @param handshakeTimeoutMs deadline for the data-channel connection wait. Defaults to
+     *   [DEFAULT_HANDSHAKE_TIMEOUT_MS]. Setup before the wait and cleanup are outside it.
      */
     suspend fun runHost(
         facade: RtcPeerConnectionFacade,
@@ -81,9 +81,8 @@ internal object HandshakeRunner {
      * Joiner side: wait for the host's offer, answer it, then process
      * trickled ICE candidates until the data channel opens.
      *
-     * @param handshakeTimeoutMs overall deadline for the entire handshake. Defaults to
-     *   [DEFAULT_HANDSHAKE_TIMEOUT_MS] (30 s). Increase for environments where the peer
-     *   may take longer to boot before joining the room (e.g. WASM bundle load: 30–60 s).
+     * @param handshakeTimeoutMs deadline for the data-channel connection wait. Defaults to
+     *   [DEFAULT_HANDSHAKE_TIMEOUT_MS]. Setup before the wait and cleanup are outside it.
      */
     suspend fun runJoiner(
         facade: RtcPeerConnectionFacade,

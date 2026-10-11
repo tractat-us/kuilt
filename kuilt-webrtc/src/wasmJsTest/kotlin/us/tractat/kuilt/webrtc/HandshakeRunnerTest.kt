@@ -206,9 +206,10 @@ class HandshakeRunnerTest {
 /**
  * A facade whose data channel never opens. If [failWith] is set,
  * [awaitConnectionFailure] resolves with it; otherwise the connection
- * neither opens nor fails (exercises the handshake timeout).
+ * neither opens nor fails (exercises the handshake timeout). Shared with
+ * [WebRTCHandshakeTimeoutTest], which drives it through the factory.
  */
-private class NeverOpensFacade(
+internal class NeverOpensFacade(
     private val failWith: Throwable? = null,
 ) : RtcPeerConnectionFacade {
     override val localIceCandidates: Flow<SignalingMessage.IceCandidate> = emptyFlow()
