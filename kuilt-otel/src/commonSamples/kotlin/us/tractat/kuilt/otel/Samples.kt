@@ -149,8 +149,9 @@ internal suspend fun sampleWarpOtlpBridge() {
     val bridge = WarpOtlpBridge(telemetry, kotlin.time.Clock.System)
 
     // Wire your OtlpEdge implementation and call drain whenever connectivity returns.
-    // DrainResult.Success(spansSent, logsSent, metricPointsSent) — 0s mean up to date.
-    // DrainResult.Failure(cause)         — every attempted signal failed; retry later.
+    // DrainResult.Success(spansSent, logsSent, metricPointsSent) — no signal failed; 0s mean up to date.
+    // DrainResult.Partial(counts…, failures) — some signals failed; each SignalFailure names one and its cause.
+    // DrainResult.Failure(failures)          — every attempted signal failed; retry later.
     //
     // val edge: OtlpEdge = MyKtorOtlpEdge(endpoint = "https://otel-collector.example.com")
     // val result: DrainResult = bridge.drain(edge)

@@ -105,6 +105,9 @@ when (val result = bridge.drain(MyCollectorEdge("https://otel-collector.example.
     is DrainResult.Success -> log.info {
         "delivered ${result.spansSent} span(s), ${result.logsSent} log(s), ${result.metricPointsSent} metric point(s)"
     }
+    // Some signals got through and some did not. A signal that lands here on every drain
+    // is a problem worth looking at, not just a dropped connection.
+    is DrainResult.Partial -> result.failures.forEach { log.warn { "${it.signal} drain failed: ${it.cause}" } }
     is DrainResult.Failure -> { /* backend unreachable — just try again next reconnect */ }
 }
 ```

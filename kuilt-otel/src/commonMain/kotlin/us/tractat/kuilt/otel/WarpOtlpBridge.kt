@@ -34,9 +34,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpOtlpBridge"
  * ## Best-effort, per-signal isolation
  *
  * Each signal is drained independently and best-effort: a failing signal never
- * aborts the others, and its CRDT is left intact for the next attempt. A drain is a
- * [DrainResult.Failure] only when every *attempted* signal failed; a partial success
- * reports the counts that got through.
+ * aborts the others, and its CRDT is left intact for the next attempt. The result
+ * says which signals failed and why — [DrainResult.Partial] when some attempted
+ * signal succeeded, [DrainResult.Failure] when none did — so a signal that fails on
+ * every drain is visible to the caller, not only in a debug log line.
  *
  * @param telemetry the [WarpTelemetry] whose span/log/metric exporters are drained.
  * @param clock observation time stamped onto metric points. Required — inject a fixed
@@ -57,74 +58,107 @@ public class WarpOtlpBridge(
      * new records move over the wire, and the CRDT merge makes a resend harmless.
      *
      * @param edge the OTLP-capable backend to drain into.
-     * @return [DrainResult.Success] with per-signal counts (partial successes report
-     *   what got through), or [DrainResult.Failure] if every attempted signal failed.
+     * @return [DrainResult.Success] when no attempted signal failed,
+     *   [DrainResult.Partial] when some succeeded and some failed, or
+     *   [DrainResult.Failure] when every attempted signal failed. Failures carry the
+     *   signal and the exception its edge call threw.
      */
     public suspend fun drain(edge: OtlpEdge): DrainResult {
-        var anyAttempted = false
-        var anyFailed = false
-
         // ── Spans (+ inferred causal links) ──────────────────────────────────
         val spanSnapshot = telemetry.spans.snapshot().elements
-        var spansSent = 0
-        if (spanSnapshot.isNotEmpty()) {
-            anyAttempted = true
-            val r = runCatchingCancellable {
-                val digest = edge.digest()
-                val delta = spanSnapshot.filterTo(mutableSetOf()) { it.spanId !in digest.spanIds }
-                if (delta.isNotEmpty()) {
-                    val deltaIds = delta.mapTo(mutableSetOf()) { it.spanId }
-                    val links = inferCausalLinks(spanSnapshot).filter { it.fromSpanId in deltaIds }
-                    edge.send(delta, links)
-                    spansSent = delta.size
-                }
+        val spans = attempt(OtlpSignal.SPANS, buffered = spanSnapshot.isNotEmpty()) {
+            val digest = edge.digest()
+            val delta = spanSnapshot.filterTo(mutableSetOf()) { it.spanId !in digest.spanIds }
+            if (delta.isNotEmpty()) {
+                val deltaIds = delta.mapTo(mutableSetOf()) { it.spanId }
+                val links = inferCausalLinks(spanSnapshot).filter { it.fromSpanId in deltaIds }
+                edge.send(delta, links)
             }
-            // Interpolated rather than attached: an unreachable collector is this bridge's NORMAL
-            // state, not an anomaly — the failure is a transport exception whose type and message
-            // ("Connection refused", "Unresolved address") carry the whole diagnosis, while the
-            // trace is the same HTTP-client frames every time. Attaching it also makes a routine
-            // offline drain a candidate for the process's first symbolication, which on an Apple
-            // target is a one-time cost that collapses under load (#1596; see docs/usage.md).
-            if (r.isFailure) { anyFailed = true; logger.debug { "WarpOtlpBridge: span drain failed: ${r.exceptionOrNull()}" } }
+            delta.size
         }
 
         // ── Logs ─────────────────────────────────────────────────────────────
         val logSnapshot = telemetry.logs.snapshot().toList()
-        var logsSent = 0
-        if (logSnapshot.isNotEmpty()) {
-            anyAttempted = true
-            val r = runCatchingCancellable {
-                val digest = edge.logDigest()
-                val delta = logSnapshot.filterTo(mutableSetOf()) { it.recordId !in digest.recordIds }
-                if (delta.isNotEmpty()) { edge.sendLogs(delta); logsSent = delta.size }
-            }
-            if (r.isFailure) { anyFailed = true; logger.debug { "WarpOtlpBridge: log drain failed: ${r.exceptionOrNull()}" } }
+        val logs = attempt(OtlpSignal.LOGS, buffered = logSnapshot.isNotEmpty()) {
+            val digest = edge.logDigest()
+            val delta = logSnapshot.filterTo(mutableSetOf()) { it.recordId !in digest.recordIds }
+            if (delta.isNotEmpty()) edge.sendLogs(delta)
+            delta.size
         }
 
         // ── Metrics ──────────────────────────────────────────────────────────
         val points = renderMetricPoints(telemetry.metrics.snapshotAll(), nowEpochNanos())
-        var metricsSent = 0
-        if (points.isNotEmpty()) {
-            anyAttempted = true
-            val r = runCatchingCancellable {
-                val digest = edge.metricDigest()
-                val delta = points.filterTo(mutableSetOf()) { digest.versions[it.key] != it.valueHash() }
-                if (delta.isNotEmpty()) { edge.sendMetrics(delta); metricsSent = delta.size }
-            }
-            if (r.isFailure) { anyFailed = true; logger.debug { "WarpOtlpBridge: metric drain failed: ${r.exceptionOrNull()}" } }
+        val metrics = attempt(OtlpSignal.METRICS, buffered = points.isNotEmpty()) {
+            val digest = edge.metricDigest()
+            val delta = points.filterTo(mutableSetOf()) { digest.versions[it.key] != it.valueHash() }
+            if (delta.isNotEmpty()) edge.sendMetrics(delta)
+            delta.size
         }
 
-        return if (anyAttempted && anyFailed && spansSent == 0 && logsSent == 0 && metricsSent == 0) {
-            DrainResult.Failure(IllegalStateException("WarpOtlpBridge: all attempted signals failed to drain"))
-        } else {
-            DrainResult.Success(spansSent = spansSent, logsSent = logsSent, metricPointsSent = metricsSent)
-        }
+        return classify(spans, logs, metrics)
     }
 
     private fun nowEpochNanos(): Long = clock.now().toEpochMilliseconds() * NANOS_PER_MILLI
 
     private companion object {
         private const val NANOS_PER_MILLI = 1_000_000L
+    }
+}
+
+/** One signal's leg of a drain: not attempted (nothing buffered), sent, or failed. */
+private sealed interface SignalOutcome {
+    data object Idle : SignalOutcome
+
+    data class Sent(val count: Int) : SignalOutcome
+
+    data class Failed(val failure: SignalFailure) : SignalOutcome
+}
+
+private val SignalOutcome.sent: Int
+    get() = when (this) {
+        is SignalOutcome.Sent -> count
+        SignalOutcome.Idle, is SignalOutcome.Failed -> 0
+    }
+
+/**
+ * Run one signal's [leg] when it has anything [buffered], catching a failure as that
+ * signal's outcome so it never aborts the others. [leg] returns the number of records sent.
+ */
+private suspend fun attempt(signal: OtlpSignal, buffered: Boolean, leg: suspend () -> Int): SignalOutcome {
+    if (!buffered) return SignalOutcome.Idle
+    return runCatchingCancellable { leg() }.fold(
+        onSuccess = { SignalOutcome.Sent(it) },
+        onFailure = { cause ->
+            // Interpolated rather than attached: an unreachable collector is this bridge's NORMAL
+            // state, not an anomaly — the failure is a transport exception whose type and message
+            // ("Connection refused", "Unresolved address") carry the whole diagnosis, while the
+            // trace is the same HTTP-client frames every time. Attaching it also makes a routine
+            // offline drain a candidate for the process's first symbolication, which on an Apple
+            // target is a one-time cost that collapses under load (#1596; see docs/usage.md).
+            logger.debug { "WarpOtlpBridge: ${signal.noun} drain failed: $cause" }
+            SignalOutcome.Failed(SignalFailure(signal, cause))
+        },
+    )
+}
+
+private val OtlpSignal.noun: String
+    get() = when (this) {
+        OtlpSignal.SPANS -> "span"
+        OtlpSignal.LOGS -> "log"
+        OtlpSignal.METRICS -> "metric"
+    }
+
+/**
+ * Classify by which attempted legs succeeded or failed — never by record counts, since an
+ * up-to-date signal succeeds while sending nothing.
+ */
+private fun classify(spans: SignalOutcome, logs: SignalOutcome, metrics: SignalOutcome): DrainResult {
+    val outcomes = listOf(spans, logs, metrics)
+    val failures = outcomes.filterIsInstance<SignalOutcome.Failed>().map { it.failure }
+    return when {
+        failures.isEmpty() -> DrainResult.Success(spans.sent, logs.sent, metrics.sent)
+        outcomes.any { it is SignalOutcome.Sent } -> DrainResult.Partial(spans.sent, logs.sent, metrics.sent, failures)
+        else -> DrainResult.Failure(failures)
     }
 }
 
