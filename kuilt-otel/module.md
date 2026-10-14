@@ -15,11 +15,15 @@ whenever the network allows, possibly hours later. Reconnecting devices exchange
 only the *missing* deltas — not a full queue replay — so a brief reconnection
 is kind to a flaky link.
 
-The trick that makes this correct (not just buffered): every signal is stored as
-a **CRDT**. Spans are an `ORSet` keyed by span id; sending the same span twice
-is a set union and therefore idempotent. Metrics are mergeable counters. Logs
-are an ordered append-only sequence. A resend **cannot double-count** — the
-delta-temporality retry bug is structurally impossible.
+Every signal is stored as a **CRDT**. Spans are full `SpanRecord` values in an
+`ORSet`, including their causal stamps; span id alone does not determine equality.
+Metrics are mergeable counters. Logs are an ordered append-only sequence.
+Merging the same saved snapshot again is idempotent: it does not add another copy.
+
+Retrying `export()` is different from merging a snapshot. A span write may land
+even when the call fails or is cancelled. After recovery, retrying the original
+unstamped span can mint a new causal stamp and add another value with the same
+span id. Failed-write rollback affects live memory, not a write that already landed.
 
 ## Quick start
 
@@ -107,7 +111,7 @@ see that module's documentation for the durability contract and the four backend
 
 | Type | What it does |
 |---|---|
-| `WarpSpanExporter` | CRDT-backed span buffer (ORSet). Idempotent export + merge. |
+| `WarpSpanExporter` | Span buffer of full `SpanRecord` values (ORSet). Snapshot merge is idempotent; export retries can mint another causal stamp. |
 | `WarpMetricExporter` | CRDT-backed metric buffer: sums (GCounter), gauges (LWWRegister), cardinality (HyperLogLog). |
 | `WarpLogRecordExporter` | CRDT-backed log buffer (Rga). Ordered, idempotent export + merge. |
 | `WarpTelemetry` | Facade that composes all exporters under one surface. |
