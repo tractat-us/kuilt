@@ -6,6 +6,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
@@ -52,8 +53,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.deal.FairRandom")
  * A peer that sends a *malformed* reveal falls into that same case **as far as the protocol is
  * concerned**: the frame is dropped, so the round cannot tell it from one that never arrived.
  * Operationally the two are no longer identical — the drop is logged and names its sender, once
- * at `warn` per participant and at `debug` thereafter (#2666) — but that is a diagnostic, not a
- * signal a caller can act on. See [FairRandomMessage.Reveal].)
+ * at `warn` per participant and at `debug` thereafter. [rollWithReport] also returns participant
+ * counts, and [malformedFrameCounts] retains them after success, failure or cancellation.
+ * See [FairRandomMessage.Reveal].)
  *
  * ## Usage
  *
@@ -62,15 +64,15 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.deal.FairRandom")
  * val seed: Long = fairRandom.roll()   // suspends through both phases
  * ```
  *
- * [FairRandom] is single-use: each [roll] is a fresh protocol run. Create a new
- * instance for each roll if repeated rounds are needed.
+ * [FairRandom] is single-use: only the first call to [roll] or [rollWithReport] may start,
+ * even if it fails or is cancelled. Create a new instance for each round.
  *
  * @param seam the woven seam shared with all [peers].
  * @param peers all participant [PeerId]s, including [seam]'s own [Seam.selfId].
  */
 public class FairRandom(
     private val seam: Seam,
-    private val peers: Set<PeerId>,
+    peers: Set<PeerId>,
     /** Test-only: if true, reveals a secret that does not match the commitment. */
     internal val tamperedReveal: Boolean = false,
     /** Test-only: fixed secret bytes (skips CSPRNG). Enables deterministic seed checks. */
@@ -78,6 +80,21 @@ public class FairRandom(
     /** Test-only: fixed nonce bytes (skips CSPRNG). Enables deterministic seed checks. */
     internal val fixedNonce: ByteArray? = null,
 ) {
+    private val peers = peers.toSet()
+    private val started = MutableStateFlow(false)
+    private val finalCounts = MutableStateFlow<Map<PeerId, Long>?>(null)
+
+    /**
+     * Final malformed-frame counts, or `null` before the first round finishes.
+     *
+     * Published only after the incoming collector stops, including on failure or cancellation.
+     * Only participants with refused frames have entries; missing entries mean zero. Counts
+     * saturate at [Long.MAX_VALUE]. Each read is a defensive copy of the retained snapshot.
+     * Rejected repeat calls never replace it.
+     */
+    public val malformedFrameCounts: Map<PeerId, Long>?
+        get() = finalCounts.value?.toMap()
+
     /**
      * Run one full commit-reveal round and return the agreed seed.
      *
@@ -90,9 +107,32 @@ public class FairRandom(
      *   or if [peers] contains fewer than two participants.
      * @throws SeamCollapsedException if the seam tears or a required participant drains
      *   from the live peer set mid-round (the missing commit/reveal will never arrive).
+     * @throws IllegalStateException if either round entry point has already been called.
      * @throws CancellationException if the coroutine is cancelled.
      */
-    public suspend fun roll(): Long = coroutineScope {
+    public suspend fun roll(): Long = rollWithReport().seed
+
+    /**
+     * Run the same round as [roll], returning its seed and final malformed-frame counts.
+     *
+     * Shares [roll]'s exceptions and single-use gate. On failure or cancellation no report is
+     * returned; [malformedFrameCounts] is still finalized before the call exits.
+     *
+     * @sample us.tractat.kuilt.deal.sampleFairRandomReport
+     */
+    public suspend fun rollWithReport(): FairRandomReport {
+        check(started.compareAndSet(false, true)) { "FairRandom is single-use; create a new instance" }
+        val counts = mutableMapOf<PeerId, Long>()
+        try {
+            return FairRandomReport(runRound(counts), counts)
+        } finally {
+            // runRound's coroutineScope has joined every child, even on cancellation. No writer
+            // remains, so copying here is safe on a multi-threaded dispatcher too.
+            finalCounts.value = counts.toMap()
+        }
+    }
+
+    private suspend fun runRound(counts: MutableMap<PeerId, Long>): Long = coroutineScope {
         require(seam.selfId in peers) {
             "selfId '${seam.selfId.value}' must be listed in peers"
         }
@@ -109,15 +149,8 @@ public class FairRandom(
         val commits = Channel<Pair<PeerId, FairRandomMessage.Commit>>(Channel.UNLIMITED)
         val reveals = Channel<Pair<PeerId, FairRandomMessage.Reveal>>(Channel.UNLIMITED)
 
-        // One warn per participant that sends a malformed frame, then debug (#2666). The collector
-        // sees every frame on the seam, from any peer, with no consensus or rate limit in front of
-        // it, so an unconditional warn would hand a hostile peer a log amplifier for as long as the
-        // round lasts. A non-participant never enters the set, so it is bounded by `peers` — the
-        // rate limit cannot itself become the unbounded thing. Confined to the single collector
-        // coroutine below: `Flow.collect` is sequential, so the lambda never runs concurrently with
-        // itself and this needs no lock (it is a local, not shared state reached from elsewhere).
-        val warnedMalformed = mutableSetOf<PeerId>()
-
+        // Only this sequential collector mutates counts. The caller reads it after coroutineScope
+        // joins the collector. Presence doubles as the once-per-participant warning gate.
         val collectorJob = launch {
             seam.incoming.collect { swatch ->
                 val sender = swatch.sender ?: return@collect
@@ -145,7 +178,9 @@ public class FairRandom(
                     // open fabric, its type and message are the whole diagnosis, and the trace
                     // under it is the same CBOR framework frames every time (the WarpOtlpBridge /
                     // HeddleControlPlane convention).
-                    if (sender in peers && warnedMalformed.add(sender)) {
+                    val previous = counts[sender]
+                    if (sender in peers) counts[sender] = incrementMalformedCount(previous ?: 0L)
+                    if (sender in peers && previous == null) {
                         logger.warn { malformedFrame(myId, sender, refusal) }
                     } else {
                         logger.debug { malformedFrame(myId, sender, refusal) }
@@ -248,7 +283,7 @@ public class FairRandom(
     }
 
     /**
-     * The one line a dropped frame leaves behind.
+     * The diagnostic line accompanying a dropped frame.
      *
      * Names [sender] because the identity is in scope at the drop site and nothing downstream will
      * ever see this peer's contribution again this round — [awaitAllReveals] cannot report it, since
@@ -310,6 +345,26 @@ public class FairRandom(
         internal fun sha256(input: ByteArray): ByteArray = SHA256().digest(input)
     }
 }
+
+/**
+ * A successful round's seed and retained malformed-frame counts.
+ *
+ * Counts have the same meaning as [FairRandom.malformedFrameCounts]. Defensive copies on
+ * construction and access keep the report immutable even if a caller mutates a returned map.
+ */
+public class FairRandomReport internal constructor(
+    public val seed: Long,
+    malformedFrameCounts: Map<PeerId, Long>,
+) {
+    private val counts = malformedFrameCounts.toMap()
+
+    /** Participant-attributed refusals observed before the collector stopped. */
+    public val malformedFrameCounts: Map<PeerId, Long>
+        get() = counts.toMap()
+}
+
+internal fun incrementMalformedCount(count: Long): Long =
+    if (count == Long.MAX_VALUE) count else count + 1L
 
 /**
  * Thrown when a peer's revealed secret does not match its earlier commitment hash.
@@ -389,9 +444,9 @@ internal sealed class FairRandomMessage {
      *
      * The **attribution** is not lost with it, though it was for a while (#2666): `roll()`'s
      * collector binds `swatch.sender` before it attempts the decode, so the drop site still knows
-     * exactly who sent the frame and logs it. What no caller can yet observe is a *structured*
-     * signal — a game layer can forfeit a peer that goes quiet, but not one that repeatedly sends
-     * garbage. That remains open.
+     * exactly who sent the frame and logs it. [FairRandom.rollWithReport] returns participant
+     * refusal counts with the seed; [FairRandom.malformedFrameCounts] retains the final counts
+     * even when the round fails or is cancelled. A game layer can use them for forfeit decisions.
      */
     @Serializable
     internal data class Reveal(val secret: ByteArray, val nonce: ByteArray) : FairRandomMessage() {
