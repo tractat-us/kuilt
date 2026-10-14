@@ -354,8 +354,8 @@ internal sealed interface ForwardOutcome {
     /**
      * The proposal failed for a non-retryable reason.
      *
-     * No leader produces this today: the only failures that reach a forwarded proposal's deferred on
-     * the leader are `NotLeaderException` and `LeadershipLostException`, and both map to [NotLeader].
+     * A leader returns this when a cached request key is retried with different command bytes.
+     * Leadership failures instead map to [NotLeader], and size refusals to [PayloadTooLarge].
      * The originator surfaces it as `ForwardedProposalFailedException`, which is not a
      * `LeadershipLostException`, so a retry loop catching that type does not resend it (#2922).
      */
