@@ -43,9 +43,10 @@ class AdmissionRosterConcurrencyTest {
                 val scope = CoroutineScope(SupervisorJob() + dispatcher)
                 val host = PeerId("host")
                 val peer = PeerId("peer")
-                val inbound = Channel<Swatch>(Channel.UNLIMITED)
-                val admissions = Channel<Unit>(Channel.UNLIMITED)
-                val departures = Channel<Unit>(Channel.UNLIMITED)
+                // At most one Hello/Goodbye pair is queued before awaiting both receipts.
+                val inbound = Channel<Swatch>(capacity = 2)
+                val admissions = Channel<Unit>(capacity = 1)
+                val departures = Channel<Unit>(capacity = 1)
                 val seam = object : Seam {
                     override val selfId = host
                     // No heartbeat edge: the test drives admission, not transport liveness.
