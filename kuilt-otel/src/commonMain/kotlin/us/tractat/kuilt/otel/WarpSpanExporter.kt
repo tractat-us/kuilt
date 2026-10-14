@@ -253,7 +253,7 @@ public class WarpSpanExporter(
         }
         // A fresh dot was minted only when copy() produced a new instance; an explicit
         // or absent stamp returns `span` itself. Only a minted stamp needs rollback —
-        // a re-added unstamped/explicit span is idempotent by ORSet value.
+        // without a newly minted stamp, re-adding the same full value is idempotent.
         val minted = stamped !== span
         lock.withLock {
             maybeEvict()

@@ -33,7 +33,7 @@ internal suspend fun sampleWarpLogRecordExporter() {
         attributes = mapOf("user.id" to "42"),
     )
 
-    // Idempotent: re-exporting the same recordId is a no-op (Rga set-union).
+    // The retained recordId is a dedup hit in the log exporter; no new Insert is made.
     exporter.export(record)
     val secondResult = exporter.export(record)
     check(secondResult == ExportResult.Success)
@@ -184,7 +184,7 @@ internal suspend fun sampleWarpMetricExporter() {
     // Recover persisted metrics from a previous session.
     exporter.recover()
 
-    // Sum: count server requests — idempotent merge means no double-count under retry.
+    // Sum snapshots merge idempotently; repeating incrementSum adds another request.
     val requests = MetricKey("server.requests", MetricKind.SUM, mapOf("handler" to "/api/v1"))
     exporter.incrementSum(requests, by = 1L)
     check(exporter.sumValue(requests) == 1L)
@@ -228,7 +228,8 @@ internal suspend fun sampleWarpSpanExporter() {
         endEpochNanos = 2_000_000_000L,
     )
 
-    // Idempotent: exporting the same span twice is a no-op (ORSet union).
+    // This exporter has no causal clock: both calls add the same full span value.
+    // Auto-stamped retries after an indeterminate write can instead leave distinct copies.
     exporter.export(span)
     val secondResult = exporter.export(span)
     check(secondResult == ExportResult.Success)
