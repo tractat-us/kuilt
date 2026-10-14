@@ -53,7 +53,7 @@ import us.tractat.kuilt.test.runConcurrencyStress
  * threads and genuine preemption, which no test dispatcher reproduces.
  *
  * **JVM-hosted, `-Pconcurrency.stress.tests`-gated** (matches the other seam probes): excluded from the
- * normal `jvmTest` run and executed on a dedicated CI runner. The `*CapabilityConcurrencyTest` suffix
+ * normal `jvmTest` run and executed on a dedicated CI runner. Its entry in `.github/capability-probes.json`
  * puts it in the **gating** `capability-probes` job (`.github/workflows/ci.yml`), which *is* in
  * `ci-required` — a red here blocks the merge. It also runs, non-gating, in `concurrency-probes`
  * alongside every other `*ConcurrencyTest`; that overlap is deliberate. This KDoc said the opposite

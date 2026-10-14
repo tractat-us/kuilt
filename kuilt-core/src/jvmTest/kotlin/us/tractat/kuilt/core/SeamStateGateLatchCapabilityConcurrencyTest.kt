@@ -25,9 +25,9 @@ import us.tractat.kuilt.test.runConcurrencyStress
  * real-OS-thread only, so it is excluded from the normal `jvmTest` run and executed on the dedicated
  * concurrency-stress CI job.
  *
- * ## Why this one GATES — the `*CapabilityConcurrencyTest` name contract (#1768)
+ * ## Why this one GATES — the checked capability-probe manifest (#2639)
  *
- * The suffix is this repo's opt-in to the merge-blocking `capability-probes` job (`ci.yml`), and the
+ * The manifest `.github/capability-probes.json` selects this class for `capability-probes`, and the
  * entrance fee is evidence, not intent. Two properties earn it, and they are different questions:
  *
  * **1. Reverting the fix reds it reliably.** Restoring the check-then-act this gate exists to remove

@@ -41,7 +41,7 @@ import kotlin.test.assertTrue
  * it is closed), nothing calls a method *after* [AutoCloseable.close] — [ScopedCloseable] does not
  * say what that does, so every subclass currently invents an answer — and nothing calls
  * [AutoCloseable.close] from two threads at once, which is single-threaded-harness-unreachable and
- * lives instead in `:kuilt-core`'s real-threaded `ScopedCloseableCloseOnceCapabilityConcurrencyTest`.
+ * lives instead in `:kuilt-core`'s real-threaded `ScopedCloseableCloseOnceConcurrencyTest`.
  *
  * ## Wiring
  *
@@ -199,7 +199,7 @@ public abstract class CloseableLifecycleConformanceSuite {
      * after the capture — there is no second closer, so the lock-free [Job.children] traversal has
      * nothing mutating underneath it. (A genuinely concurrent `close()` is a different property
      * with a different mechanism, and it lives in `:kuilt-core`'s real-threaded
-     * `ScopedCloseableCloseOnceCapabilityConcurrencyTest`, which cannot be a subclass here —
+     * `ScopedCloseableCloseOnceConcurrencyTest`, which cannot be a subclass here —
      * `:kuilt-conformance` depends on `:kuilt-core`, so the reverse edge would be a cycle.)
      *
      * What the snapshot genuinely cannot see is a coroutine attached to the caller's scope

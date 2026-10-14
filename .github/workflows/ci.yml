@@ -752,15 +752,16 @@ jobs:
   # setup mirrors concurrency-probes below (dedicated runner, no sibling test
   # forks, same -P un-gate, same docs-only guard).
   #
-  # Scoped by NAME CONTRACT, not an enumeration: `*CapabilityConcurrencyTest`.
-  # The sibling job's header records why — an enumeration went stale as probes
-  # were added, so the class name is the contract and a new deterministic probe
-  # opts into the gate by being named for it.
+  # `.github/capability-probes.json` selects the classes and pins their XML methods.
+  # The checked manifest must match every *CapabilityConcurrencyTest declaration;
+  # renames, unexpected candidates, missing rows and skips fail explicitly (#2639).
+  # The lexical budget check sees visible timing APIs, not budgets hidden in callees.
+  # Its rationale and positive controls live in .github/scripts/capability-probes.py.
   #
   # TWO properties are the entrance fee, and they are different questions. (1)
   # DETERMINISM — reverting the guarded fix reds the probe reliably, so a red here
   # is a real defect essentially every time. (2) NO STARVATION-RED PATH — the probe
-  # holds no wall-clock budget of its own (no `withTimeout`, no `first { … }`, no
+  # holds no wall-clock budget of its own (no `withTimeout`, no
   # timed CyclicBarrier), so a saturated runner makes it SLOWER, never REDDER, and
   # the only real-time ceiling is the harness's shared 5-minute cap. Property 2 is
   # the one that actually makes gating safe, and it is what divides this job from
@@ -768,19 +769,11 @@ jobs:
   # `state.first { it is Torn }` or a timed barrier, so a starved box reds it for a
   # reason that is not about the code (#1135 / #1158).
   #
-  # ⚠ ONE MEMBER BELOW DOES NOT SATISFY PROPERTY 2, and it is recorded rather than
-  # quietly carried: ScopedCloseableCloseOnceCapabilityConcurrencyTest parks on a
-  # `CyclicBarrier.await(30 s)` per round and asserts `completedRounds == ROUNDS`,
-  # so a sufficiently starved runner CAN red it and block a merge. Its own failure
-  # message says as much (it prints systemLoadAverage next to availableProcessors
-  # so the artifact distinguishes the two cases). It predates this distinction
-  # being written down; it is not evidence that a timed barrier is acceptable here.
-  # `:kuilt-conformance`'s DelayedWovenSeamCloseOnceConcurrencyTest is structurally
-  # IDENTICAL — same barrier, same 30 s, same rig assertion — and is deliberately
-  # NON-gating, which is the inconsistency to resolve before adding a third of that
-  # shape. Do not use the ScopedCloseable member as precedent (#1768).
+  # ScopedCloseableCloseOnceConcurrencyTest uses timed barriers and therefore runs
+  # only in concurrency-probes, like its DelayedWovenSeam twin (#2639, option A).
+  # Unbounded first/await calls in the remaining members add no private budget.
   #
-  # Each member carries its receipt here. Today it matches three classes:
+  # Each member carries its receipt here; membership itself is checked above.
   #
   #   - CompositeCapabilityConcurrencyTest (#1767) — a lost-update race in
   #     CompositeSeam's capability rollup: two recomputes interleave and a stale
@@ -789,12 +782,6 @@ jobs:
   #     (observed at round=842). Its failure class is exactly the one #1712
   #     exists to eliminate (a peer confidently asserting a network state it
   #     never observed).
-  #   - ScopedCloseableCloseOnceCapabilityConcurrencyTest (#2305) — a
-  #     check-then-set close guard in ScopedCloseable, the base class of ten
-  #     multi-threaded coordinators, letting two concurrent close() callers both
-  #     run onClose() against its at-most-once contract. On the unguarded flag it
-  #     reddens at 1336–1830 of 2000 rounds, worst count 8 of 8, in ~1 s per run.
-  #     ⚠ Carries the timed barrier described above — see that note.
   #   - SeamStateGateLatchCapabilityConcurrencyTest (#1768) — the lost-terminal-Torn
   #     race at the PRIMITIVE level: a derived `update()` surviving a concurrent
   #     single-shot `tear()`. Graduated from the non-blocking job here; it was
@@ -826,7 +813,7 @@ jobs:
   # an auditor something untrue about the gate itself.
   #
   # DELIBERATE OVERLAP: concurrency-probes still runs `*ConcurrencyTest`, which
-  # includes this probe, so it executes twice per run. That costs seconds and
+  # includes these probes, so they execute twice per run. That costs seconds and
   # keeps the non-blocking signal complete (one artifact covering every probe).
   # Do NOT "optimise" it away by excluding the capability test from that job.
   capability-probes:
@@ -853,14 +840,11 @@ jobs:
           cache-read-only: false
 
       - name: Run deterministic capability probes (isolated runner, GATING)
-        # -Pconcurrency.stress.tests=true drops the build-defined `*ConcurrencyTest`
-        # exclusion (kuilt-core/build.gradle.kts); the narrower --tests include then
-        # selects only the deterministic capability probes. The -P flag is required
-        # for the include to match at all — a build-defined exclude would otherwise
-        # win over a command-line include and this job would be green-by-vacuity.
+        # Checks the manifest and policy fixtures, supplies exact Gradle selectors,
+        # removes stale XML, then requires every expected row to have passed.
         run: >-
-          ./gradlew :kuilt-core:jvmTest -Pconcurrency.stress.tests=true
-          --tests "*CapabilityConcurrencyTest"
+          python3 .github/scripts/capability-probes.py --self-test --run --
+          --max-workers=2 --console=plain
 
       - name: Upload test reports
         if: always()
@@ -1034,8 +1018,8 @@ jobs:
   # gate is a determinism receipt, and this lane is new: it has no failure history
   # here at all, and the argument for letting a job block merges has to be made
   # from observed behaviour on this runner rather than from a local measurement on
-  # a workstation. Graduating it to capability-probes is a one-line change (add it
-  # to ci-required's needs + success clauses) once a stated window of runs shows a
+  # a workstation. Graduation requires manifest/runner support and no private
+  # wall-clock budget, as well as a stated window of runs showing a
   # lone-failure rate near zero — measure it and quote the time span, not just a
   # sample count, for the reason concurrency-probes' own header records.
   #

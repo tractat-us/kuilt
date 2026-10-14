@@ -55,18 +55,16 @@ import us.tractat.kuilt.test.runConcurrencyStress
  * closer passed the round-start barrier and checked in. The rest of the anti-vacuity evidence is the
  * red-arm measurement above, which no green run can reproduce.
  *
- * Because this probe gates, a wedge must name its own cause: the completed-rounds failure carries
+ * A wedge must name its own cause: the completed-rounds failure carries
  * the terminating exception type plus the fan-out, core count and load average, since an assertion
  * failure (unlike the harness cap firing) runs none of [runConcurrencyStress]'s dumps.
  *
- * **JVM-hosted, `-Pconcurrency.stress.tests`-gated** (`kuilt-core/build.gradle.kts`), and named to
- * opt in to the **gating** `capability-probes` CI job: per that job's header the `*Capability`
- * `ConcurrencyTest` suffix is the contract by which a *deterministic* real-threaded probe — one
- * whose guarded defect reproduces reliably rather than under contention — joins `ci-required`. The
- * measurement above is this probe's claim to that. It also runs, non-gating, in `concurrency-probes`
- * alongside every other `*ConcurrencyTest`; that overlap is deliberate.
+ * **JVM-hosted, `-Pconcurrency.stress.tests`-gated** (`kuilt-core/build.gradle.kts`).
+ * Runs in the non-gating `concurrency-probes` job alongside every `*ConcurrencyTest`.
+ * Its timed barriers can fail when the runner starves, so it is excluded from the
+ * merge-gating manifest, like DelayedWovenSeamCloseOnceConcurrencyTest (#2639).
  */
-class ScopedCloseableCloseOnceCapabilityConcurrencyTest {
+class ScopedCloseableCloseOnceConcurrencyTest {
 
     /** Counts its own [onClose] invocations. A conforming [ScopedCloseable] leaves this at 1. */
     private class CountingCloseable(parentScope: CoroutineScope) : ScopedCloseable(parentScope) {
