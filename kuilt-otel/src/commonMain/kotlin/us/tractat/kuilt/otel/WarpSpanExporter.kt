@@ -22,9 +22,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpSpanExporte
 /**
  * A CRDT-backed span exporter.
  *
- * Spans are stored in an [ORSet]`<`[SpanRecord]`>` keyed by [SpanRecord.spanId]:
- * adding the same span twice is a set-union and therefore idempotent — a retry
- * can never double-count. Reconnecting peers reconcile by sharing their
+ * Spans are stored as [SpanRecord] values in an [ORSet]: adding the same value
+ * twice is idempotent. Auto-stamping can give a retry a different value, even with
+ * the same [SpanRecord.spanId]; see [export] for failed-write retry limits.
+ * Reconnecting peers reconcile by sharing their
  * [ORSet] deltas through the kuilt anti-entropy layer rather than replaying a
  * queue, so only missing spans move over the wire.
  *
@@ -210,14 +211,17 @@ public class WarpSpanExporter(
      * older concurrent snapshot. The span snapshot is re-encoded inside that section, so a
      * concurrent add is never dropped by a stale snapshot either.
      *
-     * If either durable write fails, a freshly-minted stamp is rolled back out of the
-     * in-memory set so a retrying caller re-adds exactly **one** copy rather than
-     * accumulating a second stamped copy of the same span. The minted dot's `seq` is
-     * left spent — a harmless gap, since the durable clock already covers it.
+     * On a non-cancellation failure in the durable-write section, a freshly stamped
+     * span is removed from the in-memory set. The clock sequence is not rolled back.
+     * This only undoes the live add: a failed write may already have committed, or may
+     * commit later. Recovery can therefore restore that span, and retrying the original
+     * unstamped span can mint another dot and create a second stamped copy. Cancellation
+     * propagates without running this rollback, leaving the live add in place.
      *
-     * Returns [ExportResult.Success] after the durable write. Returns
-     * [ExportResult.Failure] only if the [store] itself throws; the CRDT
-     * mutation is never committed without a successful store write.
+     * Returns [ExportResult.Success] after the durable write returns. A non-cancellation
+     * failure in that section returns [ExportResult.Failure]; neither failure nor
+     * cancellation establishes that the span was not persisted. See [DurableStore.write]
+     * for the indeterminate commit outcome.
      *
      * When the buffer is full, the eviction policy fires first, logging the
      * dropped span, then the new span is inserted.
@@ -258,13 +262,13 @@ public class WarpSpanExporter(
                 },
                 onFailure = { cause ->
                     if (minted) {
-                        // Undo the in-memory add so a retry produces exactly one stamped
-                        // copy. remove() targets this span's unique dot value, so it never
-                        // clobbers a concurrent add of a different span.
+                        // Remove this freshly stamped value from memory. This does not undo
+                        // a landed store write or prevent a duplicate on retry after recovery.
+                        // remove() leaves concurrent adds of different spans alone.
                         lock.withLock { spans = spans.piece { current -> current.remove(stamped) } }
                     }
-                    // Rollback first, and unconditionally: it is owed on every failed write,
-                    // whereas the line below is owed only on the one that opens the outage.
+                    // Rollback before reporting each non-cancellation failure. Cancellation
+                    // propagates above without reaching this fold; reporting only opens an outage once.
                     durableWriteFailed(cause) {
                         logger.error(it) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
                     }
