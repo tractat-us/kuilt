@@ -154,6 +154,22 @@ therefore carries two times, and they mean different things:
 The gap between them is capture latency, free of charge: if it is growing, the
 export path is falling behind the app.
 
+## Writing a capture edge
+
+Resolve each line while the caller's context is still available, then queue the
+result. `LogCapture.resolveAtEdge(NormalizedLogEvent)` returns an opaque
+`ResolvedLogEvent`, or `null` for a dropped line. Both `capture` and `captureAll`
+accept only resolved events; appender queues hold that type too. Resolution copies
+the mapped attributes and stamps the trace and event time. A resolved trace can be
+absent. The type proves resolution ran, but cannot prove it ran on the emitting thread.
+
+This changes the public capture API. Direct callers that previously passed a
+`NormalizedLogEvent` to `capture` now call `captureNow` at their log site. It
+resolves before export can suspend. Custom queueing edges call `resolveAtEdge`
+before enqueueing and retain `capture` or `captureAll` on the drain. The old
+`activeTrace` and `resolvedAttributes` input fields are gone; a source may still
+supply `emittedEpochNanos` when it already knows the event time.
+
 ## Where capture happens
 
 One uniform appender is installed in common code on every platform. It feeds each

@@ -50,7 +50,7 @@ import kotlin.time.Clock
  *
  * Anything that depends on *when and where the line was logged* is resolved at the
  * **synchronous capture edge**, on the caller, and carried on the queued
- * [NormalizedLogEvent] — never re-derived on the drain coroutine. That covers the
+ * [ResolvedLogEvent] — never re-derived on the drain coroutine. That covers the
  * ambient trace context (#1034), the [CaptureConfig.attributeMapper] (#1630), the
  * scope-bound log context ([withLogContext], #1659) and the instant the line was
  * logged (#1993). A queueing edge calls [resolveAtEdge] once; [capture] then reads
@@ -76,7 +76,7 @@ import kotlin.time.Clock
  *   default) capture is always-on and records carry no trace ids. When set, the
  *   trace is resolved at the synchronous capture edge via [resolveAtEdge], which
  *   also applies the gate there (#1745) and carries the trace on
- *   [NormalizedLogEvent.activeTrace] for [capture] to stamp from (see
+ *   [ResolvedLogEvent] for [capture] to stamp from (see
  *   [resolveAtEdge] and [capture]).
  */
 public class LogCapture(
@@ -93,10 +93,10 @@ public class LogCapture(
      * This is the one call a capture edge makes, and it MUST run synchronously on
      * the thread/coroutine that logged. It resolves all three emit-time-sensitive
      * inputs:
-     * - the ambient trace ([resolveTrace] → [NormalizedLogEvent.activeTrace], #1034)
+     * - the ambient trace ([resolveTrace] → [ResolvedLogEvent], #1034)
      *   — an ambient [TraceContextProvider] reads the caller's thread/coroutine-local
      *   context, which is gone by the time the drain runs [capture];
-     * - the [CaptureConfig.attributeMapper] ([NormalizedLogEvent.resolvedAttributes],
+     * - the [CaptureConfig.attributeMapper] ([ResolvedLogEvent],
      *   #1630) — a mapper that folds ambient state (the session in progress, a request
      *   id) into attributes must see the state the line was emitted under, not
      *   whatever it has become by drain time;
@@ -121,8 +121,10 @@ public class LogCapture(
      * a mapper is never paid for a record that will not exist. That matters most for
      * a consumer running `DROP`, who has by definition asked for most lines to be
      * discarded — the configuration in which the wasted mapping was largest.
+     *
+     * @sample us.tractat.kuilt.otel.logging.sampleQueuedCapture
      */
-    public fun resolveAtEdge(event: NormalizedLogEvent): NormalizedLogEvent? {
+    public fun resolveAtEdge(event: NormalizedLogEvent): ResolvedLogEvent? {
         if (droppedBeforeRecord(event)) return null
         // Resolve the trace BEFORE the mapper: it is what decides whether this event
         // produces a record at all, and the mapper runs on the application's logging
@@ -131,24 +133,33 @@ public class LogCapture(
         val trace = resolveTrace()
         if (droppedByTraceGate(trace)) return null
         val attributes = runCatchingCancellable { config.attributeMapper(event) }.getOrNull() ?: return null
-        return event.copy(
+        return EdgeResolvedLogEvent(
+            event = event,
             activeTrace = trace,
-            resolvedAttributes = withScopedContext(attributes),
+            resolvedAttributes = withScopedContext(attributes).toMap(),
             emittedEpochNanos = event.emittedEpochNanos ?: nowEpochNanos(),
         )
     }
 
     /**
-     * Resolve the trace active on the **current call**.
-     *
-     * Prefer [resolveAtEdge], which calls this and resolves the attribute mapper in
-     * the same step; a capture edge that only calls this leaves
-     * [NormalizedLogEvent.resolvedAttributes] unresolved and reintroduces #1630.
-     *
-     * Returns `null` when no provider is wired (the M1 always-on default) or when
-     * the provider reports no active trace.
+     * Read the current trace without producing a queueable event.
+     * Capture edges use [resolveAtEdge] to resolve attributes and time as well.
      */
     public fun resolveTrace(): ActiveTrace? = traceContextProvider?.current()
+
+    /**
+     * Resolve and export [event] directly at the caller's log site, without a queue.
+     *
+     * Trace, attributes and event time are resolved before the first suspension.
+     * Export may suspend while writing durably. A filtered event or a throwing
+     * attribute mapper returns `null`, just as at a queueing edge.
+     * Never call this on an unresolved event taken from a queue: call [resolveAtEdge]
+     * before enqueueing and [capture] on the drain instead.
+     *
+     * @sample us.tractat.kuilt.otel.logging.sampleCaptureNow
+     */
+    public suspend fun captureNow(event: NormalizedLogEvent): ExportResult? =
+        resolveAtEdge(event)?.let { capture(it) }
 
     /**
      * Map [event] to a [LogRecord] and export it.
@@ -162,24 +173,19 @@ public class LogCapture(
      * [CaptureConfig.untracedPolicy] is [UntracedPolicy.DROP]. On a sampled
      * trace the record is stamped with the trace's `traceId`/`spanId`.
      *
-     * The gate reads [event]'s pre-resolved [NormalizedLogEvent.activeTrace], and
-     * the record's attributes come from its pre-resolved
-     * [NormalizedLogEvent.resolvedAttributes] — both snapshotted at the synchronous
-     * edge via [resolveAtEdge]. Neither the trace provider nor the attribute mapper
+     * The gate reads the resolved trace and the record uses the resolved attributes,
+     * both snapshotted at the synchronous edge via [resolveAtEdge]. Neither the trace
+     * provider nor the attribute mapper
      * is consulted from this drain-side path, so ambient state that only exists on
      * the caller is honoured (#1034, #1630).
      *
-     * The one exception is a caller that invokes this directly from its own log
-     * site without going through an edge: `resolvedAttributes` is then `null` and
-     * the mapper is applied here, which for such a caller *is* emit time. That
-     * caller is also the only one for whom the gate here can still fire — an
-     * edge-resolved event has already been through the same [droppedByTraceGate] on
-     * the same trace, so for it this gate is a no-op that only stamps (#1745).
+     * Unresolved events cannot enter this path. Direct callers at their log site
+     * use [captureNow], which resolves before exporting.
      *
      * See [captureAll] for the batched counterpart — same mapping, same gates, one
      * export for a whole run of events.
      */
-    public suspend fun capture(event: NormalizedLogEvent): ExportResult? {
+    public suspend fun capture(event: ResolvedLogEvent): ExportResult? {
         val record = recordFor(event) ?: return null
         return exporter.export(record)
     }
@@ -201,21 +207,22 @@ public class LogCapture(
      * every event was dropped — so a caller can tell "nothing to do" from an export
      * result.
      */
-    public suspend fun captureAll(events: List<NormalizedLogEvent>): ExportResult? {
+    public suspend fun captureAll(events: List<ResolvedLogEvent>): ExportResult? {
         val records = events.mapNotNull { event -> recordFor(event) }
         if (records.isEmpty()) return null
         return exporter.export(records)
     }
 
     /**
-     * The [LogRecord] [event] produces, or `null` if it is dropped before one is built.
+     * The [LogRecord] [resolved] produces, or `null` if it is dropped before one is built.
      *
      * The single decision point shared by [capture] and [captureAll], so a per-event
      * gate cannot come to mean two different things on the two paths. Every gate here
      * reads the values [resolveAtEdge] snapshotted on the caller — never the ambient
      * provider or the mapper — so emit-time semantics survive the drain (#1034, #1630).
      */
-    private fun recordFor(event: NormalizedLogEvent): LogRecord? {
+    private fun recordFor(resolved: ResolvedLogEvent): LogRecord? {
+        val event = resolved.event
         if (droppedBeforeRecord(event)) return null
         // Trace/sampling gate. A null provider is M1 always-on capture, no stamp.
         // The trace was resolved at the edge (resolveAtEdge) and rides on the event;
@@ -223,7 +230,7 @@ public class LogCapture(
         var traceId: ByteString? = null
         var spanId: ByteString? = null
         if (traceContextProvider != null) {
-            val trace = event.activeTrace
+            val trace = resolved.activeTrace
             if (droppedByTraceGate(trace)) return null
             if (trace != null) {
                 traceId = trace.traceId
@@ -236,20 +243,8 @@ public class LogCapture(
             severityNumber = event.level.severityNumber,
             severityText = event.level.severityText,
             body = event.message,
-            // Resolved at the synchronous edge (#1630). The fallback covers a caller
-            // that drives capture() straight from its log site — there this call IS
-            // the edge, so applying the mapper AND merging the scoped log context
-            // here is still emit time. The merge is deliberately inside the fallback
-            // only: for an edge-resolved event the scoped context already rode in on
-            // resolvedAttributes, and re-reading the slot from the drain coroutine
-            // would stamp records with whatever scope the drain happens to be in —
-            // #1630's bug, reintroduced through #1659's feature.
-            attributes = event.resolvedAttributes ?: withScopedContext(config.attributeMapper(event)),
-            // OTLP's timeUnixNano: when the event occurred. Read at the synchronous
-            // edge (#1993). The fallback covers a caller that drives capture()
-            // straight from its log site — there this call IS the edge, so the two
-            // instants are genuinely the same, not a collapsed one.
-            timestampEpochNanos = event.emittedEpochNanos ?: observedEpochNanos,
+            attributes = resolved.resolvedAttributes,
+            timestampEpochNanos = resolved.emittedEpochNanos,
             // OTLP's observedTimeUnixNano: when capture saw the event. This is the
             // drain instant, and it belongs on the drain.
             observedEpochNanos = observedEpochNanos,
@@ -263,7 +258,7 @@ public class LogCapture(
      * it — the scope-bound half of #1659.
      *
      * Called only from a position that is genuinely the synchronous emit edge:
-     * [resolveAtEdge], and [recordFor]'s no-edge fallback. The slot it reads is
+     * [resolveAtEdge] (also used by [captureNow]). The slot it reads is
      * execution-local, so reading it anywhere else — the drain coroutine above all —
      * answers about the wrong scope.
      *
@@ -306,15 +301,20 @@ public class LogCapture(
      * **The single spelling of the gate, and deliberately so.** It is asked twice —
      * by [resolveAtEdge] on the resolved trace, so the [CaptureConfig.attributeMapper]
      * is not paid for a record that will not exist (#1745), and by [recordFor] on the
-     * trace the event carries, which is the same value and is the live gate for a
-     * caller that drives [capture] straight from its log site with no edge in front
-     * of it. Two hand-written copies of a gate that must agree is a worse defect than
-     * one gate in the wrong place, so there is only ever one.
+     * trace the event carries. The drain gate also covers an event resolved by a
+     * different capture instance with a different policy. Both ask one predicate.
      */
     private fun droppedByTraceGate(trace: ActiveTrace?): Boolean {
         if (traceContextProvider == null) return false
         return if (trace == null) config.untracedPolicy == UntracedPolicy.DROP else !trace.sampled
     }
+
+    private class EdgeResolvedLogEvent(
+        override val event: NormalizedLogEvent,
+        override val activeTrace: ActiveTrace?,
+        override val resolvedAttributes: Map<String, String>,
+        override val emittedEpochNanos: Long,
+    ) : ResolvedLogEvent()
 
     private companion object {
         private const val RECORD_ID_BYTES = 8

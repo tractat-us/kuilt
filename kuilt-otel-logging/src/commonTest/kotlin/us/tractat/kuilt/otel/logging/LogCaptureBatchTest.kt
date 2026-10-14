@@ -66,7 +66,7 @@ class LogCaptureBatchTest {
         val exporter = WarpLogRecordExporter(ReplicaId("device-1"), batchedStore)
         val capture = LogCapture(exporter, CaptureConfig(), fixedClock, Random(1))
 
-        capture.captureAll(listOf(event("a"), event("b"), event("c")))
+        capture.captureAll(listOf(event("a"), event("b"), event("c")).mapNotNull(capture::resolveAtEdge))
 
         // The same three events one at a time, as the control arm. Asserting the
         // batched run is *cheaper* rather than pinning an exact write count keeps this
@@ -75,7 +75,7 @@ class LogCaptureBatchTest {
         val perEventStore = WriteCountingStore()
         val perEventCapture =
             LogCapture(WarpLogRecordExporter(ReplicaId("device-1"), perEventStore), CaptureConfig(), fixedClock, Random(1))
-        listOf(event("a"), event("b"), event("c")).forEach { perEventCapture.capture(it) }
+        listOf(event("a"), event("b"), event("c")).forEach { perEventCapture.captureNow(it) }
 
         assertAll(
             { assertEquals(listOf("a", "b", "c"), exporter.snapshot().toList().map { it.body }) },
@@ -104,7 +104,7 @@ class LogCaptureBatchTest {
                 event("kept"),
                 event("internal", logger = "us.tractat.kuilt.otel.WarpLogRecordExporter"),
                 event("too quiet", level = LogLevel.DEBUG),
-            ),
+            ).mapNotNull(capture::resolveAtEdge),
         )
 
         assertEquals(listOf("kept"), exporter.snapshot().toList().map { it.body })
@@ -115,7 +115,10 @@ class LogCaptureBatchTest {
         // assertAll's lambdas are NON-suspending, so both runs are driven first and
         // only their results are asserted on inside the blocks.
         val ofNothing = capture().captureAll(emptyList())
-        val ofOnlyDropped = capture().captureAll(listOf(event("internal", logger = "us.tractat.kuilt.otel.X")))
+        val droppingCapture = capture()
+        val ofOnlyDropped = droppingCapture.captureAll(
+            listOf(event("internal", logger = "us.tractat.kuilt.otel.X")).mapNotNull(droppingCapture::resolveAtEdge),
+        )
 
         assertAll(
             { assertNull(ofNothing) },
