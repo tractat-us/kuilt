@@ -53,13 +53,12 @@ public actual class MultipeerServiceBrowser actual constructor(
     private val lock = ReentrantLock()
     private var collectors = 0
     private var session: BrowseSession? = null
-    private val arrivals = MutableSharedFlow<Tag>(extraBufferCapacity = 64)
     private val departuresFlow = MutableSharedFlow<String>(extraBufferCapacity = 16)
 
     /** Emits the dylib peer handle, also used by [MultipeerAdvertisement.peerKey]. */
     public actual override fun departures(): Flow<String> = sessionFeed(departuresFlow)
 
-    public actual override fun discoveries(): Flow<Tag> = sessionFeed(arrivals)
+    public actual override fun discoveries(): Flow<Tag> = sessionFeed(factory.discoveryUpdates.events).advertisements()
 
     private fun <T> sessionFeed(events: SharedFlow<T>): Flow<T> = flow {
         var acquired = false
@@ -96,7 +95,6 @@ public actual class MultipeerServiceBrowser actual constructor(
         val found = MultipeerNativeLib.PeerFoundCallback { handle, displayName ->
             val ad = MultipeerAdvertisement(handle, displayName, factory.serviceType)
             factory.setVisiblePeer(handle, ad)
-            arrivals.tryEmit(ad)
         }
         val lost = MultipeerNativeLib.PeerLostCallback { handle ->
             factory.setVisiblePeer(handle, advertisement = null)

@@ -4,7 +4,6 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
@@ -15,7 +14,7 @@ import us.tractat.kuilt.core.discovery.PeerDiscoverySource
 
 /**
  * iOS browser that discovers peers advertising under [factory]'s service
- * type and emits one [MultipeerAdvertisement] per `foundPeer` callback.
+ * type. Each collector receives the current peers, then live `foundPeer` callbacks.
  *
  * The browser does **not** own its own `MCNearbyServiceBrowser` — it
  * activates the one held by [factory] through
@@ -45,12 +44,11 @@ public actual class MultipeerServiceBrowser actual constructor(
 
     private val lock = reentrantLock()
     private var collectors = 0
-    private val arrivals = MutableSharedFlow<Tag>(extraBufferCapacity = 64)
 
     /** Emits the departed peer's displayName, also used by [MultipeerAdvertisement.peerKey]. */
     public actual override fun departures(): Flow<String> = sessionFeed(factory.lostPeerHandles)
 
-    public actual override fun discoveries(): Flow<Tag> = sessionFeed(arrivals)
+    public actual override fun discoveries(): Flow<Tag> = sessionFeed(factory.discoveryUpdates.events).advertisements()
 
     private fun <T> sessionFeed(events: SharedFlow<T>): Flow<T> = flow {
         var acquired = false
@@ -59,7 +57,7 @@ public actual class MultipeerServiceBrowser actual constructor(
                 // onSubscription runs AFTER the SharedFlow subscriber is registered. onStart
                 // would lose a callback emitted synchronously by startBrowsing.
                 lock.withLock {
-                    if (collectors == 0) factory.startBrowsing { arrivals.tryEmit(it) }
+                    if (collectors == 0) factory.startBrowsing { /* discoveries read the ordered snapshot/event stream */ }
                     collectors++
                     acquired = true
                 }

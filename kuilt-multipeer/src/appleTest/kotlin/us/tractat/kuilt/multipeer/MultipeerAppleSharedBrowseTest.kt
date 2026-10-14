@@ -17,6 +17,36 @@ import kotlin.test.assertSame
 @OptIn(ExperimentalForeignApi::class, ExperimentalCoroutinesApi::class)
 class MultipeerAppleSharedBrowseTest {
     @Test
+    fun lateDiscoveriesReceiveCurrentPeersWithoutAnotherCallback() = runTest {
+        val factory = MultipeerPeerLinkFactory("local", "kuilt-test")
+        val source = MultipeerServiceBrowser(factory)
+        val departure = backgroundScope.launch { source.departures().collect {} }
+        try {
+            runCurrent()
+            val delegate = assertNotNull(factory.activeBrowserDelegate)
+            val peer = MCPeerID(displayName = "present#12345678")
+            val gone = MCPeerID(displayName = "gone#12345678")
+            val browser = MCNearbyServiceBrowser(peer = peer, serviceType = "kuilt-test")
+            delegate.browser(browser, foundPeer = peer, withDiscoveryInfo = null)
+            delegate.browser(browser, foundPeer = gone, withDiscoveryInfo = null)
+            delegate.browser(browser, lostPeer = gone)
+            val seen = mutableListOf<String>()
+            val discovery = backgroundScope.launch { source.discoveries().collect { seen += it.peerKey } }
+            runCurrent()
+            assertEquals(listOf(peer.displayName), seen, "late discovery collector must receive the current peer without a repeated callback")
+            val later = MCPeerID(displayName = "later#12345678")
+            delegate.browser(browser, foundPeer = later, withDiscoveryInfo = null)
+            runCurrent()
+            assertEquals(listOf(peer.displayName, later.displayName), seen, "live arrivals follow the initial snapshot")
+            assertSame(delegate, factory.activeBrowserDelegate, "seeding must not restart browsing")
+            discovery.cancelAndJoin()
+        } finally {
+            departure.cancelAndJoin()
+            factory.close()
+        }
+    }
+
+    @Test
     fun cancellingDiscoveriesKeepsDeparturesAlive() = overlap(cancelDiscoveriesFirst = true)
 
     @Test

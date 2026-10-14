@@ -1,13 +1,14 @@
 package us.tractat.kuilt.multipeer
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import platform.Foundation.NSData
 import platform.Foundation.NSError
 import platform.MultipeerConnectivity.MCEncryptionRequired
@@ -92,6 +93,9 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * actual ObjC object (whose lifetime is bound to the browse session).
      */
     internal val knownPeers: MutableMap<String, MCPeerID> = mutableMapOf()
+
+    private val discoveryLock = reentrantLock()
+    internal val discoveryUpdates = MultipeerDiscoveryUpdates()
 
     private val _visiblePeers: MutableStateFlow<Set<MultipeerAdvertisement>> = MutableStateFlow(emptySet())
     public actual val visiblePeers: StateFlow<Set<MultipeerAdvertisement>> = _visiblePeers.asStateFlow()
@@ -293,8 +297,11 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         }
         browser = null
         browserDelegate = null
-        knownPeers.clear()
-        _visiblePeers.value = emptySet()
+        discoveryLock.withLock {
+            knownPeers.clear()
+            _visiblePeers.value = emptySet()
+            discoveryUpdates.publish(emptySet())
+        }
     }
 
     /**
@@ -311,7 +318,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * and [openSession] (stale-advertiser reap). Idempotent. [grabAndRelease][ActiveSeamSlot.grabAndRelease]
      * nulls the slot **before** `disconnect()` so any re-entrant terminal callback
      * from the disconnect finds an empty slot. Leaves browsing untouched — that is
-     * owned by the discoveries flow, not a session.
+     * owned jointly by collectors of the discovery and departure feeds.
      */
     private fun releaseActiveSession() {
         stopAdvertising()
@@ -379,14 +386,18 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             // from. The human-facing sessionName strips the identity back off.
             val handle = foundPeer.displayName
             log.info { "mc.discover.peer handle=$handle localPeer=${factory.displayName}" }
-            factory.knownPeers[handle] = foundPeer
             val ad =
                 MultipeerAdvertisement(
                     handle = handle,
                     sessionName = MultipeerPeerId.humanName(handle),
                     serviceType = factory.serviceType,
                 )
-            factory._visiblePeers.update { current -> current.filterNot { it.handle == handle }.toSet() + ad }
+            factory.discoveryLock.withLock {
+                factory.knownPeers[handle] = foundPeer
+                val current = factory._visiblePeers.value.filterNot { it.handle == handle }.toSet() + ad
+                factory._visiblePeers.value = current
+                factory.discoveryUpdates.publish(current, ad)
+            }
             onAdvertisement(ad)
         }
 
@@ -396,8 +407,12 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         ) {
             val handle = lostPeer.displayName
             log.info { "mc.lose.peer handle=$handle localPeer=${factory.displayName}" }
-            factory.knownPeers.remove(handle)
-            factory._visiblePeers.update { current -> current.filterNot { it.handle == handle }.toSet() }
+            factory.discoveryLock.withLock {
+                factory.knownPeers.remove(handle)
+                val current = factory._visiblePeers.value.filterNot { it.handle == handle }.toSet()
+                factory._visiblePeers.value = current
+                factory.discoveryUpdates.publish(current)
+            }
             factory.lostPeerHandles.tryEmit(handle)
         }
 
