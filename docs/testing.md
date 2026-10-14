@@ -37,6 +37,7 @@ looms wired to reach each other. The reference binding is the whole point of the
 
 ```kotlin
 class InMemoryLoomConformanceTest : SeamConformanceSuite() {
+    // …
     private val loom = InMemoryLoom()
     override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
     // …

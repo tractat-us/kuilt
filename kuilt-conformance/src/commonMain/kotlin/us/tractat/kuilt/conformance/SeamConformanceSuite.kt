@@ -2,6 +2,7 @@ package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -11,6 +12,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -115,7 +117,7 @@ import kotlin.test.fail
  * not the *fabric*. Its silent-skip is made accountable exactly as a capability gap is: every harness
  * declares an [ObligationDeclaration] via [midSessionDeathDeclaration], enforced by
  * [midSessionDeathDeclarationIsHonest]. The same shape governs [injectMembershipDrain]
- * (a peer leaving without a tear) and [injectSelfDial] (a peer dialling its own advertisement, the
+ * (a peer leaving without a tear), [injectDuplicatePeerId], [injectBlankPeerId], and [injectSelfDial] (a peer dialling its own advertisement, the
  * #1466 class) — each opt-in, each tracked-by-default via its own `*Declaration()` and
  * `*DeclarationIsHonest` meta-test rather than a required abstract every fabric would have to implement.
  *
@@ -384,6 +386,35 @@ public abstract class SeamConformanceSuite {
      * [selfDialDeclaration].
      */
     public open suspend fun injectSelfDial(host: Seam, joiner: Seam): Boolean = false
+
+    /**
+     * Offer each end a distinct newcomer claiming its incumbent's id, then disconnect the newcomer.
+     * Return `true` only when both injections fired. The rig must assert distinct device handles,
+     * count actual collision refusals, and check the roster while the newcomer is still connected.
+     * Counting offered callbacks or inspecting the final roster alone does not prove a refusal.
+     * The suite then checks incumbent delivery at both ends. Defaults to no injection.
+     */
+    public open suspend fun injectDuplicatePeerId(host: Seam, joiner: Seam): Boolean = false
+
+    /**
+     * Offer each end a newcomer announcing a blank id, then disconnect it. As with
+     * [injectDuplicatePeerId], the rig must count actual blank refusals and check the roster
+     * before disconnect, so accepting then removing a blank entry cannot pass.
+     */
+    public open suspend fun injectBlankPeerId(host: Seam, joiner: Seam): Boolean = false
+
+    /**
+     * Whether [injectDuplicatePeerId] can exercise the obligation. `NotConstructible` cross-checks
+     * the hook and requires a reason; there is no universal stimulus to refute that reason.
+     *
+     * @sample us.tractat.kuilt.conformance.samples.identityInjectionHarness
+     */
+    public open fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.DUPLICATE_PEER_ID)
+
+    /** Same declaration contract as [duplicatePeerIdDeclaration], for blank announcements. */
+    public open fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
 
     /**
      * What this harness says about the self-dial obligation — the accountability analog of
@@ -2366,6 +2397,116 @@ public abstract class SeamConformanceSuite {
     // ─────────────────────────────────────────────────────────────────────────
     //  Meta-test — every declared gap is trackable.
     // ─────────────────────────────────────────────────────────────────────────
+
+    /** A refused colliding newcomer cannot evict the incumbent or interrupt its delivery. */
+    @Test
+    public fun duplicateRemoteIdDoesNotEvictTheIncumbent(): TestResult = runTest {
+        runIdentityObligation(this, duplicatePeerIdDeclaration(), ::injectDuplicatePeerId)
+    }
+
+    /** A blank announcement cannot change either roster, tear the seam, or interrupt delivery. */
+    @Test
+    public fun blankRemoteIdIsRejected(): TestResult = runTest {
+        runIdentityObligation(this, blankPeerIdDeclaration(), ::injectBlankPeerId)
+    }
+
+    internal suspend fun runIdentityObligation(
+        scope: TestScope,
+        declaration: ObligationDeclaration,
+        inject: suspend (Seam, Seam) -> Boolean,
+    ) {
+        if (declaration !is ObligationDeclaration.Proven) return
+        scope.connectedPair { host, joiner ->
+            assertTrue(
+                identitySurvives(host, joiner, inject),
+                "identity refusal must preserve both rosters, Woven states, and incumbent delivery",
+            )
+        }
+    }
+
+    /** Cross-check the duplicate declaration against its injection hook. */
+    @Test
+    public fun duplicatePeerIdDeclarationIsHonest(): TestResult = runTest {
+        runIdentityDeclaration(this, duplicatePeerIdDeclaration(), ::injectDuplicatePeerId)
+    }
+
+    /** Cross-check the blank declaration against its injection hook. */
+    @Test
+    public fun blankPeerIdDeclarationIsHonest(): TestResult = runTest {
+        runIdentityDeclaration(this, blankPeerIdDeclaration(), ::injectBlankPeerId)
+    }
+
+    internal suspend fun runIdentityDeclaration(
+        scope: TestScope,
+        declaration: ObligationDeclaration,
+        inject: suspend (Seam, Seam) -> Boolean,
+    ) {
+        scope.connectedPair { host, joiner ->
+            when (declaration) {
+                ObligationDeclaration.Proven -> assertTrue(
+                    inject(host, joiner),
+                    "Proven requires an actual identity injection",
+                )
+                is ObligationDeclaration.Gap -> {
+                    val injected = inject(host, joiner)
+                    assertAll(
+                        { assertTrue(declaration.trackingUrl.isNotBlank(), GAP_NEEDS_A_URL) },
+                        { assertFalse(injected, "an injectable identity event cannot remain a Gap") },
+                    )
+                }
+                is ObligationDeclaration.NotApplicable.NotConstructible -> {
+                    val injected = inject(host, joiner)
+                    assertAll(
+                        { assertTrue(declaration.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON) },
+                        { assertFalse(injected, "an injected identity event is constructible") },
+                    )
+                }
+                is ObligationDeclaration.NotApplicable.ContractDiffers -> {
+                    assertTrue(declaration.reason.isNotBlank(), NOT_APPLICABLE_NEEDS_A_REASON)
+                    assertFalse(
+                        identitySurvives(host, joiner, inject),
+                        "ContractDiffers must demonstrate a deviation from the identity obligation",
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun CoroutineScope.identitySurvives(
+        host: Seam,
+        joiner: Seam,
+        inject: suspend (Seam, Seam) -> Boolean,
+    ): Boolean {
+        val hostPeers = host.peers.value
+        val joinerPeers = joiner.peers.value
+        assertAll(
+            { assertTrue(joiner.selfId in hostPeers, "precondition: host holds the incumbent") },
+            { assertTrue(host.selfId in joinerPeers, "precondition: joiner holds the incumbent") },
+            { assertIs<SeamState.Woven>(host.state.value) },
+            { assertIs<SeamState.Woven>(joiner.state.value) },
+        )
+        assertTrue(inject(host, joiner), "identity injection must actually fire at both ends")
+        // Assert before sending, so a tear reports an assertion rather than a send exception.
+        if (
+            host.peers.value != hostPeers || joiner.peers.value != joinerPeers ||
+            host.state.value !is SeamState.Woven || joiner.state.value !is SeamState.Woven
+        ) return false
+        // Separate bounded windows: a real-IO suspension in one direction cannot spend the other.
+        val forward = identityDelivery(host, joiner)
+        val reverse = identityDelivery(joiner, host)
+        return forward && reverse && host.peers.value == hostPeers && joiner.peers.value == joinerPeers &&
+            host.state.value is SeamState.Woven && joiner.state.value is SeamState.Woven
+    }
+
+    private suspend fun CoroutineScope.identityDelivery(from: Seam, to: Seam): Boolean {
+        val payload = byteArrayOf(0x25, 0x61)
+        val received = async(start = CoroutineStart.UNDISPATCHED) {
+            withTimeoutOrNull(2.seconds) { to.incoming.firstOrNull() }
+        }
+        from.broadcast(payload)
+        val frame = received.await()
+        return frame != null && frame.sender == from.selfId && frame.toByteArray().contentEquals(payload)
+    }
 
     // ── (15) every `false` capability declares a gap URL ─────────────────────
     //

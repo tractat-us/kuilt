@@ -35,6 +35,17 @@ import us.tractat.kuilt.core.freshPeerId
  */
 class MultipeerConformanceTest : SeamConformanceSuite() {
 
+    /** The JVM boundary cannot distinguish colliding devices; blank injection remains unwired. */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.NotConstructible(
+            "PeerStateCallback carries only the announced id and connected flag, with no distinct device " +
+                "handle; devices sharing an id are already merged below this JVM boundary",
+        )
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
+
+
     companion object {
         private const val HOST_DISPLAY_NAME = "conformance-host"
         private const val JOINER_DISPLAY_NAME = "conformance-joiner"

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.webrtc
 
+import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
@@ -33,6 +34,14 @@ import us.tractat.kuilt.core.Tag
  * asserted-about.
  */
 class WebRTCConformanceTest : SeamConformanceSuite() {
+
+    /** The current rig does not inject malformed announcements; these obligations remain unproven. */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.DUPLICATE_PEER_ID)
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
+
 
     private companion object {
         /**

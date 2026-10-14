@@ -1,5 +1,9 @@
 package us.tractat.kuilt.multipeer
 
+import io.github.oshai.kotlinlogging.KLogger
+import io.github.oshai.kotlinlogging.KLoggingEventBuilder
+import io.github.oshai.kotlinlogging.Level
+import io.github.oshai.kotlinlogging.Marker
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -15,6 +19,10 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.multipeer.internal.MCSessionLink
+import us.tractat.kuilt.multipeer.internal.MultipeerPeerId
+import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 /**
  * Verifies the Apple `MCSessionLink` satisfies the shared [SeamConformanceSuite].
@@ -150,6 +158,16 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
      */
     override suspend fun injectSelfDial(host: Seam, joiner: Seam): Boolean = pair?.injectSelfDial() ?: false
 
+    override suspend fun injectDuplicatePeerId(host: Seam, joiner: Seam): Boolean =
+        pair?.injectIdentity(host, joiner, blank = false) ?: false
+
+    override suspend fun injectBlankPeerId(host: Seam, joiner: Seam): Boolean =
+        pair?.injectIdentity(host, joiner, blank = true) ?: false
+
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
+
     /** Proven: this harness offers each end a connection to its own identity, so no gap. */
     override fun selfDialDeclaration(): ObligationDeclaration = ObligationDeclaration.Proven
 }
@@ -175,6 +193,7 @@ class MultipeerAppleConformanceTest : SeamConformanceSuite() {
 internal class MCSessionLinkLoomPair(private val testScope: TestScope?) {
 
     val bus: FakeMCSessionBus = FakeMCSessionBus()
+    private val refusals = IdentityRefusalLogger()
 
     private val hostPeer = MCPeerID(displayName = HOST)
     private val joinerPeer = MCPeerID(displayName = JOINER)
@@ -207,6 +226,30 @@ internal class MCSessionLinkLoomPair(private val testScope: TestScope?) {
         return onHost && onJoiner
     }
 
+    /** Count refusal events from the production branch, not offered callbacks or final roster size. */
+    fun injectIdentity(host: Seam, joiner: Seam, blank: Boolean): Boolean {
+        fun inject(local: MCPeerID, incumbent: MCPeerID, seam: Seam): Boolean {
+            // A nonempty MC display name with a whitespace identity suffix reaches the blank guard.
+            val newcomer = MCPeerID(displayName = if (blank) "newcomer# " else incumbent.displayName)
+            assertNotEquals(incumbent, newcomer, "precondition: newcomer is a distinct device")
+            val id = MultipeerPeerId.peerId(newcomer.displayName)
+            if (blank) assertTrue(id.value.isBlank(), "precondition: announcement is blank")
+            else assertEquals(MultipeerPeerId.peerId(incumbent.displayName), id)
+            val roster = seam.peers.value
+            assertTrue(MultipeerPeerId.peerId(incumbent.displayName) in roster)
+            val event = if (blank) "mc.session.blank-id" else "mc.session.collision"
+            val before = refusals.count(event, seam.selfId.value)
+            return bus.injectIdentity(local, newcomer) {
+                assertEquals(before + 1, refusals.count(event, seam.selfId.value),
+                    "rig must observe an actual $event refusal")
+                assertEquals(roster, seam.peers.value, "roster must remain unchanged before newcomer disconnect")
+            }
+        }
+        val onHost = inject(hostPeer, joinerPeer, host)
+        val onJoiner = inject(joinerPeer, hostPeer, joiner)
+        return onHost && onJoiner
+    }
+
     /**
      * Build one link over a bus endpoint and install its delegate, exactly as
      * `MultipeerPeerLinkFactory.openSession`/`joinSession` do with a real `MCSession`.
@@ -224,6 +267,7 @@ internal class MCSessionLinkLoomPair(private val testScope: TestScope?) {
             localPeerId = peer,
             session = session,
             dispatcher = UnconfinedTestDispatcher(scope.testScheduler),
+            log = refusals,
         )
         session.delegate = link.delegate
         return link
@@ -233,4 +277,19 @@ internal class MCSessionLinkLoomPair(private val testScope: TestScope?) {
         const val HOST = "conformance-host#aaaaaaaa"
         const val JOINER = "conformance-joiner#bbbbbbbb"
     }
+}
+
+/** Per-fixture logger: avoids global logging configuration and native logger initialization order. */
+private class IdentityRefusalLogger : KLogger {
+    override val name: String = "identity-refusal-rig"
+    private val messages = mutableListOf<String>()
+
+    override fun isLoggingEnabledFor(level: Level, marker: Marker?): Boolean = true
+
+    override fun at(level: Level, marker: Marker?, block: KLoggingEventBuilder.() -> Unit) {
+        KLoggingEventBuilder().apply(block).message?.let { messages += it }
+    }
+
+    fun count(event: String, localId: String): Int =
+        messages.count { it.startsWith("$event localPeer=$localId ") }
 }
