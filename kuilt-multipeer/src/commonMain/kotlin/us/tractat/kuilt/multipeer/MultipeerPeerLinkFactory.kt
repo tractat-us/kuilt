@@ -51,8 +51,7 @@ public expect class MultipeerPeerLinkFactory(
      * reality (a host that stops advertising drops out of the set, even on
      * the same device). Emitted as a [StateFlow] so the UI can `collectAsState`.
      *
-     * Empty when no `MultipeerServiceBrowser.discoveries` flow is currently
-     * being collected.
+     * Empty when neither feed of the paired `MultipeerServiceBrowser` is collected.
      */
     public val visiblePeers: StateFlow<Set<MultipeerAdvertisement>>
 
