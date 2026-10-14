@@ -19,9 +19,9 @@ import kotlin.time.Duration.Companion.seconds
  * A **forwarded** propose is held to the *leader's* payload budget, and a refusal reaches the
  * originator as the same non-retryable [PayloadTooLarge] a local propose throws (#2155).
  *
- * `RaftEngine.checkProposeFitsTransport` guards the local propose on the caller's coroutine, against
- * the caller's own transport. A forward then arrives at the leader through `onForward`, which used to
- * hand it straight to `onPropose`. Where the forwarder's budget is the **larger** of the two — a mesh
+ * Local admission guards the forward hop against the caller's own transport. A forward then arrives
+ * at the leader through `onForward` and `onPropose`, where a cache miss must also fit the leader's
+ * budget. Where the forwarder's budget is the **larger** of the two — a mesh
  * reports the minimum across its own live links, so nodes routinely differ — the forwarder's check
  * passes, the leader appends an entry it cannot replicate, and the log wedges exactly as #2069 did for
  * local proposes. The leader then loses its quorum, the forward is answered `NotLeader`, and the
