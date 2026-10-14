@@ -67,10 +67,10 @@ class WarpMetricExporterTest {
 
     @Test
     fun sumRetryCannotDoubleCount() = runTest {
-        // Idempotent: the same GCounter patch applied twice must not inflate.
-        // In practice the caller retries export() on store failure; the GCounter
-        // accumulates from its last committed value — this test verifies the
-        // fundamental idempotency of two separate increments adding to the total.
+        // These are two distinct increments, so both contribute. This does not test retry
+        // after a failed store write: the live counter already includes that mutation,
+        // and calling incrementSum again would apply another increment. Snapshot-merge
+        // idempotency is covered separately below.
         val exporter = exporterFor()
         val key = sumKey("hits")
         exporter.incrementSum(key, by = 5L)
