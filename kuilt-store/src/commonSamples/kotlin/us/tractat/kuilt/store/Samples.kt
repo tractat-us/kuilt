@@ -6,7 +6,7 @@ internal suspend fun sampleDurableStore() {
     val store: DurableStore = InMemoryDurableStore()
     val key = StoreKey("draft")
 
-    // `write` returns only once the bytes are committed — that is the whole contract.
+    // A successful `write` returns only once the bytes are committed.
     store.write(key, byteArrayOf(1, 2, 3))
 
     // A later session (a fresh store over the same backing directory or database)

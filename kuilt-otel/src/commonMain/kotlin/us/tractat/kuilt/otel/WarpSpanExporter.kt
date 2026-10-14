@@ -435,6 +435,6 @@ public sealed interface ExportResult {
     /** The span was durably written to the local store. */
     public data object Success : ExportResult
 
-    /** The durable write failed; the span is not persisted. */
+    /** The durable write failed; whether the span was persisted is indeterminate. */
     public data class Failure(public val cause: Throwable) : ExportResult
 }
