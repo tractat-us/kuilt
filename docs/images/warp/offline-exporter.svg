@@ -58,5 +58,6 @@
 
   <!-- bottom guarantee -->
   <rect x="32" y="404" width="816" height="42" rx="10" fill="#10130f" stroke="#98c37944"/>
-  <text x="440" y="430" text-anchor="middle" font-size="13" font-weight="600" fill="#98c379">Idempotent CRDT merge ⇒ a resend can't double-count: metrics are cumulative, spans dedup by id, logs merge by sequence.</text>
+  <text x="440" y="421" text-anchor="middle" font-size="12" font-weight="600" fill="#98c379">Snapshot merge is idempotent by full value; delivery digests filter span ids.</text>
+  <text x="440" y="438" text-anchor="middle" font-size="12" fill="#98c379">Retrying an unstamped export after an indeterminate write can leave distinct stamped copies.</text>
 </svg>

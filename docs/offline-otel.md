@@ -30,8 +30,8 @@ class WarpTelemetry(
     store: DurableStore,   // from `:kuilt-store` — file (JVM/Android), NSFileManager (iOS/macOS), IndexedDB (wasm)
 ) {
     // The OTel SDK plugs these in as its exporters — standard instrumentation, unchanged:
-    val spans  : WarpSpanExporter        // span records → ORSet<Span> keyed by spanId  (idempotent union)
-    val metrics: WarpMetricExporter      // cumulative temporality → mergeable counters  (no double-count)
+    val spans  : WarpSpanExporter        // span records → ORSet<SpanRecord>  (full-value snapshot merge)
+    val metrics: WarpMetricExporter      // cumulative temporality → mergeable counters  (idempotent snapshot merge)
     val logs   : WarpLogRecordExporter   // → Rga<LogRecord> (append-only, ordered)
 }
 
@@ -52,15 +52,26 @@ mid-sync.
 
 The CRDT representations are what make this safe rather than just queued:
 
-- **Spans** are an `ORSet` keyed by `spanId` — a resend is a set union, so it is
-  automatic dedup.
-- **Metrics** are mergeable cumulative counters — a resend merges idempotently, so the
-  delta-temporality double-count-under-retry bug *cannot occur*. A counter is also
-  O(1) regardless of how long the device was offline (it compresses losslessly).
+- **Spans** are an `ORSet` of full `SpanRecord` values, including their causal stamps.
+  Merging the same saved snapshot again does not add another copy. The set is not
+  keyed solely by `spanId`.
+- **Metrics** are mergeable cumulative counters — merging the same snapshot again
+  does not increment the total. Repeating an increment or recording another sample
+  is a new operation, even when the caller intends a retry. A counter uses constant
+  space per replica regardless of how long the device was offline.
 - **Logs** are an `Rga` ordered by producer sequence — append-only, idempotent merge.
 
-**A resend can never corrupt the data**, which is the property a flaky link otherwise
-destroys.
+These are guarantees about **merging saved state**, not retrying export calls.
+A failed or cancelled store write may already have committed, or may commit later.
+After recovery, retrying an original unstamped span can assign another causal stamp
+and leave distinct copies with the same span id. Rolling back memory cannot undo
+that durable write; the caller audit in [kuilt-store](../kuilt-store/module.md)
+records this unresolved recovery hazard.
+
+OTLP digest reconciliation is a separate filter by span id: ids recorded as delivered
+are skipped. It does not coalesce distinct values in the local set. If their id is
+absent from the digest, both stamped copies can be sent. Delivery retries depend on
+the edge's idempotency contract.
 
 ## The OTLP adapter
 

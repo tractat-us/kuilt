@@ -1,5 +1,13 @@
 # OTLP egress — by-digest drain of all signals + concrete Ktor JSON edge — Implementation Plan
 
+> **Retry scope clarification (#2915):** the delivery deduplication described below
+> assumes an edge/backend that applies repeated ids idempotently. A lost digest or
+> acknowledgement can cause another POST; successful re-drain tests do not establish
+> exactly-once delivery. Snapshot merges compare full `SpanRecord` values, while
+> delivery digests filter span ids. Retrying an unstamped local export after an
+> indeterminate write can leave distinct stamped copies with the same span id;
+> neither snapshot merge nor the delivery digest repairs that local buffer.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Drain kuilt's converged CRDT telemetry (spans + logs + metrics) to a standard OTLP collector by producer-local digest, folding in #846 (auto-stamp causal context on export + emit inferred `Span.links` at drain). Ship the first concrete transport: a Ktor OTLP/HTTP **JSON** edge in a new all-target module `:kuilt-otel-otlp`.
@@ -127,8 +135,8 @@ import kotlinx.io.bytestring.ByteString
  *
  * The digest is **not** a query of what the collector holds (OTLP/HTTP is
  * write-only). It is what *this* producer has already POSTed to *this* endpoint,
- * persisted locally by the edge. The collector deduplicates by record id, so a
- * lost/stale digest costs bandwidth, never correctness.
+ * persisted locally by the edge. A lost/stale digest can cause re-POSTs;
+ * delivery deduplication then relies on the collector applying record ids idempotently.
  */
 public class LogDigest(public val recordIds: Set<ByteString>)
 ```
@@ -160,8 +168,8 @@ package us.tractat.kuilt.otel
  * them — the edge never reaches into the three CRDTs directly.
  *
  * [valueHash] is over the **OTLP value fields only** (not the observation time), so
- * a re-render of an unchanged series produces the same hash and is skipped by
- * [MetricDigest] — while a value that advanced re-sends exactly once.
+ * a re-render of an unchanged series produces the same hash. Once that hash is in
+ * [MetricDigest], it is skipped; a failed send or digest write can cause retries.
  */
 public sealed interface MetricPoint {
     /** The series this point belongs to. */

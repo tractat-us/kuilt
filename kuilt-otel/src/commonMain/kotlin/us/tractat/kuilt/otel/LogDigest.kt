@@ -14,8 +14,9 @@ import kotlinx.io.bytestring.ByteString
  *
  * The digest is **not** a query of what the collector holds (OTLP/HTTP is
  * write-only). It is what *this* producer has already POSTed to *this* endpoint,
- * persisted locally by the edge. The collector deduplicates by record id, so a
- * lost or stale digest costs bandwidth, never correctness.
+ * persisted locally by the edge. A lost or stale digest can cause re-POSTs;
+ * avoiding duplicate delivery then relies on the collector deduplicating by record
+ * id. This delivery filter is separate from local exporter write outcomes.
  *
  * @param recordIds the raw 8-byte record ids ([LogRecord.recordId]) already delivered.
  */
