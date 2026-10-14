@@ -99,6 +99,17 @@ public class WarpTelemetry(
     )
 
     /**
+     * Read all exporters' health without inspecting export results. Log counters retain their
+     * record-based units; spans and metrics count persistence turns. Each component is a coherent
+     * snapshot, but concurrent activity can occur between the three reads. This getter owns no
+     * background scope and is current without a flow collector.
+     *
+     * @sample us.tractat.kuilt.otel.samplePersistenceHealth
+     */
+    public val health: TelemetryHealth
+        get() = TelemetryHealth(spans.health.value, metrics.health.value, logs.health.value)
+
+    /**
      * Load persisted CRDT state from the [DurableStore] for all exporters.
      *
      * Call once at startup, before any calls to [spans.export][WarpSpanExporter.export],
@@ -117,7 +128,7 @@ public class WarpTelemetry(
      * Idempotent: a second call simply re-reads and re-decodes the same bytes.
      */
     public suspend fun recover() {
-        causalClock.recover(store)
+        causalClock.recover(store, spans::recoveryFailed)
         spans.recover()
         metrics.recover()
         logs.recover()
@@ -173,3 +184,17 @@ public class WarpTelemetry(
         is MetricExportResult.Failure -> ExportResult.Failure(cause)
     }
 }
+
+/**
+ * Health of the local telemetry buffers, in each signal's own units.
+ *
+ * [spans] and [metrics] count persistence turns; [logs] retains log-record admission and drop
+ * accounting. Do not add these counters together. None measures delivery to an OTLP collector.
+ *
+ * @sample us.tractat.kuilt.otel.samplePersistenceHealth
+ */
+public data class TelemetryHealth(
+    public val spans: PersistenceHealth,
+    public val metrics: PersistenceHealth,
+    public val logs: ExporterHealth,
+)

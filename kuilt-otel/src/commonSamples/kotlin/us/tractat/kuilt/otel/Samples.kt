@@ -288,3 +288,18 @@ internal fun sampleInferCausalLinks() {
     check(links.size == 1)
     check(links.single().attributes["kuilt.causality"] == "potential")
 }
+
+/** @suppress — sample only */
+internal suspend fun samplePersistenceHealth() {
+    val telemetry = WarpTelemetry(ReplicaId("device"), InMemoryDurableStore())
+    telemetry.recover()
+    telemetry.metrics.incrementSum(MetricKey("requests", MetricKind.SUM))
+
+    val health = telemetry.health
+    check(health.metrics.acknowledged == 1L)
+    check(health.metrics.outstandingFailures == 0L)
+    check(!health.metrics.recoveryFailed)
+    // Logs keep record units. No log records have been admitted by this instance.
+    check(health.logs.accepted == 0L)
+    check(health.spans.acknowledged == 0L)
+}
