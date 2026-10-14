@@ -101,7 +101,8 @@ def check(root):
 
 
 def check_xml(manifest, directory):
-    expected = {(entry['class'], method) for entry in manifest for method in entry['tests']}
+    # KMP's jvmTest appends the target to XML method names; source/Gradle selectors do not.
+    expected = {(entry['class'], method + '[jvm]') for entry in manifest for method in entry['tests']}
     rows = []
     for path in sorted(directory.glob('TEST-*.xml')):
         tree = ET.parse(path)

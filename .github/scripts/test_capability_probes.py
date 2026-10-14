@@ -31,7 +31,7 @@ class CapabilityProbePolicyTest(unittest.TestCase):
         self.xml_dir = self.root / 'kuilt-core/build/test-results/jvmTest'
         self.xml_dir.mkdir(parents=True)
 
-    def xml(self, body='', name='works', classname='example.ExampleCapabilityConcurrencyTest'):
+    def xml(self, body='', name='works[jvm]', classname='example.ExampleCapabilityConcurrencyTest'):
         return f'<testcase classname="{classname}" name="{name}">{body}</testcase>'
 
     def write_xml(self, rows=None, attributes=''):
@@ -95,7 +95,7 @@ class CapabilityProbePolicyTest(unittest.TestCase):
         policy.check(self.root)
 
     def test_missing_unexpected_duplicate_and_renamed_xml_rows(self):
-        for rows in ('', self.xml(name='renamed'), self.xml() * 2,
+        for rows in ('', self.xml(name='renamed[jvm]'), self.xml(name='works'), self.xml() * 2,
                      self.xml() + self.xml(classname='example.UnexpectedConcurrencyTest')):
             with self.subTest(rows=rows):
                 self.write_xml(rows)
