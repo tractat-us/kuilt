@@ -18,6 +18,9 @@ import kotlin.js.JsAny
  * not the `put` request's `onsuccess`.  A crash before `complete` does
  * **not** guarantee the write survived; a crash after `complete` does.
  *
+ * Cancelling [write] abandons the await; it does not abort the IndexedDB transaction.
+ * The transaction may complete after the caller observes cancellation.
+ *
  * **Usage:** call [IndexedDbDurableStore.open] to obtain a ready-to-use
  * instance.  The returned store has already opened the underlying IDB
  * database and is ready for reads and writes.  Call [close] when done.

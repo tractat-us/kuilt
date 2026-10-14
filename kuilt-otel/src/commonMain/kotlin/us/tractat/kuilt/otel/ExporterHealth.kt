@@ -24,9 +24,9 @@ package us.tractat.kuilt.otel
  * There is no `lastSuccessAt`/`deadSince` field. Time is an injected dependency
  * in this repo and an exporter holds no `Clock`; adding one to carry a
  * diagnostic field would put a wall-clock read on the export hot path. Counters
- * are sufficient — `accepted == 0` with `failed > 0` *is* "dead since process
- * start", and an observer that needs wall-clock timing can stamp its own
- * observations of the flow.
+ * identify missing acknowledgements — `accepted == 0` with `failed > 0` means no
+ * export has acknowledged a newly admitted record. Failed writes may nevertheless
+ * have landed. An observer that needs wall-clock timing can stamp its own observations.
  *
  * @property accepted Log records **durably taken** by [WarpLogRecordExporter.export],
  *   cumulative. Counts records, not calls and not store writes: one batched export of
@@ -81,8 +81,9 @@ public data class ExporterHealth(
     public val refused: Long = 0L,
 ) {
     /**
-     * Whether this exporter has never once written durably yet has failed at
-     * least once — the signature of the silent death in #1860.
+     * Whether no newly admitted record has been acknowledged and a write or recovery failed.
+     * This is an alarm signal, not proof that no bytes reached storage: failed writes may land,
+     * and successful merges do not increase [accepted].
      */
     public val isDead: Boolean get() = accepted == 0L && (failed > 0L || recoveryFailed)
 }

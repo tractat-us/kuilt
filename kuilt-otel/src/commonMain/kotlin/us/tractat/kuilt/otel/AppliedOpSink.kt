@@ -45,9 +45,9 @@ import us.tractat.kuilt.crdt.RgaOp
  * ### Two contract points a consumer must be able to rely on
  *
  * - **Publication precedes the durable write.** The exporter publishes as soon as it has applied
- *   the operations, which is before its own store write returns. So a failed write leaves a sink
- *   holding a record the store does not — a *superset*, which for an archive is the right way
- *   round and is pinned by a test rather than left to chance.
+ *   the operations, which is before its own store write returns. If the write never lands, a sink
+ *   can hold a record the store does not. A failed or cancelled write can also land, leaving both
+ *   with the record; sink receipt alone says nothing about the exporter's durability.
  * - **Throwing does not fail the export.** A sink that throws is logged and otherwise ignored. It
  *   is a side channel; the exporter's contract to its caller does not change because a listener
  *   had a bad day.
