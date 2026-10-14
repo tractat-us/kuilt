@@ -46,10 +46,12 @@ public interface OtlpEdge {
      * owning span's OTLP `Span.links`. Defaults to empty so a link-unaware caller — or
      * a span with no links — is unaffected.
      *
-     * The edge must apply spans idempotently (OTLP collectors already guarantee this:
-     * duplicate spans are deduplicated by span-id). [WarpOtlpBridge] only sends spans
-     * that [digest] says the edge does not have, but idempotency at the edge is the
-     * structural backstop that makes a resend under a retry truly harmless.
+     * The edge must apply spans idempotently by span id. [WarpOtlpBridge] filters
+     * ids already in [digest]; a lost digest or failed acknowledgement may cause
+     * another send, so the backend must provide that delivery deduplication.
+     * This requirement does not deduplicate the local span buffer: an unstamped
+     * export retried after an indeterminate write can leave distinct stamped values
+     * with the same id (see [SpanRecord]).
      *
      * [spans] is non-empty when called by the bridge (an empty delta is never sent).
      *
@@ -65,8 +67,9 @@ public interface OtlpEdge {
     public suspend fun logDigest(): LogDigest = LogDigest(emptySet())
 
     /**
-     * Push a batch of log records to the edge. Deduplicated at the collector by
-     * record id; [WarpOtlpBridge] only sends records absent from [logDigest].
+     * Push a batch of log records to the edge. Delivery deduplication relies on the
+     * collector applying records idempotently by record id; [WarpOtlpBridge] only
+     * sends records absent from [logDigest].
      */
     public suspend fun sendLogs(logs: Set<LogRecord>) {}
 
@@ -95,9 +98,10 @@ public interface OtlpEdge {
  * OTLP/HTTP is **write-only** — a collector exposes no "what do you already have"
  * read-back. So the digest is **not** the collector's holdings; it is what *this*
  * producer has already successfully POSTed to *this* endpoint, persisted locally by
- * the edge. The collector deduplicates re-sent spans by span id (OTLP's own
- * guarantee), so a lost or stale producer-local digest costs bandwidth, never
- * correctness — the worst case is re-POSTing a span the collector already deduped.
+ * the edge. A lost or stale digest can cause re-POSTs; handling those without
+ * duplicate delivery relies on the edge's idempotency requirement in [OtlpEdge.send].
+ * This id-based filter does not repair distinct stamped values already in the local
+ * ORSet after an indeterminate export write and retry.
  *
  * The retention bound is therefore on the producer's own sent-set (choose a cap that
  * exceeds the device's realistic offline window), not on the collector's holdings.
