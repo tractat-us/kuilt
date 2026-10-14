@@ -62,7 +62,10 @@ class PumpInProcessSurvivalTest {
                 error(BOOM)
             }.pumpIn(
                 scope,
-                onFailure = { half, thrown -> reported.complete(half to thrown) },
+                onFailure = { half, thrown ->
+                    reported.complete(half to thrown)
+                    PumpVerdict.CONTINUE
+                },
                 name = "process-survival-probe",
             ) { /* no-op */ }
 

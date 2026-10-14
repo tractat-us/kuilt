@@ -77,5 +77,8 @@ class CoreSamplesRunTest {
     fun pumpInHolds(): TestResult = samplePumpIn()
 
     @Test
+    fun pumpInStopHolds(): TestResult = samplePumpInStop()
+
+    @Test
     fun seamStateGateHolds(): TestResult = sampleSeamStateGate()
 }

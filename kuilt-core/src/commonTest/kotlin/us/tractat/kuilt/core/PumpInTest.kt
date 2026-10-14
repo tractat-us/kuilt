@@ -390,8 +390,10 @@ class PumpInTest {
                 CoroutineExceptionHandler { _, thrown -> unhandled += thrown },
         )
 
-        fun record(phase: PumpFailure, failure: Throwable) {
+        /** Record the failure and answer [PumpVerdict.CONTINUE] — every test here pins a pump that goes on. */
+        fun record(phase: PumpFailure, failure: Throwable): PumpVerdict {
             failures += phase to failure
+            return PumpVerdict.CONTINUE
         }
 
         fun phases(): List<PumpFailure> = failures.map { it.first }
