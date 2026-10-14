@@ -49,7 +49,9 @@ class WebSocketSeamCapabilityTest {
             val observer = FakeConnectivityObserver()
             val serverLoom = KtorServerLoom(application, serverPath)
             val clientLoom =
-                KtorClientLoom(createClient { install(WebSockets) }, connectivity = observer)
+                us.tractat.kuilt.websocket.samples.websocketWithConnectivity(
+                    createClient { install(WebSockets) }, observer,
+                )
 
             val (_, clientSeam) = connectPair(serverLoom, clientLoom)
 

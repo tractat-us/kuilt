@@ -61,7 +61,8 @@ import us.tractat.kuilt.core.freshPeerId
  * @param connectivity Live device-reachability observer driving every woven [Seam]'s
  *   [Seam.capability] (#1725). Defaults to [UnobservedConnectivity] — the identity element, under
  *   which a seam reports the honest [FabricAvailability.Unknown] floor exactly as before. Supply
- *   `androidConnectivityObserver(context)` on Android or `browserConnectivityObserver()` on wasmJs;
+ *   `appleConnectivityObserver()` on Apple, `androidConnectivityObserver(context)` on Android,
+ *   or `browserConnectivityObserver()` on wasmJs;
  *   the desktop JVM has no portable observer and is meant to be left unwired (see
  *   [ConnectivityObserver]).
  * @param policy Bounds every woven seam's inbox — capacity and overflow strategy. Defaults to

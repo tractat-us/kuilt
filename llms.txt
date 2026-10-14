@@ -157,7 +157,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 
 ## Modules: Fabrics & discovery
 
-- [kuilt-websocket](https://tractat-us.github.io/kuilt/api/kuilt-websocket/index.html): Ktor WebSocket fabric for kuilt.
+- [kuilt-websocket](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-websocket/module.md): Ktor WebSocket fabric for kuilt.
 - [kuilt-tcp](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-tcp/module.md): Raw TCP fabric for kuilt, on JVM and Android.
 - [kuilt-nw](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-nw/module.md): Apple Network.framework peer-to-peer fabric for kuilt: nearby devices find each other and connect directly, with no server.
 - [kuilt-multipeer](https://tractat-us.github.io/kuilt/api/kuilt-multipeer/index.html): Apple Multipeer Connectivity fabric for kuilt. Superseded by kuilt-nw.
