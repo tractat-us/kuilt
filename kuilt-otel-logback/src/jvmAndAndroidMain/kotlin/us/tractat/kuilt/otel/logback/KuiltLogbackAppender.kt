@@ -11,6 +11,7 @@ import us.tractat.kuilt.otel.logging.EXCEPTION_MESSAGE_ATTRIBUTE
 import us.tractat.kuilt.otel.logging.LogCapture
 import us.tractat.kuilt.otel.logging.LogLevel
 import us.tractat.kuilt.otel.logging.NormalizedLogEvent
+import us.tractat.kuilt.otel.logging.ResolvedLogEvent
 
 /**
  * A logback [AppenderBase] that captures raw-SLF4J output into a kuilt
@@ -55,7 +56,7 @@ public class KuiltLogbackAppender(
     private val capture: LogCapture,
     scope: CoroutineScope,
 ) : AppenderBase<ILoggingEvent>() {
-    private val events = Channel<NormalizedLogEvent>(Channel.UNLIMITED)
+    private val events = Channel<ResolvedLogEvent>(Channel.UNLIMITED)
 
     init {
         scope.launch {
