@@ -135,7 +135,7 @@ see that module's documentation for the durability contract and the four backend
   `WarpLogRecordExporter` persists its op-log in segments of `DEFAULT_LOG_SEGMENT_OPS`
   operations, so one export rewrites one segment rather than the whole log; it then
   periodically drops everything outside the retained window from memory and deletes any
-  sealed segment the resulting suppression state fully covers. A device fed only by its own
+  sealed segment that durably written suppression state fully covers. A device fed only by its own
   `WarpLogRecordExporter.export` calls therefore holds O(`DEFAULT_MAX_LOG_RECORDS`) ops and
   a flat number of keys however long it runs, and startup reads that many keys rather than
   one per segment ever written (#2127).
