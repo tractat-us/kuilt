@@ -463,7 +463,8 @@ public class WarpLogRecordExporter(
     ) {
         fun plus(other: Suppression): Suppression = Suppression(
             floor.ceilWith(other.floor),
-            if (other.compacted.isEmpty()) compacted else compacted + other.compacted,
+            // Rewriting an active segment must not copy the entire durable id history again.
+            if (compacted.containsAll(other.compacted)) compacted else compacted + other.compacted,
         )
 
         companion object {
@@ -1827,9 +1828,13 @@ public class WarpLogRecordExporter(
         val adoptedNumbers = adopting?.let { listOf(it.number) } ?: emptyList()
         // This is a projection, not a durable-state update. Every write supplying this coverage
         // precedes the retirement action; storeTurn stops if any of them is unacknowledged.
-        val coverage = durableSuppression.plus(activeWrite.suppression)
-            .plus(adopting?.suppression ?: Suppression())
-        val retirement = if (retire) retireSupersededSegments(adoptedNumbers, coverage) else PendingRetirement.NONE
+        val retirement = if (retire) {
+            val coverage = durableSuppression.plus(activeWrite.suppression)
+                .plus(adopting?.suppression ?: Suppression())
+            retireSupersededSegments(adoptedNumbers, coverage)
+        } else {
+            PendingRetirement.NONE
+        }
         actions += retirement.actions
         if (activeOpCount >= segmentOps) actions += rollActiveSegment(retirement.staged, adoptedNumbers)
         return actions
