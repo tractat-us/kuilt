@@ -1,14 +1,17 @@
 package us.tractat.kuilt.multipeer
 
+import com.sun.jna.Pointer
+import java.lang.ref.Reference
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.onSubscription
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.discovery.DiscoveryKind
 import us.tractat.kuilt.core.discovery.PeerDiscoverySource
@@ -17,33 +20,14 @@ import us.tractat.kuilt.core.discovery.PeerDiscoverySource
  * JVM-side `MultipeerServiceBrowser`, backed by [MultipeerNativeLib] and
  * the macOS K/N `libkuilt.dylib`.
  *
- * `discoveries()` returns a cold `Flow` that opens a real MC browse
- * session under the covers, forwards every `foundPeer` event from the
- * dylib, and shuts the session down when the collector cancels. `peerLost`
- * events surface via `departures()` — a [MutableSharedFlow] that the
- * `peerLost` callback feeds while the browse session is active.
+ * Both feeds share one collection-owned MC browse session. The first collector
+ * starts it and the last stops it. Each subscriber is registered before native
+ * callbacks can fire. On non-macOS hosts both feeds remain silent.
  *
- * Non-macOS hosts (Linux/Windows): both flows are empty and never throw —
- * the lobby just shows no MC peers, while still receiving full mDNS
- * results via the parallel mDNS source.
- *
- * **Single-collector constraint:** the underlying dylib supports one active
- * browse session at a time. Do not collect `discoveries()` and `departures()`
- * concurrently from multiple coroutines.
- *
- * **Threading:** [discoveries] applies `.flowOn(Dispatchers.IO)` so that the
- * JNA callback's `trySend` call never inline-resumes the downstream collector
- * on the Darwin GCD thread that fired the callback.
- *
- * Darwin GCD worker threads have a 544 K stack + 16 K guard. The K/N dylib
- * runs its browser-collect coroutine on GCD and then calls the JNA
- * `peerFoundCb` from that GCD thread. With a deep JVM operator chain above
- * the browser, the JVM JNI frames (executed on the GCD stack) overflow the
- * guard page when `trySend` inline-resumes the suspended downstream collector.
- *
- * `.flowOn(IO)` decouples the sender from the downstream receiver by routing
- * collection through a JVM IO thread with a standard 1 MB+ stack, ensuring
- * the collection chain never runs on the GCD thread.
+ * **Threading:** each feed collects its shared flow on `Dispatchers.IO`. A native
+ * callback only enqueues an event; the IO coroutine emits it downstream. This keeps
+ * JVM collectors off the smaller Darwin GCD callback stack, including collectors
+ * using an unconfined dispatcher. Keep the `flow { emitAll(...) }` boundary here.
  */
 public actual class MultipeerServiceBrowser actual constructor(
     private val factory: MultipeerPeerLinkFactory,
@@ -66,80 +50,88 @@ public actual class MultipeerServiceBrowser actual constructor(
 
     public actual override val kind: DiscoveryKind = DiscoveryKind.Multipeer
 
-    private val departuresFlow: MutableSharedFlow<String> = MutableSharedFlow(replay = 0, extraBufferCapacity = 16)
+    private val lock = ReentrantLock()
+    private var collectors = 0
+    private var session: BrowseSession? = null
+    private val departuresFlow = MutableSharedFlow<String>(extraBufferCapacity = 16)
 
-    /**
-     * Peer keys for peers that have left the network since [discoveries] started
-     * collecting. Only emits while the [discoveries] flow is being collected.
-     *
-     * The key is the dylib's peer handle, which is also
-     * [MultipeerAdvertisement.peerKey] — so a departure names the peer [discoveries] published,
-     * as `PeerDiscoverySource.departures` requires.
-     *
-     * The collection coupling is a **known contract violation, tracked by kuilt #2410**, not a
-     * caveat, and it is the same one the appleMain actual carries: `mc_browser_set_peer_lost_callback` is invoked inside
-     * [discoveries]' `callbackFlow`, so with no `discoveries()` collector there is no browse
-     * session, no peer-lost callback, and nothing this flow could ever emit.
-     * `DiscoverySourceConformanceSuite.departuresEmitsWithNoConcurrentDiscoveriesCollector` fails
-     * against this class; `MultipeerDiscoverySourceConformanceTest` pins the failure so a fix flips
-     * it loudly. It matters because `discoveryRoster` merges the two feeds and `merge` subscribes
-     * to inner flows in separately-launched coroutines, so even a consumer collecting *both* can
-     * attach here first and lose every departure until the arrival feed opens its session. Fixing
-     * it means giving the browse session a lifetime of its own, ref-counted across both feeds —
-     * the dylib permits one browse session at a time, so `departures()` cannot simply open a
-     * second.
-     */
-    public actual override fun departures(): Flow<String> = departuresFlow.asSharedFlow()
+    /** Emits the dylib peer handle, also used by [MultipeerAdvertisement.peerKey]. */
+    public actual override fun departures(): Flow<String> = sessionFeed(departuresFlow)
 
-    public actual override fun discoveries(): Flow<Tag> =
-        flow {
-            emitAll(
-                callbackFlow {
-                    val lib = loadLib()
-                    if (lib == null) {
-                        // Non-macOS hosts: silently emit nothing.
-                        awaitClose { /* no-op */ }
-                        return@callbackFlow
-                    }
-                    val runtimeHandle = factory.requireRuntimeHandle()
+    public actual override fun discoveries(): Flow<Tag> = flow {
+        lateinit var generation: MultipeerBrowseGeneration
+        emitAll(sessionFeed(factory.discoveryUpdates.events) {
+            // A subscriber may have reserved replay while waiting for teardown's lock.
+            generation = factory.discoveryUpdates.generation
+        }.advertisements { generation })
+    }
 
-                    // JNA requires a strong JVM reference to both callback objects for
-                    // the lifetime of the browse session, otherwise the trampoline can
-                    // be GC'd and the K/N side will SIGSEGV next time it fires.
-                    val foundCallback =
-                        MultipeerNativeLib.PeerFoundCallback { handle, displayName ->
-                            val ad =
-                                MultipeerAdvertisement(
-                                    handle = handle,
-                                    sessionName = displayName,
-                                    serviceType = factory.serviceType,
-                                )
-                            factory.setVisiblePeer(handle, ad)
-                            trySend(ad)
-                        }
-                    val lostCallback =
-                        MultipeerNativeLib.PeerLostCallback { handle ->
-                            factory.setVisiblePeer(handle, advertisement = null)
-                            departuresFlow.tryEmit(handle)
-                        }
-                    val browser = lib.mc_browser_start(runtimeHandle, foundCallback)
-                    if (browser == null) {
-                        close(IllegalStateException("mc_browser_start returned null on macOS"))
-                        return@callbackFlow
-                    }
-                    lib.mc_browser_set_peer_lost_callback(browser, lostCallback)
-
-                    awaitClose {
-                        // The callback strong-refs die with this lambda's closure
-                        // capture because `foundCallback` / `lostCallback` are defined
-                        // inside `callbackFlow {}` — keeping the references until the
-                        // flow completes.
-                        lib.mc_browser_stop(browser)
-                        // mc_browser_stop doesn't fire peerLost for in-range peers;
-                        // drop the snapshot so the next collection starts clean.
+    private fun <T> sessionFeed(
+        events: SharedFlow<T>,
+        onAcquired: () -> Unit = {},
+    ): Flow<T> = flow {
+        var acquired = false
+        try {
+            emitAll(events.onSubscription {
+                lock.withLock {
+                    if (collectors == 0) session = startSession()
+                    collectors++
+                    acquired = true
+                    onAcquired()
+                }
+            })
+        } finally {
+            if (acquired) lock.withLock {
+                if (--collectors == 0) {
+                    val stopped = session
+                    session = null
+                    try {
+                        stopped?.let { it.lib.mc_browser_stop(it.handle) }
+                    } finally {
+                        // JNA retains only weak callback references. Keep both trampolines
+                        // alive through the native stop call, including exceptional teardown.
+                        Reference.reachabilityFence(stopped)
                         factory.clearVisiblePeers()
                     }
-                },
-            )
-        }.flowOn(Dispatchers.IO)
+                }
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    // Called with lock held; callbacks only publish to thread-safe flows and the factory snapshot,
+    // never take this lock. A synchronous callback cannot deadlock session startup or shutdown.
+    private fun startSession(): BrowseSession? {
+        val lib = loadLib() ?: return null
+        val found = MultipeerNativeLib.PeerFoundCallback { handle, displayName ->
+            val ad = MultipeerAdvertisement(handle, displayName, factory.serviceType)
+            factory.setVisiblePeer(handle, ad)
+        }
+        val lost = MultipeerNativeLib.PeerLostCallback { handle ->
+            factory.setVisiblePeer(handle, advertisement = null)
+            departuresFlow.tryEmit(handle)
+        }
+        val handle = checkNotNull(lib.mc_browser_start(factory.requireRuntimeHandle(), found)) {
+            "mc_browser_start returned null on macOS"
+        }
+        val started = BrowseSession(lib, handle, found, lost)
+        try {
+            lib.mc_browser_set_peer_lost_callback(handle, lost)
+        } catch (failure: Throwable) {
+            try {
+                lib.mc_browser_stop(handle)
+            } finally {
+                Reference.reachabilityFence(started)
+                factory.clearVisiblePeers()
+            }
+            throw failure
+        }
+        return started
+    }
+
+    private class BrowseSession(
+        val lib: MultipeerNativeLib,
+        val handle: Pointer,
+        val found: MultipeerNativeLib.PeerFoundCallback,
+        val lost: MultipeerNativeLib.PeerLostCallback,
+    )
 }
