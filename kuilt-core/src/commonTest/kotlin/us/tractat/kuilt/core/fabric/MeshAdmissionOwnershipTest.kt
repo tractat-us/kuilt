@@ -6,6 +6,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -22,6 +23,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.seconds
 
 class MeshAdmissionOwnershipTest {
     @Test
@@ -61,6 +63,83 @@ class MeshAdmissionOwnershipTest {
 
     @Test
     fun cancellingTheKeepArmKeepsTheLoserDraining() = cancelDuringDrain(replace = false)
+
+    @Test
+    fun bufferedOverflowWorkCannotExtendTheAdmissionTimeout() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        var admissionReturned = false
+        var admissionActiveDuringOverflow = false
+        val overflows = mutableListOf<MeshDisplacement.OrderingHoldOverflowed>()
+        val drained = mutableListOf<MeshDisplacement.Drained>()
+        val mesh = hubMesh(
+            PeerId("hub"), emptyList(), StandardTestDispatcher(testScheduler), Random(0),
+            orderingHoldCapacity = 1, drainBound = 1.hours,
+            onDisplacement = {
+                when (it) {
+                    is MeshDisplacement.OrderingHoldOverflowed -> {
+                        overflows += it
+                        admissionActiveDuringOverflow = !admissionReturned
+                        // Model a deadline firing on another thread while synchronous logging runs.
+                        // No wall-clock sleep, blocked dispatcher, or CPU starvation is involved.
+                        testScheduler.advanceTimeBy(2.seconds)
+                    }
+                    is MeshDisplacement.Drained -> drained += it
+                }
+            },
+        )
+        val (rawA, remoteA) = connectionPair()
+        val (rawB, remoteB) = connectionPair()
+        val a = CloseCountingConnection(rawA)
+        val b = CloseCountingConnection(rawB)
+        val received = mutableListOf<Swatch>()
+        backgroundScope.launch { mesh.incoming.collect { received += it } }
+        backgroundScope.launch { mesh.addLink(a) }
+        remoteA.send(MeshWire.encodeHello(PeerId("peer"), meshNonce(0xFF.toByte())))
+        runCurrent()
+        val pump = backgroundScope.acceptPump(
+            InMemoryConnectionSource().also { it.offer(b) }, 10.seconds,
+        ) {
+            mesh.addLink(it)
+            admissionReturned = true
+        }
+        runCurrent()
+        advanceTimeBy(9.seconds)
+        remoteB.send(MeshWire.encodeHello(PeerId("peer"), meshNonce(0)))
+        remoteB.send(MeshWire.encodeData(byteArrayOf(1)))
+        remoteB.send(MeshWire.encodeData(byteArrayOf(2)))
+        runCurrent()
+        runCurrent() // The synchronous callback advanced virtual time while this turn ran.
+        try {
+            assertAll(
+                { assertEquals(1, overflows.size, "rig: buffered winner frames overflowed the drain hold") },
+                { assertEquals(11_000, testScheduler.currentTime, "rig: callback crossed the admission deadline") },
+                { assertFalse(admissionActiveDuringOverflow, "admission must finish before buffered overflow work") },
+                { assertEquals(0, b.closeCalls, "the handshake timer must not close the adopted mesh winner") },
+                { assertEquals(setOf(PeerId("hub"), PeerId("peer")), mesh.peers.value) },
+                { assertEquals(listOf(1, 2), received.map { it.toByteArray().single().toInt() }) },
+            )
+            remoteA.send(MeshWire.encodeGoodbye())
+            runCurrent()
+            remoteB.send(MeshWire.encodeData(byteArrayOf(3)))
+            runCurrent()
+            assertAll(
+                { assertEquals(listOf(1, 2, 3), received.map { it.toByteArray().single().toInt() }, "winner keeps reading") },
+                { assertEquals(MeshDisplacement.Arm.Replace, drained.singleOrNull()?.arm) },
+                { assertEquals(MeshDisplacement.Outcome.Goodbye, drained.singleOrNull()?.outcome) },
+                { assertEquals(1, a.closeCalls, "the displaced connection finishes draining") },
+                { assertEquals(0, b.closeCalls) },
+            )
+        } finally {
+            pump.cancelAndJoin()
+            mesh.close()
+            remoteA.close()
+            remoteB.close()
+        }
+        runCurrent()
+        assertAll(
+            { assertTrue(a.collectionEnded.isCompleted && b.collectionEnded.isCompleted, "teardown stops both wrappers") },
+            { assertTrue(b.closeCalls > 0, "teardown closes the adopted winner") },
+        )
+    }
 
     private fun cancelDuringDrain(replace: Boolean) = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val dispatcher = StandardTestDispatcher(testScheduler)
