@@ -899,8 +899,8 @@ private class MeshSeam(
             if (outcome == Admission.Refused) return // the guard closes the unadopted wrapper.
             unowned = null // Both a live winner and a registered drain are seam-owned now.
 
-            // No caller suspension after adoption: even an accept-pump timeout must not close an
-            // adopted conn. Enter startup inline to preserve hold-before-reader ordering, then let
+            // No caller suspension after adoption: an accept-pump timeout during that wait would
+            // close the adopted conn. Enter startup inline to preserve hold-before-reader ordering, then let
             // the seam's scope finish a backpressured hold independently of the admitting caller.
             // If the seam closes before this starts, its teardown already owns every registered conn.
             scope.launch(start = CoroutineStart.UNDISPATCHED) {
