@@ -11,11 +11,50 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class MultipeerSharedBrowseTest {
+    @Test
+    fun collectorQueuedDuringTeardownDoesNotReplayTheStoppedSession() = runBlocking {
+        val stopEntered = CountDownLatch(1)
+        val allowStop = CountDownLatch(1)
+        val lib = BrowseLib(
+            arrivalForStart = { if (it == 1) "old" else "current" },
+            beforeStop = {
+                stopEntered.countDown()
+                assertTrue(allowStop.await(5, TimeUnit.SECONDS), "test must release teardown")
+            },
+        )
+        val browser = lib.browser()
+        // Observe the actual lifecycle lock rather than guessing when onSubscription runs.
+        val lockField = browser.javaClass.getDeclaredField("lock").apply { isAccessible = true }
+        val lifecycleLock = lockField.get(browser) as ReentrantLock
+        val ready = CountDownLatch(1)
+        val first = launch(Dispatchers.Default) { browser.departures().collect { ready.countDown() } }
+        val seen = LinkedBlockingQueue<String>()
+        var second: kotlinx.coroutines.Job? = null
+        try {
+            assertTrue(ready.await(5, TimeUnit.SECONDS), "first session must start")
+            first.cancel()
+            assertTrue(stopEntered.await(5, TimeUnit.SECONDS), "last collector must enter teardown")
+            second = launch(Dispatchers.Default) { browser.discoveries().collect { seen.add(it.peerKey) } }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (!lifecycleLock.hasQueuedThreads() && System.nanoTime() < deadline) Thread.sleep(1)
+            assertTrue(lifecycleLock.hasQueuedThreads(), "new subscriber must queue behind teardown after reserving replay")
+            allowStop.countDown()
+            first.join()
+            assertEquals("current", seen.poll(5, TimeUnit.SECONDS), "the restarted collector must not receive the stopped session's peer")
+            assertEquals(2, lib.starts.get(), "the collector must own a newly started session")
+        } finally {
+            allowStop.countDown()
+            first.cancelAndJoin()
+            second?.cancelAndJoin()
+        }
+    }
+
     @Test
     fun lateDiscoveriesReceiveCurrentPeersWithoutAnotherCallback() = runBlocking {
         val lib = BrowseLib()
@@ -113,7 +152,10 @@ class MultipeerSharedBrowseTest {
     }
 
     /** Callbacks fire inline during registration, before the native start call returns. */
-    private class BrowseLib : MultipeerNativeLib by FakeMultipeerNativeLib() {
+    private class BrowseLib(
+        private val arrivalForStart: (Int) -> String = { "arriving" },
+        private val beforeStop: () -> Unit = {},
+    ) : MultipeerNativeLib by FakeMultipeerNativeLib() {
         val starts = AtomicInteger()
         val stops = AtomicInteger()
         val lostFirings = AtomicInteger()
@@ -126,9 +168,9 @@ class MultipeerSharedBrowseTest {
         )
 
         override fun mc_browser_start(runtime: Pointer?, peerFoundCb: MultipeerNativeLib.PeerFoundCallback): Pointer {
-            starts.incrementAndGet()
+            val arrival = arrivalForStart(starts.incrementAndGet())
             found.set(peerFoundCb)
-            peerFoundCb.invoke("arriving", "Arrival")
+            peerFoundCb.invoke(arrival, "Arrival")
             return Pointer(2)
         }
 
@@ -139,6 +181,7 @@ class MultipeerSharedBrowseTest {
         }
 
         override fun mc_browser_stop(browser: Pointer?) {
+            beforeStop()
             stops.incrementAndGet()
             found.set(null)
             lost.set(null)

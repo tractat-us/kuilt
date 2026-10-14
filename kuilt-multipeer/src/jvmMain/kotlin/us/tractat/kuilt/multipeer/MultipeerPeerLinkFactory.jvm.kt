@@ -112,7 +112,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      */
     internal fun clearVisiblePeers() = discoveryLock.withLock {
         mutableVisiblePeers.value = emptySet()
-        discoveryUpdates.publish(emptySet())
+        discoveryUpdates.endSession()
     }
 
     /**
