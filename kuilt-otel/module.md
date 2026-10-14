@@ -62,6 +62,22 @@ val logResult = telemetry.logs.export(logRecord)
 check(logResult == ExportResult.Success) { "log export failed: $logResult" }
 ```
 
+## Is the device saving anything?
+
+Read `WarpTelemetry.health` to see whether each buffer is making progress. Logs keep
+record counts (`ExporterHealth`); spans and metrics expose `PersistenceHealth` through
+observable `health` flows. Its `acknowledged` counter advances once a complete local
+persistence turn succeeds, even if that turn needs several store calls. Reads and calls
+that do no store IO do not advance it.
+
+`failed` counts failed turns. `outstandingFailures` stays nonzero until the same work
+succeeds: a healthy sum write cannot hide a failing histogram, and a successful metric
+clear cannot prove writes work. A failed startup read or decode sets `recoveryFailed`
+for the instance's lifetime; `lastFailure` retains the latest cause after recovery.
+These are local persistence signals, not confirmation of delivery to a backend.
+The combined getter reads each exporter in turn, so it is not an atomic snapshot
+across signals during concurrent activity.
+
 ## When an app suddenly has a lot to say
 
 Saving one log line used to cost a full round of bookkeeping and two writes to the

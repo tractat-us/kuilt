@@ -6,6 +6,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.cbor.Cbor
@@ -86,6 +87,20 @@ public class WarpSpanExporter(
     private val lock = reentrantLock()
     private val ioMutex = Mutex()
     private var spans: ORSet<SpanRecord> = ORSet.empty()
+    private val persistence = PersistenceHealthTracker<StoreKey>()
+    private val spanWork = setOf(STORE_KEY)
+    private val clockAndSpanWork = if (causalClock == null) spanWork else spanWork + WarpCausalClock.STORE_KEY
+
+    /**
+     * Completed persistence turns and unresolved failures, independent of outage logging.
+     * Includes a configured clock's write as part of export/clear, not a second acknowledgement.
+     * Recovery covers the span buffer; [WarpTelemetry.recover] also reports its clock's recovery.
+     *
+     * @sample us.tractat.kuilt.otel.samplePersistenceHealth
+     */
+    public val health: StateFlow<PersistenceHealth> = persistence.health
+
+    internal fun recoveryFailed(cause: Throwable): Unit = persistence.recoveryFailed(cause)
 
     /**
      * Whether a durable-write outage is currently **open** — i.e. a refused store write has already
@@ -174,12 +189,14 @@ public class WarpSpanExporter(
      */
     public suspend fun recover() {
         val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.spans: store read failed, starting fresh" }
             return
         } ?: return
         val recovered = runCatchingCancellable<ORSet<SpanRecord>> {
             cbor.decodeFromByteArray(spanSerializer, bytes)
         }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.warn(cause) { "otel.spans: corrupt store entry, starting fresh" }
             return
         }
@@ -253,10 +270,12 @@ public class WarpSpanExporter(
                 store.write(STORE_KEY, encoded)
             }.fold(
                 onSuccess = {
+                    persistence.acknowledged(clockAndSpanWork)
                     durableWriteSucceeded()
                     ExportResult.Success
                 },
                 onFailure = { cause ->
+                    persistence.failed(clockAndSpanWork, cause)
                     if (minted) {
                         // Undo the in-memory add so a retry produces exactly one stamped
                         // copy. remove() targets this span's unique dot value, so it never
@@ -304,10 +323,12 @@ public class WarpSpanExporter(
                 store.write(STORE_KEY, encoded)
             }.fold(
                 onSuccess = {
+                    persistence.acknowledged(spanWork)
                     durableWriteSucceeded()
                     ExportResult.Success
                 },
                 onFailure = { cause ->
+                    persistence.failed(spanWork, cause)
                     durableWriteFailed(cause) {
                         logger.error(it) { "WarpSpanExporter: durable write failed during merge" }
                     }
@@ -376,10 +397,12 @@ public class WarpSpanExporter(
             store.write(STORE_KEY, encoded)
         }.fold(
             onSuccess = {
+                persistence.acknowledged(clockAndSpanWork)
                 durableWriteSucceeded()
                 ExportResult.Success
             },
             onFailure = { cause ->
+                persistence.failed(clockAndSpanWork, cause)
                 durableWriteFailed(cause) {
                     logger.error(it) { "WarpSpanExporter: durable write failed during clear" }
                 }

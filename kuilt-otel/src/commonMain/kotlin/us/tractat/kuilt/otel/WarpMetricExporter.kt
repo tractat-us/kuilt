@@ -6,6 +6,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
@@ -149,6 +150,15 @@ public class WarpMetricExporter(
     // across a `writeMutex` acquisition — so the two cannot deadlock.
     private val lock = reentrantLock()
     private val writeMutex = Mutex()
+    private val persistence = PersistenceHealthTracker<StoreKey>()
+
+    /**
+     * Completed persistence turns and unresolved failures, tracked separately for each stored
+     * kind and for clear's delete sequence. Successful reads do not acknowledge writes.
+     *
+     * @sample us.tractat.kuilt.otel.samplePersistenceHealth
+     */
+    public val health: StateFlow<PersistenceHealth> = persistence.health
 
     // LinkedHashMap preserves insertion order, which drives the DROP_OLDEST/DROP_NEWEST
     // eviction policies. The *insertion* of a new key records its age; we don't update
@@ -237,6 +247,8 @@ public class WarpMetricExporter(
     private val durableWriteOutage = MutableStateFlow<Set<StoreKey>>(emptySet())
 
     private companion object {
+        // Bookkeeping identity only; never passed to the store.
+        private val CLEAR_WORK = setOf(StoreKey("otel.metrics.clear"))
         private val SUM_STORE_KEY = StoreKey("otel.metrics.sums")
         private val SUM_DOUBLE_STORE_KEY = StoreKey("otel.metrics.sums.double")
         private val GAUGE_STORE_KEY = StoreKey("otel.metrics.gauges")
@@ -279,12 +291,14 @@ public class WarpMetricExporter(
 
     private suspend fun recoverHistograms() {
         val bytes = runCatchingCancellable { store.read(HISTOGRAM_STORE_KEY) }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.metrics.histograms: store read failed, starting fresh" }
             return
         } ?: return
         val recovered = runCatchingCancellable<Map<MetricKey, DDSketch>> {
             cbor.decodeFromByteArray(histogramsSerializer, bytes)
         }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.warn(cause) { "otel.metrics.histograms: corrupt store entry, starting fresh" }
             return
         }
@@ -293,12 +307,14 @@ public class WarpMetricExporter(
 
     private suspend fun recoverSumsDouble() {
         val bytes = runCatchingCancellable { store.read(SUM_DOUBLE_STORE_KEY) }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.metrics.sums.double: store read failed, starting fresh" }
             return
         } ?: return
         val recovered = runCatchingCancellable<Map<MetricKey, GCounterDouble>> {
             cbor.decodeFromByteArray(sumsDoubleSerializer, bytes)
         }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.warn(cause) { "otel.metrics.sums.double: corrupt store entry, starting fresh" }
             return
         }
@@ -307,12 +323,14 @@ public class WarpMetricExporter(
 
     private suspend fun recoverSums() {
         val bytes = runCatchingCancellable { store.read(SUM_STORE_KEY) }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.metrics.sums: store read failed, starting fresh" }
             return
         } ?: return
         val recovered = runCatchingCancellable<Map<MetricKey, GCounter>> {
             cbor.decodeFromByteArray(sumsSerializer, bytes)
         }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.warn(cause) { "otel.metrics.sums: corrupt store entry, starting fresh" }
             return
         }
@@ -321,12 +339,14 @@ public class WarpMetricExporter(
 
     private suspend fun recoverGauges() {
         val bytes = runCatchingCancellable { store.read(GAUGE_STORE_KEY) }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.metrics.gauges: store read failed, starting fresh" }
             return
         } ?: return
         val recovered = runCatchingCancellable<Map<MetricKey, LWWRegister<Double>>> {
             cbor.decodeFromByteArray(gaugesSerializer, bytes)
         }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.warn(cause) { "otel.metrics.gauges: corrupt store entry, starting fresh" }
             return
         }
@@ -335,12 +355,14 @@ public class WarpMetricExporter(
 
     private suspend fun recoverCardinalities() {
         val bytes = runCatchingCancellable { store.read(CARDINALITY_STORE_KEY) }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.metrics.cardinalities: store read failed, starting fresh" }
             return
         } ?: return
         val recovered = runCatchingCancellable<Map<MetricKey, HyperLogLog>> {
             cbor.decodeFromByteArray(cardinalitiesSerializer, bytes)
         }.getOrElse { cause ->
+            persistence.recoveryFailed(cause)
             logger.warn(cause) { "otel.metrics.cardinalities: corrupt store entry, starting fresh" }
             return
         }
@@ -391,8 +413,12 @@ public class WarpMetricExporter(
             store.delete(CARDINALITY_STORE_KEY)
             store.delete(HISTOGRAM_STORE_KEY)
         }.fold(
-            onSuccess = { MetricExportResult.Success },
+            onSuccess = {
+                persistence.acknowledged(CLEAR_WORK)
+                MetricExportResult.Success
+            },
             onFailure = { cause ->
+                persistence.failed(CLEAR_WORK, cause)
                 logger.error(cause) { "otel.metrics: durable delete failed during clear" }
                 MetricExportResult.Failure(cause)
             },
@@ -731,12 +757,14 @@ public class WarpMetricExporter(
         runCatchingCancellable { store.write(storeKey, encoded) }
             .fold(
                 onSuccess = {
+                    persistence.acknowledged(setOf(storeKey))
                     // The store took THIS key back. It says nothing about the others, so only this
                     // one leaves the set; the outage stays open while any key is still refused.
                     durableWriteOutage.update { it - storeKey }
                     MetricExportResult.Success
                 },
                 onFailure = { cause ->
+                    persistence.failed(setOf(storeKey), cause)
                     // One CAS decides and records: the caller that finds the set empty is the one
                     // that opened the outage, and it is the only one that reports.
                     val before = durableWriteOutage.getAndUpdate { it + storeKey }
