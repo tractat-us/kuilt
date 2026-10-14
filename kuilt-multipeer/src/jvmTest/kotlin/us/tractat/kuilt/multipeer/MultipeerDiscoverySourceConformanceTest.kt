@@ -50,16 +50,6 @@ private const val ARRIVING_DISPLAY_NAME = "conformance-peer"
 /** How long a rig waits, in **real** time, for production's browse session to reach the fake. */
 private const val BROWSE_WAIT_MILLIS = 2_000L
 
-/**
- * The substring the two #2410 pins match on.
- *
- * Carries the refusing class's name, not the bare phrase "no browse session": that phrase is not
- * unique in this repo — `:kuilt-mdns`'s `RegistryBonjourBrowser` raises a differently-caused
- * `IllegalStateException` containing it — so matching the phrase alone would make the pins accept a
- * red they were not written for the moment such a rig came within reach of this classpath.
- */
-private const val NO_SESSION_RED = "ConformanceNativeLib: no browse session"
-
 /** The runtime handle every source in this file is built against. */
 private val RUNTIME_HANDLE = Pointer(0x42L)
 
@@ -79,44 +69,9 @@ private val QUIESCENCE_WINDOW = 2.seconds
 private val SPURIOUS_DEPARTURE_DELAY = 200.milliseconds
 
 /**
- * Binds jvmMain's [MultipeerServiceBrowser] to [DiscoverySourceConformanceSuite] — and records that
- * **two of the four obligations fail**, which is the finding this file exists to make permanent.
- *
- * ## Why the properties are invoked by hand rather than inherited
- *
- * A concrete subclass of [DiscoverySourceConformanceSuite] contributes all four `@Test` methods at
- * once, and two of them red here. `@Ignore` would hide that behind a skip nobody reads; leaving the
- * binding unwritten would leave this backend exactly where the survey that removed
- * `PeerDiscoverySource.departures`' inherited default found it — unchecked. So the suite is
- * subclassed *abstractly* (invisible to test collection, for the reason
- * `DiscoverySourceConformanceSuiteRigTest` records) and every property invoked explicitly: the two
- * that hold are asserted to hold, and the two that do not are asserted to fail **with the message
- * that names the cause**. Fixing the backend therefore reds those two, loudly, rather than passing
- * unnoticed.
- *
- * ## What fails, and why
- *
- * `departures()` is a hot `MutableSharedFlow` fed by the dylib's `peerLost` callback, and that
- * callback is registered inside `discoveries()`' own `callbackFlow`. With no `discoveries()`
- * collector there is no `mc_browser_start`, hence no browse session, hence neither an arrival nor a
- * departure — so **both** obligations that collect `departures()` alone are unreachable:
- *
- *  - [theLoneCollectorObligationFailsBecauseTheBrowseSessionBelongsToDiscoveries] — the headline
- *    one, and the shape `discoveryRoster` actually produces, because `merge` subscribes to the two
- *    feeds in separately-launched coroutines.
- *  - [theArrivalIsNotADepartureObligationCannotEvenStageAnArrival] — collateral: that property
- *    stages an arrival too, and this backend cannot stage one for a lone `departures()` collector.
- *
- * [RefCountedBrowseSource] is the **control**, and it is what makes those two reds a statement
- * about the backend rather than about the harness: a source over this same fake whose one browse
- * session is ref-counted across both feeds passes every obligation. It is also the smallest sketch
- * of the fix — nothing there needs a second concurrent browse session, which the dylib forbids.
- *
- * ## What this harness does not see
- *
- * Everything below the JNA boundary. The fake stands in for `libkuilt.dylib`, so the K/N bridge,
- * the real `MCNearbyServiceBrowser` and the GCD callback threading are untouched — that surface
- * belongs to the real-network path and to [MultipeerBrowserDispatcherTest].
+ * Binds the production browser to the departure contract. The JVM drives fake JNA callbacks;
+ * Apple drives the real browser delegate. Neither proves that the radio emits a departure.
+ * Same-fixture controls below validate the harness independently of production.
  */
 class MultipeerDiscoverySourceConformanceTest {
 
@@ -130,40 +85,14 @@ class MultipeerDiscoverySourceConformanceTest {
         (object : MultipeerJvmSuite() {}).cancellingTheCollectorScopeCompletesDepartures()
     }
 
-    /**
-     * **KNOWN FAILURE — the JVM browser violates `PeerDiscoverySource.departures`. Tracked by kuilt
-     * #2410; delete this pin there.**
-     *
-     * Pinned rather than skipped, so the day somebody gives the browse session a lifetime of its own
-     * this test reds and names the pin to delete. The assertion is on the *shape* of the failure,
-     * not merely that something threw: the red must come from **this file's own fake** refusing to
-     * pretend a peer arrived (see [ConformanceNativeLib.awaitBrowseSession]), because a red for any
-     * other reason would be a harness bug wearing this finding's clothes. Matching the fake's class
-     * prefix and not the bare phrase is what keeps that true — `RegistryBonjourBrowser` in
-     * `:kuilt-mdns` raises a differently-caused failure carrying the same words, and a sibling could
-     * yet do so here.
-     */
     @Test
-    fun theLoneCollectorObligationFailsBecauseTheBrowseSessionBelongsToDiscoveries() {
-        val failure = assertFailsWith<IllegalStateException> {
-            (object : MultipeerJvmSuite() {}).departuresEmitsWithNoConcurrentDiscoveriesCollector()
-        }
-        assertTrue(
-            failure.message.orEmpty().contains(NO_SESSION_RED),
-            "expected the rig to refuse to stage an arrival with no discoveries() collector, got: ${failure.message}",
-        )
+    fun departuresEmitsWithNoConcurrentDiscoveriesCollector() {
+        (object : MultipeerJvmSuite() {}).departuresEmitsWithNoConcurrentDiscoveriesCollector()
     }
 
-    /** **KNOWN FAILURE**, same root cause and same issue (#2410) — this obligation stages an arrival too. */
     @Test
-    fun theArrivalIsNotADepartureObligationCannotEvenStageAnArrival() {
-        val failure = assertFailsWith<IllegalStateException> {
-            (object : MultipeerJvmSuite() {}).anArrivalIsNeverReportedAsADeparture()
-        }
-        assertTrue(
-            failure.message.orEmpty().contains(NO_SESSION_RED),
-            "expected the rig to refuse to stage an arrival with no discoveries() collector, got: ${failure.message}",
-        )
+    fun anArrivalIsNeverReportedAsADeparture() {
+        (object : MultipeerJvmSuite() {}).anArrivalIsNeverReportedAsADeparture()
     }
 
     // ── the control: this harness DOES admit a conforming source ─────────────
@@ -249,8 +178,7 @@ class MultipeerJvmDepartureRigTest {
     /**
      * With no browse session the rig **throws**; it does not quietly fire into nothing.
      *
-     * This is the mechanism behind both pinned failures, and the reason they are findings rather
-     * than silent passes: a rig that no-op'd here would green
+     * A rig that no-op'd here would green
      * `anArrivalIsNeverReportedAsADeparture` for this backend by never staging the arrival it is
      * supposed to stage.
      */
@@ -366,8 +294,8 @@ private abstract class MultipeerJvmSuite : DiscoverySourceConformanceSuite() {
      * Waits — in real time — for production's browse session to reach the fake, then fires one
      * `foundPeer`.
      *
-     * The wait is the whole reason this is `suspend`. `callbackFlow` calls `mc_browser_start` from a
-     * separately launched producer coroutine dispatched to `Dispatchers.IO`, so the suite's
+     * The wait is the whole reason this is `suspend`. The source calls `mc_browser_start` from a
+     * producer coroutine dispatched to `Dispatchers.IO`, so the suite's
      * `onStart` handshake proves the collection began — not that the session exists. Firing into an
      * unregistered callback would look exactly like a source that ignores arrivals.
      *
@@ -617,12 +545,7 @@ internal class ConformanceNativeLib : MultipeerNativeLib {
     }
 
     private fun requireSession(ready: Boolean) =
-        check(ready) {
-            "ConformanceNativeLib: no browse session had started ${BROWSE_WAIT_MILLIS}ms after " +
-                "causeArrival fired, so no peer can be made to arrive. On this backend that is not " +
-                "a timing accident: mc_browser_start is called inside discoveries()' callbackFlow, " +
-                "so a test collecting only departures() opens no session at all."
-        }
+        assertTrue(ready, "a departures-only collector must open a browse session")
 
     /** Deliver one `foundPeer`. Throws if no session could have seen it. */
     fun fireFoundPeer(

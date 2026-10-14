@@ -50,10 +50,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.MultipeerPeer
  * the previous link is closed throws. The lobby is expected to drive at most
  * one live session per device.
  *
- * Browsing is driven from `MultipeerServiceBrowser.discoveries` through
+ * Browsing is shared by both `MultipeerServiceBrowser` feeds through
  * [startBrowsing] / [stopBrowsing]. [join] requires browsing to be active so
- * the discovering browser is still bound to the target peer; the lobby holds
- * the discoveries flow open across the join.
+ * the discovering browser is still bound to the target peer; keep at least
+ * one feed collected across the join.
  *
  * Auto-accept invite policy: the host has already opted in by tapping
  * "Host", so we accept every inbound invitation. A confirmation prompt is
@@ -240,10 +240,10 @@ public actual class MultipeerPeerLinkFactory actual constructor(
 
     /**
      * Starts the shared `MCNearbyServiceBrowser` and routes `foundPeer` /
-     * `lostPeer` callbacks to [onAdvertisement] (after updating
-     * [knownPeers]). Called from `MultipeerServiceBrowser.discoveries` when
-     * the flow is collected. Throws if browsing is already active — the
-     * `MultipeerServiceBrowser` contract is single-collector.
+     * `lostPeer` callbacks to [onAdvertisement] and [lostPeerHandles] respectively,
+     * after updating [knownPeers]. The paired `MultipeerServiceBrowser` starts
+     * this session for its first collector of either feed and stops it for its
+     * last collector. Throws if a separate browser owner is already active.
      */
     internal fun startBrowsing(onAdvertisement: (MultipeerAdvertisement) -> Unit) {
         check(browser == null) { "MultipeerPeerLinkFactory is already browsing" }
@@ -273,9 +273,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * contract at all, which is the state the discovery survey found every non-mDNS source in — see
      * kuilt #2410 for what holding it to the contract then exposed.
      *
-     * Being `null` is itself the observation that matters most: it is exactly what a lone
-     * `departures()` collector sees, because the delegate is installed by [startBrowsing] and
-     * nothing but `MultipeerServiceBrowser.discoveries()` calls that.
+     * Being `null` means no collection-owned browse session is active.
      */
     internal val activeBrowserDelegate: MCNearbyServiceBrowserDelegateProtocol?
         get() = browserDelegate

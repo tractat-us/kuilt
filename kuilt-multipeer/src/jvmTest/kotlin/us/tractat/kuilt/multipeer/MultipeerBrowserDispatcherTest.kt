@@ -33,10 +33,9 @@ import kotlin.test.assertTrue
  *
  * ## Fix
  *
- * `.flowOn(Dispatchers.IO)` fuses the `callbackFlow` producer onto IO. The
- * `trySend` in the JNA callback places items into an IO-backed buffer. Even
- * with `Dispatchers.Unconfined` downstream, the first `emit` comes from the
- * IO thread, so the `collect { }` body runs on IO — not the GCD callback thread.
+ * The browser collects its shared event flow inside `flow { emitAll(...) }`
+ * with `.flowOn(Dispatchers.IO)`. A JNA callback enqueues an event, and the IO
+ * coroutine emits it downstream, keeping an unconfined collector off GCD.
  *
  * ## Test
  *
@@ -88,7 +87,7 @@ class MultipeerBrowserDispatcherTest {
                     }
                 }
 
-            // Let the producer start (on IO with .flowOn) and block on awaitClose.
+            // Let the producer subscribe to the shared flow on IO.
             Thread.sleep(300)
 
             // Simulate Darwin GCD firing a peer-found event.
