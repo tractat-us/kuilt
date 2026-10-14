@@ -41,11 +41,9 @@ private const val ARRIVING_HOST = "192.168.9.9"
  * `final` too and its accessors throw `Stub!` against `android.jar` in a unit test. A seam in
  * production is the only way an Android unit test reaches this code at all — see [NsdBrowser].
  *
- * **What this harness cannot see.** [NsdManagerBrowser] itself — the real NSD listener wiring and
- * the serialised resolve queue — is not exercised here, because nothing in this repo can drive the
- * Android framework in a unit test. That code moved verbatim out of the previous `discoveries()`
- * body and is unchanged by #1903, so this is a gap held constant rather than a gap opened; closing
- * it needs Robolectric or an instrumented test, neither of which exists in this repo yet.
+ * **What this harness cannot see.** [NsdManagerBrowser]'s queue and retry lifecycle are exercised
+ * separately by [NsdManagerBrowserTest] through [NsdPlatform]. Neither harness drives the Android
+ * framework itself; listener wiring and the platform's contention scope still need device coverage.
  *
  * The fake delivers every callback synchronously on the calling thread, so the suite keeps its
  * **virtual** [awaitBudget].
