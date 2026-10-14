@@ -58,7 +58,7 @@ public interface Mesh : Seam, PrincipalRoster {
      * Exchanges the mesh preamble to learn the remote [PeerId], applies the mesh's
      * [LinkAdmission] policy, dedups against existing links using the same canonical rule as
      * construction (see [meshSeam]), updates [peers], and launches the link's read loop.
-     * Suspends until the preamble exchange completes.
+     * Suspends through the preamble exchange and admission policy; adopted readers start in the seam scope.
      *
      * The admission check runs **between** the handshake and link publication — the first
      * moment the joiner's self-asserted [PeerId] is known, and the last moment before the
@@ -79,12 +79,11 @@ public interface Mesh : Seam, PrincipalRoster {
      *   single-collection conn (a stream fabric's `framed()`) works as well as a hot channel-backed
      *   one, exactly as construction does.
      *
-     *   **A call cancelled during the preamble exchange closes [conn] before the cancellation
-     *   propagates** (#2587) — the mesh does not hand back a connection it abandoned mid-handshake. The
-     *   caller therefore owes nothing on that exit, and a caller that closes it anyway is harmless
-     *   ([Connection.close] is idempotent). Cancellation is the *ordinary* exit here, not an exotic one:
-     *   it is what a formation timeout and every scope teardown deliver, and it is precisely the exit a
-     *   caller-side `runCatching`-style guard cannot see, since those rethrow cancellation by design.
+     *   The mesh takes ownership on entry. An exit before adoption closes [conn] (and its wrapper
+     *   pump), including cancellation during the preamble or admission policy. After adoption,
+     *   reader and drain startup belong to the seam: cancelling this call cannot strand them or
+     *   close an adopted connection. Callers must not close [conn] merely because this call was
+     *   cancelled; the seam owns disposal of both live links and draining dedup losers.
      */
     public suspend fun addLink(conn: Connection)
 }
@@ -883,49 +882,46 @@ private class MeshSeam(
     private val closedMessage get() = "MeshSeam for $selfId is closed"
 
     override suspend fun addLink(conn: Connection) {
-        check(state.value !is SeamState.Torn) { closedMessage }
-        val link = handshakeLink(selfId, conn, dispatcher, random)
-        // THE CHECK: between the handshake (remote id now known) and admitOrReject (link not yet
-        // live). A rejected link is closed here and never published — it cannot contend in the
-        // dedup lottery, join `peers`, or land in the roster. Reject-and-continue: the rejection is
-        // surfaced as a LinkRejectedException — the per-link signal the accept-pump (hostedOverlay)
-        // absorbs and debug-logs — so one rejected joiner never tears down the seam or other links.
-        // (kuilt-core is logger-free by contract, so the signal is raised here and logged by the
-        // pump, which owns a logger.)
-        if (!admitLink(selfId, admission, link)) {
-            // A self-connection (remote resolved to selfId) is dropped silently, like NwSeam — it is
-            // not an admission decision, so it must not surface as a LinkRejectedException. A genuine
-            // policy rejection is the per-link signal the accept-pump absorbs.
-            if (link.remoteId == selfId) return
-            throw LinkRejectedException(link.remoteId, attested = link.principal != null)
-        }
-        // Dedup against any existing link to the same peer using the canonical nonce, then publish.
-        when (val outcome = admitOrReject(link)) {
-            // First link to this peer: nothing to drain, just start reading it.
-            Admission.First -> scope.launch { readLoop(link) }
-
-            // REPLACE arm: the incoming link wins and displaces a PUBLISHED one. `startDrain` runs
-            // BEFORE the winner's read loop is launched, so the ordering hold is armed before the
-            // winner can deliver a single frame — the swap is airtight on this arm.
-            is Admission.Replaced -> {
-                startDrain(outcome.loser)
-                scope.launch { readLoop(link) }
+        var unowned: Connection? = conn
+        try {
+            check(state.value !is SeamState.Torn) { closedMessage }
+            // handshakeLink owns failure cleanup until it returns a Link. Afterwards this guard
+            // owns the WRAPPER, including its pump, until rejection or adoption settles ownership.
+            unowned = null
+            val link = handshakeLink(selfId, conn, dispatcher, random)
+            unowned = link.conn
+            if (!admitLink(selfId, admission, link)) {
+                unowned = null // admitLink completed its rejection close.
+                if (link.remoteId == selfId) return
+                throw LinkRejectedException(link.remoteId, attested = link.principal != null)
             }
+            val outcome = admitOrReject(link)
+            if (outcome == Admission.Refused) return // the guard closes the unadopted wrapper.
+            unowned = null // Both a live winner and a registered drain are seam-owned now.
 
-            // KEEP arm: the incoming link loses. It has no read loop yet — one is launched HERE, and
-            // it is the drain reader; before #2474 this loser was closed unread and its whole tail
-            // was lost. `startDrain` precedes that launch so the hold is armed before the drained
-            // link can deliver.
-            is Admission.Kept -> {
-                startDrain(link)
-                scope.launch { readLoop(link) }
+            // No caller suspension after adoption: even an accept-pump timeout must not close an
+            // adopted conn. Enter startup inline to preserve hold-before-reader ordering, then let
+            // the seam's scope finish a backpressured hold independently of the admitting caller.
+            // If the seam closes before this starts, its teardown already owns every registered conn.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                when (outcome) {
+                    Admission.First -> Unit
+                    is Admission.Replaced -> startDrain(outcome.loser)
+                    Admission.Kept -> startDrain(link)
+                    Admission.Refused -> error("Refused link cannot be adopted")
+                }
+                readLoop(link)
             }
-
-            // The seam tore between the handshake and the lock. Best-effort close (see
-            // [closeBestEffort]): a rethrown callee-minted cancellation would escape `addLink` into
-            // `acceptPump` and `superviseVoterReconnection`, skipping their cleanup and cancelling
-            // that peer's supervision outright (#1834).
-            Admission.Refused -> closeBestEffort(link.conn)
+        } finally {
+            unowned?.let { abandoned ->
+                withContext(NonCancellable) {
+                    try {
+                        abandoned.close()
+                    } catch (_: Throwable) {
+                        // Best-effort cleanup must preserve the admission failure or cancellation.
+                    }
+                }
+            }
         }
     }
 
@@ -1131,8 +1127,8 @@ private class MeshSeam(
      * winner until it has finished with the loser.
      */
     private suspend fun startDrain(loser: Link) {
-        // Step 1 runs in the CALLER, so `addLink` can rely on the hold being armed before it launches
-        // the winner's read loop.
+        // Step 1 runs in the seam-owned startup coroutine, before that coroutine reads the new
+        // link. Cancelling the admitting caller cannot skip the hold or its subsequent reader.
         armOrderingHold(loser)
         val drain = lock.withLock { draining[loser] }
         if (drain == null) {
