@@ -1,0 +1,12 @@
+[
+  {
+    "source": "kuilt-core/src/jvmTest/kotlin/us/tractat/kuilt/core/composite/CompositeCapabilityConcurrencyTest.kt",
+    "class": "us.tractat.kuilt.core.composite.CompositeCapabilityConcurrencyTest",
+    "tests": ["aStaleRecomputeNeverWinsTheLastWrite"]
+  },
+  {
+    "source": "kuilt-core/src/jvmTest/kotlin/us/tractat/kuilt/core/SeamStateGateLatchCapabilityConcurrencyTest.kt",
+    "class": "us.tractat.kuilt.core.SeamStateGateLatchCapabilityConcurrencyTest",
+    "tests": ["tearAlwaysWinsAgainstConcurrentUpdates"]
+  }
+]

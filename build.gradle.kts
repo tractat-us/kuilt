@@ -8621,9 +8621,21 @@ val forbidBareLaunchIn by tasks.registering {
     }
 }
 
+// #2639: exact probe membership plus a bounded lexical timing backstop. Types cannot
+// prove absence of timing inside arbitrary test lambdas/callees; the script records
+// that limit and runs positive controls before checking the tree. No cached stamp:
+// source membership and the fixtures are checked on every invocation.
+tasks.register<Exec>("verifyCapabilityProbeManifest") {
+    group = "verification"
+    description = "Check gating probe membership, visible budgets, and policy fixtures."
+    workingDir(rootDir)
+    commandLine("python3", ".github/scripts/capability-probes.py", "--self-test")
+}
+
 // Run the guards as part of `check` (hence `build`, hence CI) in every module.
 allprojects {
     tasks.matching { it.name == "check" }.configureEach {
+        dependsOn(rootProject.tasks.named("verifyCapabilityProbeManifest"))
         dependsOn(rootProject.tasks.named("forbidBareSeamStateFlow"))
         dependsOn(rootProject.tasks.named("forbidBareLaunchIn"))
         dependsOn(rootProject.tasks.named("verifyTestResultParity"))

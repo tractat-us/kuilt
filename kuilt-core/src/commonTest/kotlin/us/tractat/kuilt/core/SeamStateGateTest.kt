@@ -11,8 +11,8 @@ import kotlin.test.assertTrue
  * Deterministic unit tests for [SeamStateGate]'s latch semantics. The real-threaded stress that a
  * concurrent `update()`/`tear()` never leaves the state off `Torn` lives in the gated probe
  * `SeamStateGateLatchCapabilityConcurrencyTest` (JVM, real dispatcher) — the invariant here is
- * single-threaded and exercises the *rules*, not the race. That probe's `*CapabilityConcurrencyTest`
- * suffix puts it in the merge-blocking `capability-probes` job, so the latch is pinned by
+ * single-threaded and exercises the *rules*, not the race. That probe's entry in
+ * `.github/capability-probes.json` puts it in the merge-blocking `capability-probes` job, so it is pinned by
  * `ci-required`; this class is not what does that.
  */
 class SeamStateGateTest {
