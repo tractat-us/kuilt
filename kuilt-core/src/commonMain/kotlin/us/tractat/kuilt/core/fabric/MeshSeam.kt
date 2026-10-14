@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock as withMutex
 import us.tractat.kuilt.core.CloseReason
@@ -1058,6 +1059,10 @@ private class MeshSeam(
      */
     private suspend fun readLoop(link: Link) {
         try {
+            // Startup has armed any drain hold. Leave the admitting caller's stack before buffered
+            // frames can invoke synchronous callbacks and extend its handshake timeout. Enter this
+            // teardown guard first so cancellation at the dispatch boundary still disposes the link.
+            yield()
             link.conn.incoming.collect { bytes ->
                 if (state.value is SeamState.Torn) return@collect
                 // A frame this build cannot classify is a fault of THIS link and nothing else: the
