@@ -61,11 +61,15 @@ instead succeeds the moment the note is **durably written to local storage**. Ge
 it onward is a separate step that happens whenever a connection is available —
 possibly much later, and possibly from a *different device* (more on that below).
 
-That "no double-counting" property isn't politeness — it's structural. Every kind of
-note is stored as a [replicated data type](crdt-overview.md): traces as a set keyed
-by id, metrics as mergeable counters, logs as an ordered append-only sequence.
-Re-sending something you already sent is a merge with itself, which changes nothing.
-The classic "my retry counted the request twice" bug simply can't happen here.
+Sharing the same saved state twice does not count it twice. Each kind of note is
+stored as a [replicated data type](crdt-overview.md): traces as a set of full span
+records, metrics as mergeable counters, logs as an ordered append-only sequence.
+Merging the same snapshot again changes nothing.
+
+That rule applies to sharing saved state, not to retrying a failed export. A failed
+or cancelled call may still have saved the span. After recovery, exporting the
+original unstamped span again can give it a new causal stamp. The set then holds distinct
+values with the same span id. Rolling back memory cannot undo a write that landed.
 
 The same machinery reconciles notes *between devices*. Two devices that briefly meet
 exchange only the records the other is missing — so telemetry recorded on a phone
