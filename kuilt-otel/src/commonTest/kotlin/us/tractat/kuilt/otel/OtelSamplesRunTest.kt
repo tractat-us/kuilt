@@ -29,6 +29,9 @@ import kotlin.test.Test
 class OtelSamplesRunTest {
 
     @Test
+    fun persistenceHealthHolds(): TestResult = runTest { samplePersistenceHealth() }
+
+    @Test
     fun warpLogRecordExporterHolds(): TestResult = runTest { sampleWarpLogRecordExporter() }
 
     @Test
