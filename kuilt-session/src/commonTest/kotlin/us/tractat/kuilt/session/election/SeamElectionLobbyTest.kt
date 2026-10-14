@@ -4,8 +4,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -27,6 +29,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -317,6 +320,115 @@ class SeamElectionLobbyTest {
             )
             driver.cancel()
         }
+
+    @Test
+    fun `awaitRoom monitors the replacement host until it goes silent`() = runTest {
+        val self = PeerId("peer-z")
+        val oldHost = PeerId("peer-a")
+        val newHost = PeerId("peer-b")
+        val seam = FakeSeam(selfId = self, initialPeers = setOf(self, oldHost, newHost))
+        val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
+        val l = SeamElectionLobby(seam, factory(InMemoryLoom(), backgroundScope), backgroundScope, clock, null)
+        val outcome = backgroundScope.async { l.awaitRoom() }
+        runCurrent()
+        advanceTimeBy(1.seconds)
+        runCurrent()
+        assertTrue(seam.directed.any { it.first == oldHost }, "old host detector must be running")
+
+        seam.removePeer(oldHost)
+        runCurrent()
+        assertEquals(newHost, l.host.value)
+        // Keep the replacement alive past the retired detector's reconnect window. A stale
+        // detector would report the departed host lost even though this host is healthy.
+        repeat(7) {
+            seam.deliver(newHost, byteArrayOf(0))
+            runCurrent()
+            advanceTimeBy(1.seconds)
+            runCurrent()
+        }
+        assertAll(
+            { assertFalse(outcome.isCompleted, "departed host must not abort the replacement's election") },
+            { assertTrue(seam.directed.any { it.first == newHost }, "replacement host must be monitored") },
+        )
+
+        // Now withhold all traffic while keeping the replacement in the Woven roster.
+        advanceTimeBy(7.seconds)
+        runCurrent()
+        assertAll(
+            { assertEquals(setOf(self, newHost), seam.peers.value) },
+            { assertEquals(SeamState.Woven, seam.state.value) },
+            { assertTrue(outcome.isCompleted, "silent replacement host must end awaitRoom") },
+        )
+        assertEquals(ElectionOutcome.Torn(CloseReason.Unreachable), outcome.await())
+    }
+
+    @Test
+    fun `awaitRoom entered as self host monitors a later lower-id host`() = runTest {
+        val self = PeerId("peer-z")
+        val laterHost = PeerId("peer-a")
+        val seam = FakeSeam(selfId = self)
+        val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
+        val l = SeamElectionLobby(seam, factory(InMemoryLoom(), backgroundScope), backgroundScope, clock, null)
+        val outcome = backgroundScope.async { l.awaitRoom() }
+        runCurrent()
+        advanceTimeBy(7.seconds)
+        runCurrent()
+        assertAll(
+            { assertFalse(outcome.isCompleted, "initial self host must keep waiting without a deadline") },
+            { assertTrue(seam.directed.isEmpty(), "self must not get a heartbeat detector") },
+        )
+
+        seam.addPeer(laterHost)
+        runCurrent()
+        assertEquals(laterHost, l.host.value)
+        advanceTimeBy(7.seconds)
+        runCurrent()
+        assertAll(
+            { assertEquals(SeamState.Woven, seam.state.value) },
+            { assertTrue(outcome.isCompleted, "later silent host must end awaitRoom") },
+        )
+        assertEquals(ElectionOutcome.Torn(CloseReason.Unreachable), outcome.await())
+    }
+
+    @Test
+    fun `awaitRoom retires old host detectors and cancellation stops the current detector`() = runTest {
+        val self = PeerId("peer-z")
+        val oldHost = PeerId("peer-b")
+        val newHost = PeerId("peer-a")
+        val seam = FakeSeam(selfId = self, initialPeers = setOf(self, oldHost))
+        val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
+        val l = SeamElectionLobby(seam, factory(InMemoryLoom(), backgroundScope), backgroundScope, clock, null)
+        val outcome = backgroundScope.async { l.awaitRoom() }
+        runCurrent()
+        advanceTimeBy(1.seconds)
+        runCurrent()
+        assertTrue(seam.directed.any { it.first == oldHost }, "old host detector must be running")
+
+        // Leave the old host present: a leaked detector could still send to it and answer pings.
+        seam.addPeer(newHost)
+        runCurrent()
+        val oldFrames = seam.directed.count { it.first == oldHost }
+        seam.deliver(oldHost, "kuilt.heartbeat.ping".encodeToByteArray())
+        runCurrent()
+        advanceTimeBy(1.seconds)
+        runCurrent()
+        assertEquals(newHost, l.host.value)
+        val oldFramesAfterReplacement = seam.directed.count { it.first == oldHost }
+        val currentDetectorSent = seam.directed.any { it.first == newHost }
+
+        outcome.cancelAndJoin()
+        val framesAfterCancel = seam.directed.size
+        seam.deliver(newHost, "kuilt.heartbeat.ping".encodeToByteArray())
+        runCurrent()
+        advanceTimeBy(2.seconds)
+        runCurrent()
+        assertAll(
+            { assertEquals(oldFrames, oldFramesAfterReplacement, "retired detector must neither ping nor pong") },
+            { assertTrue(currentDetectorSent, "current detector must send pings") },
+            { assertTrue(outcome.isCancelled) },
+            { assertEquals(framesAfterCancel, seam.directed.size, "cancelled detector must neither ping nor pong") },
+        )
+    }
 
     @Test
     fun `state reflects the underlying seam's lifecycle`() =
