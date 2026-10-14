@@ -8,6 +8,8 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.fabric.CloseCountingConnection
@@ -23,6 +25,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
+import kotlin.time.Duration.Companion.seconds
 
 class MuxAdmissionOwnershipTest {
     @Test
@@ -142,4 +145,57 @@ class MuxAdmissionOwnershipTest {
             remote.close()
         }
     }
+
+    @Test
+    fun bufferedApplicationWorkCannotExtendTheAdmissionTimeout() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val (raw, remote) = connectionPair()
+        val conn = CloseCountingConnection(raw)
+        var authorizations = 0
+        var admissionActiveDuringAuthorization = false
+        lateinit var server: MuxServerLoom
+        server = MuxServerLoom(
+            InMemoryConnectionSource().also { it.offer(conn) }, backgroundScope, PeerId("server"),
+            RoomAuthorizer { _, _ ->
+                authorizations++
+                admissionActiveDuringAuthorization = server.backgroundJobsForTest.first().children.any { it.isActive }
+                // Model a timeout firing on another thread during synchronous application work.
+                // Advancing the scheduler executes the actual accept-pump timer without suspending
+                // this authorizer, blocking a real thread, or relying on CPU starvation.
+                testScheduler.advanceTimeBy(2.seconds)
+                true
+            },
+            // Make mesh delivery eager so the first application frame is already in rawSeam's
+            // spool when Mux starts its reader. Admission itself uses the standard test dispatcher.
+            UnconfinedTestDispatcher(testScheduler), Random(7), handshakeTimeout = 10.seconds,
+        )
+        val room = server.host(Pattern("room"))
+        val received = mutableListOf<Swatch>()
+        backgroundScope.launch { room.incoming.collect { received += it } }
+        runCurrent()
+        assertTrue(server.connectedPeers.value.isEmpty(), "rig: admission is waiting for the handshake")
+        advanceTimeBy(9.seconds)
+        remote.send(MeshWire.encodeHello(PeerId("client"), meshNonce(1)))
+        remote.send(MeshWire.encodeData(NamedFrame.encode("room".encodeToByteArray(), byteArrayOf(7))))
+        runCurrent()
+        runCurrent() // Drain continuations queued at the virtual time advanced inside authorization.
+        try {
+            assertAll(
+                { assertEquals(1, authorizations, "rig: the buffered frame reached the synchronous authorizer") },
+                { assertEquals(11_000L, testScheduler.currentTime, "rig: application work crossed the admission deadline") },
+                { assertFalse(admissionActiveDuringAuthorization, "admission must finish before buffered application work") },
+                { assertEquals(0, conn.closeCalls, "the handshake timer must not close an already-registered connection") },
+                { assertEquals(setOf(PeerId("client")), server.connectedPeers.value, "the adopted connection stays registered") },
+                { assertEquals(listOf(7), received.map { it.toByteArray().single().toInt() }, "the first frame is delivered") },
+            )
+            remote.send(MeshWire.encodeData(NamedFrame.encode("room".encodeToByteArray(), byteArrayOf(8))))
+            runCurrent()
+            assertEquals(listOf(7, 8), received.map { it.toByteArray().single().toInt() }, "the adopted reader remains live")
+        } finally {
+            server.close()
+            remote.close()
+            room.close()
+            runCurrent()
+        }
+    }
+
 }
