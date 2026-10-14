@@ -14,7 +14,8 @@ import us.tractat.kuilt.core.discovery.PeerDiscoverySource
  * exposes a transport-agnostic `Flow<Tag>` for the consumer.
  *
  * On Apple and JVM, collectors of either feed share one browse session: the first
- * starts browsing, the last stops it. Keep at least one feed collected while joining
+ * starts browsing, the last stops it. Each discovery collector receives the current
+ * peer set before live arrivals. Keep at least one feed collected while joining
  * a discovered peer, since invitations use the browser that discovered it.
  *
  * Implementations live in `appleMain`; `jvmMain` wraps the dylib + JNA bridge.

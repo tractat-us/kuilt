@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: exercises the pro
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.LinkedBlockingQueue
 import us.tractat.kuilt.test.assertAll
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -15,6 +16,31 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class MultipeerSharedBrowseTest {
+    @Test
+    fun lateDiscoveriesReceiveCurrentPeersWithoutAnotherCallback() = runBlocking {
+        val lib = BrowseLib()
+        val browser = lib.browser()
+        val ready = CountDownLatch(1)
+        val departure = launch(Dispatchers.Default) { browser.departures().collect { ready.countDown() } }
+        try {
+            assertTrue(ready.await(5, TimeUnit.SECONDS), "departure collector must start browsing")
+            lib.fireFound("gone")
+            lib.fireLost("gone")
+            val seen = LinkedBlockingQueue<String>()
+            val discovery = launch(Dispatchers.Default) { browser.discoveries().collect { seen.add(it.peerKey) } }
+            try {
+                assertEquals("arriving", seen.poll(5, TimeUnit.SECONDS), "late discovery collector must receive the current peer without a repeated callback")
+                lib.fireFound("later")
+                assertEquals("later", seen.poll(5, TimeUnit.SECONDS), "live arrivals follow the initial snapshot; departed peers are not replayed")
+                assertEquals(1, lib.starts.get(), "seeding must not restart browsing")
+            } finally {
+                discovery.cancelAndJoin()
+            }
+        } finally {
+            departure.cancelAndJoin()
+        }
+    }
+
     @Test
     fun departureSubscriptionPrecedesSynchronousRegistrationCallback() = runBlocking {
         val lib = BrowseLib()
@@ -117,6 +143,10 @@ class MultipeerSharedBrowseTest {
             found.set(null)
             lost.set(null)
         }
+
+        fun fireFound(handle: String) = checkNotNull(found.get()).invoke(handle, handle)
+
+        fun fireLost(handle: String) = checkNotNull(lost.get()).invoke(handle)
 
         fun deliverUntil(vararg received: CountDownLatch) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
