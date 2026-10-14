@@ -300,7 +300,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         discoveryLock.withLock {
             knownPeers.clear()
             _visiblePeers.value = emptySet()
-            discoveryUpdates.publish(emptySet())
+            discoveryUpdates.endSession()
         }
     }
 

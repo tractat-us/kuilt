@@ -48,9 +48,18 @@ public actual class MultipeerServiceBrowser actual constructor(
     /** Emits the departed peer's displayName, also used by [MultipeerAdvertisement.peerKey]. */
     public actual override fun departures(): Flow<String> = sessionFeed(factory.lostPeerHandles)
 
-    public actual override fun discoveries(): Flow<Tag> = sessionFeed(factory.discoveryUpdates.events).advertisements()
+    public actual override fun discoveries(): Flow<Tag> = flow {
+        lateinit var generation: MultipeerBrowseGeneration
+        emitAll(sessionFeed(factory.discoveryUpdates.events) {
+            // A subscriber may have reserved replay while waiting for teardown's lock.
+            generation = factory.discoveryUpdates.generation
+        }.advertisements { generation })
+    }
 
-    private fun <T> sessionFeed(events: SharedFlow<T>): Flow<T> = flow {
+    private fun <T> sessionFeed(
+        events: SharedFlow<T>,
+        onAcquired: () -> Unit = {},
+    ): Flow<T> = flow {
         var acquired = false
         try {
             emitAll(events.onSubscription {
@@ -60,6 +69,7 @@ public actual class MultipeerServiceBrowser actual constructor(
                     if (collectors == 0) factory.startBrowsing { /* discoveries read the ordered snapshot/event stream */ }
                     collectors++
                     acquired = true
+                    onAcquired()
                 }
             })
         } finally {
