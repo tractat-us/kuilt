@@ -41,11 +41,9 @@ import kotlin.time.Duration.Companion.seconds
  *   past the only timeout this fabric has, which is why [NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT] is
  *   not `LoomDefaults.WEAVE_TIMEOUT` under another name.
  *
- * The Android entry point `nearbyLoom(context, …)` forwards these same knobs but cannot be tested
- * here: it builds a `GmsNearbyApi`, which resolves a real `ConnectionsClient` from a `Context` at
- * construction. This repo has no Robolectric and no instrumented-test source set, so the factory's
- * one untested line is `GmsNearbyApi(context)` — everything downstream of it is what these tests
- * drive directly.
+ * The Android entry point `nearbyLoom(context, scope, …)` forwards these same knobs. This
+ * common suite drives the adapter directly; `GmsNearbyApiScopeTest` in androidUnitTest covers
+ * the factory's observer ownership through Robolectric, without a real Nearby connection.
  */
 class NearbyLoomKnobsTest {
 

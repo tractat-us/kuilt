@@ -56,7 +56,15 @@ kotlin {
         // org/slf4j/LoggerFactory out of `feed` and poisons every ChunkCodec and NearbySeam test.
         // Mirrors :kuilt-nw and :kuilt-session, which hit the same thing for the same reason.
         androidUnitTest.dependencies {
+            implementation("org.robolectric:robolectric:4.17")
+            // Robolectric reflects all GoogleApiAvailability methods, including its optional
+            // ActivityResultLauncher overload; GMS's transitive Activity version predates it.
+            runtimeOnly("androidx.activity:activity:1.8.2")
             runtimeOnly(libs.logback)
         }
     }
+}
+
+android {
+    testOptions.unitTests.isIncludeAndroidResources = true
 }
