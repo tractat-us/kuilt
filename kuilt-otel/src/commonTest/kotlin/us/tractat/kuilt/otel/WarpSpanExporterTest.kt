@@ -163,7 +163,7 @@ class WarpSpanExporterTest {
         )
     }
 
-    // ---- A2: WarpSpanExporter idempotency ----
+    // ---- A2: full-value equality with no causal clock ----
 
     @Test
     fun exportReturnsSuccessOnDurableWrite() = runTest {
@@ -178,7 +178,7 @@ class WarpSpanExporterTest {
         val s = span(1)
         exporter.export(s)
         exporter.export(s)
-        // ORSet deduplicates by element: same span → size remains 1
+        // exporterFor has no causal clock: the full value stays equal, so size remains 1.
         assertEquals(1, exporter.snapshot().elements.size)
     }
 
@@ -190,11 +190,12 @@ class WarpSpanExporterTest {
         assertTrue(s in exporter.snapshot().elements)
     }
 
-    // ---- No double-count under retry (the key invariant) ----
+    // ---- Repeated successful exports without auto-stamping ----
 
     @Test
     fun retryCannotDoubleCount() = runTest {
-        // Simulate a retry loop: the same span is sent N times.
+        // No clock and no injected write failure: each call adds the same full value.
+        // IndeterminateWriteAuditTest covers recovered commit-then-failure retries with a clock.
         val exporter = exporterFor()
         val s = span(1)
         repeat(5) { exporter.export(s) }
