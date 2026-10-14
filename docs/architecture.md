@@ -347,8 +347,8 @@ the user has revoked the local-network permission. Only a fabric wired to an
 observer that watches the connection itself can actually watch that and report a
 live answer — `kuilt-nw` via `NWPathMonitor`, `kuilt-nearby` via Android's
 Bluetooth and Wi-Fi radio-state broadcasts, `kuilt-webrtc` via the browser's ICE
-connection state, and `kuilt-websocket` via Android's `ConnectivityManager` or
-the browser's `navigator.onLine`.
+connection state, and `kuilt-websocket` via Apple's Network.framework path monitor, Android's
+`ConnectivityManager`, or the browser's `navigator.onLine`.
 
 Each fabric watches what *it* depends on, which is why those answers do not
 converge on one mechanism. `kuilt-nearby` deliberately refuses the very

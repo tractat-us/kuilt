@@ -72,24 +72,34 @@ kotlin {
         jvmTest.get().dependsOn(jvmAndAndroidTest)
         androidUnitTest.get().dependsOn(jvmAndAndroidTest)
 
+        // Shared Network.framework binding and callback tests for every Apple target.
+        val appleMain by creating {
+            dependsOn(commonMain.get())
+            dependencies {
+                implementation(libs.kotlinx.atomicfu)
+                implementation(libs.ktor.client.darwin)
+            }
+        }
+        val appleTest by creating {
+            dependsOn(commonTest.get())
+            dependencies { implementation(libs.kotlinx.coroutines.test) }
+        }
+        iosArm64Test.get().dependsOn(appleTest)
+        iosSimulatorArm64Test.get().dependsOn(appleTest)
+        macosArm64Test.get().dependsOn(appleTest)
+
         // iosMain: intermediate for both iOS K/N targets. Wired explicitly because
         // adding a manual jvmAndAndroidMain intermediate disables the KMP plugin's
         // default hierarchy auto-wiring for other platform intermediates.
         val iosMain by creating {
-            dependsOn(commonMain.get())
-            dependencies {
-                implementation(libs.ktor.client.darwin)
-            }
+            dependsOn(appleMain)
         }
         val iosArm64Main by getting { dependsOn(iosMain) }
         val iosSimulatorArm64Main by getting { dependsOn(iosMain) }
 
         // macosMain: intermediate for macosArm64 K/N target.
         val macosMain by creating {
-            dependsOn(commonMain.get())
-            dependencies {
-                implementation(libs.ktor.client.darwin)
-            }
+            dependsOn(appleMain)
         }
         val macosArm64Main by getting { dependsOn(macosMain) }
 
