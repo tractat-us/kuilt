@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.ConnectionSource
 import us.tractat.kuilt.core.fabric.acceptPump
@@ -267,6 +268,10 @@ public class MuxServerLoom(
         // populated. Null when the connection carried no attestation.
         val principal = (record.rawSeam as? PrincipalRoster)?.attestedPrincipals?.value?.get(connPeerId)
         try {
+            // Keep the undispatched prefix inside this teardown guard, but yield before reading
+            // buffered frames: synchronous authorizer work must not extend the admitting caller's
+            // handshake timeout. Cancellation at this dispatch boundary still deregisters the record.
+            yield()
             record.rawSeam.incoming.collect { frame ->
                 val name = NamedFrame.decodeName(frame) ?: return@collect
                 val room = lock.withLock { rooms[name] } ?: return@collect
