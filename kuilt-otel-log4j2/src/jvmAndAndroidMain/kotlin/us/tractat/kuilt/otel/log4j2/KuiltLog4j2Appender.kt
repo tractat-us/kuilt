@@ -13,6 +13,7 @@ import us.tractat.kuilt.otel.logging.EXCEPTION_MESSAGE_ATTRIBUTE
 import us.tractat.kuilt.otel.logging.LogCapture
 import us.tractat.kuilt.otel.logging.LogLevel
 import us.tractat.kuilt.otel.logging.NormalizedLogEvent
+import us.tractat.kuilt.otel.logging.ResolvedLogEvent
 
 /**
  * A log4j2 [AbstractAppender] that captures raw-SLF4J/log4j2 output into a kuilt
@@ -58,7 +59,7 @@ public class KuiltLog4j2Appender(
     private val capture: LogCapture,
     scope: CoroutineScope,
 ) : AbstractAppender(name, null, null, /* ignoreExceptions = */ true, Property.EMPTY_ARRAY) {
-    private val events = Channel<NormalizedLogEvent>(Channel.UNLIMITED)
+    private val events = Channel<ResolvedLogEvent>(Channel.UNLIMITED)
 
     init {
         scope.launch {

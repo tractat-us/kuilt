@@ -22,48 +22,9 @@ public data class NormalizedLogEvent(
      */
     public val attributes: Map<String, String> = emptyMap(),
     /**
-     * The distributed-trace context resolved at the **synchronous capture edge**,
-     * on the caller that logged — never on the drain coroutine (#1034). The edge
-     * fills this by calling [LogCapture.resolveAtEdge] while it still sees the
-     * caller's ambient context; [LogCapture.capture] then feeds the sampling gate
-     * from this snapshot instead of re-consulting the provider off-thread.
-     *
-     * `null` means either no provider is wired (the M1 always-on default) or the
-     * provider resolved to "untraced" — the two are disambiguated by whether a
-     * [TraceContextProvider] was installed, which [LogCapture.capture] knows.
-     */
-    public val activeTrace: ActiveTrace? = null,
-    /**
-     * The `LogRecord` attributes produced by [CaptureConfig.attributeMapper],
-     * applied at the **synchronous capture edge** on the caller that logged —
-     * never on the drain coroutine (#1630). A queueing edge fills this by calling
-     * [LogCapture.resolveAtEdge] while the caller's ambient state is still the
-     * state the line was emitted under; [LogCapture.capture] then uses the
-     * snapshot instead of re-running the mapper off-thread.
-     *
-     * `null` means the event was never edge-resolved. [LogCapture.capture] then
-     * applies the mapper itself — correct for a caller that invokes `capture()`
-     * directly from its own log site, because that call *is* the synchronous edge.
-     * A **queueing** edge must always resolve: leaving this `null` there is
-     * exactly the #1630 bug.
-     */
-    public val resolvedAttributes: Map<String, String>? = null,
-    /**
-     * The epoch-nanosecond instant the line was logged, read at the **synchronous
-     * capture edge** on the caller — never on the drain coroutine (#1993). This is
-     * OTLP's `timeUnixNano`: *when the event occurred*. [LogCapture.capture] copies
-     * it to `LogRecord.timestampEpochNanos` and keeps its own drain-side reading for
-     * `LogRecord.observedEpochNanos`, which is `observedTimeUnixNano`: when capture
-     * saw it. Read on the drain, the two collapse into one number and every record
-     * carries flush cadence instead of event timing.
-     *
-     * [LogCapture.resolveAtEdge] fills this from the injected `Clock` when it is
-     * `null`, and leaves a value already present alone — an edge whose platform
-     * event carries a true emit time of its own may supply it.
-     *
-     * `null` means the event was never edge-resolved. [LogCapture.capture] then uses
-     * its own reading for both fields — correct for a caller that invokes `capture()`
-     * directly from its own log site, because that call *is* the synchronous edge.
+     * An optional event time supplied by the source, in epoch nanoseconds.
+     * [LogCapture.resolveAtEdge] preserves it, or reads the injected clock when absent.
+     * This alone does not resolve an event: queued capture requires [ResolvedLogEvent].
      */
     public val emittedEpochNanos: Long? = null,
 )

@@ -35,12 +35,12 @@ class LogCaptureSelfExclusionTest {
 
         // A kuilt *library* logger — the exact class that emits real diagnostics a
         // consumer needs. It must be captured.
-        val libraryResult = capture.capture(
+        val libraryResult = capture.captureNow(
             NormalizedLogEvent(LogLevel.INFO, "us.tractat.kuilt.session.SeamRoom", "roster changed"),
         )
         // The exporter's own logger — capturing it feeds the export feedback loop.
         // It must be dropped before any record is built.
-        val exporterResult = capture.capture(
+        val exporterResult = capture.captureNow(
             NormalizedLogEvent(LogLevel.WARN, "us.tractat.kuilt.otel.WarpLogRecordExporter", "buffer evicted"),
         )
 

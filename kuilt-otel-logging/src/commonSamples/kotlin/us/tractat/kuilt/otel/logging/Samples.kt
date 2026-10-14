@@ -87,3 +87,24 @@ internal suspend fun sampleWithLogContext() {
     // Outside any scope, capture is exactly what it was before.
     log.info { "background heartbeat" }
 }
+
+/** @suppress — sample only */
+internal suspend fun sampleCaptureNow() {
+    val exporter = WarpLogRecordExporter(ReplicaId("device"), InMemoryDurableStore())
+    val capture = LogCapture(exporter, CaptureConfig(), Clock.System, Random.Default)
+    // Call at the log site. Resolution happens before export can suspend.
+    capture.captureNow(NormalizedLogEvent(LogLevel.INFO, "com.example.App", "started"))
+}
+
+/** @suppress — sample only */
+internal suspend fun sampleQueuedCapture() {
+    val exporter = WarpLogRecordExporter(ReplicaId("device"), InMemoryDurableStore())
+    val capture = LogCapture(exporter, CaptureConfig(), Clock.System, Random.Default)
+    val queue = kotlinx.coroutines.channels.Channel<ResolvedLogEvent>(capacity = 1)
+    // On the emitting thread, before crossing the queue:
+    capture.resolveAtEdge(NormalizedLogEvent(LogLevel.INFO, "com.example.App", "started"))
+        ?.let { queue.trySend(it) }
+    queue.close()
+    // On the drain, without consulting the caller's ambient state again:
+    for (event in queue) capture.capture(event)
+}
