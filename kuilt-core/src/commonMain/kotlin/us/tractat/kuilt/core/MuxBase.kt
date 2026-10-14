@@ -158,16 +158,24 @@ internal class MuxBase<K>(
             // base's value, which publishes `Torn` WITHOUT latching it, so the next mirrored update
             // would overwrite the terminal state. Latch it here, before the pumps can run.
             (delegate.state.value as? SeamState.Torn)?.let { tear(it.reason) }
+            // Both pumps answer CONTINUE after tearing: once `torn` is latched every later mirror is a
+            // no-op, so carrying on changes nothing a consumer can see.
             delegate.state.pumpIn(
                 scope = scope,
-                onFailure = { _, failure -> tear(CloseReason.Error(failure)) },
+                onFailure = { _, failure ->
+                    tear(CloseReason.Error(failure))
+                    PumpVerdict.CONTINUE
+                },
                 name = "mux-view-state[$key]",
             ) { next -> mirrorState(next) }
             delegate.peers.pumpIn(
                 scope = scope,
                 // A view that can no longer track the base's roster would go on advertising a stale
                 // one — the same lie as a closed view's. Latch terminal instead.
-                onFailure = { _, failure -> tear(CloseReason.Error(failure)) },
+                onFailure = { _, failure ->
+                    tear(CloseReason.Error(failure))
+                    PumpVerdict.CONTINUE
+                },
                 name = "mux-view-peers[$key]",
             ) { next -> mirrorPeers(next) }
         }

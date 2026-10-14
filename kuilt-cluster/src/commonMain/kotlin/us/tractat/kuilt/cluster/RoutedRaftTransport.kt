@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PumpVerdict
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
@@ -252,7 +253,10 @@ public class RoutedRaftTransport internal constructor(
      */
     private val innerPump: Job = inner.incoming.pumpIn(
         scope = scope,
-        onFailure = { phase, failure -> log.debug { "raft-relay: $selfId inner pump $phase: $failure" } },
+        onFailure = { phase, failure ->
+            log.debug { "raft-relay: $selfId inner pump $phase: $failure" }
+            PumpVerdict.CONTINUE
+        },
         name = "routed-raft-inner[${inner.selfId.value}]",
     ) { envelope -> inbound.deliver(envelope) }
 
@@ -263,7 +267,10 @@ public class RoutedRaftTransport internal constructor(
      */
     private val relayJob: Job = relayChannel.incoming.pumpIn(
         scope = scope,
-        onFailure = { phase, failure -> log.debug { "raft-relay: $selfId relay pump $phase: $failure" } },
+        onFailure = { phase, failure ->
+            log.debug { "raft-relay: $selfId relay pump $phase: $failure" }
+            PumpVerdict.CONTINUE
+        },
         name = "routed-raft-relay[${inner.selfId.value}]",
     ) { swatch -> handleRelayFrame(swatch) }
 

@@ -37,7 +37,7 @@ and primitive groups in order. The cookbook index splits them out.
 |that same plumbing when the transport really is just TCP|`TcpLoom.host` / `TcpLoom.join`|`fabrics.md#plain-tcp-is-already-assembled`|
 |looping a frame back to yourself, a `peers.forEach { sendTo(it, …) }` fan-out|`broadcast`; `peers` includes `selfId`, and `sendTo(selfId, …)` throws|`fabrics.md#sending-to-yourself`|
 |a hard-coded chunk size, a `FrameTooLargeException`|`Room.maxPayloadBytes`/`Seam.maxPayloadBytes`, then `PayloadTooLarge`|`fabrics.md#payload-limits`|
-|a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn(scope, onFailure, name) { … }` — `PumpFailure.ITEM` vs `UPSTREAM`|`fabrics.md#long-lived-pumps`|
+|a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn(scope, onFailure, name) { … }` — `PumpFailure.ITEM` vs `UPSTREAM`; `onFailure` returns `PumpVerdict.CONTINUE`/`STOP`|`fabrics.md#long-lived-pumps`|
 |a `MutableStateFlow<SeamState>`, or a `closed`/`tornDown` flag beside one|`SeamStateGate`|`fabrics.md#a-seams-terminal-state`|
 |bytes outliving the process — an `fsync`-rename dance, an IndexedDB wrapper|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, `FileChannelDurableStore`, `NSFileManagerDurableStore`, `IndexedDbDurableStore`)|`fabrics.md#durable-storage`|
 |a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane|`HeddlePolicy.pick` + `HeddleNode`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned` (`GovernedHeddleNode`); `HeddleAdmissionControl` + `TaskDescriptor.inLane`|`heddle.md#fair-share--placement`|

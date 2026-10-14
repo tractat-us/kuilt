@@ -252,11 +252,13 @@ while (start < blob.size) {
 ## Long-lived pumps
 
 **Intent:** collect a flow for the life of a session — a peer's state, a roster, an inbound frame stream — without one throw ending the *collector* rather than the item. Don't write `flow.onEach { try { … } catch (…) { … } }.launchIn(scope)`.
-**Primitive:** `Flow.pumpIn(scope, onFailure, name) { … }` (`:kuilt-core`).
+**Primitive:** `Flow.pumpIn(scope, onFailure, name) { … }` (`:kuilt-core`), where `onFailure` returns a `PumpVerdict`.
 
 There are **two** ways such a collector dies and a hand-written `try` only covers one. `onEach { … }.launchIn(scope)` desugars to `scope.launch { flow.onEach { … }.collect() }`, so your `try` sits *inside* the collector: it sees what the body throws and never sees a throw raised by the **flow itself**, which ends the flow and escapes the `launch` entirely. On Kotlin/Native that escape is not a dead coroutine, it is a dead **process** — an unhandled coroutine exception reaches the runtime's default handler and aborts, and a `SupervisorJob` is the mechanism rather than the protection. `pumpIn` is one call owning both halves for exactly that reason, and `PumpFailure.ITEM` / `PumpFailure.UPSTREAM` tells your handler whether the pump survived.
 
 It also settles the cancellation question you would otherwise get wrong: `runCatchingCancellable` discriminates on *type*, which cannot tell your own cancellation from a `CancellationException` a callee minted (a consumer's `withTimeout` inside `sendTo`). Rethrown from a pump, that one **cancels it silently** — no report, no stack trace. `pumpIn` uses `currentCoroutineContext().ensureActive()`, which decides it at runtime; cancelling your scope still cancels the pump.
+
+`onFailure` also decides whether the pump goes on. Return `PumpVerdict.CONTINUE` when each item stands alone, so one that failed is no reason to stop. Return `PumpVerdict.STOP` when items build on each other, so applying the next one on top of a half-applied step would be worse than stopping. A stop ends this pump before the next item: nothing more is reported, the scope is untouched, and the pump's `Job` completes normally once the flow lets the stop through. A flow that catches it around `emit` never reaches the body again, but the pump ends only when that flow does or its scope is cancelled, as with `take`. Don't stop a pump from its own `onFailure` by cancelling the `Job` that `pumpIn` returns. When the first item runs inside the `pumpIn` call, under `UNDISPATCHED` or an immediate dispatcher, that `Job` does not exist yet, and the pump consumes the item you meant to stop before. If `onFailure` itself throws, the pump continues: a pump stopped by its own logger would be a dead pump nothing reported.
 
 An `Error` is the one throw `pumpIn` does not absorb. One raised by the body, by the flow or by `onFailure` itself is rethrown and never reported, so the pump's `Job` fails with it. An `Error` means the process, not the item, is in trouble, and a handler can only log it and carry on.
 
@@ -276,12 +278,35 @@ val updates = flow {
 val pump = updates.pumpIn(
     scope = backgroundScope,
     // ITEM: that update was lost, the pump lives. UPSTREAM: the pump is over — say so, loudly.
-    onFailure = { half, _ -> reported += half },
+    onFailure = { half, _ ->
+        reported += half
+        // Each update stands alone, so one that failed is no reason to stop applying the rest.
+        PumpVerdict.CONTINUE
+    },
     // What a coroutine census calls this pump when it is the one that wedged.
     name = "sample-updates",
 ) { update ->
     if (update == "i-will-not-apply") error("this update could not be applied")
     applied += update
+}
+pump.join()
+```
+
+A pump whose items build on each other stops at the first one that fails:
+
+<!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/PumpInSamples.kt#samplePumpInStop -->
+```kotlin
+// Deltas, not whole values: each one only makes sense on top of every delta before it.
+val deltas = flowOf(+5, -99, +3)
+
+val pump = deltas.pumpIn(
+    scope = backgroundScope,
+    // The ledger is now missing a step, so every later delta would be applied to the wrong total.
+    onFailure = { _, _ -> PumpVerdict.STOP },
+    name = "sample-ledger",
+) { delta ->
+    require(delta > -10) { "this delta could not be applied" }
+    ledger += delta
 }
 pump.join()
 ```

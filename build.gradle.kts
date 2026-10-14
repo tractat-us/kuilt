@@ -8593,12 +8593,16 @@ val forbidBareLaunchIn by tasks.registering {
                     "`:kuilt-core`, which owns both halves in one call:\n" +
                     "      flow.pumpIn(\n" +
                     "          scope = scope,\n" +
-                    "          onFailure = { phase, failure -> logger.warn(failure) { \"pump died: \$phase\" } },\n" +
+                    "          onFailure = { phase, failure ->\n" +
+                    "              logger.warn(failure) { \"pump failed: \$phase\" }\n" +
+                    "              PumpVerdict.CONTINUE   // or STOP, if items build on each other\n" +
+                    "          },\n" +
                     "          name = \"composite-ply-peers[\$plyId]\",   // distinct PER INSTANCE, not per site\n" +
                     "      ) { item -> … }\n" +
                     "  `onFailure` and `name` are required, not defaulted: a pump that absorbs in silence " +
                     "is what this defect class is made of, and an anonymous pump is one whose death " +
-                    "cannot be attributed in a coroutine dump (#1811).\n" +
+                    "cannot be attributed in a coroutine dump (#1811). `onFailure`'s `PumpVerdict` is how " +
+                    "a pump stops itself — never by cancelling the Job `pumpIn` returns (#2829).\n" +
                     "  If this flow COMPLETES — a bounded collection, where there is no long-lived pump " +
                     "to lose — say so, trailing on this line or in the comment block directly above it:\n" +
                     "      // ALLOW-bareLaunchIn: <why this flow terminates>\n" +

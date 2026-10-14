@@ -9,8 +9,11 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
+import kotlin.jvm.JvmName
 
 /**
  * Which half of a [pumpIn] pump failed — and, decisively, whether the pump is still running.
@@ -21,8 +24,8 @@ import kotlinx.coroutines.launch
  */
 public enum class PumpFailure {
     /**
-     * The collector body threw on one item. **The pump survives** and consumes the next item; only this
-     * item's work was lost.
+     * The collector body threw on one item. Only this item's work was lost, and **the pump survives**
+     * unless [onFailure][pumpIn] answers [PumpVerdict.STOP].
      */
     ITEM,
 
@@ -34,6 +37,31 @@ public enum class PumpFailure {
      * guarded-launch helper someone composes with a `.catch` they have to remember (#1788).
      */
     UPSTREAM,
+}
+
+/**
+ * What a [pumpIn] pump does after [onFailure][pumpIn] has been told about a failure — the consumer's
+ * policy, stated as the callback's return value rather than built beside it (#2829).
+ *
+ * It decides something only for [PumpFailure.ITEM]. After [PumpFailure.UPSTREAM] the flow has already
+ * ended, so both answers mean the same thing: the pump is over.
+ *
+ * @sample us.tractat.kuilt.core.samplePumpInStop
+ */
+public enum class PumpVerdict {
+    /** Keep pumping: the next item is consumed. What every pump did before this verdict existed. */
+    CONTINUE,
+
+    /**
+     * End this pump now. The body is never called again, nothing further is reported, and the scope — with
+     * every sibling in it — is untouched. The pump's [Job] completes **normally** once the flow lets the
+     * stop through; a flow that catches it around `emit` never reaches the body again, but the pump ends
+     * only when that flow does, or when its scope is cancelled — as with `take` on the same flow.
+     *
+     * The answer for a pump whose items are not independent, where carrying on past a half-applied item
+     * would build on state the failure left inconsistent.
+     */
+    STOP,
 }
 
 /**
@@ -82,12 +110,35 @@ public enum class PumpFailure {
  * is the discriminator that decides it at runtime; it throws only when this job really was cancelled and
  * falls through on a callee-minted one, which then becomes an ordinary [PumpFailure.ITEM].
  *
- * ### [onFailure] cannot kill the pump either — except with an [Error]
+ * ### [onFailure] decides whether the pump goes on: [PumpVerdict]
+ * Some pumps cannot carry on past a failed item — the item was half-applied, and the next one would build
+ * on what it left behind. [onFailure] says so by returning [PumpVerdict.STOP]; a pump whose items are
+ * independent returns [PumpVerdict.CONTINUE]. Stopping is a return value rather than a handle for a
+ * reason: the obvious handle, the [Job] this function returns, does not exist yet when the first item
+ * fails under [CoroutineStart.UNDISPATCHED] or an immediate dispatcher, because that item runs inside the
+ * `pumpIn` call. A `lateinit var job` cancelled from [onFailure] then throws instead of cancelling, the
+ * throw is absorbed below, and the pump consumes the next item it was meant to stop before (#2829). A
+ * verdict is acted on in the pump's own frame, before the next item, with nothing to capture.
+ *
+ * [PumpVerdict.STOP] ends the collection the way `take` does, not by cancelling anything: the body is not
+ * called again, a hot flow is unsubscribed from, the pump's [Job] completes normally, and nothing is
+ * reported — no [PumpFailure.UPSTREAM] for the stop, and no cancellation for the scope or its siblings to
+ * see. After [PumpFailure.UPSTREAM] the verdict changes nothing, because the flow has already ended.
+ *
+ * Like `take`, it rests on the flow letting the stop through. A flow that catches it around `emit` — a
+ * relay that logs and carries on whatever `emit` threw — never reaches the body again and reports
+ * nothing more, but the pump ends only when that flow does, or when its scope is cancelled, so a `join`
+ * on it waits until then.
+ *
+ * ### [onFailure] cannot kill the pump by throwing — except with an [Error]
  * It is invoked inside a guard that absorbs everything it throws short of an [Error] —
- * `CancellationException` included. It is **non-suspending** and called outside any cancellation
- * contract, so there is no cancellation of ours for it to be reporting and nothing to preserve by
- * rethrowing; and a rethrow here would escape the very guard this exists to be. A consumer's logger must
- * never be able to kill a pump by accident.
+ * `CancellationException` included — and a throw is read as [PumpVerdict.CONTINUE]. It is
+ * **non-suspending** and called outside any cancellation contract, so there is no cancellation of ours
+ * for it to be reporting and nothing to preserve by rethrowing; and a rethrow here would escape the very
+ * guard this exists to be. A consumer's logger must never be able to kill a pump by accident, and a pump
+ * that stopped because its logger threw would be a dead pump nothing had reported — the defect this
+ * function exists to prevent. So a pump whose policy is [PumpVerdict.STOP] must not let anything it does
+ * before returning the verdict throw.
  *
  * ### An [Error] is not a pump failure: it escapes, and the pump dies with it
  * An `OutOfMemoryError`, a `StackOverflowError`, an `AssertionError` or a consumer's own `Error` says the
@@ -156,10 +207,11 @@ public enum class PumpFailure {
  *
  * @param scope the scope the pump runs in. Cancelling it still cancels the pump: a genuine cancellation
  *   of *this* job propagates through both guards untouched.
- * @param onFailure invoked with which half failed and the throwable. Required, not defaulted — a pump
- *   that absorbs in silence is what this class of defect is made of, and every caller should have to
- *   decide what to do about a dead pump. `:kuilt-core` is logger-free by contract, so this is the only
- *   signal there is. Best-effort and non-suspending.
+ * @param onFailure invoked with which half failed and the throwable, and returns whether the pump goes
+ *   on — see [PumpVerdict]. Required, not defaulted — a pump that absorbs in silence is what this class
+ *   of defect is made of, and every caller should have to decide what to do about a dead pump.
+ *   `:kuilt-core` is logger-free by contract, so this is the only signal there is. Best-effort and
+ *   non-suspending.
  * @param name what this pump is called in a coroutine dump or census — see the section above. Make it
  *   **distinct per pump instance**, not per call site: where several pumps of one kind run side by side,
  *   qualify it with whatever tells them apart (`"composite-ply-peers[$plyId]"`), so a census can
@@ -168,33 +220,26 @@ public enum class PumpFailure {
  *   [CoroutineStart.UNDISPATCHED], which leaves the pump subscribed to a hot flow before `pumpIn` returns.
  * @param body the per-item work.
  * @return the pump's [Job]. After [PumpFailure.UPSTREAM] it completes **normally** — the pump is over,
- *   but it ended with a diagnosis rather than a `SIGABRT`. After an [Error] it **fails** with that error.
+ *   but it ended with a diagnosis rather than a `SIGABRT`. After [PumpVerdict.STOP] it completes
+ *   normally too, once the flow lets the stop through — see above. After an [Error] it **fails** with
+ *   that error.
  */
+// The JVM name differs from the hidden `Unit`-callback overload below only because both callbacks erase
+// to `Function2`; on every other target the two already have distinct signatures.
+@JvmName("pumpInWithVerdict")
 public fun <T> Flow<T>.pumpIn(
     scope: CoroutineScope,
-    onFailure: (PumpFailure, Throwable) -> Unit,
+    onFailure: (PumpFailure, Throwable) -> PumpVerdict,
     name: String,
     start: CoroutineStart = CoroutineStart.DEFAULT,
     body: suspend (T) -> Unit,
 ): Job {
-    val guarded = onEach { value ->
-        try {
-            body(value)
-        } catch (error: Error) {
-            // Never an item failure — the process is in trouble, and the pump dies with it. See the KDoc.
-            throw error
-        } catch (failure: Throwable) {
-            // Genuinely our own cancellation → rethrow, so the pump stops as structured concurrency
-            // intends; anything else — INCLUDING a `CancellationException` the callee minted itself — is
-            // this item's failure. See the KDoc.
-            currentCoroutineContext().ensureActive()
-            reportPumpFailure(onFailure, PumpFailure.ITEM, failure)
-        }
-    }
-        // The half the `try` above structurally cannot see. Applied AFTER the body guard so it is
-        // downstream of it, and therefore sees the flow's own failures — the guard above has already
+    val guarded = guardedItems(body, onFailure)
+        // The half the item guard structurally cannot see. Applied AFTER the item guard so it is
+        // downstream of it, and therefore sees the flow's own failures — the item guard has already
         // absorbed everything [body] can raise except an `Error`. An `Error` passes through untouched,
-        // whether the flow raised it or the body guard rethrew it.
+        // whether the flow raised it or the body guard rethrew it. The verdict is discarded: the flow
+        // has already ended, so STOP and CONTINUE are the same outcome here.
         .catch { failure ->
             if (failure is Error) throw failure
             reportPumpFailure(onFailure, PumpFailure.UPSTREAM, failure)
@@ -208,11 +253,71 @@ public fun <T> Flow<T>.pumpIn(
 }
 
 /**
- * The signature [pumpIn] had before it took a [CoroutineStart], kept so a binary compiled against it
- * still links. Hidden, so source sees one `pumpIn`; it is [pumpIn] with [CoroutineStart.DEFAULT].
+ * [pumpIn]'s item guard: [body] on each item, a failure reported through [onFailure], and its verdict
+ * acted on before the next item.
+ *
+ * `transformWhile` rather than `onEach`, so a STOP ends the collection where it was decided: returning
+ * `false` aborts the upstream the way `take` does, and the abort is consumed inside that operator — the
+ * upstream guard downstream of this never sees it, so a stop is not reported as an UPSTREAM failure.
+ *
+ * The abort only ends a flow that lets it through. One that catches it and emits again — a `Flow`
+ * implemented directly, or a `flow {}` that wraps each `emit` in a `catch` — would reach the body again,
+ * so `stopped` latches the verdict and every later item is refused before the body. The latch lives
+ * inside the `flow {}`, so each collection gets its own.
+ */
+private fun <T> Flow<T>.guardedItems(
+    body: suspend (T) -> Unit,
+    onFailure: (PumpFailure, Throwable) -> PumpVerdict,
+): Flow<Nothing> = flow {
+    var stopped = false
+    emitAll(
+        transformWhile<T, Nothing> { value ->
+            if (stopped) return@transformWhile false
+            try {
+                body(value)
+                true
+            } catch (error: Error) {
+                // Never an item failure — the process is in trouble, and the pump dies with it. See the
+                // KDoc on [pumpIn].
+                throw error
+            } catch (failure: Throwable) {
+                // Genuinely our own cancellation → rethrow, so the pump stops as structured concurrency
+                // intends; anything else — INCLUDING a `CancellationException` the callee minted itself —
+                // is this item's failure. See the KDoc on [pumpIn].
+                currentCoroutineContext().ensureActive()
+                stopped = reportPumpFailure(onFailure, PumpFailure.ITEM, failure) == PumpVerdict.STOP
+                !stopped
+            }
+        },
+    )
+}
+
+/**
+ * The signature [pumpIn] had before [onFailure] returned a [PumpVerdict] (#2829), kept so a binary compiled
+ * against it still links. Hidden, so source sees one `pumpIn`; it is [pumpIn] with every failure answered
+ * [PumpVerdict.CONTINUE], which is exactly what that signature did.
  */
 @Deprecated(
-    "Kept for binary compatibility; call pumpIn, whose start defaults to DEFAULT.",
+    "Kept for binary compatibility; call pumpIn, whose onFailure returns a PumpVerdict.",
+    level = DeprecationLevel.HIDDEN,
+)
+public fun <T> Flow<T>.pumpIn(
+    scope: CoroutineScope,
+    onFailure: (PumpFailure, Throwable) -> Unit,
+    name: String,
+    // Load-bearing although source never calls this: the default is what still emits `pumpIn$default`,
+    // which every binary that omitted `start` links against.
+    start: CoroutineStart = CoroutineStart.DEFAULT,
+    body: suspend (T) -> Unit,
+): Job = pumpIn(scope, alwaysContinue(onFailure), name, start, body)
+
+/**
+ * The signature [pumpIn] had before it took a [CoroutineStart] (#2826), kept so a binary compiled against
+ * it still links. Hidden, so source sees one `pumpIn`; it is [pumpIn] with [CoroutineStart.DEFAULT] and
+ * every failure answered [PumpVerdict.CONTINUE].
+ */
+@Deprecated(
+    "Kept for binary compatibility; call pumpIn, whose onFailure returns a PumpVerdict.",
     level = DeprecationLevel.HIDDEN,
 )
 public fun <T> Flow<T>.pumpIn(
@@ -220,17 +325,25 @@ public fun <T> Flow<T>.pumpIn(
     onFailure: (PumpFailure, Throwable) -> Unit,
     name: String,
     body: suspend (T) -> Unit,
-): Job = pumpIn(scope, onFailure, name, CoroutineStart.DEFAULT, body)
+): Job = pumpIn(scope, alwaysContinue(onFailure), name, CoroutineStart.DEFAULT, body)
+
+/** A pre-#2829 `Unit` callback, answering [PumpVerdict.CONTINUE] — the only behaviour it ever had. */
+private fun alwaysContinue(onFailure: (PumpFailure, Throwable) -> Unit): (PumpFailure, Throwable) -> PumpVerdict =
+    { phase, failure ->
+        onFailure(phase, failure)
+        PumpVerdict.CONTINUE
+    }
 
 /**
- * Hand a pump failure to a consumer callback, absorbing whatever the callback throws short of an [Error]
- * — see [pumpIn]'s KDoc for why, and why this is not the banned bare `runCatching`.
+ * Hand a pump failure to a consumer callback and return its verdict, absorbing whatever the callback
+ * throws short of an [Error] and reading that as [PumpVerdict.CONTINUE] — see [pumpIn]'s KDoc for why,
+ * and why this is not the banned bare `runCatching`.
  */
 private fun reportPumpFailure(
-    onFailure: (PumpFailure, Throwable) -> Unit,
+    onFailure: (PumpFailure, Throwable) -> PumpVerdict,
     phase: PumpFailure,
     failure: Throwable,
-) {
+): PumpVerdict =
     try {
         onFailure(phase, failure)
     } catch (error: Error) {
@@ -238,6 +351,7 @@ private fun reportPumpFailure(
     } catch (_: Throwable) {
         // Deliberately total short of an `Error`, `CancellationException` included: this runs inside the
         // pump's own guard, so a rethrow escapes it and kills the pump silently — the very defect the hook
-        // exists to report.
+        // exists to report. CONTINUE, not STOP, for the same reason: a pump stopped by its own logger's
+        // throw is a dead pump nothing reported.
+        PumpVerdict.CONTINUE
     }
-}

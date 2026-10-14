@@ -29,6 +29,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.PlyId
 import us.tractat.kuilt.core.PumpFailure
+import us.tractat.kuilt.core.PumpVerdict
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -435,9 +436,11 @@ internal class CompositeSeam(
      * a bigger decision than this fix.
      */
     @Suppress("UNUSED_PARAMETER")
-    private fun absorbDesiredFailure(half: PumpFailure, failure: Throwable) {
-        // Deliberately empty — see the KDoc. Named rather than a `{ _, _ -> }` at the call site so the
-        // absorption has somewhere to be argued and cannot be read as an oversight.
+    private fun absorbDesiredFailure(half: PumpFailure, failure: Throwable): PumpVerdict {
+        // Deliberately reports nothing — see the KDoc. Named rather than a `{ _, _ -> }` at the call site so
+        // the absorption has somewhere to be argued and cannot be read as an oversight. CONTINUE: one
+        // failed reconcile is isolated per ply, so the next desired set is still worth applying.
+        return PumpVerdict.CONTINUE
     }
 
     /**
@@ -447,12 +450,15 @@ internal class CompositeSeam(
      * phase, because "that strand of this ply will never update again" and "one delivery was lost" are not
      * degrees of the same event, and only the reporter can still tell them apart.
      */
-    private fun plyPumpFailure(id: PlyId): (PumpFailure, Throwable) -> Unit = { half, failure ->
+    private fun plyPumpFailure(id: PlyId): (PumpFailure, Throwable) -> PumpVerdict = { half, failure ->
         val phase = when (half) {
             PumpFailure.ITEM -> PlyReconcileException.Phase.PUMP
             PumpFailure.UPSTREAM -> PlyReconcileException.Phase.PUMP_ENDED
         }
         raisePlyFailure(id, phase, failure)
+        // Each item is the ply's latest whole value, not a delta, so the next one repairs what this one
+        // failed to mirror.
+        PumpVerdict.CONTINUE
     }
 
     /**
@@ -760,7 +766,11 @@ internal class CompositeSeam(
         // for a dropped frame and is simply vacuous once the flow has ended.
         seam.incoming.pumpIn(
             plyScope,
-            onFailure = { _, failure -> raisePlyFailure(id, PlyReconcileException.Phase.INBOUND, failure) },
+            onFailure = { _, failure ->
+                raisePlyFailure(id, PlyReconcileException.Phase.INBOUND, failure)
+                // A malformed frame is a dropped frame, and the ply keeps delivering — see above.
+                PumpVerdict.CONTINUE
+            },
             name = "composite-ply-inbound[${id.value}]",
         ) { swatch ->
             onPlyFrame(id, swatch)
