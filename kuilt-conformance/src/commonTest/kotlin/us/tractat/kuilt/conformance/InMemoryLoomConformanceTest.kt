@@ -19,6 +19,18 @@ import us.tractat.kuilt.core.Seam
  * [SeamConformanceSuite.peersDrainWithoutTearOnInjectedMembershipDrain].
  */
 class InMemoryLoomConformanceTest : SeamConformanceSuite() {
+
+    /** The reference cannot construct either malformed announcement through its weave API. */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.NotConstructible(
+            "InMemoryLoom mints fresh identities internally; this harness cannot supply an announced id",
+        )
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.NotConstructible(
+            "InMemoryLoom mints fresh identities internally; this harness cannot supply an announced id",
+        )
+
     private val loom = InMemoryLoom()
     override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
 

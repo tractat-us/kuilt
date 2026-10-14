@@ -41,6 +41,14 @@ import kotlin.time.Duration.Companion.seconds
  */
 class TcpConformanceTest : SeamConformanceSuite() {
 
+    /** The current rig does not inject malformed announcements; these obligations remain unproven. */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.DUPLICATE_PEER_ID)
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
+
+
     private companion object {
         /**
          * A TCP session is ONE connection, so one accepted socket is the whole transport under both
