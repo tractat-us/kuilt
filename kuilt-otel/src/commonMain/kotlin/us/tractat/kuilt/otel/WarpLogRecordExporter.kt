@@ -18,6 +18,7 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.VersionVector
 import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.InMemoryDurableStore
@@ -183,7 +184,7 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  *
  * Windowing alone leaves the store growing: a windowed-away `Insert` leaves `log`, but it
  * stays in whichever *sealed* segment it landed in. A sealed segment whose every op the
- * suppression state already covers contributes **nothing** to what recovery reconstructs —
+ * durably written suppression state already covers contributes **nothing** to what recovery reconstructs —
  * the union re-purges those ops under the floor and the retained `Compact`s — so its key can
  * be deleted. That is what a [windowPass] does next, and **on the export path** it is what keeps
  * the number of keys recovery opens flat instead of growing with the records ever exported — the
@@ -429,14 +430,16 @@ public class WarpLogRecordExporter(
     // Guarded by `lock`, like everything above. Only the segment NUMBERS are held —
     // the ops live in `log`, and the segments are how it is persisted.
     //
-    // The invariant is that **the segments' union `piece`s to `log`** — NOT that their op-sets
-    // are equal. Set equality held before windowing and is false now: a windowed-away `Insert`
-    // leaves `log` but stays in whichever SEALED segment it landed in until that segment is
+    // When all merged state has been persisted, the segments' union `piece`s to `log`;
+    // failed turns can leave additional live state without a durable copy. Even when all
+    // writes succeed the op-sets need not be equal: a windowed-away `Insert` leaves `log`
+    // but stays in whichever SEALED segment it landed in until that segment is
     // retired, so the raw union is a strict superset. What makes recovery exact is that the
     // union is taken with `Rga.piece`, which merges the floor and the retained `Compact`s the
     // active segment carries and re-purges those ops under them. Every write path preserves the
     // `piece` form: a pass's covering state rides in the active-segment write, and a segment is
-    // retired only once that state covers every op it holds.
+    // retired only once durable coverage (including this turn's preceding writes) covers every
+    // op it holds. `log` alone is not evidence of that coverage after a failed merge.
     //
     // A number leaves `sealedSegments` in exactly one way: it moves to `retiringSegments`,
     // which is the on-disk ledger's in-memory mirror, and is deleted from there. It is never
@@ -445,6 +448,30 @@ public class WarpLogRecordExporter(
     // startup is recorded as SegmentContent.Pinned and so keeps its place here, which is what
     // keeps a transient read failure costing one segment's records for one run rather than
     // deleting them.
+
+    /**
+     * Suppression recovered from disk or carried by acknowledged segment writes. Guarded by
+     * [lock]. Unlike [log], this never absorbs an unacknowledged remote merge: that adopt can
+     * be abandoned and swept, so its Compact ids cannot authorize deletion of another segment.
+     * Stores only the floor and ids, never a second copy of the log's records.
+     */
+    private var durableSuppression = Suppression()
+
+    private class Suppression(
+        val floor: VersionVector = VersionVector.EMPTY,
+        val compacted: Set<RgaId> = emptySet(),
+    ) {
+        fun plus(other: Suppression): Suppression = Suppression(
+            floor.ceilWith(other.floor),
+            // Rewriting an active segment must not copy the entire durable id history again.
+            if (compacted.containsAll(other.compacted)) compacted else compacted + other.compacted,
+        )
+
+        companion object {
+            fun of(segment: Rga<LogRecord>): Suppression =
+                Suppression(segment.compactedBelow, segment.compactedIds)
+        }
+    }
 
     private val sealedSegments: MutableList<Int> = mutableListOf()
 
@@ -583,6 +610,9 @@ public class WarpLogRecordExporter(
         /** Write [bytes] under [key]. */
         class Put(val key: StoreKey, val bytes: ByteArray) : StoreAction
 
+        /** Advance durable suppression only after these exact active-segment bytes are acknowledged. */
+        class CommitActive(val key: StoreKey, val bytes: ByteArray, val suppression: Suppression) : StoreAction
+
         /**
          * The **commit point** of a retirement: write [bytes] — an index naming [numbers] under
          * [LogSegmentIndex.retired] — and, only once that write has *returned*, move [numbers]
@@ -663,7 +693,12 @@ public class WarpLogRecordExporter(
          * [number] on the retirement ledger instead ([abandonAdopt]), so it is named and swept
          * rather than orphaned or read back as a phantom.
          */
-        class CommitAdopt(val number: Int, val bytes: ByteArray, val content: SegmentContent) : StoreAction
+        class CommitAdopt(
+            val number: Int,
+            val bytes: ByteArray,
+            val content: SegmentContent,
+            val suppression: Suppression,
+        ) : StoreAction
 
         /**
          * Best-effort delete of retired segment [number]'s key.
@@ -796,7 +831,8 @@ public class WarpLogRecordExporter(
         // keeping the split matters more here, not less.
         runCatchingCancellable {
             val entries = recovered.log.entries()
-            lock.withLock { install(recovered, entries) }
+            val suppression = Suppression.of(recovered.log)
+            lock.withLock { install(recovered, entries, suppression) }
         }.onFailure { cause ->
             logger.error(cause) { "otel.logs: recovered state could not be installed, starting fresh" }
             // Start fresh on the RECORDS, never on the numbering. Leaving the segment
@@ -986,8 +1022,13 @@ public class WarpLogRecordExporter(
     }
 
     /** Install a [RecoveredState] and its already-materialized entries. Must hold [lock]. */
-    private fun install(recovered: RecoveredState, entries: List<Pair<RgaId, LogRecord>>) {
+    private fun install(
+        recovered: RecoveredState,
+        entries: List<Pair<RgaId, LogRecord>>,
+        suppression: Suppression,
+    ) {
         log = recovered.log
+        durableSuppression = suppression
         sealedSegments.clear()
         sealedSegments.addAll(recovered.sealedSegments.distinct())
         installSealedContents(recovered.sealedContents)
@@ -1433,7 +1474,7 @@ public class WarpLogRecordExporter(
                 // never rolled rewrote one ever-growing key on every merge — Θ(merges²) bytes,
                 // the exact defect the segmented layout exists to prevent.
                 if (windowPassDue() && windowPass()) {
-                    adopted.actions + flushActiveSegment(retire = true, adopting = listOf(adopted.number))
+                    adopted.actions + flushActiveSegment(retire = true, adopting = adopted)
                 } else {
                     adopted.actions
                 }
@@ -1523,8 +1564,8 @@ public class WarpLogRecordExporter(
                 // earlier pass's covering write ever landed.
                 //
                 // retire = true is sound for the same reason it is on the other two paths: the
-                // pass has put the current suppression state into `activeSegment`, and
-                // pendingWrites queues that write ahead of the retirement it gates. On a retry
+                // pass has put its suppression delta into `activeSegment`, and pendingWrites
+                // combines that write's coverage with acknowledged suppression for retirement. On a retry
                 // the pass is a no-op but `activeSegment` still carries the floor from the
                 // first attempt, so the write is still covering and the sealed segments are
                 // still retirable against `log.compactedBelow`.
@@ -1634,6 +1675,10 @@ public class WarpLogRecordExporter(
         actions.forEach { action ->
             when (action) {
                 is StoreAction.Put -> store.write(action.key, action.bytes)
+                is StoreAction.CommitActive -> {
+                    store.write(action.key, action.bytes)
+                    lock.withLock { durableSuppression = durableSuppression.plus(action.suppression) }
+                }
                 is StoreAction.CommitRetirement -> {
                     store.write(INDEX_KEY, action.bytes)
                     lock.withLock { applyRetirement(action.numbers) }
@@ -1749,7 +1794,7 @@ public class WarpLogRecordExporter(
         // this write restates the ledger; it cannot extend it. It does extend it with an abandoned
         // adopt's number (see abandonAdopt), which was never sealed and needs no covering write.
         if (!indexPersisted) actions += StoreAction.Put(INDEX_KEY, encodeIndex())
-        actions += flushActiveSegment(retire = retire, adopting = emptyList())
+        actions += flushActiveSegment(retire = retire, adopting = null)
         return actions
     }
 
@@ -1759,9 +1804,9 @@ public class WarpLogRecordExporter(
      * hold [lock].
      *
      * [retire] is the caller's answer to "did a [windowPass] just run?", and it gates retirement
-     * because a pass is the only thing that puts the *current* suppression state into
-     * [activeSegment] — so it is the only point at which the write immediately below is known to
-     * carry the state that supersedes whatever is about to be deleted.
+     * because a pass puts its suppression delta into [activeSegment]. Coverage combines that
+     * write with [durableSuppression] and this turn's adopted write, never with [log]: a failed
+     * earlier merge can leave Compact ids in the live log with no durable carrier.
      *
      * Shared rather than restated **because the roll is the part a second call site forgets**.
      * [merge] once emitted the segment write and the retirement without it, and the omission was
@@ -1772,22 +1817,35 @@ public class WarpLogRecordExporter(
      * written and one key growing without bound, which is what [segmentOps] exists to rule out.
      * A key count stays flat throughout, so only a byte measurement sees it.
      *
-     * [adopting] is the segment number a merge earlier in this same turn has staged but not yet
+     * [adopting] describes the segment a merge earlier in this same turn has staged but not yet
      * sealed ([StoreAction.CommitAdopt]); every index write emitted here projects it as sealed.
-     * Empty on the export path, which adopts nothing.
+     * Null on the export path, which adopts nothing.
      */
-    private fun flushActiveSegment(retire: Boolean, adopting: List<Int>): List<StoreAction> {
+    private fun flushActiveSegment(retire: Boolean, adopting: PendingAdopt?): List<StoreAction> {
         val actions = mutableListOf<StoreAction>()
-        actions += activeSegmentWrite()
-        val retirement = if (retire) retireSupersededSegments(adopting) else PendingRetirement.NONE
+        val activeWrite = activeSegmentWrite()
+        actions += activeWrite
+        val adoptedNumbers = adopting?.let { listOf(it.number) } ?: emptyList()
+        // This is a projection, not a durable-state update. Every write supplying this coverage
+        // precedes the retirement action; storeTurn stops if any of them is unacknowledged.
+        val retirement = if (retire) {
+            val coverage = durableSuppression.plus(activeWrite.suppression)
+                .plus(adopting?.suppression ?: Suppression())
+            retireSupersededSegments(adoptedNumbers, coverage)
+        } else {
+            PendingRetirement.NONE
+        }
         actions += retirement.actions
-        if (activeOpCount >= segmentOps) actions += rollActiveSegment(retirement.staged, adopting)
+        if (activeOpCount >= segmentOps) actions += rollActiveSegment(retirement.staged, adoptedNumbers)
         return actions
     }
 
     /** The write that puts the current [activeSegment] on disk under its own key. Must hold [lock]. */
-    private fun activeSegmentWrite(): StoreAction =
-        StoreAction.Put(segmentKey(activeNumber), cbor.encodeToByteArray(logSerializer, activeSegment))
+    private fun activeSegmentWrite(): StoreAction.CommitActive = StoreAction.CommitActive(
+        segmentKey(activeNumber),
+        cbor.encodeToByteArray(logSerializer, activeSegment),
+        Suppression.of(activeSegment),
+    )
 
     /**
      * **Stage** the seal of a full active segment and the opening of a fresh one, and emit the
@@ -1897,8 +1955,10 @@ public class WarpLogRecordExporter(
      */
     private fun adoptRemoteSegment(remote: Rga<LogRecord>): PendingAdopt {
         val number = nextSegmentNumber++
+        val suppression = Suppression.of(remote)
         return PendingAdopt(
             number = number,
+            suppression = suppression,
             actions = listOf(
                 StoreAction.Put(INDEX_KEY, encodeIndex(sealed = sealedSegments + number)),
                 StoreAction.CommitAdopt(
@@ -1908,13 +1968,18 @@ public class WarpLogRecordExporter(
                     // key — so a remote log carrying an `RgaOp.Compact` pins its segment from the
                     // moment it lands.
                     content = contentOf(remote, number),
+                    suppression = suppression,
                 ),
             ),
         )
     }
 
     /** A merge's adopted segment: the number it reserved, and the actions that carry it to disk. */
-    private class PendingAdopt(val number: Int, val actions: List<StoreAction>)
+    private class PendingAdopt(
+        val number: Int,
+        val suppression: Suppression,
+        val actions: List<StoreAction>,
+    )
 
     /**
      * Apply an adopt whose segment write has **returned**: seal [StoreAction.CommitAdopt.number]
@@ -1927,6 +1992,7 @@ public class WarpLogRecordExporter(
         check(adopt.number !in sealedSegments) { "otel.logs: adopted segment ${adopt.number} is already sealed" }
         sealedSegments += adopt.number
         sealedContents[adopt.number] = adopt.content
+        durableSuppression = durableSuppression.plus(adopt.suppression)
     }
 
     /**
@@ -2028,8 +2094,9 @@ public class WarpLogRecordExporter(
         }
 
     /**
-     * Sealed segments whose every op the current suppression state already covers, and which
-     * carry no [RgaOp.Compact] of their own. Must hold [lock].
+     * Sealed segments whose every op [coverage] covers, and which carry no [RgaOp.Compact] of
+     * their own. Coverage comes only from recovered or acknowledged suppression plus writes
+     * queued before this retirement in the same turn. Must hold [lock].
      *
      * Candidates come from [sealedContents]' **entries**, not from [sealedSegments]. That is the
      * whole defence against the vacuity this file's hazard is: with a lookup, a segment that
@@ -2060,13 +2127,13 @@ public class WarpLogRecordExporter(
      * which absorbs this replica's own windowed-away dots, and [Rga.compactedIds], which is where
      * a *foreign* author's land because [Rga.dropWindow] can never raise a foreign floor entry.
      */
-    private fun retirableSegments(): List<Int> {
+    private fun retirableSegments(coverage: Suppression): List<Int> {
         check(sealedContents.keys == sealedSegments.toSet()) {
             "otel.logs: sealedContents must describe exactly the sealed segments — a sealed segment " +
                 "nothing is known about is Pinned, never absent; got ${sealedContents.keys} for $sealedSegments"
         }
-        val floor = log.compactedBelow
-        val compacted = log.compactedIds
+        val floor = coverage.floor
+        val compacted = coverage.compacted
         val retirable = mutableListOf<Int>()
         for ((number, content) in sealedContents) {
             if (content !is SegmentContent.Ids) continue
@@ -2083,7 +2150,8 @@ public class WarpLogRecordExporter(
      * The order, extending this file's own precedent that the index is the commit point:
      *
      * 1. the covering state — the raised floor, and any `RgaOp.Compact` the pass minted — rides
-     *    in the active-segment write the caller has already queued ahead of this;
+     *    in the active-segment write the caller has already queued ahead of this. Other coverage
+     *    comes from acknowledged writes or this turn's preceding adopted-segment write;
      * 2. an index write moves the numbers out of `sealedSegments` and into
      *    [LogSegmentIndex.retired]: **the commit point**, and the point at which the same move is
      *    applied in memory ([StoreAction.CommitRetirement]);
@@ -2121,8 +2189,8 @@ public class WarpLogRecordExporter(
      * still emits a ledger write when the ledger is non-empty: it restates a ledger already on
      * disk, and stages nothing.
      */
-    private fun retireSupersededSegments(adopting: List<Int>): PendingRetirement {
-        val retirable = retirableSegments()
+    private fun retireSupersededSegments(adopting: List<Int>, coverage: Suppression): PendingRetirement {
+        val retirable = retirableSegments(coverage)
         if (retirable.isEmpty() && retiringSegments.isEmpty()) return PendingRetirement.NONE
         val ledger = ledgerWith(retirable)
         logger.debug { "otel.logs: retiring superseded segments $retirable; ledger would be $ledger" }
