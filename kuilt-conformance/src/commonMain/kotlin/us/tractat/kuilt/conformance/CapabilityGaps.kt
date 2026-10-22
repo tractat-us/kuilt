@@ -1,19 +1,25 @@
 package us.tractat.kuilt.conformance
 
 /**
- * Stable [CapabilityGaps] URLs for by-design capability limitations
- * (see docs/architecture.md#capability-gaps-by-design).
+ * URLs explaining declared conformance gaps.
  *
- * **Every constant here points at a docs anchor, never at an issue, and that is load-bearing.** A
- * URL naming an issue asserts the work is outstanding, so it inverts the moment the issue closes —
- * silently, in published API, aimed at whoever writes the next fabric. All three harness-gap
- * constants below did exactly that: #1442, #1474 and #1502 had all closed while the constants still
- * cited them. A gap constant describes an evergreen *category* ("this harness cannot reach a
- * transport handle"), which outlives any particular issue that once tracked closing one instance of
- * it. Point a *fabric's own* blocking issue at the declaration site instead — as
- * [SeamConformanceSuite.payloadBudgetGap] documents — not at the shared constant.
+ * By-design capability limitations point at stable docs anchors (see
+ * docs/architecture.md#capability-gaps-by-design). An issue URL would incorrectly present those
+ * enduring categories as unfinished work, and become stale when the issue closed.
+ *
+ * [DUPLICATE_PEER_ID] and [BLANK_PEER_ID] instead track unfinished injection rigs under #2561.
+ * A harness that cannot construct an announcement by design should declare
+ * [ObligationDeclaration.NotApplicable.NotConstructible], not one of those gaps. A remaining
+ * injectable-but-unwired harness keeps that issue outstanding; proving the Apple rig alone does
+ * not close it. Fabric-specific blocking issues belong at the declaration site.
  */
 public object CapabilityGaps {
+    /** Unfinished duplicate-identity injection rigs; see [SeamConformanceSuite.injectDuplicatePeerId]. */
+    public const val DUPLICATE_PEER_ID: String = "https://github.com/tractat-us/kuilt/issues/2561"
+
+    /** Unfinished blank-identity injection rigs; see [SeamConformanceSuite.injectBlankPeerId]. */
+    public const val BLANK_PEER_ID: String = "https://github.com/tractat-us/kuilt/issues/2561"
+
     /** Fabrics unencrypted on the wire by design (plaintext ws://, raw TCP, in-memory). */
     public const val SECURES_TRANSPORT: String =
         "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#securestransport--fabrics-without-wire-encryption"

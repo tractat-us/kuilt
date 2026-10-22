@@ -1,5 +1,6 @@
 package us.tractat.kuilt.multipeer.internal
 
+import io.github.oshai.kotlinlogging.KLogger
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
@@ -38,7 +39,7 @@ import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import kotlin.coroutines.CoroutineContext
 
-private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.MCSessionLink")
+private val defaultLog = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.MCSessionLink")
 
 /**
  * `Seam` backed by an `MCSession`.
@@ -68,6 +69,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.MCSe
  * needs it refused: the delegate never binds it, and [remotes] keeps it out of
  * the send targets (#2445).
  *
+ * @param log Receives session events; injectable so a harness can count actual identity refusals.
  * @param policy Governs the inbound [Spool]'s capacity and overflow behaviour.
  *   Defaults to [DeliveryPolicy.Reliable] (bounded, backpressured, lossless).
  * @param dispatcher The context for the delivery drain coroutine (scheduling only).
@@ -80,6 +82,7 @@ internal class MCSessionLink(
     internal val session: MCSession,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     dispatcher: CoroutineContext = Dispatchers.Default,
+    private val log: KLogger = defaultLog,
 ) : Seam {
     override val selfId: PeerId = MultipeerPeerId.peerId(localPeerId.displayName)
 

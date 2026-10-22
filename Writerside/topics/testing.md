@@ -29,6 +29,7 @@ checked for you:
 
 ```kotlin
 class InMemoryLoomConformanceTest : SeamConformanceSuite() {
+    // …
     private val loom = InMemoryLoom()
     override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
     // …
@@ -36,7 +37,7 @@ class InMemoryLoomConformanceTest : SeamConformanceSuite() {
 ```
 
 That's the binding. The real class adds a few more overrides — which guarantees this fabric
-does and doesn't offer, plus two hooks the harness needs — but this is the part that matters.
+does and doesn't offer, plus declarations about events the harness can stage — but this is the part that matters.
 `newLoomPair()` returns the two peers to wire together —
 for the in-memory mesh the same instance plays both roles, so it's `loom to loom`. A
 new fabric (a WebSocket, a TCP socket) returns two distinct peers wired to reach each

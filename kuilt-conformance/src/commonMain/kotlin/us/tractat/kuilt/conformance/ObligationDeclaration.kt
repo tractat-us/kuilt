@@ -2,7 +2,7 @@ package us.tractat.kuilt.conformance
 
 /**
  * What a conformance harness says about one **injectable** obligation of [SeamConformanceSuite] —
- * the mid-session transport death, the membership drain, the self-dial.
+ * transport death, membership drain, self-dial, and duplicate or blank identity announcements.
  *
  * ## Why this exists
  *
@@ -23,7 +23,7 @@ package us.tractat.kuilt.conformance
  * `CLAUDE.md`: *"an 'I cannot reach this state' opt-out moves the vacuity one level up, where it is
  * harder to see."* A [NotApplicable] arm the suite simply **believed** would be strictly worse than
  * the tracked gap it replaces — it converts a visible, listed shortfall into an invisible,
- * self-certified green. So no arm is taken on trust. Every arm, on all three obligations, is
+ * self-certified green. So no arm is taken on trust. Every arm, on the injectable obligations, is
  * cross-checked against the harness's own injection hook, whose return value the harness cannot fake
  * without actually injecting:
  *
@@ -36,7 +36,7 @@ package us.tractat.kuilt.conformance
  *
  * That last cell is the one asymmetry, and it is deliberate rather than an omission: a refutation
  * needs a stimulus the suite can apply without the harness's help, and only the mid-session-death arm
- * has one (make the counterpart depart). The membership-drain and self-dial declarations get the hook
+ * has one (make the counterpart depart). The membership-drain, self-dial, and malformed-identity declarations get the hook
  * cross-check and the prose toll, and nothing more.
  *
  * [NotApplicable.ContractDiffers] is the strong arm, and the strength is the point: a harness cannot

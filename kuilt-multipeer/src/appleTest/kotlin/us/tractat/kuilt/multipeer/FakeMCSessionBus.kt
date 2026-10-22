@@ -120,6 +120,25 @@ internal class FakeMCSessionBus {
         return true
     }
 
+    /**
+     * Offer a distinct device to one endpoint, inspect the live announcement, then drop only that
+     * device. Keep device identity separate from displayName: a collision is precisely where names
+     * are equal. The newcomer is deliberately not a registered endpoint that could steal delivery.
+     */
+    fun injectIdentity(peer: MCPeerID, newcomer: MCPeerID, whileConnected: () -> Unit): Boolean {
+        val local = endpoints.firstOrNull { it.peer == peer } ?: return false
+        val delegate = local.session.delegate ?: return false
+        local.session.connected = local.session.connected + newcomer
+        try {
+            delegate.session(local.session, newcomer, MCSessionState.MCSessionStateConnected)
+            whileConnected()
+        } finally {
+            local.session.connected = local.session.connected.filterNot { it == newcomer }
+            delegate.session(local.session, newcomer, MCSessionState.MCSessionStateNotConnected)
+        }
+        return true
+    }
+
     /** Deliver [data] from [from] to every endpoint named in [toPeers]. */
     fun route(from: MCPeerID, data: NSData, toPeers: List<*>) {
         val targets = toPeers.filterIsInstance<MCPeerID>().map { it.displayName }.toSet()

@@ -52,6 +52,14 @@ import kotlin.random.Random
  */
 class NwConformanceTest : SeamConformanceSuite() {
 
+    /** The current rig does not inject malformed announcements; these obligations remain unproven. */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.DUPLICATE_PEER_ID)
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
+
+
     private companion object {
         const val SERVICE_TYPE = "_kuilt._tcp"
         const val HOST_DEVICE = "host"
