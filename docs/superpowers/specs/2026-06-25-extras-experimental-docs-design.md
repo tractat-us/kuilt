@@ -66,7 +66,7 @@ Accessible-first. Opening (plain, no jargon): your app runs across phones, brows
 and laptops; each device quietly records what happened — errors, timings, counts — so
 you can tell whether things are working. Normally those records are lost when a device
 is offline. kuilt keeps them safe on the device and syncs them up when the network
-returns, with nothing duplicated and nothing lost.
+returns. Sharing the same saved snapshot again does not add another copy.
 
 Then drill in (jargon introduced here, defined at first use):
 - This plugs into **OpenTelemetry** (the industry-standard way apps emit traces,
@@ -74,10 +74,11 @@ Then drill in (jargon introduced here, defined at first use):
   Prometheus) work unchanged.
 - The inversion: `export()` succeeds the moment data is *durably written locally*, not
   when it's delivered. Delivery is the fabric's job, whenever connectivity allows.
-- Why it's correct, not merely buffered: each signal is stored as a CRDT (spans → set
-  keyed by id, metrics → mergeable counters, logs → ordered sequence), so a resend is
-  idempotent — the delta-temporality double-count-under-retry bug is structurally
-  impossible.
+- Why snapshot merging is idempotent: each signal is stored as a CRDT (spans → set
+  of full records, metrics → mergeable counters, logs → ordered sequence). Retrying
+  an increment is a new operation. Retrying an unstamped span export after an
+  indeterminate write can leave distinct stamped copies with the same span id;
+  neither snapshot merge nor OTLP's span-id digest filter repairs those local copies.
 
 Links → `kuilt-otel` Dokka module (`/api/`) and the new `docs/offline-otel.md` design
 doc. Honest-limits one-liner with a pointer for depth.

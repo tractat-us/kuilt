@@ -9,7 +9,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpOtlpBridge"
 /**
  * Drains converged CRDTs — spans, logs, and metrics — to an OTLP-capable [OtlpEdge],
  * reconciling each signal by its own producer-local digest so a re-drain sends only
- * what the endpoint lacks.
+ * records absent from that digest.
  *
  * On each [drain] call, per signal, the bridge:
  * 1. Snapshots the local CRDT.
@@ -27,9 +27,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpOtlpBridge"
  * ## Why reconcile-by-digest?
  *
  * A naive replay would retransmit the entire buffer on every reconnect. A
- * digest-gated delta means the common case (edge already has the record) never
- * touches the wire, offline-then-reconnect sends only the gap, and the CRDT's
- * idempotent merge makes retries harmless.
+ * digest-gated delta skips span ids already recorded as delivered. A lost digest or
+ * failed acknowledgement can cause another send, which relies on [OtlpEdge.send]'s
+ * idempotency requirement. Snapshot merge is separately idempotent by full record
+ * equality. Retrying an unstamped export after an indeterminate write can leave
+ * distinct stamped copies with one span id; this bridge does not coalesce them.
+ * If their id is absent from the digest, both copies are eligible for delivery.
  *
  * ## Best-effort, per-signal isolation
  *
@@ -54,8 +57,9 @@ public class WarpOtlpBridge(
     /**
      * Drain everything the edge is missing, across all three signals.
      *
-     * Safe to call on every reconnect — the per-signal digest comparison ensures only
-     * new records move over the wire, and the CRDT merge makes a resend harmless.
+     * Reconnects compare against each signal's digest. Records absent from it may
+     * be resent, so delivery retries rely on the edge's idempotency contract.
+     * This does not make retries of [WarpSpanExporter.export] idempotent.
      *
      * @param edge the OTLP-capable backend to drain into.
      * @return [DrainResult.Success] when no attempted signal failed,

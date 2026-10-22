@@ -6,8 +6,10 @@ package us.tractat.kuilt.otel
  * an [OtlpEdge] serializes them — the edge never reaches into the CRDTs directly.
  *
  * [valueHash] is over the **OTLP value fields only** (not the observation time), so a
- * re-render of an unchanged series produces the same hash and is skipped by
- * [MetricDigest] — while a value that advanced re-sends exactly once.
+ * re-render of an unchanged series produces the same hash. Once that hash is in
+ * [MetricDigest], the bridge skips it; an advanced value is eligible for sending.
+ * Failed delivery or digest persistence can cause retries, so this is not an
+ * exactly-once delivery guarantee. Nor does it deduplicate repeated increments.
  *
  * The five variants mirror the five kinds a [MetricCatalog] holds: a long cumulative
  * sum ([Sum]), a double-precision cumulative sum ([DoubleSum]), a last-writer-wins

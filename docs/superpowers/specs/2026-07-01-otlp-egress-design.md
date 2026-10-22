@@ -1,5 +1,13 @@
 # OTLP egress — drain logs + metrics + spans by digest, plus a concrete Ktor edge
 
+> **Retry scope clarification (#2915):** the delivery deduplication described below
+> assumes an edge/backend that applies repeated ids idempotently. A lost digest or
+> acknowledgement can cause another POST; successful re-drain tests do not establish
+> exactly-once delivery. Snapshot merges compare full `SpanRecord` values, while
+> delivery digests filter span ids. Retrying an unstamped local export after an
+> indeterminate write can leave distinct stamped copies with the same span id;
+> neither snapshot merge nor the delivery digest repairs that local buffer.
+
 _Design for #1027 **and #846**. Part of the log-capture epic #986 (M2). Builds on
 the M1 capture buffer (`2026-06-27-log-capture-and-extraction-design.md`) and the
 spans-only egress bridge already in `:kuilt-otel`._
@@ -38,7 +46,7 @@ straight to a server the moment it happens — and if the phone is offline, or t
 laptop is on a plane, that telemetry is simply lost.
 
 kuilt keeps that telemetry in a small on-device store that survives being offline,
-merges cleanly when several devices later sync, and never double-counts. This
+merges the same saved snapshots without double-counting. This
 change adds the **last mile**: when the network comes back, quietly forward
 everything the server hasn't seen yet to a **standard OpenTelemetry collector** —
 the same endpoint your existing dashboards already read from.
@@ -128,7 +136,7 @@ consequences:
 - **Offline-first survives.** No dependency on a collector read API that doesn't
   exist. The bridge works against a dumb, standard, write-only collector.
 - **Correctness backstop stays at the collector.** If two producers both deliver
-  span *X*, the collector deduplicates by span-id (OTLP's own guarantee) — so the
+  span *X*, this design requires the collector to apply that span id idempotently — so the
   local digest is an *optimization* (don't waste the wire), and the collector is the
   *safety net* (never double-count). Losing the digest can only cost bandwidth,
   never correctness.
@@ -192,7 +200,8 @@ the same OTLP point, and re-sending it is pure waste:
 
 Drain, per series: render the OTLP point, hash it; if `key` absent from the digest
 **or** the hash differs, send it and record the new hash. Idempotent re-drain: all
-hashes match → nothing sent. A series whose value advanced re-sends exactly once.
+hashes match → nothing sent. After a successful send records the new hash, an
+unchanged value is skipped. A failed send or digest write can cause retries.
 
 > **Cumulative-temporality note.** OTLP `SUM` points carry
 > `(start_time, time, value)`. `start_time` is fixed per series (CRDT genesis);
@@ -439,7 +448,10 @@ Design points:
   both the spans and their links from the first drain. `inferCausalLinks` is
   deterministic (sorted output), so a re-drain that *did* have a delta emits exactly
   the same links — the collector dedups spans (and thus their attached links) by
-  span-id. No link is ever emitted twice for the same span.
+  span-id. An empty delta emits no links; delivery retries can emit them again.
+  This assumes an idempotent edge, not exactly-once emission. It also does not make
+  local export retries idempotent: an indeterminate span write followed by recovery
+  and retry can leave distinct stamped values with the same id.
 
 ### Coordination / ordering note
 
@@ -455,7 +467,7 @@ digest-extension PR (see PR split in open questions).
   reflect what it has received.
 - Assert first drain delivers spans + logs + metrics; **idempotent re-drain sends
   nothing new** for all three (the headline done-when).
-- Assert a metric whose value **advances** re-sends exactly once; an unchanged
+- With successful send and digest updates, assert an advanced metric sends once; an unchanged
   metric never re-sends.
 - Assert **partial failure isolation**: a fake that fails only `sendLogs` still
   delivers spans + metrics and reports them.
@@ -557,7 +569,8 @@ open and are called out again at the bottom of the plan for @keddie.
 
 - `WarpOtlpBridge.drain()` reconciles **spans + logs + metrics** each by its own
   digest against a fake `OtlpEdge`; an idempotent re-drain sends nothing new for all
-  three; an advanced metric re-sends exactly once; partial per-signal failure is
+  three after successful send and digest updates; an advanced metric sends once in
+  that fixture; partial per-signal failure is
   isolated.
 - `LogDigest` / `MetricDigest` / `MetricPoint` land; `OtlpEdge` is widened additively
   (defaults keep the spans path and the existing fake compiling);
@@ -572,8 +585,8 @@ open and are called out again at the bottom of the plan for @keddie.
   recovered/persisted on the durable path (no re-minted dots across restart).
 - **(#846) Link emission** — `drain()` runs `inferCausalLinks` over the span
   snapshot and threads the delta's links to the edge; the span→OTLP serializer emits
-  them on `Span.links` with `kuilt.causality=potential`; a re-drain emits links
-  idempotently (no double emission).
+  them on `Span.links` with `kuilt.causality=potential`; a re-drain with the
+  successfully updated digest emits no links for ids already recorded as delivered.
 - Full `./gradlew build` green. One or two ready PRs per the split above. The
   digest-extension PR **closes #846** (the concrete-edge PR, if split out, still
   carries the `Span.links` serializer test).
