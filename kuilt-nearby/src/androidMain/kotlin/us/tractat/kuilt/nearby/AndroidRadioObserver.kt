@@ -8,7 +8,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.wifi.WifiManager
 import com.google.android.gms.common.GoogleApiAvailability
-import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,13 +47,11 @@ import com.google.android.gms.common.ConnectionResult as GmsConnectionResult
  * [us.tractat.kuilt.core.FabricAvailability.Unknown], never a definite `Unavailable`. A radio we
  * were not permitted to read may well be on.
  *
- * ## Lifecycle — bounded per instance, NOT per process (see #2397)
- * Registered against the **application** context, so a single instance holds one process-lifetime
- * subscription and leaks into no shorter-lived object. That is only safe *per instance*: every
- * [nearbyLoom] call constructs a fresh [GmsNearbyApi] and therefore registers another receiver, and
- * ActivityManager caps a process at 1000. [close] unregisters and is idempotent, but [nearbyLoom]
- * exposes no route to it — a consumer that needs release must construct [GmsNearbyApi] itself and
- * hand it to [NearbyLoom]. Giving the loom a real lifecycle is #2397.
+ * ## Lifecycle
+ * [GmsNearbyApi] starts observation eagerly and binds [close] to its owner's scope. Closing is
+ * permanent: a later [start] cannot reopen the observer. If registration is in flight, the
+ * registering thread releases the receiver as soon as the platform returns. Both explicit close
+ * and scope cancellation use this same path.
  */
 internal class AndroidRadioObserver(private val appContext: Context) {
 
@@ -61,11 +60,10 @@ internal class AndroidRadioObserver(private val appContext: Context) {
     /** Latest-value radio state; `null` until [start] takes the first reading. */
     val radioState: StateFlow<NearbyRadioState?> = _radioState.asStateFlow()
 
-    // Atomic, not a plain `var`: [start] runs on the constructing thread while [close] is public and
-    // callable from any, so an unguarded check-then-set is a data race (the #2328 shape). CAS makes
-    // both idempotent AND makes the double-unregister unreachable — see [close]. Mirrors
-    // `NearbySeam.closed`.
-    private val registered = atomic(false)
+    private enum class State { NEW, REGISTERING, REGISTERED, CLOSED }
+
+    private val lock = reentrantLock()
+    private var state = State.NEW
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) = publish()
@@ -76,7 +74,10 @@ internal class AndroidRadioObserver(private val appContext: Context) {
      * woven before any transition still gets a verdict rather than sitting on the floor.
      */
     fun start() {
-        if (!registered.compareAndSet(expect = false, update = true)) return
+        lock.withLock {
+            if (state != State.NEW) return
+            state = State.REGISTERING
+        }
         val filter = IntentFilter().apply {
             addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
             addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
@@ -98,30 +99,47 @@ internal class AndroidRadioObserver(private val appContext: Context) {
         // stale `Available` after the user switches Bluetooth off — precisely the fabricated verdict
         // #1712 exists to prevent, and one this fabric's `reportsLiveCapability = true` now vouches
         // for. Receiving all system broadcasts requires the flag to be absent or EXPORTED.
-        appContext.registerReceiver(receiver, filter)
-        publish()
+        try {
+            appContext.registerReceiver(receiver, filter)
+        } catch (failure: Throwable) {
+            lock.withLock { state = State.CLOSED }
+            throw failure
+        }
+        // Never unregister before the platform has finished registering. close() marks an
+        // in-flight registration CLOSED; this thread then owns its sole unregister call.
+        val release = lock.withLock {
+            if (state == State.CLOSED) true else {
+                state = State.REGISTERED
+                false
+            }
+        }
+        if (release) appContext.unregisterReceiver(receiver) else publish()
     }
 
-    /** Unregister the receiver. Idempotent; safe to call without a preceding [start]. */
+    /** Permanently close observation. Safe before, during, or after [start], and idempotent. */
     fun close() {
-        if (!registered.compareAndSet(expect = true, update = false)) return
-        // No try/catch: `unregisterReceiver` throws only for a receiver that was never registered,
-        // which the CAS above makes unreachable. The platform does not reclaim receivers held on the
-        // APPLICATION context either (that applies to Activity/Service contexts), so there is no
-        // second path to an already-unregistered state.
-        appContext.unregisterReceiver(receiver)
+        val release = lock.withLock {
+            val wasRegistered = state == State.REGISTERED
+            state = State.CLOSED
+            wasRegistered
+        }
+        if (release) appContext.unregisterReceiver(receiver)
     }
 
     private fun publish() {
         val gmsReady = GoogleApiAvailability.getInstance()
             .isGooglePlayServicesAvailable(appContext) == GmsConnectionResult.SUCCESS
-        _radioState.value =
+        val reading =
             if (gmsReady) {
                 NearbyRadioState(bluetooth = bluetoothStatus(), wifi = wifiStatus())
             } else {
                 // No Nearby runtime ⇒ neither radio is usable BY THIS FABRIC, whatever the hardware.
                 NearbyRadioState(NearbyRadioStatus.Unsupported, NearbyRadioStatus.Unsupported)
             }
+        lock.withLock {
+            // A queued broadcast or an in-flight read must not revive a closed observer.
+            if (state == State.REGISTERED) _radioState.value = reading
+        }
     }
 
     private fun bluetoothStatus(): NearbyRadioStatus {

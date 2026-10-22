@@ -103,12 +103,16 @@ the code unchanged:
 ```kotlin
 val loom: Loom = when {
     isApple   -> appleNwLoom(serviceType = "_myapp._tcp", roomKey = code)
-    isAndroid -> nearbyLoom(context, serviceId = "com.example.app")
+    isAndroid -> nearbyLoom(context, scope, serviceId = "com.example.app")
     isBrowser -> WebRTCPeerLinkFactory(signaling = WebSocketSignalingChannel(wsUrl), room = "myroom")
     else      -> KtorClientLoom(httpClient)
 }
 val seam: Seam = loom.join(tag)
 ```
+
+On Android, keep `scope` alive until all seams from the loom are closed.
+Cancelling it releases the radio observer. Pass a scope you own, such as your
+screen's scope, and close its seams before leaving the screen.
 
 On iPhone and Mac that `code` is not a label — it is the shared password that
 encrypts the session, and it is required. See
