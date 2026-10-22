@@ -45,14 +45,13 @@ public enum class NetworkReachability {
 /**
  * A live source of [NetworkReachability] readings for the WebSocket fabric.
  *
- * Bindings: `androidConnectivityObserver` (a `ConnectivityManager.NetworkCallback`) and
+ * Bindings: `appleConnectivityObserver` (Network.framework path monitoring),
+ * `androidConnectivityObserver` (a `ConnectivityManager.NetworkCallback`), and
  * `browserConnectivityObserver` (`navigator.onLine` plus the `online`/`offline` events). The
  * desktop JVM has **no** binding on purpose — there is no portable OS reachability observer there,
  * and synthesising one from socket state would report the relay's health as the device's, the exact
  * conflation [NetworkReachability] forbids. A JVM caller therefore leaves the default
  * [UnobservedConnectivity] in place and the seam honestly reports [FabricAvailability.Unknown].
- * Apple targets have no binding yet either — see
- * [#2413](https://github.com/tractat-us/kuilt/issues/2413).
  */
 public interface ConnectivityObserver {
     /**
