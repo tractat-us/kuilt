@@ -1,10 +1,11 @@
 package us.tractat.kuilt.multipeer
 
 import com.sun.jna.Pointer
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.ActiveSeamSlot
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
@@ -76,6 +77,9 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      */
     internal fun requireRuntimeHandle(): Pointer = runtimeHandle ?: throwUnsupportedPlatform()
 
+    private val discoveryLock = ReentrantLock()
+    internal val discoveryUpdates = MultipeerDiscoveryUpdates()
+
     private val mutableVisiblePeers: MutableStateFlow<Set<MultipeerAdvertisement>> = MutableStateFlow(emptySet())
 
     /**
@@ -93,11 +97,11 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     internal fun setVisiblePeer(
         handle: String,
         advertisement: MultipeerAdvertisement?,
-    ) {
-        mutableVisiblePeers.update { current ->
-            val filtered = current.filterNot { it.handle == handle }.toSet()
-            if (advertisement != null) filtered + advertisement else filtered
-        }
+    ) = discoveryLock.withLock {
+        val filtered = mutableVisiblePeers.value.filterNot { it.handle == handle }.toSet()
+        val current = if (advertisement != null) filtered + advertisement else filtered
+        mutableVisiblePeers.value = current
+        discoveryUpdates.publish(current, advertisement)
     }
 
     /**
@@ -106,8 +110,9 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * are still in range, so we drop the cache so the next browse session
      * starts clean.
      */
-    internal fun clearVisiblePeers() {
+    internal fun clearVisiblePeers() = discoveryLock.withLock {
         mutableVisiblePeers.value = emptySet()
+        discoveryUpdates.endSession()
     }
 
     /**
