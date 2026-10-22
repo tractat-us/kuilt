@@ -696,7 +696,7 @@ internal class SeamRoom(
 
     /**
      * Guards every mutation of the plain membership state:
-     * `admittedById`, `closed`, `hostLost`, `hostPeerId`, `incomingCollectJob`,
+     * `admittedById`, `_roster`, `_rosterPeers`, `closed`, `hostLost`, `hostPeerId`, `incomingCollectJob`,
      * `detectorJobs`, `channelViews`, `admitLanes`, `relayLanes`, `episodeDetectedAtMs` — and, shared with
      * [JoinerResumeMachine] (which is handed this same instance), the joiner-side resume state.
      *
@@ -764,8 +764,8 @@ internal class SeamRoom(
     /**
      * Admitted roster as a [StateFlow] of [PeerId]s, including self.
      *
-     * Updated in lock-step with [_roster] by [syncRosterPeers]. Used by [RoomChannelSeam.peers]
-     * to provide the admit-gated peer set to consumers such as
+     * Updated with [_roster] under [lock] by [addToRoster] and [removeFromRoster].
+     * Used by [RoomChannelSeam.peers] to provide the admit-gated peer set to consumers such as
      * [us.tractat.kuilt.quilter.Quilter].
      */
     private val _rosterPeers = MutableStateFlow<Set<PeerId>>(setOf(selfId))
@@ -3431,36 +3431,25 @@ internal class SeamRoom(
         // resolves its recipients under a SEPARATE lock acquisition, so an eviction can land between
         // the two and a check keyed only on `closed` would mint a lane for a peer already gone. The
         // two together give the invariant `lanes.keys ⊆ admittedById.keys` at every point the lock is
-        // not held. Tied to `removed != null` so a duplicate eviction cannot discard a lane a re-admit
-        // has since installed. See [discardLanes].
-        var endedInbox: MemberInbox? = null
-        val removed = lock.withLock {
-            admittedById.remove(peerId)?.also {
-                discardLanes(peerId)
-                // Reaped with the member so a long-lived room does not accumulate an entry per peer
-                // that ever left. Correctness does not depend on it — refineWindow's Partitioned
-                // gate already rejects an announcement for a member that is gone.
-                episodeDetectedAtMs.remove(peerId)
-                // Removed with the admission, so a member admitted again later gets a fresh inbox.
-                // Deliberately removed here rather than after the roster update below: this map is the
-                // room's record of which admissions exist, and it is dropped in the same critical section
-                // that drops the admission. The window that opens is harmless and cannot loop — the member
-                // is off this map while `_roster` still lists it, so a claim landing in it reads the
-                // `emptyFlow()` of "no current admission" rather than the ended stream. Nothing between
-                // here and the roster update suspends, and completion is the same answer that claimant
-                // gets a moment later, so a consumer re-attaching on completion wastes at most one attach.
-                endedInbox = memberInboxes.remove(peerId)
-            }
+        // not held. If no admission is removed, no lane is discarded. See [discardLanes].
+        val endedInbox = lock.withLock {
+            if (admittedById.remove(peerId) == null) return // already removed, avoid duplicate Left events
+            discardLanes(peerId)
+            // Reaped with the member so a long-lived room does not accumulate an entry per peer
+            // that ever left. refineWindow's Partitioned gate rejects an announcement for a gone member.
+            episodeDetectedAtMs.remove(peerId)
+            // A later admission gets a fresh inbox; close this admission's inbox outside the lock.
+            val inbox = memberInboxes.remove(peerId)
+            // Keep removal in the same critical section as admission and liveness updates. Otherwise
+            // a Hello can re-admit this peer after the map removal, and these late publications erase
+            // the new admission from both roster views while the frame gate still accepts it.
+            _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
+            _rosterPeers.update { current -> current - peerId }
+            emitEvent(MembershipEvent.Left(peerId, reason))
+            inbox
         }
-        removed ?: return // already removed, avoid duplicate Left events
-        _roster.update { current -> current.filterNot { it.id == peerId }.toSet() }
-        _rosterPeers.update { current -> current - peerId }
-        emitEvent(MembershipEvent.Left(peerId, reason))
-        // Closed last, and outside the lock. Last, so a reader that sees its flow complete already sees the
-        // member gone from `roster` and `Left` emitted — none of the three steps above suspends, so the order
-        // needs no lock to hold. Outside the lock, because closing can resume the member's collector in place,
-        // and it may call straight back into this room. The collector delivers what was held and completes,
-        // so the consumer learns the admission ended rather than waiting on an inbox nothing will feed.
+        // Close after publishing the departure, outside the lock: closing can resume a collector
+        // inline, which may call back into this room. A re-admission owns a different inbox.
         endedInbox?.close()
     }
 
