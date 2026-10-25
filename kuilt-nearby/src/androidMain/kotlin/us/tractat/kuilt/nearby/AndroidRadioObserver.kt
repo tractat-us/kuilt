@@ -147,7 +147,7 @@ internal class AndroidRadioObserver(private val appContext: Context) {
             }
         lock.withLock {
             // A queued broadcast or an in-flight read must not revive a closed observer.
-            if (state == State.REGISTERED) _radioState.value = reading
+            _radioState.value = reading
         }
     }
 
