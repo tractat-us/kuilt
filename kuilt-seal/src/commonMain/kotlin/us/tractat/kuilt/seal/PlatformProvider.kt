@@ -3,6 +3,7 @@ package us.tractat.kuilt.seal
 import dev.whyoleg.cryptography.CryptographyProvider
 import dev.whyoleg.cryptography.CryptographySystem
 import dev.whyoleg.cryptography.random.CryptographyRandom
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * The cryptographic provider this platform seals with: JCA on JVM and Android, CryptoKit on Apple,
@@ -11,6 +12,24 @@ import dev.whyoleg.cryptography.random.CryptographyRandom
  * `CryptographySystem.setDefaultProvider`.
  */
 internal expect fun platformProvider(): CryptographyProvider
+
+/**
+ * Runs a provider call and replaces any failure with [fail]`(className)`, so no provider message —
+ * text this module does not control — reaches a caller's message chain.
+ *
+ * It catches [Throwable], not [Exception], because on wasmJs a rejected WebCrypto promise arrives
+ * as `JsException`, which extends [Throwable] directly: an `Exception` arm lets the raw
+ * `OperationError` through. Cancellation and [Error] always escape untouched.
+ */
+internal inline fun <T> providerCall(fail: (failureClass: String) -> Throwable, block: () -> T): T = try {
+    block()
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Error) {
+    throw e
+} catch (e: Throwable) {
+    throw fail(e::class.simpleName ?: "Throwable")
+}
 
 /**
  * Refuses to seal unless [current] is the platform CSPRNG.

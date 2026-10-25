@@ -2,7 +2,6 @@ package us.tractat.kuilt.seal
 
 import dev.whyoleg.cryptography.algorithms.EC
 import dev.whyoleg.cryptography.algorithms.ECDH
-import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * A recipient's public key: anyone holding it can [seal][SealedBox.seal] bytes that only the
@@ -42,13 +41,9 @@ public class SealPublicKey private constructor(
          */
         public suspend fun decode(encoded: ByteArray): SealPublicKey {
             val key = decodeForAgreement(encoded)
-            try {
+            providerCall({ IllegalArgumentException("not a point on P-256 ($it)") }) {
                 ecdh().keyPairGenerator(EC.Curve.P256).generateKey()
                     .privateKey.sharedSecretGenerator().generateSharedSecretToByteArray(key)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                throw IllegalArgumentException("not a point on P-256 (${e::class.simpleName})")
             }
             return of(key)
         }
@@ -61,12 +56,8 @@ public class SealPublicKey private constructor(
             require(encoded.size == ENCODED_SIZE && encoded[0] == UNCOMPRESSED_TAG) {
                 "a SealPublicKey is $ENCODED_SIZE bytes starting 0x04; got ${encoded.size} bytes"
             }
-            return try {
+            return providerCall({ IllegalArgumentException("not a P-256 point ($it)") }) {
                 ecdh().publicKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PublicKey.Format.RAW, encoded)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                throw IllegalArgumentException("not a P-256 point (${e::class.simpleName})")
             }
         }
 
@@ -112,15 +103,11 @@ public class SealPrivateKey private constructor(
          * Android, where the provider cannot recompute it; other platforms may accept one.
          */
         public suspend fun decodePkcs8(der: ByteArray): SealPrivateKey {
-            val (key, public) = try {
+            val (key, public) = providerCall({
+                IllegalArgumentException("not a PKCS #8 P-256 private key carrying its public key ($it)")
+            }) {
                 val key = ecdh().privateKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PrivateKey.Format.DER, der)
                 key to key.getPublicKey()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                throw IllegalArgumentException(
-                    "not a PKCS #8 P-256 private key carrying its public key (${e::class.simpleName})",
-                )
             }
             return SealPrivateKey(key, SealPublicKey.of(public))
         }

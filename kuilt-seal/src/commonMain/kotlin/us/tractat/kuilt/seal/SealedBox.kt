@@ -5,7 +5,6 @@ import dev.whyoleg.cryptography.algorithms.AES
 import dev.whyoleg.cryptography.algorithms.EC
 import dev.whyoleg.cryptography.algorithms.HKDF
 import dev.whyoleg.cryptography.algorithms.SHA256
-import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Encrypt bytes to a recipient's public key so that only the holder of the private key can read
@@ -54,7 +53,7 @@ public object SealedBox {
      */
     public suspend fun seal(recipient: SealPublicKey, plaintext: ByteArray, associatedData: ByteArray): ByteArray {
         requirePlatformRandom()
-        return guarded(SealedBoxException.Reason.SEAL_FAILED) {
+        return providerCall({ SealedBoxException(SealedBoxException.Reason.SEAL_FAILED, it) }) {
             val ephemeral = ecdh().keyPairGenerator(EC.Curve.P256).generateKey()
             val ephemeralPublic = SealPublicKey.of(ephemeral.publicKey)
             val shared = ephemeral.privateKey.sharedSecretGenerator().generateSharedSecretToByteArray(recipient.key)
@@ -78,7 +77,7 @@ public object SealedBox {
             )
         }
         if (sealed[0] != VERSION) throw SealedBoxException(SealedBoxException.Reason.UNSUPPORTED_VERSION)
-        return guarded(SealedBoxException.Reason.NOT_AUTHENTIC) {
+        return providerCall({ SealedBoxException(SealedBoxException.Reason.NOT_AUTHENTIC, it) }) {
             val ephemeralBytes = sealed.copyOfRange(VERSION_SIZE, HEADER_SIZE)
             // The agreement below is the on-curve check for this attacker-chosen point.
             val ephemeralPublic = SealPublicKey.decodeForAgreement(ephemeralBytes)
@@ -98,20 +97,5 @@ public object SealedBox {
             .secretDerivation(SHA256, AES_KEY_SIZE.bytes, salt = null, info = LABEL + ephemeral + recipient)
             .deriveSecretToByteArray(shared)
         return provider.get(AES.GCM).keyDecoder().decodeFromByteArray(AES.Key.Format.RAW, keyBytes)
-    }
-
-    /**
-     * Runs [block], replacing any provider exception with a [SealedBoxException] that names only
-     * the exception's class — never its message, which is provider text this module does not
-     * control. Cancellation passes through untouched; an [Error] is not caught.
-     */
-    private inline fun <T> guarded(reason: SealedBoxException.Reason, block: () -> T): T = try {
-        block()
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: SealedBoxException) {
-        throw e
-    } catch (e: Exception) {
-        throw SealedBoxException(reason, e::class.simpleName)
     }
 }

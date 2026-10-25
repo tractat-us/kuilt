@@ -27,7 +27,10 @@ class OffCurvePointTest {
             "agreed a shared secret with an off-curve point"
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
+        } catch (e: Error) {
+            throw e
+        } catch (e: Throwable) {
+            // Throwable, not Exception: WebCrypto's refusal arrives on wasmJs as a bare JsException.
             "refused: ${e::class.simpleName}"
         }
         assertTrue(outcome.startsWith("refused"), outcome)
