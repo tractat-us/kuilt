@@ -129,7 +129,6 @@ internal class AndroidRadioObserver(private val appContext: Context) {
         val release = lock.withLock {
             val wasRegistered = state == State.REGISTERED
             state = State.CLOSED
-            _radioState.value = null
             wasRegistered
         }
         if (release) appContext.unregisterReceiver(receiver)
