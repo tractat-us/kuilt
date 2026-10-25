@@ -343,7 +343,8 @@ internal class NearbySeam(
      * The capability of a seam with **no live radio reading**: the fabric's base role, but an honest
      * [FabricAvailability.Unknown] availability.
      *
-     * A `null` [NearbyApi.radioState] means the binding wired no observer, or none has reported yet.
+     * A `null` [NearbyApi.radioState] means the binding wired no observer, none has reported yet, or
+     * observation has ended.
      * Either way this seam does not know whether its radios are up and must say so. It cannot fall
      * back on [NearbyApi.availability] even by accident: [staticRoles] carries roles only, because
      * that value answers a *platform-support* question ("is there a Nearby runtime here") and
