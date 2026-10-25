@@ -740,14 +740,17 @@ kuilt-crdt           delta-state CRDT zoo — plain value types, depends on NO o
 
 kuilt-store          durable key→bytes storage (DurableStore) — depends on NO other kuilt module
 
+kuilt-seal           public-key sealed boxes (SealedBox) — depends on NO other kuilt module
+
 kuilt-bom            Gradle/Maven platform constraining every module to one aligned version (not a code module)
 ```
 
-Three roots, and that is the point. `kuilt-core` carries the networking contract;
+Four roots, and that is the point. `kuilt-core` carries the networking contract;
 `kuilt-crdt` carries data types that need no network at all; `kuilt-store` carries
-"keep these bytes safe" and knows about neither. Each depends on no other kuilt
+"keep these bytes safe" and `kuilt-seal` "keep these bytes secret", and each knows
+about none of the others. Each depends on no other kuilt
 module and can be used entirely on its own. Everything else hangs off one of the
-three, and the arrow only ever points *down* — nothing points back into a root. Keeping `kuilt-core` free of fabric imports is what
+four, and the arrow only ever points *down* — nothing points back into a root. Keeping `kuilt-core` free of fabric imports is what
 lets the whole boundary be build-enforced when consumed as a composite build or a
 published artifact.
 
