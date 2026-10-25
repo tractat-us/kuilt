@@ -22,15 +22,12 @@ class SealedBoxKnownAnswerTest {
     @Test
     fun anIndependentlyBuiltBoxOpens() = runTest {
         val recipient = SealPrivateKey.decodePkcs8(RECIPIENT_PKCS8.hexToByteArray())
+        val decodedPublic = SealPublicKey.decode(RECIPIENT_PUBLIC.hexToByteArray())
+        val opened = SealedBox.open(recipient, SEALED.hexToByteArray(), ASSOCIATED_DATA.hexToByteArray())
         assertAll(
             { assertContentEquals(RECIPIENT_PUBLIC.hexToByteArray(), recipient.publicKey.encoded()) },
-            { assertEquals(SealPublicKey.decode(RECIPIENT_PUBLIC.hexToByteArray()), recipient.publicKey) },
-            {
-                assertContentEquals(
-                    PLAINTEXT.hexToByteArray(),
-                    SealedBox.open(recipient, SEALED.hexToByteArray(), ASSOCIATED_DATA.hexToByteArray()),
-                )
-            },
+            { assertEquals(decodedPublic, recipient.publicKey) },
+            { assertContentEquals(PLAINTEXT.hexToByteArray(), opened) },
         )
     }
 

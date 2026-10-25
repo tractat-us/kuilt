@@ -24,8 +24,9 @@ class SealedBoxTest {
     fun sealThenOpenReturnsThePlaintext() = runTest {
         val recipient = SealPrivateKey.generate()
         val sealed = SealedBox.seal(recipient.publicKey, plaintext, associatedData)
+        val opened = SealedBox.open(recipient, sealed, associatedData)
         assertAll(
-            { assertContentEquals(plaintext, SealedBox.open(recipient, sealed, associatedData)) },
+            { assertContentEquals(plaintext, opened) },
             { assertEquals(plaintext.size + SealedBox.OVERHEAD, sealed.size) },
         )
     }
@@ -34,8 +35,9 @@ class SealedBoxTest {
     fun emptyPlaintextAndEmptyAssociatedDataRoundTrip() = runTest {
         val recipient = SealPrivateKey.generate()
         val sealed = SealedBox.seal(recipient.publicKey, ByteArray(0), ByteArray(0))
+        val opened = SealedBox.open(recipient, sealed, ByteArray(0))
         assertAll(
-            { assertContentEquals(ByteArray(0), SealedBox.open(recipient, sealed, ByteArray(0))) },
+            { assertContentEquals(ByteArray(0), opened) },
             { assertEquals(SealedBox.OVERHEAD, sealed.size) },
         )
     }
@@ -122,11 +124,12 @@ class SealedBoxTest {
     fun aPublicKeyEncodesAsTheSixtyFiveByteUncompressedPoint() = runTest {
         val key = SealPrivateKey.generate().publicKey
         val encoded = key.encoded()
+        val decoded = SealPublicKey.decode(encoded)
         assertAll(
             { assertEquals(SealPublicKey.ENCODED_SIZE, encoded.size) },
             { assertEquals(0x04.toByte(), encoded[0]) },
-            { assertEquals(key, SealPublicKey.decode(encoded)) },
-            { assertEquals(key.hashCode(), SealPublicKey.decode(encoded).hashCode()) },
+            { assertEquals(key, decoded) },
+            { assertEquals(key.hashCode(), decoded.hashCode()) },
         )
     }
 
@@ -147,9 +150,10 @@ class SealedBoxTest {
         val original = SealPrivateKey.generate()
         val sealed = SealedBox.seal(original.publicKey, plaintext, associatedData)
         val restored = SealPrivateKey.decodePkcs8(original.encodePkcs8())
+        val opened = SealedBox.open(restored, sealed, associatedData)
         assertAll(
             { assertEquals(original.publicKey, restored.publicKey) },
-            { assertContentEquals(plaintext, SealedBox.open(restored, sealed, associatedData)) },
+            { assertContentEquals(plaintext, opened) },
         )
     }
 
@@ -164,9 +168,11 @@ class SealedBoxTest {
     @Test
     fun badPublicKeyBytesAreRejected() = runTest {
         val notOnCurve = ByteArray(SealPublicKey.ENCODED_SIZE).also { it[0] = 0x04; it[64] = 7 }
+        val wrongLength = decodeFailure(ByteArray(64))
+        val offCurve = decodeFailure(notOnCurve)
         assertAll(
-            { assertFailsWith<IllegalArgumentException> { SealPublicKey.decode(ByteArray(64)) } },
-            { assertFailsWith<IllegalArgumentException> { SealPublicKey.decode(notOnCurve) } },
+            { assertTrue(wrongLength is IllegalArgumentException, "wrong length gave $wrongLength") },
+            { assertTrue(offCurve is IllegalArgumentException, "off-curve point gave $offCurve") },
         )
     }
 
@@ -194,6 +200,14 @@ class SealedBoxTest {
             { requirePlatformRandom(CryptographyRandom.Default) },
             { assertFailsWith<IllegalStateException> { requirePlatformRandom(seeded) } },
         )
+    }
+
+    /** What [SealPublicKey.decode] threw for [bytes], or null if it returned. */
+    private suspend fun decodeFailure(bytes: ByteArray): Throwable? = try {
+        SealPublicKey.decode(bytes)
+        null
+    } catch (e: IllegalArgumentException) {
+        e
     }
 
     private fun ByteArray.ephemeralKey(): ByteArray = copyOfRange(1, 1 + SealPublicKey.ENCODED_SIZE)
