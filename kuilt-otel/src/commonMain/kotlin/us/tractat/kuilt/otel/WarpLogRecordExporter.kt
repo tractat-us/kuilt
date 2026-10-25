@@ -1568,7 +1568,7 @@ public class WarpLogRecordExporter(
                 // combines that write's coverage with acknowledged suppression for retirement. On a retry
                 // the pass is a no-op but `activeSegment` still carries the floor from the
                 // first attempt, so the write is still covering and the sealed segments are
-                // still retirable against `log.compactedBelow`.
+                // still retirable against the floor that write carries.
                 pendingWrites(retire = true)
             }
         }.getOrElse { cause ->
