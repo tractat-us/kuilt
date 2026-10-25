@@ -53,8 +53,8 @@ import com.google.android.gms.common.ConnectionResult as GmsConnectionResult
  *
  * **The scope's [Job] cannot complete normally while observation is open** — observation is a child
  * of it, and nothing ends that child but [close] or cancellation. Cancel the scope; never wait for
- * it. `coroutineScope { GmsNearbyApi(ctx, this) }`, `runBlocking { … }` and
- * `runTest { GmsNearbyApi(ctx, this) }` never return. In tests pass `backgroundScope`.
+ * it. `coroutineScope { GmsNearbyApi(ctx, this) }` and `runBlocking { … }` never return, and
+ * `runTest { GmsNearbyApi(ctx, this) }` hangs until its timeout. In tests pass `backgroundScope`.
  *
  * @param context Android context; only its application context is retained.
  * @param scope Owner of the radio observer; must contain a [Job].
