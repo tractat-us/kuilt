@@ -1,5 +1,6 @@
 package us.tractat.kuilt.seal
 
+import dev.whyoleg.cryptography.algorithms.EC
 import dev.whyoleg.cryptography.random.CryptographyRandom
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
@@ -146,15 +147,24 @@ class SealedBoxTest {
     }
 
     @Test
-    fun aPrivateKeySurvivesPkcs8AndStillOpens() = runTest {
+    fun aProviderWrittenPkcs8EitherRestoresTheSameKeyOrIsRefused() = runTest {
+        // The provider's own PKCS #8 may omit the public key (the JDK's does). decodePkcs8 must then
+        // refuse it with IllegalArgumentException — never return a key with a different public half.
         val original = SealPrivateKey.generate()
         val sealed = SealedBox.seal(original.publicKey, plaintext, associatedData)
-        val restored = SealPrivateKey.decodePkcs8(original.encodePkcs8())
-        val opened = SealedBox.open(restored, sealed, associatedData)
-        assertAll(
-            { assertEquals(original.publicKey, restored.publicKey) },
-            { assertContentEquals(plaintext, opened) },
-        )
+        val der = original.key.encodeToByteArray(EC.PrivateKey.Format.DER)
+        val restored = try {
+            SealPrivateKey.decodePkcs8(der)
+        } catch (refused: IllegalArgumentException) {
+            null
+        }
+        if (restored != null) {
+            val opened = SealedBox.open(restored, sealed, associatedData)
+            assertAll(
+                { assertEquals(original.publicKey, restored.publicKey) },
+                { assertContentEquals(plaintext, opened) },
+            )
+        }
     }
 
     @Test

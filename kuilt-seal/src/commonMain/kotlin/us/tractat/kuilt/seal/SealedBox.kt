@@ -58,7 +58,7 @@ public object SealedBox {
             val ephemeral = ecdh().keyPairGenerator(EC.Curve.P256).generateKey()
             val ephemeralPublic = SealPublicKey.of(ephemeral.publicKey)
             val shared = ephemeral.privateKey.sharedSecretGenerator().generateSharedSecretToByteArray(recipient.key)
-            val cipher = aeadKey(shared, ephemeralPublic, recipient).cipher()
+            val cipher = aeadKey(shared, ephemeralPublic.encoded(), recipient.encoded()).cipher()
             // Provider layout: nonce (12, drawn from the CSPRNG checked above) || ciphertext || tag.
             val nonceCiphertextTag = cipher.encrypt(plaintext, associatedData)
             byteArrayOf(VERSION) + ephemeralPublic.encoded() + nonceCiphertextTag
@@ -79,21 +79,23 @@ public object SealedBox {
         }
         if (sealed[0] != VERSION) throw SealedBoxException(SealedBoxException.Reason.UNSUPPORTED_VERSION)
         return guarded(SealedBoxException.Reason.NOT_AUTHENTIC) {
-            val ephemeralPublic = SealPublicKey.decode(sealed.copyOfRange(VERSION_SIZE, HEADER_SIZE))
-            val shared = recipient.key.sharedSecretGenerator().generateSharedSecretToByteArray(ephemeralPublic.key)
-            val cipher = aeadKey(shared, ephemeralPublic, recipient.publicKey).cipher()
+            val ephemeralBytes = sealed.copyOfRange(VERSION_SIZE, HEADER_SIZE)
+            // The agreement below is the on-curve check for this attacker-chosen point.
+            val ephemeralPublic = SealPublicKey.decodeForAgreement(ephemeralBytes)
+            val shared = recipient.key.sharedSecretGenerator().generateSharedSecretToByteArray(ephemeralPublic)
+            val cipher = aeadKey(shared, ephemeralBytes, recipient.publicKey.encoded()).cipher()
             cipher.decrypt(sealed.copyOfRange(HEADER_SIZE, sealed.size), associatedData)
         }
     }
 
     private suspend fun aeadKey(
         shared: ByteArray,
-        ephemeral: SealPublicKey,
-        recipient: SealPublicKey,
+        ephemeral: ByteArray,
+        recipient: ByteArray,
     ): AES.GCM.Key {
         val provider = platformProvider()
         val keyBytes = provider.get(HKDF)
-            .secretDerivation(SHA256, AES_KEY_SIZE.bytes, salt = null, info = LABEL + ephemeral.encoded() + recipient.encoded())
+            .secretDerivation(SHA256, AES_KEY_SIZE.bytes, salt = null, info = LABEL + ephemeral + recipient)
             .deriveSecretToByteArray(shared)
         return provider.get(AES.GCM).keyDecoder().decodeFromByteArray(AES.Key.Format.RAW, keyBytes)
     }

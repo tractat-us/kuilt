@@ -34,19 +34,40 @@ public class SealPublicKey private constructor(
         /**
          * Reads a key from its [encoded] form. Throws [IllegalArgumentException] when the bytes are
          * not a point on P-256 in uncompressed form.
+         *
+         * The JDK provider's decoder does not check that a point lies on the curve; its key
+         * agreement does. So the check here is a throwaway agreement against the decoded point,
+         * which every provider refuses for an off-curve one (`OffCurvePointTest` pins that per
+         * target). That makes a bad key fail here, uniformly, rather than at the first seal.
          */
         public suspend fun decode(encoded: ByteArray): SealPublicKey {
+            val key = decodeForAgreement(encoded)
+            try {
+                ecdh().keyPairGenerator(EC.Curve.P256).generateKey()
+                    .privateKey.sharedSecretGenerator().generateSharedSecretToByteArray(key)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                throw IllegalArgumentException("not a point on P-256 (${e::class.simpleName})")
+            }
+            return of(key)
+        }
+
+        /**
+         * Decodes without the agreement probe, for [SealedBox.open]: there the real agreement is the
+         * check, and an off-curve ephemeral key fails it as NOT_AUTHENTIC.
+         */
+        internal suspend fun decodeForAgreement(encoded: ByteArray): ECDH.PublicKey {
             require(encoded.size == ENCODED_SIZE && encoded[0] == UNCOMPRESSED_TAG) {
                 "a SealPublicKey is $ENCODED_SIZE bytes starting 0x04; got ${encoded.size} bytes"
             }
-            val key = try {
+            return try {
                 ecdh().publicKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PublicKey.Format.RAW, encoded)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 throw IllegalArgumentException("not a P-256 point (${e::class.simpleName})")
             }
-            return of(key)
         }
 
         internal suspend fun of(key: ECDH.PublicKey): SealPublicKey {
@@ -64,17 +85,17 @@ public class SealPublicKey private constructor(
 /**
  * A recipient's private key: it [opens][SealedBox.open] what was sealed to its [publicKey].
  *
- * Generate one with [generate], keep its [encodePkcs8] bytes wherever the holder keeps secrets, and
- * read it back with [decodePkcs8]. [toString] never prints key material.
+ * [generate] makes one in memory. A key that must outlive the process is made outside it — for
+ * example `openssl ecparam -name prime256v1 -genkey | openssl pkcs8 -topk8 -nocrypt -outform DER` —
+ * and read with [decodePkcs8]. There is deliberately no encoder: the JDK provider writes PKCS #8
+ * without the optional public key and cannot recompute it, so an encoder would write bytes that
+ * [decodePkcs8] refuses on the JVM. [toString] never prints key material.
  */
 public class SealPrivateKey private constructor(
     internal val key: ECDH.PrivateKey,
     /** The public half, to hand to whoever seals. */
     public val publicKey: SealPublicKey,
 ) {
-    /** The key as PKCS #8 DER (`PrivateKeyInfo`, RFC 5958) — secret material; store it as such. */
-    public suspend fun encodePkcs8(): ByteArray = key.encodeToByteArray(EC.PrivateKey.Format.DER)
-
     override fun toString(): String = "SealPrivateKey(publicKey=$publicKey)"
 
     public companion object {
@@ -85,18 +106,23 @@ public class SealPrivateKey private constructor(
         }
 
         /**
-         * Reads a key from PKCS #8 DER, as [encodePkcs8] writes it. Throws
-         * [IllegalArgumentException] when the bytes are not a P-256 private key.
+         * Reads a P-256 key from PKCS #8 DER (`PrivateKeyInfo`, RFC 5958) whose inner `ECPrivateKey`
+         * carries the optional public key, as OpenSSL writes it. Throws [IllegalArgumentException]
+         * when the bytes are not such a key. A DER without the public key is refused on JVM and
+         * Android, where the provider cannot recompute it; other platforms may accept one.
          */
         public suspend fun decodePkcs8(der: ByteArray): SealPrivateKey {
-            val key = try {
-                ecdh().privateKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PrivateKey.Format.DER, der)
+            val (key, public) = try {
+                val key = ecdh().privateKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PrivateKey.Format.DER, der)
+                key to key.getPublicKey()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                throw IllegalArgumentException("not a PKCS #8 P-256 private key (${e::class.simpleName})")
+                throw IllegalArgumentException(
+                    "not a PKCS #8 P-256 private key carrying its public key (${e::class.simpleName})",
+                )
             }
-            return SealPrivateKey(key, SealPublicKey.of(key.getPublicKey()))
+            return SealPrivateKey(key, SealPublicKey.of(public))
         }
     }
 }

@@ -21,9 +21,12 @@ cannot see the cards they were never shown.
 
 ## Using it
 
-A recipient makes a key pair once with `SealPrivateKey.generate()`, stores
-`encodePkcs8()` somewhere it keeps secrets, and hands out `publicKey.encoded()`, a fixed 65 bytes.
-A sender reads those bytes with `SealPublicKey.decode` and calls `SealedBox.seal(recipient,
+A recipient makes its key once, outside the app, as PKCS #8 DER that carries its public key, which
+is what `openssl ecparam -name prime256v1 -genkey | openssl pkcs8 -topk8 -nocrypt -outform DER`
+writes. It loads that key with `SealPrivateKey.decodePkcs8` and hands out `publicKey.encoded()`, a
+fixed 65 bytes. `SealPrivateKey.generate()` makes a key that lives only in memory. There is no
+encoder, because the JVM provider writes PKCS #8 without the public key and then cannot read it
+back. A sender reads those bytes with `SealPublicKey.decode` and calls `SealedBox.seal(recipient,
 plaintext, associatedData)`. The recipient calls `SealedBox.open(privateKey, sealed,
 associatedData)`. Both calls suspend, because the browser's WebCrypto has only asynchronous
 operations.
@@ -39,8 +42,8 @@ and check at startup that it is not running with a test key.
 - **Length.** Nothing is compressed, deliberately: compression makes the length depend on the
   content. If the length of what you seal is itself a secret, pad it to a fixed size first. A box
   is always `plaintext.size + SealedBox.OVERHEAD` bytes.
-- **Key storage.** The module encodes keys; where a private key lives, and who may read it, is up
-  to the application.
+- **Key storage.** The module reads a private key but never writes one. Where it lives, and who
+  may read it, is up to the application.
 
 ## Underneath
 
