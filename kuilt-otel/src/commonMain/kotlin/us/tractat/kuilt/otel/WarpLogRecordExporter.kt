@@ -654,12 +654,14 @@ public class WarpLogRecordExporter(
          *   into the floor and only shrink the segment). In exactly that turn, a refused
          *   [activeSegmentWrite] leaves the segment sealed in memory as [SegmentContent.Pinned]
          *   while its key on disk still holds the *pre-pass* bytes without the `Compact` — and
-         *   nothing ever rewrites a sealed key. In-memory `log.compactedIds` still covers those
-         *   foreign ids, so a later pass judges the merge-adopted segment holding their `Insert`s
-         *   retirable and sweeps it. Neither the ops nor anything suppressing them survives the
-         *   restart, and a peer re-admits them on the next [merge] —
-         *   `droppingTheSegmentCarryingACompactReAdmitsAForeignAuthorsRecord`'s harm, reached
-         *   without deleting anything a rule forbids deleting.
+         *   nothing ever rewrites a sealed key. In-memory `log.compactedIds` still covered those
+         *   foreign ids, and retirement then read `log`, so a later pass judged the merge-adopted
+         *   segment holding their `Insert`s retirable and swept it. Neither the ops nor anything
+         *   suppressing them survived the restart, and a peer re-admitted them on the next
+         *   [merge] — `droppingTheSegmentCarryingACompactReAdmitsAForeignAuthorsRecord`'s harm,
+         *   reached without deleting anything a rule forbids deleting. Retirement now judges only
+         *   against `durableSuppression` plus this turn's queued writes, and a refused write
+         *   credits neither, so that sweep is blocked a second way.
          * - **Permanently pinned phantom segments.** Under sustained segment-write refusal the
          *   small index write keeps succeeding while every segment write fails, so each
          *   [segmentOps] operations sealed a number whose key was never written. On the next start
@@ -1566,9 +1568,9 @@ public class WarpLogRecordExporter(
                 // retire = true is sound for the same reason it is on the other two paths: the
                 // pass has put its suppression delta into `activeSegment`, and pendingWrites
                 // combines that write's coverage with acknowledged suppression for retirement. On a retry
-                // the pass is a no-op but `activeSegment` still carries the floor from the
-                // first attempt, so the write is still covering and the sealed segments are
-                // still retirable against the floor that write carries.
+                // the pass is a no-op but `activeSegment` still carries the suppression (floor
+                // and Compact ids) from the first attempt, so the write is still covering and the
+                // sealed segments are still retirable against the suppression that write carries.
                 pendingWrites(retire = true)
             }
         }.getOrElse { cause ->
