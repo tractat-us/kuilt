@@ -178,12 +178,10 @@ class SealedBoxTest {
     @Test
     fun privateKeyToStringPrintsOnlyThePublicFingerprint() = runTest {
         val key = SealPrivateKey.generate()
-        val der = key.encodePkcs8().toHexString()
-        val text = key.toString()
+        // Exact, so nothing beyond the public fingerprint can ride along.
         assertAll(
-            { assertTrue(text.startsWith("SealPrivateKey(publicKey=SealPublicKey(")) },
-            // The DER's last 65 bytes are the public point; the secret scalar sits before them.
-            { assertFalse(text.contains(der.substring(0, der.length - 130))) },
+            { assertEquals("SealPrivateKey(publicKey=${key.publicKey})", key.toString()) },
+            { assertTrue(key.publicKey.toString().matches(Regex("""SealPublicKey\(04[0-9a-f]{14}…\)"""))) },
         )
     }
 
