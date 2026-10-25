@@ -251,7 +251,8 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      */
     internal fun startBrowsing(onAdvertisement: (MultipeerAdvertisement) -> Unit) {
         check(browser == null) { "MultipeerPeerLinkFactory is already browsing" }
-        val delegate = BrowserDelegate(this, onAdvertisement)
+        val session = discoveryLock.withLock { discoveryUpdates.generation }
+        val delegate = BrowserDelegate(this, session, onAdvertisement)
         val nextBrowser =
             MCNearbyServiceBrowser(
                 peer = localPeerId,
@@ -371,8 +372,15 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         }
     }
 
+    /**
+     * [session] is the browse generation this delegate was installed under. [stopBrowsing] clears the
+     * browser's delegate but cannot recall a callback already dispatched to it, so each callback
+     * checks [session] against the current generation under the same lock teardown advances it with,
+     * and a callback from a stopped session changes nothing and reports nothing.
+     */
     private class BrowserDelegate(
         private val factory: MultipeerPeerLinkFactory,
+        private val session: MultipeerBrowseGeneration,
         private val onAdvertisement: (MultipeerAdvertisement) -> Unit,
     ) : NSObject(),
         MCNearbyServiceBrowserDelegateProtocol {
@@ -392,13 +400,15 @@ public actual class MultipeerPeerLinkFactory actual constructor(
                     sessionName = MultipeerPeerId.humanName(handle),
                     serviceType = factory.serviceType,
                 )
-            factory.discoveryLock.withLock {
+            val accepted = factory.discoveryLock.withLock {
+                if (session !== factory.discoveryUpdates.generation) return@withLock false
                 factory.knownPeers[handle] = foundPeer
                 val current = factory._visiblePeers.value.filterNot { it.handle == handle }.toSet() + ad
                 factory._visiblePeers.value = current
                 factory.discoveryUpdates.publish(current, ad)
+                true
             }
-            onAdvertisement(ad)
+            if (accepted) onAdvertisement(ad)
         }
 
         override fun browser(
@@ -407,13 +417,15 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         ) {
             val handle = lostPeer.displayName
             log.info { "mc.lose.peer handle=$handle localPeer=${factory.displayName}" }
-            factory.discoveryLock.withLock {
+            val accepted = factory.discoveryLock.withLock {
+                if (session !== factory.discoveryUpdates.generation) return@withLock false
                 factory.knownPeers.remove(handle)
                 val current = factory._visiblePeers.value.filterNot { it.handle == handle }.toSet()
                 factory._visiblePeers.value = current
                 factory.discoveryUpdates.publish(current)
+                true
             }
-            factory.lostPeerHandles.tryEmit(handle)
+            if (accepted) factory.lostPeerHandles.tryEmit(handle)
         }
 
         override fun browser(
