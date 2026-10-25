@@ -138,7 +138,8 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
      *  - **That a platform emits readings is not proven by any of this.** A fake-injected signal
      *    demonstrates the seam's reaction, never the transport's emission; the Android and browser
      *    halves are device-only. Apple callback adaptation is covered by `AppleConnectivityObserverTest`;
-     *    real OS path delivery still requires a device check.
+     *    `AppleConnectivityObserverNetworkFrameworkTest` proves a real macOS path monitor delivers a
+     *    first reading, but no test moves a real path, so a change in delivery is still a device check.
      */
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(
         securesTransport = false,
