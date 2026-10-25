@@ -25,3 +25,16 @@ kotlin {
         }
     }
 }
+
+dependencies {
+    constraints {
+        // cryptography-core 0.6.0 asks for kotlinx-io 0.9.0, whose wasmJs Node interop contains
+        // `import.meta`; a browser bundle (Karma's webpack here, and a consumer's) then fails with
+        // "Cannot use 'import.meta' outside a module" before any test runs. 0.9.1, the version the
+        // rest of kuilt pins, has none. A constraint rather than a dependency: this module never
+        // touches kotlinx-io itself, and the constraint is published, so consumers get 0.9.1 too.
+        add("commonMainImplementation", libs.kotlinx.io.core) {
+            because("kotlinx-io 0.9.0's wasmJs import.meta breaks browser bundles")
+        }
+    }
+}
