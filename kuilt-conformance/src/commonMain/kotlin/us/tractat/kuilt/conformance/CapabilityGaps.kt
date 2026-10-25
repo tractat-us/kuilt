@@ -6,8 +6,8 @@ package us.tractat.kuilt.conformance
  *
  * **Every constant here points at a docs anchor, never at an issue, and that is load-bearing.** A
  * URL naming an issue asserts the work is outstanding, so it inverts the moment the issue closes —
- * silently, in published API, aimed at whoever writes the next fabric. All three harness-gap
- * constants below did exactly that: #1442, #1474 and #1502 had all closed while the constants still
+ * silently, in published API, aimed at whoever writes the next fabric. The three original
+ * harness-gap constants below did exactly that: #1442, #1474 and #1502 had all closed while the constants still
  * cited them. A gap constant describes an evergreen *category* ("this harness cannot reach a
  * transport handle"), which outlives any particular issue that once tracked closing one instance of
  * it. Point a *fabric's own* blocking issue at the declaration site instead — as
