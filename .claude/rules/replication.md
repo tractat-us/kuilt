@@ -7,6 +7,7 @@ paths:
   - "kuilt-bolt/**"
   - "kuilt-deal/**"
   - "kuilt-deal-test/**"
+  - "kuilt-seal/**"
   - "kuilt-scale/**"
 ---
 # Replication
