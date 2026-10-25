@@ -435,7 +435,7 @@ valuable thing the declaration does.
 ### When it is the test that falls short, not the fabric
 
 The gaps above all say something about a *transport*: this one really is
-unencrypted, that one really does relay through a hub. Three more say something
+unencrypted, that one really does relay through a hub. The rest say something
 about the **test instead**. The fabric may behave perfectly well; what is missing
 is a way to set up the situation that would prove it.
 
