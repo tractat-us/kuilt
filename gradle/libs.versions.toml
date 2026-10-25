@@ -15,6 +15,8 @@ logback = "1.6.5"
 slf4j = "2.0.20"
 log4j2 = "2.26.1"
 playServicesNearby = "19.5.1"
+robolectric = "4.17"
+androidx-activity = "1.8.2"
 junit-platform-launcher = "6.1.3"
 kover = "0.9.11"
 dokka = "2.2.0"
@@ -94,6 +96,11 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 # Google Nearby Connections (Android-only) + Tasks↔coroutines bridge for kuilt-nearby:
 play-services-nearby = { module = "com.google.android.gms:play-services-nearby", version.ref = "playServicesNearby" }
 kotlinx-coroutines-playServices = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "kotlinx-coroutines" }
+# Robolectric — Android framework services for kuilt-nearby's androidUnitTest (the radio observer):
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+# androidx.activity — kuilt-nearby test runtime only: Robolectric reflects every GoogleApiAvailability
+# method, including its ActivityResultLauncher overload, and GMS's transitive Activity predates it.
+androidx-activity = { module = "androidx.activity:activity", version.ref = "androidx-activity" }
 # ionspin bignum — arbitrary-precision arithmetic for SRA commutative encryption in kuilt-deal:
 ionspin-bignum = { module = "com.ionspin.kotlin:bignum", version.ref = "ionspin-bignum" }
 # KotlinCrypto SHA-2 — multiplatform SHA-256 for kuilt-deal commit-reveal protocol:
