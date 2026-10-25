@@ -50,16 +50,16 @@ kotlin {
         jvmTest.dependencies {
             implementation(libs.logback)
         }
-        // kotlin-logging needs an SLF4J backend on the Android unit-test variant too. ChunkCodec
-        // now logs every refused/evicted chunk, so the first logger USE is on the reassembly happy
-        // path rather than an error-only path; without a backend that throws NoClassDefFoundError:
-        // org/slf4j/LoggerFactory out of `feed` and poisons every ChunkCodec and NearbySeam test.
-        // Mirrors :kuilt-nw and :kuilt-session, which hit the same thing for the same reason.
         androidUnitTest.dependencies {
-            implementation("org.robolectric:robolectric:4.17")
+            implementation(libs.robolectric)
             // Robolectric reflects all GoogleApiAvailability methods, including its optional
             // ActivityResultLauncher overload; GMS's transitive Activity version predates it.
-            runtimeOnly("androidx.activity:activity:1.8.2")
+            runtimeOnly(libs.androidx.activity)
+            // kotlin-logging needs an SLF4J backend on the Android unit-test variant too. ChunkCodec
+            // now logs every refused/evicted chunk, so the first logger USE is on the reassembly happy
+            // path rather than an error-only path; without a backend that throws NoClassDefFoundError:
+            // org/slf4j/LoggerFactory out of `feed` and poisons every ChunkCodec and NearbySeam test.
+            // Mirrors :kuilt-nw and :kuilt-session, which hit the same thing for the same reason.
             runtimeOnly(libs.logback)
         }
     }
