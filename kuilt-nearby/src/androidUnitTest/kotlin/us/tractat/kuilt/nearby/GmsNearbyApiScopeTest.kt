@@ -190,14 +190,20 @@ class GmsNearbyApiScopeTest {
             receiver.onReceive(context, Intent(WifiManager.WIFI_STATE_CHANGED_ACTION))
             testScheduler.runCurrent()
             assertIs<FabricAvailability.Available>(seam.capability.value.availability)
-            seam.close()
+            // The seam outlives its owner scope here, deliberately: observation ends, the seam does not.
             owner.cancel()
-            val lastReading = api.radioState.value
             shadowOf(wifi).setWifiState(WifiManager.WIFI_STATE_DISABLED)
             receiver.onReceive(context, Intent(WifiManager.WIFI_STATE_CHANGED_ACTION))
+            testScheduler.runCurrent()
             assertAll(
                 { assertEquals(0, context.receivers.size) },
-                { assertEquals(lastReading, api.radioState.value, "queued callback cannot publish after close") },
+                { assertNull(api.radioState.value, "close withdraws the reading; a queued callback cannot republish") },
+                {
+                    assertIs<FabricAvailability.Unknown>(
+                        seam.capability.value.availability,
+                        "a seam outliving observation must not keep the last Available",
+                    )
+                },
             )
         } finally {
             seam.close()
