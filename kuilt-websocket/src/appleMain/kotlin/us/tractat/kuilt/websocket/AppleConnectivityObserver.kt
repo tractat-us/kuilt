@@ -75,8 +75,6 @@ public class AppleConnectivityObserver internal constructor(
  * // Use the loom, then close the observer when its last consumer is done.
  * connectivity.close()
  * ```
- *
- * @sample us.tractat.kuilt.websocket.samples.websocketWithConnectivity
  */
 public fun appleConnectivityObserver(): AppleConnectivityObserver =
     AppleConnectivityObserver(NetworkPathMonitor())
