@@ -57,7 +57,7 @@ internal class AndroidRadioObserver(private val appContext: Context) {
 
     private val _radioState = MutableStateFlow<NearbyRadioState?>(null)
 
-    /** Latest-value radio state; `null` until [start] takes the first reading. */
+    /** Latest-value radio state; `null` until [start] takes the first reading, and again after [close]. */
     val radioState: StateFlow<NearbyRadioState?> = _radioState.asStateFlow()
 
     private enum class State { NEW, REGISTERING, REGISTERED, CLOSED }
