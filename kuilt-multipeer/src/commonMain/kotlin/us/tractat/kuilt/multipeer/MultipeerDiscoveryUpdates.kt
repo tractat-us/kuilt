@@ -26,7 +26,10 @@ internal class MultipeerDiscoveryUpdates {
     )
 
     // Collection-owned teardown writes under both the lifecycle and visible-peer locks; acquisition
-    // reads it under the lifecycle lock, after any preceding teardown has completed.
+    // reads it under the lifecycle lock, after any preceding teardown has completed. A browse session
+    // also captures it at start, and factories drop a callback whose session no longer matches,
+    // checked under the visible-peer lock: the native stop does not wait for in-flight callbacks, so
+    // without that check a stopped session's callback would publish under its successor's generation.
     var generation: MultipeerBrowseGeneration = MultipeerBrowseGeneration()
         private set
 
