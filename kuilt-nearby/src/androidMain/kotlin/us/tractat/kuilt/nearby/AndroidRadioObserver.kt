@@ -116,11 +116,20 @@ internal class AndroidRadioObserver(private val appContext: Context) {
         if (release) appContext.unregisterReceiver(receiver) else publish()
     }
 
-    /** Permanently close observation. Safe before, during, or after [start], and idempotent. */
+    /**
+     * Permanently close observation. Safe before, during, or after [start], and idempotent.
+     *
+     * Withdraws the last reading as well: a closed observer sees no further transition, so the
+     * reading it last took is no longer live, and a seam that outlives its owner scope must fall
+     * back to [us.tractat.kuilt.core.FabricAvailability.Unknown] rather than report a stale
+     * `Available` forever (#1712). Done under [lock], where [publish] checks the state, so no
+     * queued broadcast can republish after it.
+     */
     fun close() {
         val release = lock.withLock {
             val wasRegistered = state == State.REGISTERED
             state = State.CLOSED
+            _radioState.value = null
             wasRegistered
         }
         if (release) appContext.unregisterReceiver(receiver)
