@@ -218,6 +218,11 @@ public class GmsNearbyApi(context: Context, scope: CoroutineScope) : NearbyApi {
  * outlive every seam woven by this loom: close the seams before cancelling it. Cancellation
  * releases observation only; it does not close seams or stop their connections.
  *
+ * **The scope's [Job] cannot complete normally while observation is open** — see [GmsNearbyApi].
+ * Cancel it; never wait for it. `coroutineScope { nearbyLoom(ctx, this) }` and
+ * `runBlocking { … }` never return, and `runTest { nearbyLoom(ctx, this) }` hangs until its
+ * timeout. In tests pass `backgroundScope`.
+ *
  * @param context           Android [Context]; only its `applicationContext` is retained.
  * @param scope             Radio observer owner; must contain a [Job] and outlive all woven seams.
  * @param serviceId         Nearby Connections service ID. Must match on both devices.
