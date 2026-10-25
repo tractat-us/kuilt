@@ -116,6 +116,9 @@ fun moduleDescription(module: String): String = when (module) {
     "kuilt-store" ->
         "Durable key-to-bytes storage for Kotlin Multiplatform: a write returns only once the " +
             "bytes will survive a crash, with a crash-safe implementation per platform."
+    "kuilt-seal" ->
+        "Sealed boxes for Kotlin Multiplatform: encrypt bytes to a recipient's public key so only " +
+            "its holder can read them, on each platform's own cryptography."
     "kuilt-bolt" ->
         "Write-only history archive kept beside a live CRDT replica, so a server can keep a " +
             "year of edits while the phone feeding it keeps an hour."
