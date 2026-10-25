@@ -151,6 +151,74 @@ class MultipeerSharedBrowseTest {
         )
     }
 
+    /**
+     * `mc_browser_stop` does not wait for callbacks already in flight, so a found callback that was
+     * blocked on the factory's discovery lock can run after teardown. Invoking the stopped session's
+     * captured callback after `cancelAndJoin` is that interleaving, forced: the stale peer must reach
+     * neither [MultipeerPeerLinkFactory.visiblePeers] nor the next session's discovery snapshot.
+     */
+    @Test
+    fun foundCallbackFromAStoppedSessionNeverReachesTheNextSession() = runBlocking {
+        val lib = BrowseLib()
+        val browser = lib.browser()
+        val ready = CountDownLatch(1)
+        val first = launch(Dispatchers.Default) { browser.departures().collect { ready.countDown() } }
+        assertTrue(ready.await(5, TimeUnit.SECONDS), "first session must start")
+        val staleFound = lib.foundCallback()
+        first.cancelAndJoin()
+        assertEquals(1, lib.stops.get(), "the first session must be torn down before its callback fires")
+
+        staleFound.invoke("ghost", "Ghost")
+        val visibleAfterStaleCallback = lib.factory.visiblePeers.value.map { it.handle }
+
+        val seen = LinkedBlockingQueue<String>()
+        val discovery = launch(Dispatchers.Default) { browser.discoveries().collect { seen.add(it.peerKey) } }
+        try {
+            val firstSeen = seen.poll(5, TimeUnit.SECONDS)
+            assertAll(
+                { assertEquals(emptyList(), visibleAfterStaleCallback, "a stopped session must not repopulate visible peers") },
+                { assertEquals("arriving", firstSeen, "the next session's first discovery is its own peer, not the stopped session's") },
+                { assertEquals(listOf("arriving"), lib.factory.visiblePeers.value.map { it.handle }) },
+                { assertEquals(2, lib.starts.get(), "the discovery collector owns a newly started session") },
+            )
+        } finally {
+            discovery.cancelAndJoin()
+        }
+    }
+
+    /**
+     * The departure half of the same interleaving: a lost callback from a stopped session must not
+     * drop a peer the next session found, nor emit a departure for it. The live `marker` loss is
+     * queued behind the stale one on the same feed, so the order of the departures proves absence
+     * without a timeout.
+     */
+    @Test
+    fun lostCallbackFromAStoppedSessionCannotDropAPeerTheNextSessionFound() = runBlocking {
+        val lib = BrowseLib()
+        val browser = lib.browser()
+        val ready = CountDownLatch(1)
+        val first = launch(Dispatchers.Default) { browser.departures().collect { ready.countDown() } }
+        assertTrue(ready.await(5, TimeUnit.SECONDS), "first session must start")
+        val staleLost = lib.lostCallback()
+        first.cancelAndJoin()
+
+        val departed = LinkedBlockingQueue<String>()
+        val second = launch(Dispatchers.Default) { browser.departures().collect { departed.add(it) } }
+        try {
+            assertEquals("leaving", departed.poll(5, TimeUnit.SECONDS), "the next session's registration departure marks it live")
+            staleLost.invoke("arriving")
+            val visibleAfterStaleLoss = lib.factory.visiblePeers.value.map { it.handle }
+            lib.fireLost("marker")
+            assertAll(
+                { assertEquals(listOf("arriving"), visibleAfterStaleLoss, "a stopped session must not drop the next session's peer") },
+                { assertEquals("marker", departed.poll(5, TimeUnit.SECONDS), "a stopped session's loss must not reach the departure feed") },
+                { assertEquals(2, lib.starts.get()) },
+            )
+        } finally {
+            second.cancelAndJoin()
+        }
+    }
+
     /** Callbacks fire inline during registration, before the native start call returns. */
     private class BrowseLib(
         private val arrivalForStart: (Int) -> String = { "arriving" },
@@ -162,10 +230,9 @@ class MultipeerSharedBrowseTest {
         private val found = AtomicReference<MultipeerNativeLib.PeerFoundCallback?>()
         private val lost = AtomicReference<MultipeerNativeLib.PeerLostCallback?>()
 
-        fun browser(): MultipeerServiceBrowser = MultipeerServiceBrowser(
-            MultipeerPeerLinkFactory("test", "kuilt-test", injectedLib = this, injectedRuntimeHandle = Pointer(1)),
-            libLoader = { this },
-        )
+        val factory = MultipeerPeerLinkFactory("test", "kuilt-test", injectedLib = this, injectedRuntimeHandle = Pointer(1))
+
+        fun browser(): MultipeerServiceBrowser = MultipeerServiceBrowser(factory, libLoader = { this })
 
         override fun mc_browser_start(runtime: Pointer?, peerFoundCb: MultipeerNativeLib.PeerFoundCallback): Pointer {
             val arrival = arrivalForStart(starts.incrementAndGet())
@@ -190,6 +257,12 @@ class MultipeerSharedBrowseTest {
         fun fireFound(handle: String) = checkNotNull(found.get()).invoke(handle, handle)
 
         fun fireLost(handle: String) = checkNotNull(lost.get()).invoke(handle)
+
+        /** The live session's found callback, retained so a test can fire it after that session stops. */
+        fun foundCallback(): MultipeerNativeLib.PeerFoundCallback = checkNotNull(found.get())
+
+        /** The live session's lost callback, retained so a test can fire it after that session stops. */
+        fun lostCallback(): MultipeerNativeLib.PeerLostCallback = checkNotNull(lost.get())
 
         fun deliverUntil(vararg received: CountDownLatch) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
