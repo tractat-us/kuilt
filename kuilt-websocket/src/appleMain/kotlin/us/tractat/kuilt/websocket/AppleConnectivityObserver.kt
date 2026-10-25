@@ -67,7 +67,7 @@ public class AppleConnectivityObserver internal constructor(
 /**
  * Start a caller-owned Network.framework observer on iOS or macOS.
  * Pass it as [KtorClientLoom]'s `connectivity` and close it when all looms using it are done.
- * Until the first callback (or if a monitor cannot be created), its reading stays `null`.
+ * Until the first callback, its reading stays `null`.
  *
  * ```kotlin
  * val connectivity = appleConnectivityObserver()
@@ -88,17 +88,16 @@ internal interface ApplePathMonitor {
 }
 
 private class NetworkPathMonitor : ApplePathMonitor {
-    private val monitor = nw_path_monitor_create()
+    private val monitor = checkNotNull(nw_path_monitor_create()) { "nw_path_monitor_create returned null" }
     private val queue = dispatch_queue_create("us.tractat.kuilt.websocket.connectivity", null)
 
     override fun start(onStatus: (nw_path_status_t) -> Unit) {
-        val handle = monitor ?: return
-        nw_path_monitor_set_queue(handle, queue)
-        nw_path_monitor_set_update_handler(handle) { path -> onStatus(nw_path_get_status(path)) }
-        nw_path_monitor_start(handle)
+        nw_path_monitor_set_queue(monitor, queue)
+        nw_path_monitor_set_update_handler(monitor) { path -> onStatus(nw_path_get_status(path)) }
+        nw_path_monitor_start(monitor)
     }
 
     override fun cancel() {
-        monitor?.let { nw_path_monitor_cancel(it) }
+        nw_path_monitor_cancel(monitor)
     }
 }
