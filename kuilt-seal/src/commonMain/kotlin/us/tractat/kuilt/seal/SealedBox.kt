@@ -35,6 +35,14 @@ import kotlin.coroutines.cancellation.CancellationException
  * Every failure is a [SealedBoxException]; none carries plaintext.
  */
 public object SealedBox {
+    private const val VERSION: Byte = 1
+    private const val VERSION_SIZE = 1
+    private const val HEADER_SIZE = VERSION_SIZE + SealPublicKey.ENCODED_SIZE
+    private const val NONCE_SIZE = 12
+    private const val TAG_SIZE = 16
+    private const val AES_KEY_SIZE = 32
+    private val LABEL = "kuilt-seal/v1 P-256 HKDF-SHA-256 AES-256-GCM".encodeToByteArray()
+
     /** Bytes a box adds to its plaintext: version, ephemeral key, nonce and tag. */
     public const val OVERHEAD: Int = VERSION_SIZE + SealPublicKey.ENCODED_SIZE + NONCE_SIZE + TAG_SIZE
 
@@ -104,12 +112,4 @@ public object SealedBox {
     } catch (e: Exception) {
         throw SealedBoxException(reason, e::class.simpleName)
     }
-
-    private const val VERSION: Byte = 1
-    private const val VERSION_SIZE = 1
-    private const val HEADER_SIZE = VERSION_SIZE + SealPublicKey.ENCODED_SIZE
-    private const val NONCE_SIZE = 12
-    private const val TAG_SIZE = 16
-    private const val AES_KEY_SIZE = 32
-    private val LABEL = "kuilt-seal/v1 P-256 HKDF-SHA-256 AES-256-GCM".encodeToByteArray()
 }
