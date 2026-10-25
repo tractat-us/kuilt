@@ -113,6 +113,8 @@ public interface NearbyApi {
      * and the seam reports [us.tractat.kuilt.core.FabricAvailability.Unknown] rather than guessing;
      * [NearbyLoom]'s static report supplies only the ROLES, never a live verdict (#1712). Wiring an
      * observer here is therefore what takes a binding's seam OFF that floor; nothing else can.
+     * A binding whose observation has ended returns to `null` as well: a reading nobody is still
+     * taking is not live, so a seam outliving it falls back to that floor.
      * `GmsNearbyApi` (androidMain) drives it from the platform's Bluetooth/Wi-Fi state broadcasts;
      * the test fake exposes a controllable `MutableStateFlow` so no test touches a system service.
      *

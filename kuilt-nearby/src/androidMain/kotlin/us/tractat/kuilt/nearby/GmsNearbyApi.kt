@@ -16,6 +16,8 @@ import com.google.android.gms.nearby.connection.Payload
 import com.google.android.gms.nearby.connection.PayloadCallback
 import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,9 +46,21 @@ import com.google.android.gms.common.ConnectionResult as GmsConnectionResult
  * and folded by [NearbySeam] into [us.tractat.kuilt.core.Seam.capability]. That observer — not
  * [availability], which answers the *static* platform-support question — is what takes a woven
  * Nearby seam off the [FabricAvailability.Unknown] floor.
+ *
+ * [scope] owns observation and must outlive every seam using this API. Cancelling it releases
+ * the receiver, even during construction. [close] releases observation early; neither operation
+ * closes seams. Close those seams before cancelling the owner scope or explicitly closing this API.
+ *
+ * **The scope's [Job] cannot complete normally while observation is open** — observation is a child
+ * of it, and nothing ends that child but [close] or cancellation. Cancel the scope; never wait for
+ * it. `coroutineScope { GmsNearbyApi(ctx, this) }` and `runBlocking { … }` never return, and
+ * `runTest { GmsNearbyApi(ctx, this) }` hangs until its timeout. In tests pass `backgroundScope`.
+ *
+ * @param context Android context; only its application context is retained.
+ * @param scope Owner of the radio observer; must contain a [Job].
  */
 @SuppressLint("MissingPermission")
-public class GmsNearbyApi(context: Context) : NearbyApi {
+public class GmsNearbyApi(context: Context, scope: CoroutineScope) : NearbyApi {
 
     private val appContext: Context = context.applicationContext
     private val client: ConnectionsClient = Nearby.getConnectionsClient(appContext)
@@ -68,21 +82,33 @@ public class GmsNearbyApi(context: Context) : NearbyApi {
     // construction already has a verdict to fold rather than the unobserved floor; see
     // [AndroidRadioObserver] for why this watches the radio-power broadcasts rather than a
     // ConnectivityManager.NetworkCallback, and why the Play-services half is polled.
-    private val radioObserver = AndroidRadioObserver(appContext).also { it.start() }
+    private val radioObserver = AndroidRadioObserver(appContext)
+    // A child with no coroutine body completes promptly on parent cancellation, without waiting
+    // for the owner's other children or dispatching cleanup onto a possibly stopped dispatcher.
+    private val observerLifetime = Job(requireNotNull(scope.coroutineContext[Job]) {
+        "The radio observer scope must contain a Job"
+    }).also { lifetime -> lifetime.invokeOnCompletion { radioObserver.close() } }
+
+    init {
+        try {
+            radioObserver.start()
+        } catch (failure: Throwable) {
+            observerLifetime.complete()
+            throw failure
+        }
+    }
 
     override val radioState: StateFlow<NearbyRadioState?> = radioObserver.radioState
 
     /**
      * Release the radio observer's broadcast receiver. Idempotent.
      *
-     * Reachable only if you construct this class yourself and pass it to [NearbyLoom]: [nearbyLoom]
-     * builds a [GmsNearbyApi] internally and [NearbyLoom] has no `close()` to forward, so through
-     * that entry point the receiver is held for the process lifetime. One instance registered on the
-     * application context leaks into nothing, but N calls to [nearbyLoom] register N receivers
-     * against ActivityManager's 1000-per-process cap. Giving the loom a real lifecycle is #2397.
+     * The owner scope also releases it on cancellation. Close all seams using this API first.
+     * This detaches the observer's child job from the owner; subsequent cancellation or close
+     * cannot unregister the receiver again.
      */
     public fun close() {
-        radioObserver.close()
+        observerLifetime.complete()
     }
 
     private val lifecycleCallback =
@@ -188,14 +214,17 @@ public class GmsNearbyApi(context: Context) : NearbyApi {
  * - **`weaveTimeout`** — nothing here bounds a rendezvous; [handshakeTimeout] bounds a
  *   single connection instead. See [NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT].
  *
- * ⚠ **No release path.** This builds a [GmsNearbyApi] internally, which registers a radio-state
- * broadcast receiver for the live [NearbyApi.radioState] signal, and [NearbyLoom] exposes no
- * `close()` to forward to [GmsNearbyApi.close]. One loom is fine; calling this repeatedly registers
- * a receiver each time, against ActivityManager's 1000-per-process cap. A consumer that needs to
- * release must construct [GmsNearbyApi] itself and pass it to [NearbyLoom]. Giving the loom a real
- * lifecycle is #2397.
+ * The radio observer starts eagerly and is released when [scope] is cancelled. The scope must
+ * outlive every seam woven by this loom: close the seams before cancelling it. Cancellation
+ * releases observation only; it does not close seams or stop their connections.
+ *
+ * **The scope's [Job] cannot complete normally while observation is open** — see [GmsNearbyApi].
+ * Cancel it; never wait for it. `coroutineScope { nearbyLoom(ctx, this) }` and
+ * `runBlocking { … }` never return, and `runTest { nearbyLoom(ctx, this) }` hangs until its
+ * timeout. In tests pass `backgroundScope`.
  *
  * @param context           Android [Context]; only its `applicationContext` is retained.
+ * @param scope             Radio observer owner; must contain a [Job] and outlive all woven seams.
  * @param serviceId         Nearby Connections service ID. Must match on both devices.
  * @param policy            Delivery policy for every woven seam's inbound buffer.
  * @param handshakeTimeout  Ceiling on one connection's handshake — not a weave timeout.
@@ -203,12 +232,13 @@ public class GmsNearbyApi(context: Context) : NearbyApi {
  */
 public fun nearbyLoom(
     context: Context,
+    scope: CoroutineScope,
     serviceId: String = NearbyLoom.DEFAULT_SERVICE_ID,
     policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     handshakeTimeout: Duration = NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT,
     maxChunkPayload: Int = ChunkCodec.MAX_CHUNK_PAYLOAD,
 ): NearbyLoom = NearbyLoom(
-    api = GmsNearbyApi(context),
+    api = GmsNearbyApi(context, scope),
     serviceId = serviceId,
     policy = policy,
     handshakeTimeout = handshakeTimeout,

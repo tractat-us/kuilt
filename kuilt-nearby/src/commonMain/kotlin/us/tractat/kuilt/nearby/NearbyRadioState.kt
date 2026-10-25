@@ -11,9 +11,9 @@ import us.tractat.kuilt.core.TransportRole
  * published and the seam's availability follows.
  *
  * The real observer lives in `GmsNearbyApi` (androidMain); tests drive a controllable
- * `MutableStateFlow<NearbyRadioState?>` through `FakeNearbyApi`, so no code under test touches an
- * Android system service. A `null` radio state (the default on a binding that has wired no
- * observer) means "unknown": the seam reports [FabricAvailability.Unknown] rather than guessing,
+ * `MutableStateFlow<NearbyRadioState?>` through `FakeNearbyApi` in common tests. Android unit tests
+ * also exercise the binding with Robolectric services. A `null` radio state (the default on a
+ * binding that has wired no observer) means "unknown": the seam reports [FabricAvailability.Unknown] rather than guessing,
  * and [NearbyLoom]'s static report supplies only the ROLES, never a live verdict (#1712/#1543).
  *
  * @param bluetooth whether the Bluetooth radio is usable by this fabric — Nearby's `P2P_STAR`
