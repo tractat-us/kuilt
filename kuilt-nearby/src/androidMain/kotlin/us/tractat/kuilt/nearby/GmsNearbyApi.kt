@@ -51,6 +51,11 @@ import com.google.android.gms.common.ConnectionResult as GmsConnectionResult
  * the receiver, even during construction. [close] releases observation early; neither operation
  * closes seams. Close those seams before cancelling the owner scope or explicitly closing this API.
  *
+ * **The scope's [Job] cannot complete normally while observation is open** — observation is a child
+ * of it, and nothing ends that child but [close] or cancellation. Cancel the scope; never wait for
+ * it. `coroutineScope { GmsNearbyApi(ctx, this) }`, `runBlocking { … }` and
+ * `runTest { GmsNearbyApi(ctx, this) }` never return. In tests pass `backgroundScope`.
+ *
  * @param context Android context; only its application context is retained.
  * @param scope Owner of the radio observer; must contain a [Job].
  */
