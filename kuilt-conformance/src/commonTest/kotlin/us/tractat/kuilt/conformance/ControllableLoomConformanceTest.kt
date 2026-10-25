@@ -29,6 +29,14 @@ import us.tractat.kuilt.test.ControllableLoom
  */
 class ControllableLoomConformanceTest : SeamConformanceSuite() {
 
+    /** The current rig does not inject malformed announcements; these obligations remain unproven (#2561). */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.DUPLICATE_PEER_ID)
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
+
+
     private val loom = ControllableLoom()
 
     override fun newLoomPair(): Pair<Loom, Loom> = loom to loom

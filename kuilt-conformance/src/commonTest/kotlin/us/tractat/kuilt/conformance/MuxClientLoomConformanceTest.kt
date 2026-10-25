@@ -46,6 +46,14 @@ import us.tractat.kuilt.core.TransportCapability
 @OptIn(ExperimentalCoroutinesApi::class)
 class MuxClientLoomConformanceTest : SeamConformanceSuite() {
 
+    /** The current rig does not inject malformed announcements; these obligations remain unproven (#2561). */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.DUPLICATE_PEER_ID)
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
+
+
     /** Retained so the departure hooks can reach the joiner's base rather than its channel view. */
     private var pair: MuxClientLoomPair? = null
 

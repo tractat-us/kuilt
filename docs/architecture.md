@@ -435,7 +435,7 @@ valuable thing the declaration does.
 ### When it is the test that falls short, not the fabric
 
 The gaps above all say something about a *transport*: this one really is
-unencrypted, that one really does relay through a hub. Three more say something
+unencrypted, that one really does relay through a hub. The rest say something
 about the **test instead**. The fabric may behave perfectly well; what is missing
 is a way to set up the situation that would prove it.
 
@@ -480,6 +480,22 @@ recognised and dropped.
 Staging it needs a harness that can deliver a peer its own advertisement. A
 relay harness, where a server hands out the roster, has no way to produce one,
 so the guard goes unexercised there however correct it is.
+
+### duplicatePeerId / blankPeerId — harnesses that cannot announce a malformed identity
+
+Every peer in a session goes by an id, and two things can go wrong with the id a
+newcomer announces. It can be one somebody already holds — a second phone claiming
+to be a peer that is already in the room — or it can be empty. Either way the
+fabric has to turn the newcomer away and leave the peer already there untouched:
+still listed, still connected, still receiving messages.
+
+Staging either case needs a harness that can put a second device in front of the
+seam and choose what it announces. Many harnesses cannot: they build both ends
+through a factory that mints its own ids, or they connect exactly one joiner and
+have nowhere to plug in a third. Where that is a fixed property of the harness,
+it says so in a declaration with its reason rather than pointing here. This
+section is for the other case — a harness that could stage the announcement but
+has not been taught to yet.
 
 ### Not every flag describes a design choice
 

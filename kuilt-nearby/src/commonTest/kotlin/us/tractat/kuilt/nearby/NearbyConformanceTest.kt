@@ -1,5 +1,6 @@
 package us.tractat.kuilt.nearby
 
+import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
@@ -39,6 +40,17 @@ import us.tractat.kuilt.core.SeamState
  * directly, so the claim this comment rests on is asserted rather than merely asserted-about.
  */
 class NearbyConformanceTest : SeamConformanceSuite() {
+
+    /** The one-endpoint rig cannot stage a collision; blank injection remains unwired (#2561). */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.NotApplicable.NotConstructible(
+            "each weave owns one endpoint and openSession admits one joiner; no second device can " +
+                "announce an incumbent id to the same seam through this harness",
+        )
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
+
 
     private companion object {
         /**

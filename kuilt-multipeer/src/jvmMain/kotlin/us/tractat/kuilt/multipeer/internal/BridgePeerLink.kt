@@ -77,7 +77,7 @@ internal class BridgePeerLink(
     // nothing else — the native bridge has already flattened the `MCPeerID` device identity that
     // the Apple half keys by into a bare string. So two devices sharing one display name have
     // become one identity BELOW this file, and `BindResult.COLLISION` is structurally unreachable
-    // here; un-merging them needs a device handle on the ABI (#1539), not a change in this class.
+    // here; un-merging them needs a device handle on the native callback ABI, not a change in this class.
     // What the registry does buy this path is the rest of the rules: a blank id is refused, a
     // self-dial is refused, and `unbind` is identity-scoped, so a drop for an id nothing holds
     // evicts nobody.

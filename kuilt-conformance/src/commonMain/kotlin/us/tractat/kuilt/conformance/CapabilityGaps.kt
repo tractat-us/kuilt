@@ -6,8 +6,8 @@ package us.tractat.kuilt.conformance
  *
  * **Every constant here points at a docs anchor, never at an issue, and that is load-bearing.** A
  * URL naming an issue asserts the work is outstanding, so it inverts the moment the issue closes —
- * silently, in published API, aimed at whoever writes the next fabric. All three harness-gap
- * constants below did exactly that: #1442, #1474 and #1502 had all closed while the constants still
+ * silently, in published API, aimed at whoever writes the next fabric. The three original
+ * harness-gap constants below did exactly that: #1442, #1474 and #1502 had all closed while the constants still
  * cited them. A gap constant describes an evergreen *category* ("this harness cannot reach a
  * transport handle"), which outlives any particular issue that once tracked closing one instance of
  * it. Point a *fabric's own* blocking issue at the declaration site instead — as
@@ -64,6 +64,28 @@ public object CapabilityGaps {
      */
     public const val SELF_DIAL: String =
         "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#selfdial--harnesses-that-cannot-dial-themselves"
+
+    /**
+     * A conformance harness that has not wired a **duplicate-identity** injection — a second,
+     * distinct device announcing an id an incumbent already holds (see
+     * [SeamConformanceSuite.injectDuplicatePeerId] and [SeamConformanceSuite.duplicatePeerIdDeclaration]).
+     * Not a *fabric* gap — a *harness* gap: the fabric may refuse the newcomer correctly, but proving it
+     * needs a rig that can hand the seam a second device under the incumbent's id. A harness that
+     * structurally cannot construct that announcement declares
+     * [ObligationDeclaration.NotApplicable.NotConstructible] with its reason instead of this gap.
+     */
+    public const val DUPLICATE_PEER_ID: String =
+        "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#duplicatepeerid--blankpeerid--harnesses-that-cannot-announce-a-malformed-identity"
+
+    /**
+     * A conformance harness that has not wired a **blank-identity** injection — a newcomer announcing
+     * an empty or whitespace id (see [SeamConformanceSuite.injectBlankPeerId] and
+     * [SeamConformanceSuite.blankPeerIdDeclaration]). The same *harness* gap as [DUPLICATE_PEER_ID],
+     * for the blank stimulus; the same [ObligationDeclaration.NotApplicable.NotConstructible] rule
+     * applies to a harness that cannot construct it at all.
+     */
+    public const val BLANK_PEER_ID: String =
+        "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#duplicatepeerid--blankpeerid--harnesses-that-cannot-announce-a-malformed-identity"
 
     /**
      * A fabric that names no frame ceiling — [us.tractat.kuilt.core.Seam.maxPayloadBytes] is `null`

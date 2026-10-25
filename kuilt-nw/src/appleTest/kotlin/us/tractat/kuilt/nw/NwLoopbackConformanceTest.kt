@@ -1,5 +1,6 @@
 package us.tractat.kuilt.nw
 
+import us.tractat.kuilt.conformance.CapabilityGaps
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback conformance harness — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
@@ -52,6 +53,14 @@ import kotlin.test.AfterTest
  * live in that one factory precisely so this suite cannot forget any of them.
  */
 class NwLoopbackConformanceTest : SeamConformanceSuite() {
+
+    /** The current rig does not inject malformed announcements; these obligations remain unproven (#2561). */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.DUPLICATE_PEER_ID)
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
+
 
     private companion object {
         const val SERVICE_TYPE = "_kuilt._tcp"

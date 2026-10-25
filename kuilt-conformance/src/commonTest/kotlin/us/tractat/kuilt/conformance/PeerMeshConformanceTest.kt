@@ -22,6 +22,14 @@ import kotlin.coroutines.ContinuationInterceptor
  */
 class PeerMeshConformanceTest : SeamConformanceSuite() {
 
+    /** The current rig does not inject malformed announcements; these obligations remain unproven (#2561). */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.DUPLICATE_PEER_ID)
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
+
+
     // The two ends of the in-memory link under the current pair, captured so injectMidSessionDeath
     // can drop the transport. Tests run one pair at a time, sequentially.
     private var hostConn: Connection? = null

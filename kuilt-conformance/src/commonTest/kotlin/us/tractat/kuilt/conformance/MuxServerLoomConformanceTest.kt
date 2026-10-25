@@ -46,6 +46,14 @@ import kotlin.random.Random
 @OptIn(ExperimentalCoroutinesApi::class)
 class MuxServerLoomConformanceTest : SeamConformanceSuite() {
 
+    /** The current rig does not inject malformed announcements; these obligations remain unproven (#2561). */
+    override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.DUPLICATE_PEER_ID)
+
+    override fun blankPeerIdDeclaration(): ObligationDeclaration =
+        ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
+
+
     /** Retained so [injectMembershipDrain] can tear the client's transport out from under the hub. */
     private var pair: RoomHubLoomPair? = null
 
