@@ -92,6 +92,7 @@ private class NetworkPathMonitor : ApplePathMonitor {
     override fun start(onStatus: (nw_path_status_t) -> Unit) {
         nw_path_monitor_set_queue(monitor, queue)
         nw_path_monitor_set_update_handler(monitor) { path -> onStatus(nw_path_get_status(path)) }
+        nw_path_monitor_start(monitor)
     }
 
     override fun cancel() {
