@@ -41,7 +41,7 @@ import kotlin.time.Duration.Companion.seconds
  */
 class TcpConformanceTest : SeamConformanceSuite() {
 
-    /** The current rig does not inject malformed announcements; these obligations remain unproven. */
+    /** The current rig does not inject malformed announcements; these obligations remain unproven (#2561). */
     override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
         ObligationDeclaration.Gap(CapabilityGaps.DUPLICATE_PEER_ID)
 

@@ -35,7 +35,7 @@ import us.tractat.kuilt.core.freshPeerId
  */
 class MultipeerConformanceTest : SeamConformanceSuite() {
 
-    /** The JVM boundary cannot distinguish colliding devices; blank injection remains unwired. */
+    /** The JVM boundary cannot distinguish colliding devices; blank injection remains unwired (#2561). */
     override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
         ObligationDeclaration.NotApplicable.NotConstructible(
             "PeerStateCallback carries only the announced id and connected flag, with no distinct device " +

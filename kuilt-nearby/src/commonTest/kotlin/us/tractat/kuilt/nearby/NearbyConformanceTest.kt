@@ -41,7 +41,7 @@ import us.tractat.kuilt.core.SeamState
  */
 class NearbyConformanceTest : SeamConformanceSuite() {
 
-    /** The one-endpoint rig cannot stage a collision; blank injection remains unwired. */
+    /** The one-endpoint rig cannot stage a collision; blank injection remains unwired (#2561). */
     override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
         ObligationDeclaration.NotApplicable.NotConstructible(
             "each weave owns one endpoint and openSession admits one joiner; no second device can " +
