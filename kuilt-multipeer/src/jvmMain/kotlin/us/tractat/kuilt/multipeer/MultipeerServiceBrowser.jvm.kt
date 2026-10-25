@@ -102,13 +102,16 @@ public actual class MultipeerServiceBrowser actual constructor(
     // never take this lock. A synchronous callback cannot deadlock session startup or shutdown.
     private fun startSession(): BrowseSession? {
         val lib = loadLib() ?: return null
+        // Teardown advances the generation under this lock, so this is the generation the session
+        // runs in. `mc_browser_stop` does not wait for in-flight callbacks; carrying the generation
+        // lets the factory discard one that lands after this session has stopped.
+        val session = factory.discoveryUpdates.generation
         val found = MultipeerNativeLib.PeerFoundCallback { handle, displayName ->
             val ad = MultipeerAdvertisement(handle, displayName, factory.serviceType)
-            factory.setVisiblePeer(handle, ad)
+            factory.setVisiblePeer(session, handle, ad)
         }
         val lost = MultipeerNativeLib.PeerLostCallback { handle ->
-            factory.setVisiblePeer(handle, advertisement = null)
-            departuresFlow.tryEmit(handle)
+            if (factory.setVisiblePeer(session, handle, advertisement = null)) departuresFlow.tryEmit(handle)
         }
         val handle = checkNotNull(lib.mc_browser_start(factory.requireRuntimeHandle(), found)) {
             "mc_browser_start returned null on macOS"
