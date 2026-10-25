@@ -93,15 +93,24 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * [handle] entirely when [advertisement] is `null`. Called from
      * `MultipeerServiceBrowser` JVM actual's JNA callbacks — `PeerFoundCallback`
      * passes a non-null advertisement, `PeerLostCallback` passes `null`.
+     *
+     * [session] is the browse generation the calling callback was created under. `mc_browser_stop`
+     * does not wait for callbacks already in flight, so one can arrive after [clearVisiblePeers] has
+     * ended its session; it is then discarded, and `false` tells the caller not to report a departure
+     * either. The check and the update share [discoveryLock] with teardown, so no callback can slip
+     * between them.
      */
     internal fun setVisiblePeer(
+        session: MultipeerBrowseGeneration,
         handle: String,
         advertisement: MultipeerAdvertisement?,
-    ) = discoveryLock.withLock {
+    ): Boolean = discoveryLock.withLock {
+        if (session !== discoveryUpdates.generation) return@withLock false
         val filtered = mutableVisiblePeers.value.filterNot { it.handle == handle }.toSet()
         val current = if (advertisement != null) filtered + advertisement else filtered
         mutableVisiblePeers.value = current
         discoveryUpdates.publish(current, advertisement)
+        true
     }
 
     /**
