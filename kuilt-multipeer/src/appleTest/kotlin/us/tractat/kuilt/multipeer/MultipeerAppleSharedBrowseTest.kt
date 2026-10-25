@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import platform.MultipeerConnectivity.MCNearbyServiceBrowser
 import platform.MultipeerConnectivity.MCPeerID
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -86,6 +87,84 @@ class MultipeerAppleSharedBrowseTest {
         } finally {
             discovery.cancelAndJoin()
             departure.cancelAndJoin()
+            factory.close()
+        }
+    }
+
+    /**
+     * `stopBrowsing` clears the browser's delegate but cannot recall a callback already dispatched to
+     * it. Holding the first session's delegate and calling it after teardown is that interleaving,
+     * forced: the stale peer must reach neither [MultipeerPeerLinkFactory.visiblePeers] nor the next
+     * session's discovery snapshot.
+     */
+    @Test
+    fun foundCallbackFromAStoppedSessionNeverReachesTheNextSession() = runTest {
+        val factory = MultipeerPeerLinkFactory("local", "kuilt-test")
+        val source = MultipeerServiceBrowser(factory)
+        val first = backgroundScope.launch { source.departures().collect {} }
+        val seen = mutableListOf<String>()
+        try {
+            runCurrent()
+            val staleDelegate = assertNotNull(factory.activeBrowserDelegate)
+            first.cancelAndJoin()
+            assertNull(factory.activeBrowserDelegate, "the first session must be torn down before its callback fires")
+            val ghost = MCPeerID(displayName = "ghost#12345678")
+            val browser = MCNearbyServiceBrowser(peer = ghost, serviceType = "kuilt-test")
+            staleDelegate.browser(browser, foundPeer = ghost, withDiscoveryInfo = null)
+            val visibleAfterStaleCallback = factory.visiblePeers.value.map { it.handle }
+
+            val discovery = backgroundScope.launch { source.discoveries().collect { seen += it.peerKey } }
+            runCurrent()
+            val delegate = assertNotNull(factory.activeBrowserDelegate)
+            val arriving = MCPeerID(displayName = "arriving#12345678")
+            delegate.browser(browser, foundPeer = arriving, withDiscoveryInfo = null)
+            runCurrent()
+            assertAll(
+                { assertEquals(emptyList(), visibleAfterStaleCallback, "a stopped session must not repopulate visible peers") },
+                { assertEquals(listOf(arriving.displayName), seen, "the next session sees its own peer, never the stopped session's") },
+                { assertEquals(listOf(arriving.displayName), factory.visiblePeers.value.map { it.handle }) },
+            )
+            discovery.cancelAndJoin()
+        } finally {
+            first.cancelAndJoin()
+            factory.close()
+        }
+    }
+
+    /**
+     * The departure half of the same interleaving: a stopped session's `lostPeer` must not drop a
+     * peer the next session found, nor emit a departure for it. The live `marker` loss follows the
+     * stale one on the same feed, so the recorded departures prove absence without a timeout.
+     */
+    @Test
+    fun lostCallbackFromAStoppedSessionCannotDropAPeerTheNextSessionFound() = runTest {
+        val factory = MultipeerPeerLinkFactory("local", "kuilt-test")
+        val source = MultipeerServiceBrowser(factory)
+        val first = backgroundScope.launch { source.departures().collect {} }
+        val departed = mutableListOf<String>()
+        try {
+            runCurrent()
+            val staleDelegate = assertNotNull(factory.activeBrowserDelegate)
+            first.cancelAndJoin()
+
+            val second = backgroundScope.launch { source.departures().collect { departed += it } }
+            runCurrent()
+            val delegate = assertNotNull(factory.activeBrowserDelegate)
+            val arriving = MCPeerID(displayName = "arriving#12345678")
+            val marker = MCPeerID(displayName = "marker#12345678")
+            val browser = MCNearbyServiceBrowser(peer = arriving, serviceType = "kuilt-test")
+            delegate.browser(browser, foundPeer = arriving, withDiscoveryInfo = null)
+            staleDelegate.browser(browser, lostPeer = arriving)
+            val visibleAfterStaleLoss = factory.visiblePeers.value.map { it.handle }
+            delegate.browser(browser, lostPeer = marker)
+            runCurrent()
+            assertAll(
+                { assertEquals(listOf(arriving.displayName), visibleAfterStaleLoss, "a stopped session must not drop the next session's peer") },
+                { assertEquals(listOf(marker.displayName), departed, "a stopped session's loss must not reach the departure feed") },
+            )
+            second.cancelAndJoin()
+        } finally {
+            first.cancelAndJoin()
             factory.close()
         }
     }
