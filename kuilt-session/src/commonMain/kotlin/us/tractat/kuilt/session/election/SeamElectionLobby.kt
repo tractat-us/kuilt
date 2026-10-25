@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
@@ -236,7 +238,7 @@ internal class SeamElectionLobby(
                     // Silent-but-present collapse (#1480/#1478): the elected host stops answering
                     // heartbeat pings while `seam.peers` still lists it and `state` stays Woven — the
                     // host→self signal above never fires. The lobby heartbeat is the only detector.
-                    coElectorLostSignal(setOf(host.value)),
+                    hostLostSignal(),
                 ),
             ) {
                 runMemberElection()
@@ -429,6 +431,16 @@ internal class SeamElectionLobby(
                 signalJobs.forEach { it.cancel() }
             }
         }
+
+    /**
+     * Follow the elected host for the whole member wait. Each host change cancels and joins the
+     * previous signal, including its detector children, before monitoring the replacement. While
+     * self is host the inner signal suspends, but the host subscription remains live for weave-in.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun hostLostSignal(): suspend () -> LobbyTornException = {
+        host.mapLatest { elected -> coElectorLostSignal(setOf(elected))() }.first()
+    }
 
     /**
      * A [guardElection] collapse-signal that catches the **present-but-silent** co-elector — the
