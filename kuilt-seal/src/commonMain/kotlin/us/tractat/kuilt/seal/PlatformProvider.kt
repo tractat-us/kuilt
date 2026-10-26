@@ -63,7 +63,7 @@ private suspend fun selfTested(): Algorithms = try {
     check(point.size == SealPublicKey.ENCODED_SIZE && point[0] == 0x04.toByte()) {
         "provider encodes a P-256 public key as ${point.size} bytes, not the 65-byte SEC 1 form"
     }
-    val keyBytes = algorithms.hkdf.secretDerivation(SHA256, 32.bytes, salt = null, info = null)
+    val keyBytes = algorithms.hkdf.secretDerivation(SHA256, 32.bytes, salt = ByteArray(0), info = ByteArray(0))
         .deriveSecretToByteArray(forward)
     val cipher = algorithms.gcm.keyDecoder().decodeFromByteArray(AES.Key.Format.RAW, keyBytes).cipher(TAG_SIZE_BITS)
     val probe = byteArrayOf(1, 2, 3)
