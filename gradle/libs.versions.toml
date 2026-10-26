@@ -111,6 +111,10 @@ cryptography-core = { module = "dev.whyoleg.cryptography:cryptography-core", ver
 cryptography-provider-jdk = { module = "dev.whyoleg.cryptography:cryptography-provider-jdk", version.ref = "cryptography-kotlin" }
 cryptography-provider-cryptokit = { module = "dev.whyoleg.cryptography:cryptography-provider-cryptokit", version.ref = "cryptography-kotlin" }
 cryptography-provider-webcrypto = { module = "dev.whyoleg.cryptography:cryptography-provider-webcrypto", version.ref = "cryptography-kotlin" }
+# The library's own DER codec and key structures (PrivateKeyInfo, EcPrivateKey): :kuilt-seal writes a
+# PKCS #8 private key that carries its public key, which the JDK provider's own export omits.
+cryptography-serialization-asn1 = { module = "dev.whyoleg.cryptography:cryptography-serialization-asn1", version.ref = "cryptography-kotlin" }
+cryptography-serialization-asn1-modules = { module = "dev.whyoleg.cryptography:cryptography-serialization-asn1-modules", version.ref = "cryptography-kotlin" }
 # Chicory — pure-JVM WebAssembly runtime (no native bits); JVM source sets only:
 chicory-runtime = { module = "com.dylibso.chicory:runtime", version.ref = "chicory" }
 # Gradle plugin artifacts for build-logic to depend on:
