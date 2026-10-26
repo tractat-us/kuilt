@@ -352,8 +352,8 @@ Five things to know before you bind this to a UI:
 
 - **On `:kuilt-websocket` you have to wire the observer — it is off by default.** Pass one to the
   loom: `KtorClientLoom(httpClient, connectivity = androidConnectivityObserver(context))` on Android,
-  `browserConnectivityObserver()` on wasmJs. Without it the loom uses `UnobservedConnectivity` and
-  every room over it reads `Unknown` forever, which is honest but useless for a banner. You own the
+  `appleConnectivityObserver()` on iOS/macOS, or `browserConnectivityObserver()` on wasmJs. Without it
+  the loom uses `UnobservedConnectivity` and every room over it reads `Unknown` forever, which is honest but useless for a banner. You own the
   observer's lifetime — `close()` it when the looms built from it are done. On the desktop JVM there
   is deliberately nothing to wire; don't synthesise reachability from socket state, because that
   reports the **relay's** health as the **device's** and those are different questions (the second is

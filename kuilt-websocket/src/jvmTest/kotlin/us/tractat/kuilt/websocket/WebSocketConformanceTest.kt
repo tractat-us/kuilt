@@ -131,7 +131,8 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
      *
      * `reportsLiveCapability = true` (#1725): [WebSocketSeam] drives its
      * [Seam.capability] from the [ConnectivityObserver] its loom was built with, whose real
-     * bindings are `androidConnectivityObserver` (a `ConnectivityManager.NetworkCallback`) and
+     * bindings are `appleConnectivityObserver` (Network.framework),
+     * `androidConnectivityObserver` (a `ConnectivityManager.NetworkCallback`), and
      * `browserConnectivityObserver` (`navigator.onLine`). Per the rule stated on
      * `NwBridgeLoopbackConformanceTest`, this flag tracks the **binding under test** rather than the
      * abstract fabric — and the binding under test here is wired to [connectivity], so it is off the
@@ -144,7 +145,9 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
      *    `WebSocketSeamCapabilityTest.unobservedByDefaultReportsTheUnknownFloor` holds it there.
      *  - **That a platform emits readings is not proven by any of this.** A fake-injected signal
      *    demonstrates the seam's reaction, never the transport's emission; the Android and browser
-     *    halves are device-only. Apple has no binding yet at all — #2413.
+     *    halves are device-only. Apple callback adaptation is covered by `AppleConnectivityObserverTest`;
+     *    `AppleConnectivityObserverNetworkFrameworkTest` proves a real macOS path monitor delivers a
+     *    first reading, but no test moves a real path, so a change in delivery is still a device check.
      */
     override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(
         securesTransport = false,

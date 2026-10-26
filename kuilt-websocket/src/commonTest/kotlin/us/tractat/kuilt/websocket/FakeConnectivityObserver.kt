@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * A [ConnectivityObserver] a test can move — the fake twin of `AndroidConnectivityObserver` and
+ * A [ConnectivityObserver] a test can move — the fake twin of `AppleConnectivityObserver`, `AndroidConnectivityObserver`, and
  * `BrowserConnectivityObserver`.
  *
  * **Deliberately able to sit in every state, including the ones that would make an assertion
