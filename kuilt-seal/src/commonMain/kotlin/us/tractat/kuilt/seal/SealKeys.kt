@@ -106,10 +106,10 @@ public class SealPrivateKey private constructor(
      */
     public suspend fun encodePkcs8(): ByteArray {
         algorithms()
-        val providerDer = providerCall({ IllegalStateException("provider could not export a P-256 private key ($it)") }) {
-            key.encodeToByteArray(EC.PrivateKey.Format.DER)
+        // One guard over both steps: a DER codec message may quote bytes, and these are secret.
+        return providerCall({ IllegalStateException("could not write a P-256 private key as PKCS #8 ($it)") }) {
+            pkcs8WithPublicKey(key.encodeToByteArray(EC.PrivateKey.Format.DER), publicKey.encoded())
         }
-        return pkcs8WithPublicKey(providerDer, publicKey.encoded())
     }
 
     override fun toString(): String = "SealPrivateKey(publicKey=$publicKey)"

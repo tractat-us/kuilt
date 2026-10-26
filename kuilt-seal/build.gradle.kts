@@ -15,11 +15,14 @@ kotlin {
         val macosArm64Main by getting { dependsOn(appleMain) }
 
         commonMain.dependencies {
-            // No kuilt module and no coroutines: a sealed box is two suspend functions over byte
-            // arrays, and a consumer that wants one should inherit nothing else with it. The
-            // primitives are cryptography-kotlin's; this module composes them and owns no math.
-            // `implementation`, not `api`: no cryptography-kotlin type appears in the public surface.
+            // No kuilt module: a sealed box is a few suspend functions over byte arrays, and a
+            // consumer that wants one should inherit nothing else with it. The primitives are
+            // cryptography-kotlin's; this module composes them and owns no math. `implementation`,
+            // not `api`: no cryptography-kotlin type appears in the public surface.
             implementation(libs.cryptography.core)
+            // Only for `currentCoroutineContext().ensureActive()`: telling this coroutine's own
+            // cancellation from one a provider minted (providerCall), per kuilt's exception rule.
+            implementation(libs.kotlinx.coroutines.core)
             // The library's DER codec, for writing PKCS #8 with its public key (SealPrivateKey.encodePkcs8).
             implementation(libs.cryptography.serialization.asn1)
             implementation(libs.cryptography.serialization.asn1.modules)

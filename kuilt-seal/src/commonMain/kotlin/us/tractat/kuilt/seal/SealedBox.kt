@@ -1,10 +1,11 @@
 package us.tractat.kuilt.seal
 
 import dev.whyoleg.cryptography.BinarySize.Companion.bytes
+import dev.whyoleg.cryptography.CryptographySystem
 import dev.whyoleg.cryptography.algorithms.AES
 import dev.whyoleg.cryptography.algorithms.EC
-import dev.whyoleg.cryptography.algorithms.HKDF
 import dev.whyoleg.cryptography.algorithms.SHA256
+import dev.whyoleg.cryptography.random.CryptographyRandom
 
 /**
  * Encrypt bytes to a recipient's public key so that only the holder of the private key can read
@@ -15,6 +16,11 @@ import dev.whyoleg.cryptography.algorithms.SHA256
  * and encrypts. Sealing the same plaintext twice gives two different boxes, and there is no
  * deterministic form, for tests or otherwise: a reproducible seal lets a reader who knows all but
  * one input confirm guesses at it.
+ *
+ * **A box proves nothing about who sealed it.** Sealing needs only the public key, and anyone can
+ * hold that — an app that compiles it in hands it to every user. Opening a box shows it was sealed
+ * to this key and not altered since; it does not show by whom. Authenticate the sender separately
+ * where that matters.
  *
  * The format (version 1), all lengths in bytes:
  *
@@ -31,7 +37,8 @@ import dev.whyoleg.cryptography.algorithms.SHA256
  * content. A caller that must hide the length pads the plaintext to a fixed size itself.
  *
  * Both calls are `suspend` because WebCrypto, the wasmJs provider, has only asynchronous operations.
- * Every failure is a [SealedBoxException]; none carries plaintext.
+ * A failure caused by the bytes passed in is a [SealedBoxException]; none carries plaintext. A
+ * platform provider that cannot run at all fails its one-time self-test with [IllegalStateException].
  */
 public object SealedBox {
     private const val VERSION: Byte = 1
@@ -48,16 +55,26 @@ public object SealedBox {
     /**
      * Seals [plaintext] to [recipient], binding [associatedData] (which is authenticated, not
      * encrypted, and must be passed again to [open]). Throws [IllegalStateException] if the process
-     * has replaced the platform CSPRNG, and [SealedBoxException] with
-     * [SealedBoxException.Reason.SEAL_FAILED] if the provider fails.
+     * has replaced the platform CSPRNG or the provider fails its self-test, and [SealedBoxException]
+     * with [SealedBoxException.Reason.SEAL_FAILED] if a sealing step fails.
      */
-    public suspend fun seal(recipient: SealPublicKey, plaintext: ByteArray, associatedData: ByteArray): ByteArray {
-        requirePlatformRandom()
+    public suspend fun seal(recipient: SealPublicKey, plaintext: ByteArray, associatedData: ByteArray): ByteArray =
+        seal(recipient, plaintext, associatedData, CryptographySystem.getDefaultRandom())
+
+    /** [seal] with the process random passed in, so a test can show the guard is on the path. */
+    internal suspend fun seal(
+        recipient: SealPublicKey,
+        plaintext: ByteArray,
+        associatedData: ByteArray,
+        currentRandom: CryptographyRandom,
+    ): ByteArray {
+        requirePlatformRandom(currentRandom)
+        val algorithms = algorithms()
         return providerCall({ SealedBoxException(SealedBoxException.Reason.SEAL_FAILED, it) }) {
-            val ephemeral = ecdh().keyPairGenerator(EC.Curve.P256).generateKey()
+            val ephemeral = algorithms.ecdh.keyPairGenerator(EC.Curve.P256).generateKey()
             val ephemeralPublic = SealPublicKey.of(ephemeral.publicKey)
             val shared = ephemeral.privateKey.sharedSecretGenerator().generateSharedSecretToByteArray(recipient.key)
-            val cipher = aeadKey(shared, ephemeralPublic.encoded(), recipient.encoded()).cipher()
+            val cipher = aeadKey(algorithms, shared, ephemeralPublic.encoded(), recipient.encoded()).cipher(TAG_SIZE_BITS)
             // Provider layout: nonce (12, drawn from the CSPRNG checked above) || ciphertext || tag.
             val nonceCiphertextTag = cipher.encrypt(plaintext, associatedData)
             byteArrayOf(VERSION) + ephemeralPublic.encoded() + nonceCiphertextTag
@@ -77,25 +94,27 @@ public object SealedBox {
             )
         }
         if (sealed[0] != VERSION) throw SealedBoxException(SealedBoxException.Reason.UNSUPPORTED_VERSION)
+        // Outside the guard below: an unusable provider is the environment's fault, not the box's.
+        val algorithms = algorithms()
         return providerCall({ SealedBoxException(SealedBoxException.Reason.NOT_AUTHENTIC, it) }) {
             val ephemeralBytes = sealed.copyOfRange(VERSION_SIZE, HEADER_SIZE)
             // The agreement below is the on-curve check for this attacker-chosen point.
-            val ephemeralPublic = SealPublicKey.decodeForAgreement(ephemeralBytes)
+            val ephemeralPublic = SealPublicKey.decodeForAgreement(algorithms, ephemeralBytes)
             val shared = recipient.key.sharedSecretGenerator().generateSharedSecretToByteArray(ephemeralPublic)
-            val cipher = aeadKey(shared, ephemeralBytes, recipient.publicKey.encoded()).cipher()
+            val cipher = aeadKey(algorithms, shared, ephemeralBytes, recipient.publicKey.encoded()).cipher(TAG_SIZE_BITS)
             cipher.decrypt(sealed.copyOfRange(HEADER_SIZE, sealed.size), associatedData)
         }
     }
 
     private suspend fun aeadKey(
+        algorithms: Algorithms,
         shared: ByteArray,
         ephemeral: ByteArray,
         recipient: ByteArray,
     ): AES.GCM.Key {
-        val provider = platformProvider()
-        val keyBytes = provider.get(HKDF)
+        val keyBytes = algorithms.hkdf
             .secretDerivation(SHA256, AES_KEY_SIZE.bytes, salt = null, info = LABEL + ephemeral + recipient)
             .deriveSecretToByteArray(shared)
-        return provider.get(AES.GCM).keyDecoder().decodeFromByteArray(AES.Key.Format.RAW, keyBytes)
+        return algorithms.gcm.keyDecoder().decodeFromByteArray(AES.Key.Format.RAW, keyBytes)
     }
 }
