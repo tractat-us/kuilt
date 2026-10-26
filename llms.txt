@@ -44,6 +44,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Replicated data](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#replicated-data)
 - [Scaling to many peers](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#scaling-to-many-peers)
 - [Dealing cards nobody can peek at](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#dealing-cards-nobody-can-peek-at)
+- [Sealed boxes](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#sealed-boxes)
 - [Dedup](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#dedup)
 - [Archiving what the live replica forgets](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#archiving-what-the-live-replica-forgets)
 - [Session](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md)
