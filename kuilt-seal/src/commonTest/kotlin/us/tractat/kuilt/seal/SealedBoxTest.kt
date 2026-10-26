@@ -171,6 +171,37 @@ class SealedBoxTest {
     }
 
     @Test
+    fun aPkcs8WhosePublicKeyIsTheNegatedPointIsRefused() = runTest {
+        // Regression: the KAT recipient's PKCS #8 with y := p − y, so the embedded point is −P. ECDH
+        // gives only x, which P and −P share, so an agreement-based pair check accepted this on the
+        // JDK, and every box sealed to the real P would then fail to open. OpenSSL refuses it.
+        val failure = decodePkcs8Failure(NEGATED_PKCS8.hexToByteArray())
+        assertTrue(failure is IllegalArgumentException, "a negated public point gave $failure")
+    }
+
+    @Test
+    fun generateRefusesAReplacedRandomSource() = runTest {
+        // The JDK draws key generation from the process random, and generate() + encodePkcs8() is
+        // how a long-term key is made, so a seeded random would persist a predictable key.
+        val seeded = object : CryptographyRandom() {
+            override fun nextBits(bitCount: Int): Int = 0
+        }
+        val withPlatformRandom = SealPrivateKey.generate(CryptographyRandom.Default)
+        val refusal = try {
+            SealPrivateKey.generate(seeded)
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IllegalStateException) {
+            e
+        }
+        assertAll(
+            { assertEquals(SealPublicKey.ENCODED_SIZE, withPlatformRandom.publicKey.encoded().size) },
+            { assertTrue(refusal?.message.orEmpty().contains("setDefaultRandom"), "generate accepted a seeded random: $refusal") },
+        )
+    }
+
+    @Test
     fun aPkcs8WrittenByEncodePkcs8IsPairChecked() = runTest {
         // The same swap applied to a file encodePkcs8 wrote: the check covers this module's own
         // output, not only foreign files.
@@ -255,6 +286,13 @@ class SealedBoxTest {
                 "a5a39d1ce543a0980ce60b9bd43727e506f5c68616046f45a14403420004269ecfd436d7baf0a41475a681" +
                 "325c137b2b52862c0836cf09fb245acb84eee5c3e935a011959d9f995a259f8bb1a3912fed7f13682df874" +
                 "c406eb38b3b77500"
+
+        /** The same PKCS #8 with its embedded point negated (y := p − y): −P, sharing P's x. */
+        const val NEGATED_PKCS8 =
+            "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420ed43106c5d978b86" +
+                "a5a39d1ce543a0980ce60b9bd43727e506f5c68616046f45a1440342000423161b652dafc4beef3f403b0a" +
+                "d40a860c2cb2752ccd75f801c9e31de50b18192885962f09db7b0b6b87297757c0f139394d0cd8dc1e6a06" +
+                "4a8c59877cbdbc69"
     }
 
     /** What [SealPublicKey.decode] threw for [bytes], or null if it returned. */

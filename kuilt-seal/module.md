@@ -44,7 +44,9 @@ check(opened.decodeToString() == "the hidden position")
 
 `encodePkcs8` writes standard PKCS #8 that carries the public key, on every platform, so a key
 written on one reads back on any other. A key made with OpenSSL reads back too. `decodePkcs8`
-refuses a file whose public key does not belong to its private key. Every call suspends, because
+refuses a file whose public key does not belong to its private key, including one carrying the
+key's negation: the private half signs and the public half must verify, since a key agreement
+cannot tell a point from its negation. Every call suspends, because
 the browser's WebCrypto has only asynchronous operations.
 
 The associated data is authenticated but not encrypted. Use it for whatever the box must stay

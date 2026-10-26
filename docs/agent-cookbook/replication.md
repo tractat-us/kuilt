@@ -645,9 +645,11 @@ check(opened.decodeToString() == "the hidden position")
 Every seal draws a fresh ephemeral key and nonce, so two seals of the same bytes differ, and there
 is no deterministic mode to reach for in tests. **A box proves nothing about who sealed it**: anyone
 holding the public key can seal, so authenticate the sender separately where that matters. Nothing
-is compressed; pad the plaintext yourself if its length is a secret. Any failure caused by the bytes
-you pass is a `SealedBoxException` whose message never quotes them; a platform whose cryptography
-cannot run at all (no `crypto.subtle` on an insecure origin) fails with `IllegalStateException`.
+is compressed; pad the plaintext yourself if its length is a secret. Bad input fails by where it
+came in: `seal` and `open` throw `SealedBoxException`, and the key decoders (`SealPublicKey.decode`,
+`SealPrivateKey.decodePkcs8`) throw `IllegalArgumentException`. Neither message ever quotes your
+bytes. A platform whose cryptography cannot run at all (no `crypto.subtle` on an insecure origin),
+or a process that replaced the platform random source, fails with `IllegalStateException`.
 
 ## Dedup
 
