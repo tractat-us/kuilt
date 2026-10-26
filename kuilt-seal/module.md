@@ -19,17 +19,33 @@ cannot see the cards they were never shown.
 - **Failures never quote your data.** An exception's message names the reason and nothing else,
   because crash reports keep the whole message chain.
 
+What it does not promise: **a box proves nothing about who sealed it.** Sealing needs only the
+public key, and an app that compiles that key in hands it to every user. Opening a box shows it was
+sealed to your key and not changed since, not who sent it. Check the sender some other way where
+that matters.
+
 ## Using it
 
-A recipient makes its key once, outside the app, as PKCS #8 DER that carries its public key, which
-is what `openssl ecparam -name prime256v1 -genkey | openssl pkcs8 -topk8 -nocrypt -outform DER`
-writes. It loads that key with `SealPrivateKey.decodePkcs8` and hands out `publicKey.encoded()`, a
-fixed 65 bytes. `SealPrivateKey.generate()` makes a key that lives only in memory. There is no
-encoder, because the JVM provider writes PKCS #8 without the public key and then cannot read it
-back. A sender reads those bytes with `SealPublicKey.decode` and calls `SealedBox.seal(recipient,
-plaintext, associatedData)`. The recipient calls `SealedBox.open(privateKey, sealed,
-associatedData)`. Both calls suspend, because the browser's WebCrypto has only asynchronous
-operations.
+<!-- verbatim from kuilt-seal/src/commonSamples/kotlin/us/tractat/kuilt/seal/SealSamples.kt#sampleSealedBox -->
+```kotlin
+// Once, on the recipient's side: make a key, keep the private half secret, publish the public one.
+val recipient = SealPrivateKey.generate()
+val storedPrivateKey: ByteArray = recipient.encodePkcs8() // secret — store it as such
+val publishedKey: ByteArray = recipient.publicKey.encoded() // 65 bytes, safe to compile into an app
+
+// On the sender's side: only the public key is needed, and the sender cannot read the box afterwards.
+val reportId = "report-42".encodeToByteArray() // authenticated, not encrypted; must match on open
+val sealed = SealedBox.seal(SealPublicKey.decode(publishedKey), "the hidden position".encodeToByteArray(), reportId)
+
+// Back on the recipient's side, from the stored key.
+val opened = SealedBox.open(SealPrivateKey.decodePkcs8(storedPrivateKey), sealed, reportId)
+check(opened.decodeToString() == "the hidden position")
+```
+
+`encodePkcs8` writes standard PKCS #8 that carries the public key, on every platform, so a key
+written on one reads back on any other. A key made with OpenSSL reads back too. `decodePkcs8`
+refuses a file whose public key does not belong to its private key. Every call suspends, because
+the browser's WebCrypto has only asynchronous operations.
 
 The associated data is authenticated but not encrypted. Use it for whatever the box must stay
 attached to, such as a report id or a format tag, and pass the same bytes to `open`.
@@ -42,8 +58,8 @@ and check at startup that it is not running with a test key.
 - **Length.** Nothing is compressed, deliberately: compression makes the length depend on the
   content. If the length of what you seal is itself a secret, pad it to a fixed size first. A box
   is always `plaintext.size + SealedBox.OVERHEAD` bytes.
-- **Key storage.** The module reads a private key but never writes one. Where it lives, and who
-  may read it, is up to the application.
+- **Key storage.** The module encodes a private key; where those bytes live, and who may read
+  them, is up to the application.
 
 ## Underneath
 
