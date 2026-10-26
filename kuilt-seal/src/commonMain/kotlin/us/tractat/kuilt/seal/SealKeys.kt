@@ -1,7 +1,11 @@
 package us.tractat.kuilt.seal
 
+import dev.whyoleg.cryptography.CryptographySystem
 import dev.whyoleg.cryptography.algorithms.EC
 import dev.whyoleg.cryptography.algorithms.ECDH
+import dev.whyoleg.cryptography.algorithms.ECDSA
+import dev.whyoleg.cryptography.algorithms.SHA256
+import dev.whyoleg.cryptography.random.CryptographyRandom
 import dev.whyoleg.cryptography.serialization.asn1.BitArray
 import dev.whyoleg.cryptography.serialization.asn1.Der
 import dev.whyoleg.cryptography.serialization.asn1.modules.EcPrivateKey
@@ -115,8 +119,17 @@ public class SealPrivateKey private constructor(
     override fun toString(): String = "SealPrivateKey(publicKey=$publicKey)"
 
     public companion object {
-        /** A fresh key pair from the platform provider's own key generator. */
-        public suspend fun generate(): SealPrivateKey {
+        /**
+         * A fresh key pair from the platform provider's own key generator. Throws
+         * [IllegalStateException] if the process has replaced the platform CSPRNG (the JDK provider
+         * draws key generation from it, and this is the key [encodePkcs8] persists) or the provider
+         * fails its self-test.
+         */
+        public suspend fun generate(): SealPrivateKey = generate(CryptographySystem.getDefaultRandom())
+
+        /** [generate] with the process random passed in, so a test can show the guard is on the path. */
+        internal suspend fun generate(currentRandom: CryptographyRandom): SealPrivateKey {
+            requirePlatformRandom(currentRandom)
             val algorithms = algorithms()
             val pair = providerCall({ IllegalStateException("provider could not generate a P-256 key pair ($it)") }) {
                 algorithms.ecdh.keyPairGenerator(EC.Curve.P256).generateKey()
@@ -131,8 +144,10 @@ public class SealPrivateKey private constructor(
          *
          * That last check is not paranoia: the JDK provider takes the embedded public key on trust,
          * so without it a file whose public key was swapped would decode, and boxes sealed to the
-         * swapped key would never open. Here the two halves must agree a secret with a fresh key
-         * pair — the private half one way, the public half the other — on every platform. A DER
+         * swapped key would never open. Here the private half signs a fixed message and the public
+         * half must verify it, on every platform. A signature, not a key agreement: ECDH yields only
+         * the x-coordinate, which a point and its negation share, so an agreement check accepts a
+         * file whose public key was replaced by its negation. A DER
          * without the optional public key is refused on JVM and Android, where the provider cannot
          * recompute it; other platforms may accept one.
          */
@@ -144,8 +159,8 @@ public class SealPrivateKey private constructor(
                 val key = algorithms.ecdh.privateKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PrivateKey.Format.DER, der)
                 key to key.getPublicKey()
             }
-            requirePair(algorithms, key, public)
             val publicKey = SealPublicKey.of(public)
+            requirePair(algorithms, der, publicKey.encoded())
             // CryptoKit derives the public half from the scalar and ignores the embedded one, so the
             // pair check alone would accept a swapped file there. Compare the embedded point too.
             val embedded = providerCall({ IllegalArgumentException("not a PKCS #8 P-256 private key ($it)") }) {
@@ -157,15 +172,18 @@ public class SealPrivateKey private constructor(
             return SealPrivateKey(key, publicKey)
         }
 
-        private suspend fun requirePair(algorithms: Algorithms, private: ECDH.PrivateKey, public: ECDH.PublicKey) {
+        /** The private half of [der] signs [PAIR_PROBE]; [publicPoint] must verify the signature. */
+        private suspend fun requirePair(algorithms: Algorithms, der: ByteArray, publicPoint: ByteArray) {
             val matches = providerCall({ IllegalArgumentException("the PKCS #8 public key is unusable ($it)") }) {
-                val witness = algorithms.ecdh.keyPairGenerator(EC.Curve.P256).generateKey()
-                val viaPrivate = private.sharedSecretGenerator().generateSharedSecretToByteArray(witness.publicKey)
-                val viaPublic = witness.privateKey.sharedSecretGenerator().generateSharedSecretToByteArray(public)
-                viaPrivate.contentEquals(viaPublic)
+                val signer = algorithms.ecdsa.privateKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PrivateKey.Format.DER, der)
+                val verifier = algorithms.ecdsa.publicKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PublicKey.Format.RAW, publicPoint)
+                val signature = signer.signatureGenerator(SHA256, ECDSA.SignatureFormat.RAW).generateSignature(PAIR_PROBE)
+                verifier.signatureVerifier(SHA256, ECDSA.SignatureFormat.RAW).tryVerifySignature(PAIR_PROBE, signature)
             }
             require(matches) { "the PKCS #8 public key does not belong to its private key" }
         }
+
+        private val PAIR_PROBE = "kuilt-seal/v1 PKCS #8 pair check".encodeToByteArray()
     }
 }
 

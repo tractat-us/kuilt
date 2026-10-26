@@ -6,6 +6,7 @@ import dev.whyoleg.cryptography.CryptographyProvider
 import dev.whyoleg.cryptography.algorithms.AES
 import dev.whyoleg.cryptography.algorithms.EC
 import dev.whyoleg.cryptography.algorithms.ECDH
+import dev.whyoleg.cryptography.algorithms.ECDSA
 import dev.whyoleg.cryptography.algorithms.HKDF
 import dev.whyoleg.cryptography.algorithms.SHA256
 import dev.whyoleg.cryptography.random.CryptographyRandom
@@ -27,8 +28,11 @@ import kotlin.coroutines.cancellation.CancellationException
  */
 internal expect fun platformProvider(): CryptographyProvider
 
-/** The three algorithms a sealed box uses, resolved from [platformProvider] and self-tested. */
-internal class Algorithms(val ecdh: ECDH, val hkdf: HKDF, val gcm: AES.GCM)
+/**
+ * The algorithms a sealed box uses, resolved from [platformProvider] and self-tested. ECDSA seals
+ * nothing: it is the sign-sensitive check that a PKCS #8 file's two halves belong together.
+ */
+internal class Algorithms(val ecdh: ECDH, val hkdf: HKDF, val gcm: AES.GCM, val ecdsa: ECDSA)
 
 /** AES-GCM tag length: 128 bits, the only length every provider supports (CryptoKit has no other). */
 internal val TAG_SIZE_BITS = 128.bits
@@ -38,8 +42,8 @@ private var verified: Algorithms? = null
 
 /**
  * The platform's algorithms, after a self-test that runs once per process: two fresh key pairs
- * agree the same secret both ways, HKDF derives from it, AES-GCM round-trips, and a public key
- * encodes in the 65-byte SEC 1 form.
+ * agree the same secret both ways, HKDF derives from it, AES-GCM round-trips, a public key
+ * encodes in the 65-byte SEC 1 form, and ECDSA verifies its own signature.
  *
  * This is the line between the environment and the input. A provider that cannot run here — no
  * `crypto.subtle` on a non-secure browser origin, two JCA providers registered, a FIPS mode that
@@ -53,7 +57,7 @@ internal suspend fun algorithms(): Algorithms = verified ?: selfTested().also { 
 
 private suspend fun selfTested(): Algorithms = try {
     val provider = platformProvider()
-    val algorithms = Algorithms(provider.get(ECDH), provider.get(HKDF), provider.get(AES.GCM))
+    val algorithms = Algorithms(provider.get(ECDH), provider.get(HKDF), provider.get(AES.GCM), provider.get(ECDSA))
     val one = algorithms.ecdh.keyPairGenerator(EC.Curve.P256).generateKey()
     val two = algorithms.ecdh.keyPairGenerator(EC.Curve.P256).generateKey()
     val forward = one.privateKey.sharedSecretGenerator().generateSharedSecretToByteArray(two.publicKey)
@@ -68,6 +72,11 @@ private suspend fun selfTested(): Algorithms = try {
     val cipher = algorithms.gcm.keyDecoder().decodeFromByteArray(AES.Key.Format.RAW, keyBytes).cipher(TAG_SIZE_BITS)
     val probe = byteArrayOf(1, 2, 3)
     check(cipher.decrypt(cipher.encrypt(probe, probe), probe).contentEquals(probe)) { "AES-GCM did not round-trip" }
+    val signing = algorithms.ecdsa.keyPairGenerator(EC.Curve.P256).generateKey()
+    val signature = signing.privateKey.signatureGenerator(SHA256, ECDSA.SignatureFormat.RAW).generateSignature(probe)
+    check(signing.publicKey.signatureVerifier(SHA256, ECDSA.SignatureFormat.RAW).tryVerifySignature(probe, signature)) {
+        "ECDSA did not verify its own signature"
+    }
     algorithms
 } catch (e: CancellationException) {
     currentCoroutineContext().ensureActive()
