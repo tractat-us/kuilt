@@ -1,6 +1,6 @@
 package us.tractat.kuilt.seal
 
-import dev.whyoleg.cryptography.algorithms.EC
+import kotlin.coroutines.cancellation.CancellationException
 import dev.whyoleg.cryptography.random.CryptographyRandom
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
@@ -147,24 +147,37 @@ class SealedBoxTest {
     }
 
     @Test
-    fun aProviderWrittenPkcs8EitherRestoresTheSameKeyOrIsRefused() = runTest {
-        // The provider's own PKCS #8 may omit the public key (the JDK's does). decodePkcs8 must then
-        // refuse it with IllegalArgumentException — never return a key with a different public half.
+    fun encodePkcs8RoundTripsAndTheRestoredKeyOpens() = runTest {
         val original = SealPrivateKey.generate()
         val sealed = SealedBox.seal(original.publicKey, plaintext, associatedData)
-        val der = original.key.encodeToByteArray(EC.PrivateKey.Format.DER)
-        val restored = try {
-            SealPrivateKey.decodePkcs8(der)
-        } catch (refused: IllegalArgumentException) {
-            null
-        }
-        if (restored != null) {
-            val opened = SealedBox.open(restored, sealed, associatedData)
-            assertAll(
-                { assertEquals(original.publicKey, restored.publicKey) },
-                { assertContentEquals(plaintext, opened) },
-            )
-        }
+        val der = original.encodePkcs8()
+        val restored = SealPrivateKey.decodePkcs8(der)
+        val opened = SealedBox.open(restored, sealed, associatedData)
+        assertAll(
+            // The written file carries the public point itself, whatever the provider's export did.
+            { assertTrue(der.containsSubarray(original.publicKey.encoded()), "PKCS #8 without its public key") },
+            { assertEquals(original.publicKey, restored.publicKey) },
+            { assertContentEquals(plaintext, opened) },
+        )
+    }
+
+    @Test
+    fun aPkcs8WhosePublicKeyBelongsToAnotherKeyIsRefused() = runTest {
+        // Hand-built: the KAT recipient's PKCS #8 with its embedded public point swapped for another
+        // valid P-256 point. OpenSSL refuses it (`pkey -check`: "ossl_ec_key_pairwise_check"); SunEC
+        // alone would take the embedded point on trust.
+        val failure = decodePkcs8Failure(MISMATCHED_PKCS8.hexToByteArray())
+        assertTrue(failure is IllegalArgumentException, "a mismatched key pair gave $failure")
+    }
+
+    @Test
+    fun aPkcs8WrittenByEncodePkcs8IsPairChecked() = runTest {
+        // The same swap applied to a file encodePkcs8 wrote: the check covers this module's own
+        // output, not only foreign files.
+        val der = SealPrivateKey.generate().encodePkcs8()
+        val swapped = pkcs8WithPublicKey(der, SealPrivateKey.generate().publicKey.encoded())
+        val failure = decodePkcs8Failure(swapped)
+        assertTrue(failure is IllegalArgumentException, "a mismatched key pair gave $failure")
     }
 
     @Test
@@ -202,14 +215,46 @@ class SealedBoxTest {
     }
 
     @Test
-    fun sealingRefusesAReplacedRandomSource() {
+    fun sealRefusesAReplacedRandomSource() = runTest {
+        // Through seal itself, not the guard alone, so deleting the guard's call from seal reds this.
+        val recipient = SealPrivateKey.generate()
         val seeded = object : CryptographyRandom() {
             override fun nextBits(bitCount: Int): Int = 0
         }
+        val withPlatformRandom = SealedBox.seal(recipient.publicKey, plaintext, associatedData, CryptographyRandom.Default)
+        val opened = SealedBox.open(recipient, withPlatformRandom, associatedData)
+        val refusal = try {
+            SealedBox.seal(recipient.publicKey, plaintext, associatedData, seeded)
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IllegalStateException) {
+            e
+        }
         assertAll(
-            { requirePlatformRandom(CryptographyRandom.Default) },
-            { assertFailsWith<IllegalStateException> { requirePlatformRandom(seeded) } },
+            { assertContentEquals(plaintext, opened) },
+            { assertTrue(refusal?.message.orEmpty().contains("setDefaultRandom"), "seal accepted a seeded random: $refusal") },
         )
+    }
+
+    /** What [SealPrivateKey.decodePkcs8] threw for [der], or null if it returned. */
+    private suspend fun decodePkcs8Failure(der: ByteArray): Throwable? = try {
+        SealPrivateKey.decodePkcs8(der)
+        null
+    } catch (e: IllegalArgumentException) {
+        e
+    }
+
+    private fun ByteArray.containsSubarray(needle: ByteArray): Boolean =
+        (0..size - needle.size).any { start -> needle.indices.all { this[start + it] == needle[it] } }
+
+    private companion object {
+        /** SealedBoxKnownAnswerTest's recipient PKCS #8, its public point replaced by an unrelated one. */
+        const val MISMATCHED_PKCS8 =
+            "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420ed43106c5d978b86" +
+                "a5a39d1ce543a0980ce60b9bd43727e506f5c68616046f45a14403420004269ecfd436d7baf0a41475a681" +
+                "325c137b2b52862c0836cf09fb245acb84eee5c3e935a011959d9f995a259f8bb1a3912fed7f13682df874" +
+                "c406eb38b3b77500"
     }
 
     /** What [SealPublicKey.decode] threw for [bytes], or null if it returned. */

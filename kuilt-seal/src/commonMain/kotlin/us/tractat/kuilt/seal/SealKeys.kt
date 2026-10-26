@@ -145,7 +145,16 @@ public class SealPrivateKey private constructor(
                 key to key.getPublicKey()
             }
             requirePair(algorithms, key, public)
-            return SealPrivateKey(key, SealPublicKey.of(public))
+            val publicKey = SealPublicKey.of(public)
+            // CryptoKit derives the public half from the scalar and ignores the embedded one, so the
+            // pair check alone would accept a swapped file there. Compare the embedded point too.
+            val embedded = providerCall({ IllegalArgumentException("not a PKCS #8 P-256 private key ($it)") }) {
+                embeddedPublicPoint(der)
+            }
+            require(embedded == null || embedded.contentEquals(publicKey.encoded())) {
+                "the PKCS #8 public key does not belong to its private key"
+            }
+            return SealPrivateKey(key, publicKey)
         }
 
         private suspend fun requirePair(algorithms: Algorithms, private: ECDH.PrivateKey, public: ECDH.PublicKey) {
@@ -158,6 +167,12 @@ public class SealPrivateKey private constructor(
             require(matches) { "the PKCS #8 public key does not belong to its private key" }
         }
     }
+}
+
+/** The public point a PKCS #8 `ECPrivateKey` carries, or null when it carries none. */
+internal fun embeddedPublicPoint(pkcs8: ByteArray): ByteArray? {
+    val info = Der.decodeFromByteArray(PrivateKeyInfo.serializer(), pkcs8)
+    return Der.decodeFromByteArray(EcPrivateKey.serializer(), info.privateKey).publicKey?.byteArray
 }
 
 /**
