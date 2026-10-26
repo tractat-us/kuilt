@@ -616,6 +616,41 @@ outer timeout of your own. The one thing it cannot defend against is stated plai
 A last mover sees every other reveal before deciding whether to send its own, so **withholding is a
 game-layer concern** — forfeit the peer that goes quiet; commit-reveal cannot.
 
+## Sealed boxes
+
+**Intent:** encrypt bytes so that only one recipient can read them, when the sender holds no secret
+and must not be able to read them back — a hidden game position attached to a problem report, a
+payload for a collector. You are about to hand-roll ECIES, pick an AES mode, or ask a crypto
+library for "encrypt with this public key".
+**Primitive:** `SealedBox.seal`/`open` (`:kuilt-seal`) over `SealPublicKey` (a stable 65-byte
+encoding you can compile into an app) and `SealPrivateKey` (`generate`, `encodePkcs8`,
+`decodePkcs8`). P-256 ECDH, HKDF-SHA-256 and AES-256-GCM on each platform's own cryptography.
+
+<!-- verbatim from kuilt-seal/src/commonSamples/kotlin/us/tractat/kuilt/seal/SealSamples.kt#sampleSealedBox -->
+```kotlin
+// Once, on the recipient's side: make a key, keep the private half secret, publish the public one.
+val recipient = SealPrivateKey.generate()
+val storedPrivateKey: ByteArray = recipient.encodePkcs8() // secret — store it as such
+val publishedKey: ByteArray = recipient.publicKey.encoded() // 65 bytes, safe to compile into an app
+
+// On the sender's side: only the public key is needed, and the sender cannot read the box afterwards.
+val reportId = "report-42".encodeToByteArray() // authenticated, not encrypted; must match on open
+val sealed = SealedBox.seal(SealPublicKey.decode(publishedKey), "the hidden position".encodeToByteArray(), reportId)
+
+// Back on the recipient's side, from the stored key.
+val opened = SealedBox.open(SealPrivateKey.decodePkcs8(storedPrivateKey), sealed, reportId)
+check(opened.decodeToString() == "the hidden position")
+```
+
+Every seal draws a fresh ephemeral key and nonce, so two seals of the same bytes differ, and there
+is no deterministic mode to reach for in tests. **A box proves nothing about who sealed it**: anyone
+holding the public key can seal, so authenticate the sender separately where that matters. Nothing
+is compressed; pad the plaintext yourself if its length is a secret. Bad input fails by where it
+came in: `seal` and `open` throw `SealedBoxException`, and the key decoders (`SealPublicKey.decode`,
+`SealPrivateKey.decodePkcs8`) throw `IllegalArgumentException`. Neither message ever quotes your
+bytes. A platform whose cryptography cannot run at all (no `crypto.subtle` on an insecure origin),
+or a process that replaced the platform random source, fails with `IllegalStateException`.
+
 ## Dedup
 
 **Intent:** skip a message/id you've already handled ("seenIds", "skip-if-exists").

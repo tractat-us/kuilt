@@ -24,6 +24,7 @@ ionspin-bignum = "0.3.10"
 kotlincrypto-hash = "0.8.0"
 kotlincrypto-macs = "0.8.0"
 kotlincrypto-random = "0.6.0"
+cryptography-kotlin = "0.6.0"
 chicory = "1.7.5"
 vanniktechMavenPublish = "0.37.0"
 otel = "1.67.0"
@@ -109,6 +110,18 @@ kotlincrypto-hash-sha2 = { module = "org.kotlincrypto.hash:sha2", version.ref = 
 kotlincrypto-macs-hmac-sha2 = { module = "org.kotlincrypto.macs:hmac-sha2", version.ref = "kotlincrypto-macs" }
 # KotlinCrypto CSPRNG — multiplatform cryptographically-secure random for minting the join code/nonce:
 kotlincrypto-random-crypto-rand = { module = "org.kotlincrypto.random:crypto-rand", version.ref = "kotlincrypto-random" }
+# cryptography-kotlin (whyoleg) — :kuilt-seal's P-256 ECDH, HKDF-SHA-256 and AES-256-GCM. One
+# provider per platform, each wrapping the platform's own implementation: JCA on JVM/Android,
+# CryptoKit on Apple, WebCrypto on wasmJs. Named per provider rather than through the "optimal"
+# aggregate, so the module picks its provider explicitly instead of trusting a process-global default.
+cryptography-core = { module = "dev.whyoleg.cryptography:cryptography-core", version.ref = "cryptography-kotlin" }
+cryptography-provider-jdk = { module = "dev.whyoleg.cryptography:cryptography-provider-jdk", version.ref = "cryptography-kotlin" }
+cryptography-provider-cryptokit = { module = "dev.whyoleg.cryptography:cryptography-provider-cryptokit", version.ref = "cryptography-kotlin" }
+cryptography-provider-webcrypto = { module = "dev.whyoleg.cryptography:cryptography-provider-webcrypto", version.ref = "cryptography-kotlin" }
+# The library's own DER codec and key structures (PrivateKeyInfo, EcPrivateKey): :kuilt-seal writes a
+# PKCS #8 private key that carries its public key, which the JDK provider's own export omits.
+cryptography-serialization-asn1 = { module = "dev.whyoleg.cryptography:cryptography-serialization-asn1", version.ref = "cryptography-kotlin" }
+cryptography-serialization-asn1-modules = { module = "dev.whyoleg.cryptography:cryptography-serialization-asn1-modules", version.ref = "cryptography-kotlin" }
 # Chicory — pure-JVM WebAssembly runtime (no native bits); JVM source sets only:
 chicory-runtime = { module = "com.dylibso.chicory:runtime", version.ref = "chicory" }
 # Gradle plugin artifacts for build-logic to depend on:

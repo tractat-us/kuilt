@@ -67,6 +67,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a non-Kotlin client for a `TcpLoom` peer — reverse-engineering the frame and hello bytes, or a bridge protocol beside them | the TCP wire contract `docs/tcp-wire.md` + its golden vectors | [The other end is not written in Kotlin](agent-cookbook/fabrics.md#the-other-end-is-not-written-in-kotlin) |
 | dealing cards nobody can peek at — a shuffle on one device, "the dealer could cheat", hiding a card from the player holding it | `DealSession` | [Dealing cards nobody can peek at](agent-cookbook/replication.md#dealing-cards-nobody-can-peek-at) |
 | a shared random seed nobody could steer — one peer picks a number and broadcasts it | `FairRandom.roll()` | [Nobody chose that number](agent-cookbook/replication.md#nobody-chose-that-number) |
+| encrypting bytes to a recipient's public key — hand-rolled ECIES, an AES mode picked by hand, "encrypt so only the collector can read it" | `SealedBox.seal`/`open` + `SealPublicKey`/`SealPrivateKey` | [Sealed boxes](agent-cookbook/replication.md#sealed-boxes) |
 | a server holding the authoritative log while many clients propose into it, and a client that must survive losing its server | `ClusterClient` + `ServerCluster` | [When one of the peers is a server](agent-cookbook/consensus.md#when-one-of-the-peers-is-a-server) |
 | a session too big for everyone-talks-to-everyone — N² links, a broadcast sent N times, memory that grows with the room | `GossipSeam` + `deltaTargets = { gossip.activePeers.value }` | [Scaling to many peers](agent-cookbook/replication.md#scaling-to-many-peers) |
 
@@ -76,7 +77,7 @@ The detail lives in seven family pages; each holds the sections named beside it.
 
 - [Fabrics](agent-cookbook/fabrics.md) — discovery, transports, the seam, payload limits, pumps, durable storage.
 - [Session](agent-cookbook/session.md) — rejoin & reconnect, liveness & presence, per-member frames, host election & the lobby.
-- [Replication](agent-cookbook/replication.md) — replicated data, scaling to many peers, dealing cards, dedup, archiving what the live replica forgets.
+- [Replication](agent-cookbook/replication.md) — replicated data, scaling to many peers, dealing cards, sealed boxes, dedup, archiving what the live replica forgets.
 - [Consensus](agent-cookbook/consensus.md) — consensus & turns, when one of the peers is a server, durable consensus state.
 - [Heddle](agent-cookbook/heddle.md) — weighted fair share, reserving and charging over a network, minting quota and reshaping with agreement, weighted lanes over warp.
 - [Warp](agent-cookbook/warp.md) — where a task may run, code mobility.
