@@ -31,4 +31,9 @@ class OtelLoggingSamplesRunTest {
 
     @Test
     fun withLogContextHolds(): TestResult = runTest { sampleWithLogContext() }
+    @Test
+    fun captureNowHolds(): TestResult = runTest { sampleCaptureNow() }
+
+    @Test
+    fun queuedCaptureHolds(): TestResult = runTest { sampleQueuedCapture() }
 }

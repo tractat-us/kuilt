@@ -32,7 +32,7 @@ class LogCaptureTest {
         val exp = exporter(store)
         val capture = LogCapture(exp, CaptureConfig(), fixedClock, Random(42))
 
-        val result = capture.capture(
+        val result = capture.captureNow(
             NormalizedLogEvent(
                 level = LogLevel.WARN,
                 loggerName = "com.example.Service",
@@ -63,7 +63,7 @@ class LogCaptureTest {
         val exp = exporter(store)
         val capture = LogCapture(exp, CaptureConfig(minLevel = LogLevel.WARN), fixedClock, Random(0))
 
-        val result = capture.capture(
+        val result = capture.captureNow(
             NormalizedLogEvent(LogLevel.INFO, "com.example.Service", "below the floor"),
         )
 
@@ -81,7 +81,7 @@ class LogCaptureTest {
         val exp = exporter(store)
         val capture = LogCapture(exp, CaptureConfig(), fixedClock, Random(0))
 
-        val result = capture.capture(
+        val result = capture.captureNow(
             NormalizedLogEvent(LogLevel.ERROR, "us.tractat.kuilt.otel.WarpLogRecordExporter", "internal eviction warn"),
         )
 
@@ -95,8 +95,8 @@ class LogCaptureTest {
         val exp = exporter(store)
         val capture = LogCapture(exp, CaptureConfig(minLevel = LogLevel.WARN), fixedClock, Random(0))
 
-        assertEquals(ExportResult.Success, capture.capture(NormalizedLogEvent(LogLevel.WARN, "lg", "at floor")))
-        assertEquals(ExportResult.Success, capture.capture(NormalizedLogEvent(LogLevel.ERROR, "lg", "above floor")))
+        assertEquals(ExportResult.Success, capture.captureNow(NormalizedLogEvent(LogLevel.WARN, "lg", "at floor")))
+        assertEquals(ExportResult.Success, capture.captureNow(NormalizedLogEvent(LogLevel.ERROR, "lg", "above floor")))
         assertEquals(2, exp.snapshot().toList().size)
     }
 
@@ -107,7 +107,7 @@ class LogCaptureTest {
         val exp = exporter(store)
         val capture = LogCapture(exp, CaptureConfig(), fixedClock, Random(7))
 
-        capture.capture(NormalizedLogEvent(LogLevel.INFO, "lg", "m"))
+        capture.captureNow(NormalizedLogEvent(LogLevel.INFO, "lg", "m"))
 
         val record = exp.snapshot().toList().single()
         assertContentEquals(expectedId, record.recordId.toByteArray())
@@ -120,7 +120,7 @@ class LogCaptureTest {
         val config = CaptureConfig(attributeMapper = { mapOf("fixed" to "value") })
         val capture = LogCapture(exp, config, fixedClock, Random(1))
 
-        capture.capture(NormalizedLogEvent(LogLevel.INFO, "lg", "m", attributes = mapOf("dropped" to "x")))
+        capture.captureNow(NormalizedLogEvent(LogLevel.INFO, "lg", "m", attributes = mapOf("dropped" to "x")))
 
         val record = exp.snapshot().toList().single()
         assertAll(
