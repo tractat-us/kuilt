@@ -66,8 +66,9 @@ plaintext marker the test data would produce (log bodies, the metric value, both
 — zero hits, all payload bytes high-entropy, consistent with `MCEncryptionRequired`.
 
 One discovery-side gotcha worth recording for whoever builds the next manual harness: the
-`MultipeerServiceBrowser.discoveries()` Flow must stay **collected** across the `join()` call
-itself — cancelling it beforehand (e.g. via `Flow.first()`) tears down the native browser
-before `join()` can use it and fails with `mc_runtime session open failed`. Keep the browse
-collector running (e.g. into a `CompletableDeferred`) until after `join()` returns, matching
+`MultipeerServiceBrowser` must have at least one feed **collected** across the `join()` call
+itself. Discoveries and departures share the browse session; cancelling its last collector
+beforehand (e.g. via `Flow.first()`) tears down the native browser before `join()` can use it
+and fails with `mc_runtime session open failed`. Keep a browse collector running (e.g. into a
+`CompletableDeferred`) until after `join()` returns, matching
 `MultipeerCrossProcessProbe.runJoinFirst`'s existing pattern.
