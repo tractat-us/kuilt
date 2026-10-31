@@ -233,7 +233,10 @@ public class WarpSpanExporter(
      * This only undoes the live add: a failed write may already have committed, or may
      * commit later. Recovery can therefore restore that span, and retrying the original
      * unstamped span can mint another dot and create a second stamped copy. Cancellation
-     * propagates without running this rollback, leaving the live add in place.
+     * propagates without running this rollback, leaving the live add in place, whether it
+     * arrives while waiting for the write section or inside the write. A caller that cancels
+     * an export (through its own timeout, say) and retries the unstamped span therefore holds
+     * two stamped copies in memory, with no landed write and no recovery involved.
      *
      * Returns [ExportResult.Success] after the durable write returns. A non-cancellation
      * failure in that section returns [ExportResult.Failure]; neither failure nor
@@ -286,8 +289,9 @@ public class WarpSpanExporter(
                         // remove() leaves concurrent adds of different spans alone.
                         lock.withLock { spans = spans.piece { current -> current.remove(stamped) } }
                     }
-                    // Rollback before reporting each non-cancellation failure. Cancellation
-                    // propagates above without reaching this fold; reporting only opens an outage once.
+                    // Roll back before the outage report; the health count above records the turn
+                    // either way. Cancellation propagates above without reaching this fold, so it
+                    // is counted as neither acknowledged nor failed; reporting only opens an outage once.
                     durableWriteFailed(cause) {
                         logger.error(it) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
                     }

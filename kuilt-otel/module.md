@@ -4,7 +4,8 @@
 
 Record traces, metrics, and logs on any platform — JVM, Android, iOS, macOS, or
 browser (wasm) — and have them automatically reconcile across all your users'
-devices when connectivity returns, with no duplicates and no data loss.
+devices when connectivity returns. Syncing the same saved state twice never counts
+it twice; retrying a failed export is another matter, covered below.
 
 ## Why this is different
 
@@ -21,9 +22,13 @@ Metrics are mergeable counters. Logs are an ordered append-only sequence.
 Merging the same saved snapshot again is idempotent: it does not add another copy.
 
 Retrying `export()` is different from merging a snapshot. A span write may land
-even when the call fails or is cancelled. After recovery, retrying the original
-unstamped span can mint a new causal stamp and add another value with the same
-span id. Failed-write rollback affects live memory, not a write that already landed.
+even when the call fails or is cancelled. Retrying the original unstamped span
+mints a new causal stamp and adds another value with the same span id. After an
+ordinary failure that happens once recovery reads a landed write. After a
+cancellation, such as a caller's timeout, it happens at once: cancellation keeps
+the first stamp in memory. Rollback affects live memory, not a write that already
+landed. Retrying a metric increment adds it again; a log record whose id was
+already exported is skipped.
 
 ## Quick start
 
@@ -78,7 +83,8 @@ that do no store IO do not advance it.
 succeeds: a healthy sum write cannot hide a failing histogram, and a successful metric
 clear cannot prove writes work. A failed startup read or decode sets `recoveryFailed`
 for the instance's lifetime; `lastFailure` retains the latest cause after recovery.
-These are local persistence signals, not confirmation of delivery to a backend.
+A failed turn may still have saved its data, and a cancelled turn counts as neither
+acknowledged nor failed. These are local persistence signals, not confirmation of delivery to a backend.
 The combined getter reads each exporter in turn, so it is not an atomic snapshot
 across signals during concurrent activity.
 
