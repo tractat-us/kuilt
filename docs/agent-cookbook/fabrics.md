@@ -367,7 +367,7 @@ It is deliberately small: no iteration, no query, no transaction across two keys
 val store: DurableStore = InMemoryDurableStore()
 val key = StoreKey("draft")
 
-// `write` returns only once the bytes are committed — that is the whole contract.
+// A successful `write` returns only once the bytes are committed.
 store.write(key, byteArrayOf(1, 2, 3))
 
 // A later session (a fresh store over the same backing directory or database)

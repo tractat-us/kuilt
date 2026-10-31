@@ -52,8 +52,10 @@ public enum class OtlpWireFormat {
  * The digest is what *this* producer has already successfully delivered to *this*
  * endpoint: span and log ids in a bounded id-set, metric series as `MetricKey → value
  * hash`. The set is folded forward only **after** a 2xx response, so a failed POST
- * leaves the digest untouched and the next drain retries. The collector deduplicates
- * re-sent spans/logs by id, so a lost sent-set costs bandwidth, never correctness.
+ * leaves the digest untouched and the next drain retries. A lost sent-set can cause
+ * re-POSTs, so delivery deduplication relies on the backend applying records
+ * idempotently by id. This sent-set does not repair distinct stamped span values
+ * created by retrying an export after an indeterminate local write.
  *
  * The id-set is capped at [maxSentIds] (drop-oldest) so a long-lived producer's
  * sent-set cannot grow without bound; choose a cap that exceeds the device's realistic

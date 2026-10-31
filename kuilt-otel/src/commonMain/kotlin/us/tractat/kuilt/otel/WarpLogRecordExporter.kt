@@ -1221,9 +1221,9 @@ public class WarpLogRecordExporter(
             }
             return TurnOutcome(consumed = maxOf(consumed, 1), result = failure(cause))
         }
-        // BEFORE the durable write, deliberately — see [AppliedOpSink]. A refused write then
-        // leaves a sink holding a record the store does not, which for an archive is the right
-        // way round: a superset is the product, a subset is a silent hole.
+        // BEFORE the durable write, deliberately — see [AppliedOpSink]. If the write never lands,
+        // the sink still holds the record. If it lands but reports failure, both may hold it;
+        // publishing here makes no claim about the store's eventual outcome.
         publishApplied(applied)
         // Nothing to write, so nothing to report: an all-dedup or all-refused turn is
         // Success with no durable write and no movement on `accepted`, exactly as the

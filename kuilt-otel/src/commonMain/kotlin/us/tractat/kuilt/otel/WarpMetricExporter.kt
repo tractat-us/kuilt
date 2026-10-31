@@ -846,6 +846,6 @@ public sealed interface MetricExportResult {
     /** The metric was durably written to the local store. */
     public data object Success : MetricExportResult
 
-    /** The durable write failed; the metric is not persisted. */
+    /** The durable write failed; whether the metric was persisted is indeterminate. */
     public data class Failure(public val cause: Throwable) : MetricExportResult
 }

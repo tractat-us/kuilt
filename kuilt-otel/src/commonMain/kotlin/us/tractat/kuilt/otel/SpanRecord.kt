@@ -17,11 +17,14 @@ import kotlinx.serialization.Serializable
  *
  * [ByteString] is used rather than [ByteArray] because the [ORSet] inside
  * [WarpSpanExporter] keys by element equality — [ByteString] provides content-based
- * `equals`/`hashCode`, so re-exporting the same span is always a no-op set union.
+ * `equals`/`hashCode` for the byte fields of the full [SpanRecord] value.
  *
- * [SpanRecord] is the element type stored in the [ORSet][us.tractat.kuilt.crdt.ORSet]
- * inside [WarpSpanExporter]: keyed by [spanId], so re-exporting the same span
- * is a no-op (set union is idempotent).
+ * The [ORSet][us.tractat.kuilt.crdt.ORSet] inside [WarpSpanExporter] compares full
+ * records, including [causalStamp], rather than keying by [spanId] alone. Merging
+ * the same saved snapshot is idempotent. Retrying an unstamped export can mint a
+ * different stamp: if an earlier write committed but reported failure or cancellation,
+ * recovery followed by retry can retain distinct stamped copies with the same span id.
+ * Digest reconciliation filters by span id; it does not coalesce these local values.
  *
  * ## Honest limits
  * - **Clock skew.** [startEpochNanos] and [endEpochNanos] are the *producer's* local

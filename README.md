@@ -47,8 +47,8 @@ fabric module.
 
 When something goes wrong on a phone with no signal, the evidence is usually
 gone by the time anyone looks. kuilt records traces, metrics and logs on the
-device and reconciles them across devices once the network returns — nothing
-lost, nothing counted twice.
+device and reconciles them across devices once the network returns. Syncing the
+same records twice never counts them twice.
 
 It's [OpenTelemetry][otel], so collectors and dashboards you already run read it
 unchanged. Tests and CI can also pull the logs off a live device by joining it
@@ -159,7 +159,7 @@ Replace `<version>` with the latest release shown on the Maven Central badge at 
 
 | Module | Targets | What it gives you |
 |--------|---------|-------------------|
-| `kuilt-otel` | all | Offline-first OpenTelemetry exporter: record traces, metrics, and logs on any device and have them reconcile when connectivity returns — with no duplicates and no data loss (`WarpTelemetry`, `WarpOtlpBridge`). See the [Observability guide](https://tractat-us.github.io/kuilt/guide/observability.html). |
+| `kuilt-otel` | all | Offline-first OpenTelemetry exporter: record traces, metrics, and logs on any device and have them reconcile when connectivity returns. Syncing saved state twice never counts it twice, though retrying a failed export can (`WarpTelemetry`, `WarpOtlpBridge`). See the [Observability guide](https://tractat-us.github.io/kuilt/guide/observability.html). |
 
 **Playground** — pre-1.0, outside the stability surface; API may change, not for production.
 
@@ -204,7 +204,8 @@ The full documentation suite is published to GitHub Pages on every push to `main
   reference for every public symbol, with runnable `@sample` snippets.
 - **[Observability](https://tractat-us.github.io/kuilt/guide/observability.html)**
   — the offline-first OpenTelemetry exporter (`kuilt-otel`): record on any device,
-  survive being offline, and deliver to your dashboard with no duplicates.
+  survive being offline, and deliver to your dashboard. Syncing saved state twice never
+  counts it twice; retrying a failed export can.
 - **[Playground → Warp](https://tractat-us.github.io/kuilt/guide/warp.html)**
   — the coordination-free distributed scheduler (`kuilt-warp`) and the research behind it.
 - **[llms.txt](https://tractat-us.github.io/kuilt/llms.txt)** — everything above as one

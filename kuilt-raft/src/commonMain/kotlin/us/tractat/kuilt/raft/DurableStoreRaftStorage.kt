@@ -52,10 +52,19 @@ import us.tractat.kuilt.store.StoreKey
  *
  * Every mutator builds the state it is about to have, encodes it, calls [DurableStore.write], and
  * only then updates its in-memory copy. A write that throws leaves memory holding the last
- * **committed** state and propagates the failure: the engine is never told a term or an entry is
- * durable when it is not. [DurableStore.write] returns only once the bytes are committed, so
- * "the write returned" is the whole of this adapter's durability claim — what that costs, and where
- * each platform's guarantee stops short, is the store's business and its own KDoc says so.
+ * **acknowledged** state and propagates the failure. The medium may already hold the candidate,
+ * or may commit it later: an unsuccessful write has an indeterminate outcome.
+ * [DurableStore.write] returns only once the bytes are committed, so "the write returned" is the
+ * whole of this adapter's durability claim — what that costs, and where each platform's guarantee
+ * stops short, is the store's business and its own KDoc says so.
+ *
+ * This adapter does not invalidate or refresh its cache after a failed write, so the cache may
+ * attest state the medium no longer holds. After a landed [truncateFrom] or [discardLogPrefix], a
+ * reused handle still serves the dropped entries until its next log write rewrites the whole log.
+ * Meta and snapshot caches instead fall behind a landed write. Recovery must first establish that
+ * outstanding writes have settled, then discard the old handle and [open] a fresh one;
+ * [DurableStore] provides no settlement operation, so an immediate reopen alone cannot establish
+ * that precondition.
  *
  * [saveTerm], [saveVotedFor], [saveTermAndVotedFor] and [saveLeaderForTerm] all write **one**
  * [META_KEY] record carrying all of term, vote and the leader pin. `DurableStore.write` is atomic
@@ -171,9 +180,10 @@ public class DurableStoreRaftStorage private constructor(
      * Encode [candidate], commit it to the medium, and only then adopt it in memory.
      *
      * The order is the whole point: if [DurableStore.write] throws, [meta] still holds the last
-     * state the medium accepted and the failure reaches the caller, so a reopen and this handle
-     * agree. Committing first and writing after would have the engine believe a term is durable
-     * that is not, which is the §5.2 hole `RaftStorage`'s KDoc warns about.
+     * acknowledged state and the failure reaches the caller. The medium may nevertheless have
+     * accepted the candidate, so a reopen and this handle can disagree. Adopting first would
+     * instead have the engine believe a term is durable that is not, which is the §5.2 hole
+     * `RaftStorage`'s KDoc warns about.
      */
     private suspend fun commitMeta(candidate: StoredMeta) {
         store.write(META_KEY, encode(StoredMeta.serializer(), candidate))

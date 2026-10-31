@@ -17,7 +17,9 @@ telemetry.logs.export(logRecord)   // one line of text
 ```
 
 Each line finishes the moment it is written to the device — the same as traces and
-metrics — and is delivered later with no duplicates. That whole journey is on
+metrics — and is delivered later. Exporting a record whose id was already exported is
+skipped, so a retry does not save the line twice. Delivery can still send a line twice
+if an acknowledgement is lost. That whole journey is on
 **[Device to dashboard](observability.md)**.
 
 ## Starting over with a clean slate

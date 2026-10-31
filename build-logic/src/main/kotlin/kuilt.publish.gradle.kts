@@ -163,7 +163,7 @@ fun moduleDescription(module: String): String = when (module) {
     // ── Observability ────────────────────────────────────────────────────────
     "kuilt-otel" ->
         "Offline-first OpenTelemetry: record traces, metrics and logs on any device and have " +
-            "them reconcile when connectivity returns, with no duplicates and no data loss."
+            "them reconcile when connectivity returns. Syncing saved state twice never counts it twice."
     "kuilt-otel-tap" ->
         "Pull the logs off a running device by joining it as a peer and reading the " +
             "offline-first buffer it already keeps."

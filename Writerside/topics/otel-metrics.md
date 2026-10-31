@@ -33,7 +33,9 @@ telemetry.metrics.addCardinality(users, "user-abc") // ignored — already count
 ## Where they go
 
 Recording is only the first step. Your metrics are held safely on the device, survive
-being offline, and reach your dashboard with no duplicates. That whole journey is on
+being offline, and reach your dashboard. Sharing the same saved totals twice does not
+count them twice. Retrying an increment after a failed write can, because the retry is
+a new increment. That whole journey is on
 **[Device to dashboard](observability.md)**.
 
 ## Starting over with a clean slate
