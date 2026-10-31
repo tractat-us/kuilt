@@ -112,21 +112,23 @@ module was split out of `kuilt-otel` (#2497).
 
 ## Failed-write caller audit
 
-A missing acknowledgement is not an undo. The tests named below inject a write that
+A missing acknowledgement is not an undo. Most tests named below inject a write that
 lands before throwing an exception or cancellation, and assert that the injection
-fired. They characterize recovery as well as the result the caller reported.
-The in-memory backing models visibility between handles, not a physical crash.
+fired. They characterize recovery as well as the result the caller reported. One span
+test instead abandons a write that never lands, because that hazard needs no landed
+write. The in-memory backing models visibility between handles, not a physical crash.
 
-| Caller | Verdict for a landed, unacknowledged write | Coverage |
+| Caller | Verdict for an unacknowledged write | Coverage |
 |---|---|---|
-| `DurableStoreRaftStorage` | **Unsafe to reuse the handle.** Meta, log and snapshot caches change only after acknowledgement. A later meta or log update can overwrite landed state using the stale cache. Once outstanding writes have settled, a fresh handle reads the landed state. An immediate reopen cannot prove settlement. | `DurableStoreIndeterminateWriteTest` demonstrates stale meta and a later overwrite. Log and snapshot verdicts follow the same write-then-adopt ordering. |
-| `WarpSpanExporter` | **Rollback does not undo persistence.** An ordinary failure removes a newly stamped span from memory, though recovery can still find it. Cancellation bypasses that rollback. Retrying an unstamped span after recovery mints another dot and can duplicate the span. Merge and clear rewrite state; neither can interpret failure as absence. | `IndeterminateWriteAuditTest.stampedSpanRollbackDoesNotUndoTheDurableWriteAndRestartRetryDuplicates` exercises ordinary failure, cancellation and recovery. |
+| `DurableStoreRaftStorage` | **Unsafe to reuse the handle.** Every cache changes only after acknowledgement, so a landed write leaves the cache disagreeing with the medium. The direction that matters is a destructive log write: after a landed truncate or prefix discard, the cache may attest state the medium no longer holds. A reused handle serves those entries to the engine, and a write to another key leaves the gap in place, until the next log write rewrites the whole cached log. Meta and snapshot caches fall behind the medium instead. Once outstanding writes have settled, a fresh handle reads the landed state. An immediate reopen cannot prove settlement. | `DurableStoreIndeterminateWriteTest.aLandedTruncateLeavesTheCacheAttestingEntriesTheMediumDropped` pins the gap, its survival across a meta write, and the next log write closing it. `aLandedSnapshotOrMetaWriteLeavesTheCacheBehindTheMedium` pins snapshot and meta ordering. Prefix discard shares truncate's write path but has no fixture. Neither test drives the engine, so neither shows a reply built on the dropped entries reaching a commit. |
+| `WarpSpanExporter` | **Rollback runs only on ordinary failure, and never undoes persistence.** An export cancelled while waiting for the write lock, or inside the write, keeps its minted stamp in memory. A caller whose own timeout abandons the export and then retries the unstamped span holds two stamped copies, with no landed write and no recovery. An ordinary failure removes the stamp from memory, but a landed write can bring it back on recovery, and a retry then mints another dot. Merge and clear rewrite state; neither can interpret failure as absence. | `IndeterminateWriteAuditTest.cancelledExportKeepsItsMintedStampSoARetryDuplicatesWithoutRecovery` abandons a span write that never lands; cancellation while waiting for the lock is not exercised. `stampedSpanRollbackDoesNotUndoTheDurableWriteAndRestartRetryDuplicates` exercises ordinary failure, cancellation and recovery. |
 | `WarpMetricExporter` | **Snapshot rewrite is benign once writes settle; replaying an operation is different.** Memory already holds each mutation. Recovery reads the landed snapshot. Re-merging the same snapshot does not increment again; retrying an increment or sample does. This does not establish ordering against a late, outstanding write. | `IndeterminateWriteAuditTest.metricSnapshotsRecoverAndRewriteWithoutReapplyingTheOperation` covers each persisted metric kind. |
 | `WarpCausalClock` | **A landed high-water mark is recoverable.** Persist does not roll back the live clock; recovery advances beyond the landed dot. An outstanding old snapshot still needs settlement before restart or later persistence. | `IndeterminateWriteAuditTest.clockCommitBeforeFailureRecoversItsHighWaterMark`. |
 | `WarpLogRecordExporter` | **Adopted-segment cancellation and retirement are both covered.** The merge records the segment before awaiting its write and repairs bookkeeping on failure, which prevents the orphan/phantom cases. A segment retires only on durable suppression, which only an acknowledged covering write or recovery advances; a refused or cancelled write never does, even if it landed (#2988). This does not prove every ledger schedule safe. | `WarpLogRecordExporterRetirementTest.aMergeCancelledAfterItsSegmentLandedLeavesNoOrphanKey` and `aMergeCancelledBeforeItsSegmentLandedLeavesNoPhantomAcrossARestart` assert landed/cancelled counts and inspect the next roll and restart. `WarpLogRecordExporterDurableSuppressionTest` covers refused and cancelled covering writes, before and after landing. |
 | `OtlpHttpEdge` | **A landed sent-set is benign for the completed delivery.** Persistence follows a successful HTTP response. The next digest reads the store, so a landed sent-set suppresses a redundant send even if the call failed. Span/log ids and metric versions use this ordering. This is not an exactly-once collector guarantee or a proof about concurrent sends. | `IndeterminateWriteAuditTest.committedSentSetSurvivesFailureAfterSuccessfulPost` exercises spans; the log and metric verdicts follow the same POST-then-record ordering. |
 | `AppliedOpSink` | **No store write.** Receives operations when applied in memory, before the exporter's write returns; receipt is not a durability acknowledgement. | `AppliedOpSink` contract and exporter call sites. |
 | `ExporterHealth` | **No store write.** Reports exporter health. A write-failure report does not establish that the bytes are absent. | `ExporterHealth` declarations and exporter failure paths. |
+| `PersistenceHealth`, `TelemetryHealth` | **No store write.** Count span and metric persistence turns; `TelemetryHealth` reads them beside the logs' `ExporterHealth`. A `failed` turn may still have landed, and a cancelled turn counts as neither acknowledged nor failed. | `PersistenceHealth` declarations and the span and metric persistence paths. |
 
 These are audit verdicts, not changes to recovery policy. In particular, the Raft
 cache and stamped-span retry hazards need caller-specific remedies; this contract
@@ -135,7 +137,6 @@ clarification introduces no settlement API or serialization change.
 There is no universal conformance property requiring a cancelled write to land:
 both leaving the old value intact and committing the candidate are permitted. Adding
 that requirement to `DurableStoreConformanceSuite` would reject valid backends, and
-wrapping its in-memory reference would test the wrapper alone. Instead,
-`IndeterminateWriteTest.cancellationCanPrecedeDurableVisibility` demonstrates the
-permitted late-commit schedule explicitly, while the IndexedDB test exercises a real
-transaction whose caller abandons the await.
+wrapping its in-memory reference would test the wrapper alone. Only a real backend
+can show the late commit: `IndexedDbIndeterminateWriteTest` cancels a caller while its
+IndexedDB transaction is still open, then reads the value back after the transaction lands.

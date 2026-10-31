@@ -58,10 +58,13 @@ import us.tractat.kuilt.store.StoreKey
  * whole of this adapter's durability claim — what that costs, and where each platform's guarantee
  * stops short, is the store's business and its own KDoc says so.
  *
- * This adapter does not invalidate or refresh its cache after a failed write. Reusing that handle
- * can overwrite a landed update with stale state. Recovery must first establish that outstanding
- * writes have settled, then discard the old handle and [open] a fresh one; [DurableStore] provides
- * no settlement operation, so an immediate reopen alone cannot establish that precondition.
+ * This adapter does not invalidate or refresh its cache after a failed write, so the cache may
+ * attest state the medium no longer holds. After a landed [truncateFrom] or [discardLogPrefix], a
+ * reused handle still serves the dropped entries until its next log write rewrites the whole log.
+ * Meta and snapshot caches instead fall behind a landed write. Recovery must first establish that
+ * outstanding writes have settled, then discard the old handle and [open] a fresh one;
+ * [DurableStore] provides no settlement operation, so an immediate reopen alone cannot establish
+ * that precondition.
  *
  * [saveTerm], [saveVotedFor], [saveTermAndVotedFor] and [saveLeaderForTerm] all write **one**
  * [META_KEY] record carrying all of term, vote and the leader pin. `DurableStore.write` is atomic
