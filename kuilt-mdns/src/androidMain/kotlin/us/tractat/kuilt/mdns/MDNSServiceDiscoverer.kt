@@ -17,8 +17,8 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Browse-only: hosting remains JVM-only via [MDNSServiceAdvertiser] / JmDNS.
  *
- * [NsdManager.resolveService] can only handle one resolution at a time; resolution requests are
- * serialised through an in-memory queue inside [NsdManagerBrowser].
+ * Resolution requests share a browser-local queue. Platform contention is retried with backoff
+ * while the collection and service remain live; see [NsdManagerBrowser].
  *
  * @param serviceType The mDNS service type. Supply the canonical base form
  *   (e.g. `MDNSServiceType("_myapp._tcp")`) — the NsdManager-required trailing
