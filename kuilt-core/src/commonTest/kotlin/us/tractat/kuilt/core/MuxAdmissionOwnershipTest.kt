@@ -12,7 +12,10 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.awaitCancellation
 import us.tractat.kuilt.core.fabric.CloseCountingConnection
+import us.tractat.kuilt.core.fabric.Connection
+import us.tractat.kuilt.core.fabric.ConnectionSource
 import us.tractat.kuilt.core.fabric.MeshWire
 import us.tractat.kuilt.core.fabric.meshNonce
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -211,8 +214,45 @@ class MuxAdmissionOwnershipTest {
         )
     }
 
+    /**
+     * The accept pump hands a conn to admission even when its job is already cancelled. Admission
+     * then fails while building its empty mesh, before `addLink` has taken the conn, so it must
+     * close the conn itself.
+     */
     @Test
-    fun bufferedApplicationWorkCannotExtendTheAdmissionTimeout()= runTest(timeout = TEST_WEDGE_BACKSTOP) {
+    fun admissionEnteredAlreadyCancelledClosesTheConnection() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val (raw, remote) = connectionPair()
+        val conn = CloseCountingConnection(raw)
+        lateinit var loom: MuxServerLoom
+        var accepts = 0
+        val source = object : ConnectionSource {
+            override suspend fun accept(): Connection {
+                if (accepts++ > 0) awaitCancellation()
+                // Cancel the pump while this accept returns, so admission starts on a cancelled job.
+                loom.close()
+                return conn
+            }
+        }
+        loom = MuxServerLoom(
+            source, backgroundScope, PeerId("server"),
+            RoomAuthorizer.AllowAll, StandardTestDispatcher(testScheduler), Random(7),
+        )
+        runCurrent()
+        try {
+            assertAll(
+                { assertEquals(1, accepts, "rig: the pump accepted exactly one conn") },
+                { assertTrue(loom.backgroundJobsForTest.all { it.isCompleted }, "rig: the pump was cancelled") },
+                { assertTrue(loom.connectedPeers.value.isEmpty(), "the conn was never registered") },
+                { assertEquals(1, conn.closeCalls, "a conn handed to a cancelled admission must be closed") },
+            )
+        } finally {
+            loom.close()
+            remote.close()
+        }
+    }
+
+    @Test
+    fun bufferedApplicationWorkCannotExtendTheAdmissionTimeout() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val (raw, remote) = connectionPair()
         val conn = CloseCountingConnection(raw)
         var authorizations = 0

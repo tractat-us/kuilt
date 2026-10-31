@@ -15,6 +15,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.ConnectionSource
+import us.tractat.kuilt.core.fabric.Mesh
 import us.tractat.kuilt.core.fabric.acceptPump
 import us.tractat.kuilt.core.fabric.hubMesh
 import kotlin.coroutines.ContinuationInterceptor
@@ -222,16 +223,23 @@ public class MuxServerLoom(
      * demuxed by channel name and pushed into the matching live [RoomHubSeam].
      */
     private suspend fun admit(conn: Connection) {
-        val rawSeam = hubMesh(
-            selfId = selfId,
-            connections = listOf(conn),
-            dispatcher = dispatcher,
-            random = random,
-        )
+        // The mesh starts empty and takes the conn through `addLink`, which owns it from entry: an
+        // exit before adoption closes it, and an adopted link is closed with the seam below. Building
+        // the mesh around the conn instead would hand a handshaken link back through `buildMesh`'s
+        // `awaitAll`, where a cancellation drops it with nothing left holding it.
+        var rawSeam: Mesh? = null
         var registered = false
         try {
-            val connPeerId = rawSeam.peers.first { peers -> peers.any { it != selfId } }.first { it != selfId }
-            val record = ConnRecord(rawSeam)
+            val seam = hubMesh(
+                selfId = selfId,
+                connections = emptyList(),
+                dispatcher = dispatcher,
+                random = random,
+            )
+            rawSeam = seam
+            seam.addLink(conn)
+            val connPeerId = seam.peers.first { peers -> peers.any { it != selfId } }.first { it != selfId }
+            val record = ConnRecord(seam)
             lock.withLock {
                 connRecords[connPeerId] = record
                 _connectedPeers.value = connRecords.keys.toSet()
@@ -247,9 +255,12 @@ public class MuxServerLoom(
                 launchedJobs += watchJob
             }
         } finally {
+            val built = rawSeam
             if (!registered) withContext(NonCancellable) {
                 try {
-                    rawSeam.close()
+                    // No mesh means `addLink` was never entered (building the empty mesh was
+                    // cancelled), so the conn is still this frame's to close.
+                    if (built != null) built.close() else conn.close()
                 } catch (_: Throwable) {
                     // Preserve the original admission failure, including cancellation.
                 }
