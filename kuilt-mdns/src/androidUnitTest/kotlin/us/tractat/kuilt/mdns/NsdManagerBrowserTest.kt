@@ -72,6 +72,9 @@ class NsdManagerBrowserTest {
         }
         val before = platform.attempts.size
         val stoppedAt = testScheduler.currentTime
+        // A timer that survived stop now fires at most once instead of re-arming forever, so
+        // advanceUntilIdle stays bounded and a regression reds on the assertions below, not a hang.
+        platform.alwaysContend = false
         advanceUntilIdle()
         assertEquals(stoppedAt, testScheduler.currentTime, "stop must remove scheduled timers")
         advanceTimeBy(10_000)
@@ -111,11 +114,13 @@ class NsdManagerBrowserTest {
             runCurrent()
             platform.listeners[0].onLost("service")
             val lostAt = testScheduler.currentTime
+            // Contention off first: a timer that survived the loss fires once rather than
+            // re-arming forever, so advanceUntilIdle stays bounded.
+            platform.alwaysContend = false
             advanceUntilIdle()
             assertEquals(lostAt, testScheduler.currentTime, "loss must remove scheduled timer")
             advanceTimeBy(10_000)
             assertEquals(1, platform.attempts.size, "lost service must not retry")
-            platform.alwaysContend = false
             platform.found(0, "service")
             platform.succeed()
             assertAll(
