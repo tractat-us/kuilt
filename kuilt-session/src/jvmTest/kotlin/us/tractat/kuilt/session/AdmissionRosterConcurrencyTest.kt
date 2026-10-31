@@ -11,8 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -22,23 +20,27 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.runConcurrencyStress
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Instant
-import kotlin.time.Duration.Companion.minutes
 
 /**
  * Exercises the real Hello/Goodbye handlers on two threads, without production hooks or sleeps.
  * Each round awaits both handlers before comparing levels; a disagreement is persistent, not a
  * read across an unfinished transition. This JVM stress probe samples interleavings rather than
  * forcing one, and does not establish a failure rate on Native or Wasm.
+ *
+ * A `*ConcurrencyTest`, so it is excluded from the normal `jvmTest` and runs only under
+ * `-Pconcurrency.stress.tests=true` in the non-blocking `concurrency-probes` CI job (see
+ * `kuilt-session/build.gradle.kts`). [runConcurrencyStress] caps it and names the stalled stage.
  */
 class AdmissionRosterConcurrencyTest {
     @Test
-    fun readmissionRacingGoodbyeKeepsAdmissionAndRosterTogether() = runBlocking {
-        // Wall-clock wedge backstop, not the assertion that detects roster divergence.
-        withTimeout(2.minutes) {
+    fun readmissionRacingGoodbyeKeepsAdmissionAndRosterTogether() =
+        // The harness cap is a wedge backstop, not the assertion that detects roster divergence.
+        runConcurrencyStress { stage ->
             Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { dispatcher ->
                 val scope = CoroutineScope(SupervisorJob() + dispatcher)
                 val host = PeerId("host")
@@ -88,16 +90,23 @@ class AdmissionRosterConcurrencyTest {
                 var completed = 0
                 try {
                     room.start()
-                    repeat(20_000) {
+                    repeat(20_000) { round ->
+                        val snapshot = {
+                            "admitted=${room.isAdmitted(peer)} roster=${room.roster.value.map { it.id }} " +
+                                "rosterPeers=${room.rosterPeers.value}"
+                        }
                         // Establish the departure's precondition, even when the preceding round removed it.
                         inbound.send(hello)
+                        stage.at("round $round: precondition admission", snapshot)
                         admissions.receive()
                         assertTrue(room.isAdmitted(peer), "precondition: Goodbye has an admitted peer")
                         // Hello launches an admission child; Goodbye runs on the inbound collector.
                         // Both receipts precede inspection, so reads cannot straddle an unfinished mutation.
                         inbound.send(hello)
                         inbound.send(goodbye)
+                        stage.at("round $round: racing admission", snapshot)
                         admissions.receive()
+                        stage.at("round $round: racing departure", snapshot)
                         departures.receive()
                         val admitted = room.isAdmitted(peer)
                         if (admitted != room.roster.value.any { it.id == peer }) rosterDisagreements++
@@ -117,5 +126,4 @@ class AdmissionRosterConcurrencyTest {
                 }
             }
         }
-    }
 }
