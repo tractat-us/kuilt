@@ -27,13 +27,36 @@ public class LeadershipLostException(message: String = "leadership lost while pr
  * not catch this one: the leader judged the failure permanent, and sending the same command again
  * would fail the same way. Surface it to the caller instead of retrying.
  *
- * No leader in this release reports such a failure — every failure a forwarded proposal can meet
- * on the leader today is a loss of leadership, which arrives as [LeadershipLostException]. This type
- * exists so that the receiving side already honours the wire's meaning when a leader does.
+ * No leader in this release reports such a failure. A reused request id with changed command bytes
+ * is reported as [RequestIdConflictException] instead, on the leader and the forwarder alike. This
+ * type exists so that the receiving side already honours the wire's meaning when a leader does.
  */
 public class ForwardedProposalFailedException(
     message: String = "the leader reported the forwarded proposal failed for a non-retryable reason",
 ) : Exception(message)
+
+/**
+ * Thrown by `RaftNode.propose(command, requestId)` when the leader still holds a committed result
+ * for that `requestId` and the retry carries **different command bytes** (#2923).
+ *
+ * A request id names one command. A retry must resend the same bytes, so the leader can hand back
+ * the original commit rather than append a second one. Acknowledging changed bytes under a
+ * committed id would tell the caller a command committed that never did, so the leader refuses
+ * instead. Nothing is appended.
+ *
+ * The same type arrives whether the proposing node is the leader or forwarded the proposal to it,
+ * so one `catch` covers both. It is a caller mistake, not a transient failure: do not retry under
+ * the same id. It is not a [LeadershipLostException], so a retry loop catching that type does not
+ * resend it. Draw a fresh id for a new command.
+ *
+ * The leader only knows about ids in its committed-result cache, which holds every keyed entry it
+ * applies while leading and is dropped when it steps down. So the absence of
+ * this exception does **not** prove an id was never used: after a leader change a reused id with new
+ * bytes appends, and a consumer folding [ClientSessionTable.shouldApply] then skips it as a duplicate.
+ */
+public class RequestIdConflictException(
+    message: String = "requestId reused with a different command",
+) : IllegalArgumentException(message)
 
 /**
  * Thrown by [RaftNode.changeMembership] when a membership change is already in progress

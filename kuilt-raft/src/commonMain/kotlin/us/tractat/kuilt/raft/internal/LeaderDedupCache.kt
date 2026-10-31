@@ -8,8 +8,10 @@ import us.tractat.kuilt.raft.LogEntry
  * engine's single dispatch loop (no internal locking) and cleared whenever this node loses
  * leadership — a new leader starts cold and the consumer's durable table is the backstop.
  *
- * Keeps the most-recent committed entry per client; because serials are monotonic per client, a
- * lost-ack retry is for the most-recent serial, so a single slot per client catches the common case.
+ * Keeps **every** keyed entry applied while this node leads, one slot per [DedupKey], with no
+ * eviction: it grows with the tenure and is emptied only by [clear]. A lost-ack retry of any key
+ * committed this tenure therefore finds its entry, and so does a reused key carrying different
+ * bytes, which the engine refuses as `RequestIdConflictException`.
  */
 internal class LeaderDedupCache {
     private val lastCommitted = HashMap<DedupKey, LogEntry>()

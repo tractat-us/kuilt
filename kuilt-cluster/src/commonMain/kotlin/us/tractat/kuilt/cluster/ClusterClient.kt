@@ -103,8 +103,13 @@ public class ClusterClient internal constructor(
      * Proposes [command] with a caller-pinned [requestId] for cross-crash exactly-once dedup.
      *
      * The caller must persist [requestId] before invoking this method. A retry with the same
-     * [requestId] coalesces to the original committed entry via
-     * [us.tractat.kuilt.raft.ClientSessionTable.shouldApply].
+     * [requestId] and the **same command bytes** coalesces to the original committed entry via
+     * [us.tractat.kuilt.raft.ClientSessionTable.shouldApply]. A [requestId] names one command:
+     * never reuse it for a different one.
+     *
+     * @throws us.tractat.kuilt.raft.RequestIdConflictException if the leader still holds a
+     *   committed result for [requestId] and [command] differs from it. Nothing was appended; do
+     *   not retry under the same [requestId].
      */
     public suspend fun propose(command: ByteArray, requestId: Long): LogEntry =
         raftNode.propose(command, requestId)

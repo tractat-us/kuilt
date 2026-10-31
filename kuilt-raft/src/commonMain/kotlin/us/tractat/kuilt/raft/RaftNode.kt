@@ -276,12 +276,12 @@ public interface RaftNode {
      * @throws NotLeaderException only in terminal cases: the node is [close]d, or the leader
      *   is rejecting proposals because a leadership transfer is in flight.
      * @throws PayloadTooLarge if [command] exceeds the transport's published payload budget less an
-     *   envelope reserve (#2069). Raised on the calling coroutine *before* the command reaches the
-     *   log — nothing was appended and no client serial was burned, so a retry with a smaller
-     *   command is safe. A transport that publishes no budget never raises it. On a non-leader it
-     *   can also arrive from the **leader**, whose budget may be smaller than this node's (#2155):
-     *   then the numbers are the leader's, a serial was drawn but nothing was appended under it, and
-     *   it is still not worth retrying the same command. It is never a [LeadershipLostException].
+     *   envelope reserve (#2069). The caller preflight refuses before drawing a serial. Admission
+     *   checks again on the actor, before forwarding or appending, so a changed budget can refuse
+     *   after a serial was drawn. A non-leader may also receive the **leader's** refusal when that
+     *   budget is smaller (#2155); then the numbers are the leader's. This attempt appends nothing,
+     *   and a new proposal with a smaller command is safe. A transport that publishes no budget
+     *   imposes no local limit. A size refusal is never a [LeadershipLostException].
      */
     public suspend fun propose(command: ByteArray): LogEntry
 
@@ -294,13 +294,20 @@ public interface RaftNode {
      * the forward hop unchanged, and the consumer's dedup table ([ClientSessionTable]) skips a serial
      * it has already applied. The auto-serial [propose] form draws the next monotonic serial itself.
      *
-     * @throws PayloadTooLarge if [command] exceeds the transport's published payload budget less an
-     *   envelope reserve (#2069). Raised before the command reaches the log, so [requestId] is
-     *   unspent and replaying it against a smaller command keeps the exactly-once guarantee intact.
-     *   That holds when the refusal comes from the leader of a forwarded propose too (#2155): it is
-     *   refused before the append, so this attempt appends nothing under [requestId]. The size check
-     *   runs before the leader's dedup lookup, though, so a retry of a request that already committed
-     *   can also be refused this way — tracked by #2923.
+     * A [requestId] names one command: a retry must carry the **same command bytes**. While the
+     * current leader holds the committed result in its best-effort cache, a retry gets that result
+     * back, even if the leader's payload limit has since shrunk below the command. The cache lasts
+     * for that leader's tenure and is dropped when it steps down. A non-leader still checks its own
+     * forward-hop budget before sending, even for a committed retry; the leader's cache cannot
+     * bypass that hop.
+     *
+     * @throws RequestIdConflictException if the leader has a cached result for [requestId] with
+     *   different command bytes. The same type arrives whether this node leads or forwarded the
+     *   proposal. Nothing was appended; do not retry under the same [requestId].
+     * @throws PayloadTooLarge if a required forward hop cannot fit [command], or the leader has no
+     *   cached result and the command exceeds its current payload budget less the envelope reserve.
+     *   This attempt appends nothing; it does not prove an earlier attempt never committed. Do not
+     *   reuse [requestId] for a smaller command after an ambiguous earlier attempt.
      */
     public suspend fun propose(command: ByteArray, requestId: Long): LogEntry
 

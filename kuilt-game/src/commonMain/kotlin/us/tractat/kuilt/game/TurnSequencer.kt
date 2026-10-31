@@ -153,9 +153,14 @@ public class TurnSequencer<A>(
      * serial it has already applied. The client supplies its stable identity at bootstrap
      * (`gameNode`/`gameHost`/`gameJoin`/`gameSpectate`'s `identity` parameter); [requestId] must be a
      * per-client monotonic serial the caller owns — do not pass a log index or a random value.
+     * A retry must resend the **same** [action], which must encode to the same bytes; a
+     * [requestId] names one action and is never reused for another.
      *
      * @throws [LeadershipLostException] if a forwarded proposal is rejected because the leader
      *   stepped down mid-flight. The caller may retry with the same [requestId].
+     * @throws [us.tractat.kuilt.raft.RequestIdConflictException] if the leader still holds a
+     *   committed result for [requestId] and [action] encodes differently. Nothing was appended; do
+     *   not retry under the same [requestId].
      */
     public suspend fun propose(action: A, requestId: Long): IndexedAction<A> {
         val entry = node.propose(encode(action), requestId)
