@@ -76,24 +76,18 @@ class LogCaptureGateTest {
         assertTrue(dropExp.snapshot().toList().isEmpty())
     }
 
-    /**
-     * The gate inside `capture()` is a no-op for an edge-resolved event, but it is
-     * not dead code: a caller that drives `capture()` straight from its own log site
-     * never goes through [LogCapture.resolveAtEdge], so that call *is* its edge and
-     * the gate there is the only one it meets. Both call sites ask the same private
-     * predicate, so the two can never come to disagree (#1745).
-     */
+    /** The direct entry must resolve and apply the same sampling gate as a queued edge. */
     @Test
-    fun drainSideGateStillAppliesToACallerWithNoEdge() = runTest(StandardTestDispatcher()) {
+    fun directCaptureResolvesAndAppliesTheGate() = runTest(StandardTestDispatcher()) {
         val dropExp = exporter()
         val dropped = capture(dropExp, CaptureConfig(untracedPolicy = UntracedPolicy.DROP), TraceContextProvider { null })
-            .capture(event())
-        assertNull(dropped, "an untraced direct call under DROP is dropped by capture()'s own gate")
+            .captureNow(event())
+        assertNull(dropped, "an untraced direct call under DROP is dropped by captureNow()'s edge gate")
 
         val unsampledExp = exporter()
         val unsampled = capture(unsampledExp, CaptureConfig(), TraceContextProvider { trace(sampled = false) })
-            .capture(event().copy(activeTrace = trace(sampled = false)))
-        assertNull(unsampled, "an unsampled direct call is dropped by capture()'s own gate")
+            .captureNow(event())
+        assertNull(unsampled, "an unsampled direct call is dropped by captureNow()'s edge gate")
 
         assertTrue(dropExp.snapshot().toList().isEmpty())
         assertTrue(unsampledExp.snapshot().toList().isEmpty())

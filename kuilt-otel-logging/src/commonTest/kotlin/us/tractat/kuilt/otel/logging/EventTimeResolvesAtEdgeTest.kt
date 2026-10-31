@@ -78,7 +78,7 @@ class EventTimeResolvesAtEdgeTest {
     }
 
     /**
-     * A caller driving [LogCapture.capture] straight from its own log site never went
+     * A caller driving [LogCapture.captureNow] straight from its own log site never went
      * through a queueing edge, so there is no earlier emit instant to carry: that call
      * *is* the edge, and both timestamps are correctly the same instant.
      */
@@ -87,7 +87,7 @@ class EventTimeResolvesAtEdgeTest {
         val exporter = WarpLogRecordExporter(ReplicaId("device-1"), InMemoryDurableStore())
         val capture = LogCapture(exporter, CaptureConfig(), SettableClock(EMITTED_AT), Random(0))
 
-        capture.capture(NormalizedLogEvent(LogLevel.INFO, "com.example.Direct", "logged from the call site"))
+        capture.captureNow(NormalizedLogEvent(LogLevel.INFO, "com.example.Direct", "logged from the call site"))
 
         val record = exporter.snapshot().toList().single()
         assertAll(

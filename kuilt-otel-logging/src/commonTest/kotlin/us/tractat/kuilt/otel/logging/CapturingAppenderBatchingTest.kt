@@ -114,7 +114,7 @@ class CapturingAppenderBatchingTest {
      * dependence on scheduling luck.
      *
      * The control arm is the drain body this replaces, verbatim:
-     * `for (event in events) capture.capture(event)`, over the same events, into an
+     * `for (event in events) capture.captureNow(event)`, over the same events, into an
      * identically configured exporter. Both arms produce the same records in the same
      * order, so the write count is the *only* thing that can tell them apart — which
      * is exactly why an assertion on the batched arm alone would prove nothing.
@@ -124,7 +124,7 @@ class CapturingAppenderBatchingTest {
         val perEventStore = CountingStore()
         val perEventExporter = exporterOver(perEventStore, segmentOps = SEGMENT_OPS)
         val perEventCapture = captureInto(perEventExporter)
-        List(BURST) { queuedEvent("event $it") }.forEach { event -> perEventCapture.capture(event) }
+        List(BURST) { queuedEvent("event $it") }.forEach { event -> perEventCapture.captureNow(event) }
 
         val batchedStore = CountingStore()
         val exporter = exporterOver(batchedStore, segmentOps = SEGMENT_OPS)

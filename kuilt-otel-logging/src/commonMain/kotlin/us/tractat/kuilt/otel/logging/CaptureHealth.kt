@@ -17,8 +17,8 @@ package us.tractat.kuilt.otel.logging
  *   exception cascade — are a few hundred lines over a second or two. A depth
  *   below that would drop events while the drain is merely momentarily behind,
  *   which is the case the queue is *for*.
- * - **Heap.** A queued [NormalizedLogEvent] is a level, two strings and — after
- *   `LogCapture.resolveAtEdge` — **two** attribute maps
+ * - **Heap.** A queued [ResolvedLogEvent] retains the normalized event plus
+ *   the resolved attribute snapshot — **two** attribute maps
  *   ([NormalizedLogEvent.attributes] and its resolved copy), so call it a couple of
  *   kilobytes rather than one. This depth therefore bounds the queue's contribution
  *   to the host application's heap in the low single-digit megabytes, and only when

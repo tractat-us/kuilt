@@ -101,7 +101,7 @@ internal class CapturingAppender(
     /** Out-of-band health for this capture edge — see [CaptureHealth]. */
     val health: StateFlow<CaptureHealth> = healthState.asStateFlow()
 
-    private val events = Channel<NormalizedLogEvent>(
+    private val events = Channel<ResolvedLogEvent>(
         capacity = capacity,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
         // Invoked once per element the channel evicts on overflow, inside the
@@ -129,7 +129,7 @@ internal class CapturingAppender(
      * *already* queued. Nothing waits for a batch to grow.
      */
     private suspend fun drain() {
-        val batch = ArrayList<NormalizedLogEvent>(maxBatchSize)
+        val batch = ArrayList<ResolvedLogEvent>(maxBatchSize)
         while (true) {
             // receiveCatching() rather than `for (event in events)` because the first
             // element and the rest are now taken by different means; a null here is
