@@ -27,9 +27,9 @@ public class LeadershipLostException(message: String = "leadership lost while pr
  * not catch this one: the leader judged the failure permanent, and sending the same command again
  * would fail the same way. Surface it to the caller instead of retrying.
  *
- * No leader in this release reports such a failure — every failure a forwarded proposal can meet
- * on the leader today is a loss of leadership, which arrives as [LeadershipLostException]. This type
- * exists so that the receiving side already honours the wire's meaning when a leader does.
+ * A leader reports this when a request key still in its committed-result cache is reused with
+ * different command bytes. The reply carries no further reason; the caller must not treat it as
+ * a leadership failure or a successful commit of the changed command.
  */
 public class ForwardedProposalFailedException(
     message: String = "the leader reported the forwarded proposal failed for a non-retryable reason",

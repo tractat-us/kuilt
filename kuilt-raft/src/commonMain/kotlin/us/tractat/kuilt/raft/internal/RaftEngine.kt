@@ -3489,6 +3489,32 @@ internal class RaftEngine(
     }
 
     private suspend fun onPropose(command: ByteArray, dedupKey: DedupKey?, response: CompletableDeferred<LogEntry>) {
+        if (_role.value is RaftRole.Leader) {
+            // §3.10: a transfer still rejects proposals while the target catches up.
+            val transferInFlight = transfer.inFlightTarget
+            if (transferInFlight != null) {
+                response.completeExceptionally(NotLeaderException("leadership transfer in flight to ${transferInFlight.value}"))
+                return
+            }
+            // Resolve a cache-resident commit before measuring today's append budget. Both local
+            // pinned requests and forwards reach this actor-owned lookup; no new entry is needed.
+            dedupCache.lookup(dedupKey)?.let { committed ->
+                if (committed.command.contentEquals(command)) {
+                    response.complete(committed)
+                } else {
+                    // A ForwardResponse carries only index/term; acknowledging different bytes
+                    // would make the originator manufacture a commit receipt for those new bytes.
+                    response.completeExceptionally(IllegalArgumentException("requestId reused with a different command"))
+                }
+                return
+            }
+        }
+        // Cache misses must fit before append; non-leaders must fit before queueing/forwarding.
+        // Measure around the originator's id, which is preserved in the appended entry.
+        proposeRefusal(command, dedupKey?.clientId ?: clientIdProbe)?.let { refusal ->
+            response.completeExceptionally(refusal)
+            return
+        }
         if (_role.value !is RaftRole.Leader) {
             // Follower/Candidate/Learner: forward to the leader (Raft §8). Wait, cancellably,
             // if none is known yet. Cleanup of cancelled entries is handled on the actor loop
@@ -3502,18 +3528,6 @@ internal class RaftEngine(
             }
             return
         }
-        // §3.10: while a leadership transfer is in flight, reject new proposals so the target can
-        // catch up to our log without racing additional appends. The NotLeaderException is the correct
-        // signal — the caller should retry on the new leader once transfer completes.
-        val transferInFlight = transfer.inFlightTarget
-        if (transferInFlight != null) {
-            response.completeExceptionally(NotLeaderException("leadership transfer in flight to ${transferInFlight.value}"))
-            return
-        }
-        // §8 best-effort leader dedup: a retry of an already-committed key coalesces onto the recorded
-        // result instead of appending a second entry. The consumer's ClientSessionTable is the durable
-        // backstop; this only catches the common lost-ack retry on a still-leading node.
-        dedupCache.lookup(dedupKey)?.let { response.complete(it); return }
         val index = state.lastLogIndex + 1L
         val entry = LogEntry(index, state.currentTerm, command, dedupKey = dedupKey)
         state.log += entry
@@ -3544,13 +3558,12 @@ internal class RaftEngine(
      * advances and the leader retries that same frame forever. AppendEntries is prefix-ordered, so no
      * *later* entry can commit behind it either: one oversize command wedges the log permanently.
      *
-     * **Why here rather than in the actor loop.** Refusing on the caller's coroutine means the command
-     * never enters the engine at all: no dedup serial is burned ([onLocalPropose] does `++serial`), no
-     * forward is queued, and the caller gets a synchronous, actionable failure it can retry against a
-     * smaller command. On a non-leader it bounds the [RaftMessage.Forward] hop, which crosses this
-     * same local transport — but **not** the leader's append, which is held to the leader's budget.
-     * Those differ, so [onForward] applies the same measurement on the leader through
-     * [proposeRefusal] and answers [ForwardOutcome.PayloadTooLarge] (#2155).
+     * Auto-serial calls preflight on the caller's coroutine so a refusal burns no serial. Pinned
+     * requests enter the actor first: [onPropose] resolves a leader's cached committed result before
+     * [proposeRefusal], and refuses cache misses before appending. On a non-leader the same actor
+     * gate bounds the [RaftMessage.Forward] hop before queueing or sending it. A fitting forward
+     * reaches [onPropose] on the leader through [onForward], where the leader's own budget applies
+     * after cache lookup. A size refusal is returned as [ForwardOutcome.PayloadTooLarge] (#2155).
      *
      * **Why the budget is read per propose rather than snapshotted at construction.**
      * `Seam.maxPayloadBytes` is "a reading, not a lease": a mesh reports the minimum across its live
@@ -3580,7 +3593,7 @@ internal class RaftEngine(
      *
      * **The measurement is deliberately conservative rather than exact, so that the published bound
      * is stable over the node's lifetime.** The entry's `index` and `term` do not exist yet — they
-     * are assigned on the actor loop, and this gate deliberately runs before it — so
+     * are assigned only when appending, and the auto-serial preflight runs outside the actor — so
      * [proposeEnvelopeBytes] charges the widest values the engine will admit. The reserve therefore
      * depends only on this node's [ClientId], and the limit is a constant a caller may read once.
      *
@@ -3633,7 +3646,7 @@ internal class RaftEngine(
      * [command] carried in an entry stamped with [clientId], or `null` when it fits (or the transport
      * names no budget).
      *
-     * The local gate passes this node's own [clientIdProbe]. [onForward] passes the **originator's**
+     * The caller preflight passes this node's own [clientIdProbe]. [onPropose] passes the **originator's**
      * id, because that is the id the appended entry will carry: the leader appends a forward under
      * the proposer's [DedupKey] unchanged, so measuring the envelope around its own id would
      * under-reserve for every forwarder whose id is wider (#2155).
@@ -3713,7 +3726,9 @@ internal class RaftEngine(
     }
 
     private suspend fun proposeWithRequestId(command: ByteArray, requestId: Long?): LogEntry {
-        checkProposeFitsTransport(command)
+        // Auto-serial calls cannot be committed retries; keep their refusal before serial allocation.
+        // Pinned requests must reach the actor so a leader can consult its committed-result cache.
+        if (requestId == null) checkProposeFitsTransport(command)
         val d = CompletableDeferred<LogEntry>()
         try {
             cmd.send(EngineCommand.Propose(command, requestId, d))
@@ -4220,21 +4235,6 @@ internal class RaftEngine(
             send(from, RaftMessage.ForwardResponse(m.clientRequestId, ForwardOutcome.NotLeader))
             return
         }
-        // The forwarder's own propose-time gate measured against ITS transport, not this one, and a
-        // forwarder with the larger budget admits a command this leader cannot replicate — the
-        // permanent wedge checkProposeFitsTransport closes for a local propose (#2155). So refuse
-        // here, before the append, measured around the id the entry would carry.
-        proposeRefusal(m.command, m.dedupKey?.clientId ?: clientIdProbe)?.let { refusal ->
-            debug { "onForward: refused reqId=${m.clientRequestId} from ${from.value} — ${refusal.message}" }
-            send(
-                from,
-                RaftMessage.ForwardResponse(
-                    m.clientRequestId,
-                    ForwardOutcome.PayloadTooLarge(refusal.payloadBytes, refusal.budgetBytes, refusal.reservedBytes),
-                ),
-            )
-            return
-        }
         val d = CompletableDeferred<LogEntry>()
         // Append under the proposer's own dedupKey UNCHANGED — the leader must not re-stamp it (that
         // would defeat exactly-once) and does not count it among the serials it issued itself.
@@ -4245,8 +4245,11 @@ internal class RaftEngine(
                 ForwardOutcome.Committed(e.index, e.term)
             } catch (e: Throwable) {
                 if (e is CancellationException) throw e
-                if (e is NotLeaderException || e is LeadershipLostException) ForwardOutcome.NotLeader
-                else ForwardOutcome.Failed
+                when (e) {
+                    is PayloadTooLarge -> ForwardOutcome.PayloadTooLarge(e.payloadBytes, e.budgetBytes, e.reservedBytes)
+                    is NotLeaderException, is LeadershipLostException -> ForwardOutcome.NotLeader
+                    else -> ForwardOutcome.Failed
+                }
             }
             // Best-effort reply; transport may be tearing down on close.
             runCatchingCancellable { send(from, RaftMessage.ForwardResponse(m.clientRequestId, outcome)) }
