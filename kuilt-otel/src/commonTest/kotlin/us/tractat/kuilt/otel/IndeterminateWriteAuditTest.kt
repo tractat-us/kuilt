@@ -1,7 +1,9 @@
 package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.store.DurableStore
@@ -12,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** #2915: characterize recovery separately from whether an operation reported success. */
@@ -46,6 +49,32 @@ class IndeterminateWriteAuditTest {
                 { assertTrue(retried.any { requireNotNull(it.causalStamp).dot.seq > firstDot.seq }) },
             )
         }
+    }
+
+    /**
+     * The commoner duplicate needs neither a landed span write nor recovery: cancellation skips
+     * the rollback, so the minted stamp stays in memory and a caller's retry mints a second one.
+     */
+    @Test
+    fun cancelledExportKeepsItsMintedStampSoARetryDuplicatesWithoutRecovery() = runTest {
+        val spansKey = StoreKey("otel.spans")
+        val store = ParkingStore(spansKey)
+        val exporter = WarpSpanExporter(replica, store, causalClock = WarpCausalClock(replica))
+        // A caller's own timeout, abandoning the export while the span write is in flight.
+        val timedOut = withTimeoutOrNull(1_000L) { exporter.export(span) }
+        val landedAtTimeout = store.landed(spansKey)
+        store.parking = false
+        assertIs<ExportResult.Success>(exporter.export(span))
+        val live = exporter.snapshot().elements
+        val durable = WarpSpanExporter(replica, store).also { it.recover() }.snapshot().elements
+        assertAll(
+            { assertNull(timedOut, "the first export must time out") },
+            { assertEquals(1, store.parked, "the first span write must be parked when cancelled") },
+            { assertNull(landedAtTimeout, "no span write landed before the retry") },
+            { assertEquals(2, live.size, "audit: the retry adds a second stamped copy in memory") },
+            { assertEquals(setOf(span.spanId), live.map { it.spanId }.toSet()) },
+            { assertEquals(2, durable.size, "the next successful write persists both copies") },
+        )
     }
 
     @Test
@@ -103,6 +132,23 @@ class IndeterminateWriteAuditTest {
                 { assertEquals(durable, rewritten, "rewriting state must not reapply increments/samples") },
                 { assertEquals(3L, recovered.sumValue(sum)) },
             )
+        }
+    }
+
+    /** Parks writes to [target] until [parking] is cleared, so a caller can abandon one mid-write. */
+    private class ParkingStore(private val target: StoreKey) : DurableStore {
+        private val backing = InMemoryDurableStore()
+        var parking = true
+        var parked = 0
+        suspend fun landed(key: StoreKey): ByteArray? = backing.read(key)
+        override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+        override suspend fun delete(key: StoreKey) = backing.delete(key)
+        override suspend fun write(key: StoreKey, bytes: ByteArray) {
+            if (parking && key == target) {
+                parked++
+                awaitCancellation()
+            }
+            backing.write(key, bytes)
         }
     }
 
