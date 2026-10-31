@@ -990,6 +990,14 @@ jobs:
           -Pconcurrency.stress.tests=true
           --tests "*ConcurrencyTest"
 
+      # `:kuilt-session`'s admission/roster probe (#2813). Own step, same reason as above: a red in
+      # another module must not hide this one. Gated identically in kuilt-session/build.gradle.kts.
+      - name: Run :kuilt-session concurrency probes (isolated runner, NON-BLOCKING)
+        if: always()
+        run: >-
+          ./gradlew :kuilt-session:jvmTest -Pconcurrency.stress.tests=true
+          --tests "*ConcurrencyTest"
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -1008,6 +1016,8 @@ jobs:
             kuilt-cluster/build/test-results/
             kuilt-mdns/build/reports/tests/
             kuilt-mdns/build/test-results/
+            kuilt-session/build/reports/tests/
+            kuilt-session/build/test-results/
 
   # ── nw-concurrency-probes ───────────────────────────────────────────────────
   # `:kuilt-nw`'s real-threaded probes (#2481). Same shape as concurrency-probes
