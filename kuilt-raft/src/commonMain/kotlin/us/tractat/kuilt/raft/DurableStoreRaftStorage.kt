@@ -54,8 +54,9 @@ import us.tractat.kuilt.store.StoreKey
  * only then updates its in-memory copy. A write that throws leaves memory holding the last
  * **acknowledged** state and propagates the failure. The medium may already hold the candidate,
  * or may commit it later: an unsuccessful write has an indeterminate outcome.
- * [DurableStore.write] returns only once the bytes are committed, so "the write returned" is the whole of this adapter's durability claim — what that costs, and where
- * each platform's guarantee stops short, is the store's business and its own KDoc says so.
+ * [DurableStore.write] returns only once the bytes are committed, so "the write returned" is the
+ * whole of this adapter's durability claim — what that costs, and where each platform's guarantee
+ * stops short, is the store's business and its own KDoc says so.
  *
  * This adapter does not invalidate or refresh its cache after a failed write. Reusing that handle
  * can overwrite a landed update with stale state. Recovery must first establish that outstanding
