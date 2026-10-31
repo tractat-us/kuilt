@@ -288,6 +288,7 @@ class NsdManagerBrowserTest {
         try {
             platform.found(0, "busy")
             platform.listeners[0].onFailed(UnsupportedOperationException("discovery failed"))
+            platform.alwaysContend = false
             platform.found(0, "late")
             advanceTimeBy(10_000)
             assertAll(
