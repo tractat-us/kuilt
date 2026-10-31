@@ -414,7 +414,9 @@ public class WarpNode(
      *
      * Guarded by [lock]. Prevents double-execution when the same task's command commits
      * more than once — possible under warp-roster churn when two ring owners each proposed
-     * the same task, or when a re-drive's re-proposal races the original entry.
+     * the same task, when a re-drive's re-proposal races the original entry, or when a
+     * proposer retries after a failure (each propose now draws a fresh auto serial, so the
+     * retry appends a second entry rather than being coalesced into the first).
      *
      * Only the quorum-fenced Raft leader calls [coordinatedExecutor] (checked in
      * [onCoordinatedCommit]), so this set is the local safety net for the same leader

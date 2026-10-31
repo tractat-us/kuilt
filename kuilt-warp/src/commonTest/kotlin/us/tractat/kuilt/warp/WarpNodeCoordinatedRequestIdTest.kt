@@ -5,6 +5,7 @@ package us.tractat.kuilt.warp
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.delay
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
@@ -15,6 +16,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -39,6 +41,8 @@ class WarpNodeCoordinatedRequestIdTest {
         val second = TaskId("BB")
 
         val leader = sim.awaitLeader()
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+        val startTerm = sim.storages.getValue(leaderId).term()
         val seam = InMemoryLoom().host(Pattern("warp-request-id"))
         val executed = mutableListOf<TaskId>()
         val lock = reentrantLock()
@@ -62,12 +66,31 @@ class WarpNodeCoordinatedRequestIdTest {
         )
 
         warp.enqueue(first, CoordinationKind.Coordinated)
-        sim.awaitTrue("the first task runs", within = 4.seconds) { warp.results[first] != null }
+        sim.awaitTrue("the first task runs", within = 2.seconds) { warp.results[first] != null }
 
         warp.enqueue(second, CoordinationKind.Coordinated)
-        sim.awaitTrue("the second task runs", within = 4.seconds) { warp.results[second] != null }
+        // Bounded but non-throwing: a timeout here must not pre-empt the log assertion below, which
+        // is what tells "never proposed" apart from "coalesced or refused".
+        // (Not `sim.awaitTrue`: it turns any TimeoutCancellationException into a thrown state dump.)
+        var waitedMs = 0
+        while (warp.results[second] == null && waitedMs < 2_000) {
+            delay(1.milliseconds)
+            waitedMs++
+        }
+        sim.settle()
+
+        val logged = sim.storages.getValue(leaderId).entries(1L)
+            .filter { !it.isNoOp && it.config == null }
+            .map { it.command.decodeToString() }
+        val endTerm = sim.storages.getValue(leaderId).term()
 
         assertAll(
+            // "Aa" may legitimately appear twice (a re-drive re-proposes it; coordinatedApplied dedups the run),
+            // so count "BB" exactly and require "Aa" at least once.
+            { assertEquals(1, logged.count { it == "BB" }, "the leader's log has exactly one BB entry; log=$logged") },
+            { assertTrue(logged.contains("Aa"), "the leader's log has an Aa entry; log=$logged") },
+            { assertEquals(leaderId, sim.nodes.entries.first { it.value.role.value is RaftRole.Leader }.key, "rig: same leader at the end") },
+            { assertEquals(startTerm, endTerm, "rig: same leader term at the end, so the dedup cache was never cleared") },
             { assertEquals(first.value.hashCode(), second.value.hashCode(), "rig: the two ids must collide") },
             { assertEquals(RaftRole.Leader, leader.role.value, "rig: one leader tenure throughout") },
             { assertEquals(listOf(first, second), lock.withLock { executed.toList() }, "each task runs exactly once") },
