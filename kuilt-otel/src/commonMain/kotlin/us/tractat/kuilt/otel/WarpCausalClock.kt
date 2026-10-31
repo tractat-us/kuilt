@@ -103,14 +103,19 @@ public class WarpCausalClock(private val replica: ReplicaId) {
      * Reload `(seq, frontier)` from [store]. Call once at startup before any [tick];
      * a missing or corrupt entry leaves the clock fresh (seq 0, empty frontier).
      */
-    public suspend fun recover(store: DurableStore) {
+    public suspend fun recover(store: DurableStore): Unit = recover(store) {}
+
+    /** Lets the owning telemetry facade include clock recovery in span persistence health. */
+    internal suspend fun recover(store: DurableStore, onFailure: (Throwable) -> Unit) {
         val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
+            onFailure(cause)
             logger.error(cause) { "otel.causal.clock: store read failed, starting fresh" }
             return
         } ?: return
         val state = runCatchingCancellable {
             cbor.decodeFromByteArray(stateSerializer, bytes)
         }.getOrElse { cause ->
+            onFailure(cause)
             logger.warn(cause) { "otel.causal.clock: corrupt store entry, starting fresh" }
             return
         }

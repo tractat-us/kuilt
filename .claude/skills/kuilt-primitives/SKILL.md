@@ -44,7 +44,7 @@ and primitive groups in order. The cookbook index splits them out.
 |a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane|`HeddlePolicy.pick` + `HeddleNode`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned` (`GovernedHeddleNode`); `HeddleAdmissionControl` + `TaskDescriptor.inLane`|`heddle.md#fair-share--placement`|
 |"only run on a GPU / in-region peer", a placement predicate|`Affinity` + `TaskDescriptor.where` + `CapSet`|`warp.md#where-a-task-may-run-location-eligibility`|
 |a content-hash blob cache; running code another peer sent you, an `eval`|`Creel` + `BobbinExchange`; `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch`|`warp.md#code-mobility`|
-|a flush-per-line log exporter, "logging stalls the app"; stamping a line's session/game; resetting a telemetry store; a counter of whether telemetry still lands|`WarpLogRecordExporter.export(records)` + `installLogCapture`; `withLogContext(attributes) { … }`, **not** `CaptureConfig.attributeMapper`; `WarpTelemetry.clear()`; `WarpLogRecordExporter.health` (`ExporterHealth`) + `LogCaptureInstallation.health` (`CaptureHealth.droppedEvents`)|`otel.md#telemetry--log-capture`|
+|a flush-per-line log exporter, "logging stalls the app"; stamping a line's session/game; resetting a telemetry store; a counter of whether telemetry still lands|`WarpLogRecordExporter.export(records)` + `installLogCapture`; `withLogContext(attributes) { … }`, **not** `CaptureConfig.attributeMapper`; `WarpTelemetry.clear()`; `WarpTelemetry.health` (spans, metrics, logs) + `LogCaptureInstallation.health` (`CaptureHealth.droppedEvents`)|`otel.md#telemetry--log-capture`|
 
 ## Fetching a route
 

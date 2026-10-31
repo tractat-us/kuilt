@@ -84,7 +84,17 @@ when (val result = telemetry.clear()) {
 ```
 
 **Intent:** know whether telemetry is still being written at all — "has anything landed since launch?", "are we losing log lines?" — instead of keeping your own flag or counter beside the exporter.
-**Primitive:** `WarpLogRecordExporter.health` (`ExporterHealth`, `:kuilt-otel`) and `LogCaptureInstallation.health` (`CaptureHealth`, `:kuilt-otel-logging`). Both are `StateFlow`s, so read a point-in-time answer or collect and alarm on a stall.
+**Primitive:** `WarpTelemetry.health` (`TelemetryHealth`, `:kuilt-otel`) for all three signals in one read; per signal, `WarpLogRecordExporter.health` (`ExporterHealth`), `WarpSpanExporter.health` and `WarpMetricExporter.health` (`PersistenceHealth`); and `LogCaptureInstallation.health` (`CaptureHealth`, `:kuilt-otel-logging`). The per-exporter surfaces are `StateFlow`s, so read a point-in-time answer or collect and alarm on a stall.
+
+<!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#samplePersistenceHealth -->
+```kotlin
+val health = telemetry.health
+check(health.metrics.acknowledged == 1L)
+check(health.metrics.outstandingFailures == 0L)
+check(!health.metrics.recoveryFailed)
+```
+
+Spans and metrics count complete local persistence **turns**, logs count **records** — so never add the three together. `outstandingFailures` stays nonzero until the same work succeeds, so a healthy sum write cannot hide a failing histogram.
 
 A failed durable write returns `ExportResult.Failure`, but on the logging path every caller discards it — the per-platform appender signatures return `void`. A device therefore stopped accepting telemetry and stayed that way for hours with nothing written and nothing logged (#1860); these counters are the out-of-band answer. `ExporterHealth.isDead` already derives "nothing accepted since process start" — there is deliberately no timestamp, because an exporter holds no `Clock` and a wall-clock read does not belong on the export path.
 
