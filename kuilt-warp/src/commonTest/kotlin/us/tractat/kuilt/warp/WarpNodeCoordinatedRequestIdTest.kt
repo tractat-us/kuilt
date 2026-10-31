@@ -16,7 +16,6 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -85,10 +84,11 @@ class WarpNodeCoordinatedRequestIdTest {
         val endTerm = sim.storages.getValue(leaderId).term()
 
         assertAll(
-            // "Aa" may legitimately appear twice (a re-drive re-proposes it; coordinatedApplied dedups the run),
-            // so count "BB" exactly and require "Aa" at least once.
             { assertEquals(1, logged.count { it == "BB" }, "the leader's log has exactly one BB entry; log=$logged") },
-            { assertTrue(logged.contains("Aa"), "the leader's log has an Aa entry; log=$logged") },
+            // The warp node starts on a node that already leads, so the role flow's first emission launches a
+            // re-drive whose fence returns while "Aa" is still in flight. Without the pinned id's cache to
+            // coalesce it, only the proposed-as-leader guard keeps that re-drive from appending a second "Aa".
+            { assertEquals(1, logged.count { it == "Aa" }, "the leader's log has exactly one Aa entry; log=$logged") },
             { assertEquals(leaderId, sim.nodes.entries.first { it.value.role.value is RaftRole.Leader }.key, "rig: same leader at the end") },
             { assertEquals(startTerm, endTerm, "rig: same leader term at the end, so the dedup cache was never cleared") },
             { assertEquals(first.value.hashCode(), second.value.hashCode(), "rig: the two ids must collide") },

@@ -84,7 +84,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   skips it on the role check, and `committed` is replay=0) is **re-driven**: on acquiring
  *   leadership a node re-proposes every coordinated-queue task it has not executed and
  *   that has no replicated result, giving the stranded task a fresh committed entry to
- *   fire from (#879 b).
+ *   fire from (#879 b). It skips tasks it has itself proposed as leader in the same tenure:
+ *   those entries are in its own log and cannot be stranded.
  * - A local [coordinatedApplied] set plus the replicated coordinated-queue membership and
  *   [Results]-board gates deduplicate when two entries for the same task both committed
  *   (ring churn double-propose, or a re-drive racing the original entry).
@@ -425,6 +426,24 @@ public class WarpNode(
      */
     private val coordinatedApplied = mutableSetOf<TaskId>()
 
+    /**
+     * How many times the [RaftNode.role] collector has seen this node take leadership; each
+     * count names one tenure. Guarded by [lock].
+     */
+    private var tenure = 0L
+
+    /**
+     * Coordinated tasks this node proposed while it was the Raft leader, mapped to the [tenure]
+     * they were proposed under. Guarded by [lock]; cleared whenever a new tenure begins.
+     *
+     * Such a proposal is appended to this leader's own log, so its commit fires
+     * [onCoordinatedCommit] while this node still leads. It cannot be stranded in this tenure,
+     * and [redriveStrandedCoordinated] skips it rather than append a second entry. Under the
+     * old pinned request id the leader's dedup cache coalesced that second propose; an auto
+     * serial does not (#2923).
+     */
+    private val proposedAsLeader = mutableMapOf<TaskId, Long>()
+
     /** Peers currently known from [rosterFlow]. Guarded by [lock]. */
     private var rosterPeers: Set<PeerId> = emptySet()
 
@@ -597,7 +616,7 @@ public class WarpNode(
         // Re-drive coordinated tasks stranded by a commit that fired while no node held
         // leadership (#879 window b) whenever this node acquires leadership.
         raftNode?.role
-            ?.onEach { role -> if (role is RaftRole.Leader) redriveStrandedCoordinated() }
+            ?.onEach { role -> if (role is RaftRole.Leader) redriveStrandedCoordinated(beginTenure()) }
             ?.launchIn(ownScope)
     }
 
@@ -1411,14 +1430,31 @@ public class WarpNode(
      * every key it applies for the rest of its tenure. This used to pin `taskId.value.hashCode()`,
      * so two task ids with the same 32-bit hash (`"Aa"` and `"BB"`) shared a key: the second
      * task's propose found the first one's committed entry and the second task never ran. A
-     * stable id bought nothing to offset that. A retry after a failover reaches a leader whose
-     * cache started cold, so it appends again regardless; and [onCoordinatedCommit] already
-     * deduplicates per [TaskId] when two entries for one task commit. An auto serial is unique
-     * per proposal, so a retry or a re-drive always gets a fresh entry to fire from.
+     * retry after a failover reaches a leader whose cache started cold, so it appends again
+     * regardless; and [onCoordinatedCommit] already deduplicates per [TaskId] when two entries for
+     * one task commit. An auto serial is unique per proposal, so a retry or a re-drive always gets
+     * a fresh entry to fire from.
+     *
+     * The stable id did absorb one duplicate: a re-drive re-proposing a task this same leader had
+     * already proposed in the same tenure. [proposedAsLeader] now skips that re-propose instead.
      */
     private suspend fun executeViaRaft(taskId: TaskId) {
-        checkNotNull(raftNode).propose(taskId.value.encodeToByteArray())
+        val raft = checkNotNull(raftNode)
+        lock.withLock { if (raft.role.value is RaftRole.Leader) proposedAsLeader[taskId] = tenure }
+        var proposed = false
+        try {
+            raft.propose(taskId.value.encodeToByteArray())
+            proposed = true
+        } finally {
+            if (!proposed) lock.withLock { proposedAsLeader.remove(taskId) }
+        }
         // Execution driven from raftNode.committed in onCoordinatedCommit.
+    }
+
+    /** Starts a new leader [tenure] and returns it; proposals from earlier tenures stop counting. */
+    private fun beginTenure(): Long = lock.withLock {
+        proposedAsLeader.clear()
+        ++tenure
     }
 
     /**
@@ -1467,9 +1503,12 @@ public class WarpNode(
                 return@launch
             }
             val shouldExecute = lock.withLock {
-                taskId in coordQueueQuilter.state.value.elements &&
+                val run = taskId in coordQueueQuilter.state.value.elements &&
                     resultsQuilter.state.value[taskId] == null &&
                     coordinatedApplied.add(taskId)
+                // Applied now, so the re-drive's coordinatedApplied gate covers it from here on.
+                if (run) proposedAsLeader.remove(taskId)
+                run
             }
             if (!shouldExecute) return@launch
             runCatchingCancellable {
@@ -1503,15 +1542,22 @@ public class WarpNode(
      * waits for its current-term no-op to commit, so the scan runs against a settled view.
      * A re-propose failure (e.g. leadership lost mid-re-drive) is logged and dropped — the
      * next leader's re-drive picks the task up again.
+     *
+     * A task this node itself proposed during [leaderTenure] is skipped (see [proposedAsLeader]):
+     * its entry is in this leader's log and fires here, so re-proposing it would only append a
+     * duplicate. That covers every task claimed between the role emission and the fence, which
+     * is the common case when this node already leads at construction.
      */
-    private fun redriveStrandedCoordinated() {
+    private fun redriveStrandedCoordinated(leaderTenure: Long) {
         val raft = raftNode ?: return
         ownScope.launch {
             val fence = runCatchingCancellable { raft.readIndex() }
             if (fence.isFailure) return@launch
             val stranded = lock.withLock {
                 coordQueueQuilter.state.value.elements.filter { taskId ->
-                    taskId !in coordinatedApplied && resultsQuilter.state.value[taskId] == null
+                    taskId !in coordinatedApplied &&
+                        resultsQuilter.state.value[taskId] == null &&
+                        proposedAsLeader[taskId] != leaderTenure
                 }
             }
             stranded.forEach { taskId ->
