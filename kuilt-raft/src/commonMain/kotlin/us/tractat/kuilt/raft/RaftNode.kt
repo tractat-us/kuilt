@@ -271,7 +271,8 @@ public interface RaftNode {
      * @throws LeadershipLostException if a forwarded proposal is rejected by the target leader
      *   (e.g. the leader stepped down); the caller may retry on the new leader.
      * @throws ForwardedProposalFailedException if the leader a proposal was forwarded to reports it
-     *   failed for a non-retryable reason. Do not retry the same command (#2922).
+     *   failed for a non-retryable reason. Do not retry the same command. No leader in this release
+     *   reports one (#2922).
      * @throws NotLeaderException only in terminal cases: the node is [close]d, or the leader
      *   is rejecting proposals because a leadership transfer is in flight.
      * @throws PayloadTooLarge if [command] exceeds the transport's published payload budget less an
@@ -293,14 +294,16 @@ public interface RaftNode {
      * the forward hop unchanged, and the consumer's dedup table ([ClientSessionTable]) skips a serial
      * it has already applied. The auto-serial [propose] form draws the next monotonic serial itself.
      *
-     * Retries must carry the **same command bytes** under the same [requestId]. While the current
-     * leader retains the committed result in its best-effort cache, that result takes precedence
-     * over its current payload limit. This does not promise cache retention across eviction or
-     * leadership changes. A non-leader still checks its own forward-hop budget before sending, even
-     * for a committed retry; the leader's cache cannot bypass that hop.
+     * A [requestId] names one command: a retry must carry the **same command bytes**. While the
+     * current leader holds the committed result in its best-effort cache, a retry gets that result
+     * back, even if the leader's payload limit has since shrunk below the command. The cache lasts
+     * for that leader's tenure and is dropped when it steps down. A non-leader still checks its own
+     * forward-hop budget before sending, even for a committed retry; the leader's cache cannot
+     * bypass that hop.
      *
-     * @throws IllegalArgumentException if this leader has a cached result for [requestId] with
-     *   different command bytes. A forwarded mismatch instead raises [ForwardedProposalFailedException].
+     * @throws RequestIdConflictException if the leader has a cached result for [requestId] with
+     *   different command bytes. The same type arrives whether this node leads or forwarded the
+     *   proposal. Nothing was appended; do not retry under the same [requestId].
      * @throws PayloadTooLarge if a required forward hop cannot fit [command], or the leader has no
      *   cached result and the command exceeds its current payload budget less the envelope reserve.
      *   This attempt appends nothing; it does not prove an earlier attempt never committed. Do not

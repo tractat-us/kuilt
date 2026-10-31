@@ -89,11 +89,8 @@ class CachedProposePayloadBudgetTest {
         val before = sim.storages.getValue(leaderId).entries(1L)
         sim.network.setNodeMaxPayloadBytes(leaderId, 1024)
         // Smaller bytes would pass the new budget: they must not receive a false commit receipt.
-        if (forwarded) {
-            assertFailsWith<ForwardedProposalFailedException> { proposer.propose(byteArrayOf(1), requestId = 41L) }
-        } else {
-            assertFailsWith<IllegalArgumentException> { proposer.propose(byteArrayOf(1), requestId = 41L) }
-        }
+        // One type on both paths, so a caller's catch does not depend on which node leads.
+        assertFailsWith<RequestIdConflictException> { proposer.propose(byteArrayOf(1), requestId = 41L) }
         assertEquals(before, sim.storages.getValue(leaderId).entries(1L), "changed bytes never append under a cached key")
     }
 }

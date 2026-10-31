@@ -271,8 +271,8 @@ class RaftWireGoldenVectorTest {
      * of the frame, and each is checked against the fully-qualified class name a pre-#2160 build writes
      * — the tag the old decoder looks for, and so the one tag a new frame must never carry.
      *
-     * `ForwardOutcome` rides inside `ForwardResponse` and is polymorphic too, so its four tags are
-     * pinned the same way — and against the sealed serializer's own subtype list, so a fifth outcome
+     * `ForwardOutcome` rides inside `ForwardResponse` and is polymorphic too, so its five tags are
+     * pinned the same way — and against the sealed serializer's own subtype list, so a sixth outcome
      * cannot be added without a row here.
      */
     @Test
@@ -295,6 +295,7 @@ class RaftWireGoldenVectorTest {
             Triple("nl", "NotLeader", ForwardOutcome.NotLeader),
             Triple("fl", "Failed", ForwardOutcome.Failed),
             Triple("ptl", "PayloadTooLarge", ForwardOutcome.PayloadTooLarge(2, 1, 0)),
+            Triple("ric", "RequestIdConflict", ForwardOutcome.RequestIdConflict),
         )
         val fqFrame = "us.tractat.kuilt.raft.internal.RaftMessage."
         val fqOutcome = "us.tractat.kuilt.raft.internal.ForwardOutcome."

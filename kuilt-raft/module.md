@@ -120,10 +120,13 @@ three rungs of guarantee:
 
 **Who enforces what.** The proposer stamps the key once; it rides the forward hop
 **unchanged** (the leader never re-stamps). A best-effort, non-durable leader-side
-cache coalesces the common lost-ack retry on a still-leading node. Retries must
-carry the same command bytes. A cached commit wins over a smaller leader payload
-budget, but the forward hop must still fit; cache eviction or a leadership change
-ends that guarantee. Reusing a cached key with different bytes is rejected.
+cache coalesces the common lost-ack retry on a still-leading node. It has no
+eviction: it keeps every keyed entry the leader applies during its tenure, so it
+grows with that tenure, and it is cleared only when the leader steps down.
+Retries must carry the same command bytes. A cached commit wins over a smaller
+leader payload budget, but the forward hop must still fit; a leadership change
+ends that guarantee. Reusing a cached key with different bytes throws
+`RequestIdConflictException`, whether the proposing node leads or forwards.
 The **authoritative** table is the consumer's: fold `ClientSessionTable.shouldApply`
 into your apply loop and serialize it **into your own snapshot**
 (`toBytes`/`fromBytes`). Because that table rides the consumer's snapshot, raft's

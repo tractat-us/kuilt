@@ -34,7 +34,7 @@ import us.tractat.kuilt.raft.RaftMessageType
  * | [TimeoutNow] | `tn` | | [Forward] | `fw` |
  * | [ForwardResponse] | `fwr` | | | |
  *
- * and [ForwardOutcome]'s `cm` / `nl` / `fl` / `ptl`.
+ * and [ForwardOutcome]'s `cm` / `nl` / `fl` / `ptl` / `ric`.
  *
  * **Never change a tag on its own.** A peer that does not recognise a tag refuses the frame
  * (`RaftTraceEvent.FrameUndecodable`), so renaming one splits a group along that one frame type —
@@ -43,7 +43,7 @@ import us.tractat.kuilt.raft.RaftMessageType
  * moved: byte-string framing changed only the frames that carry bytes. A tag changes only as part of
  * a new wire epoch that changes **all** of them, so a mixed group refuses every frame. Renaming or
  * moving a class no longer touches the wire; that is the other half of why the tags are explicit.
- * Pinned, all fifteen, by `RaftWireGoldenVectorTest.everyFrameTypeCarriesItsDocumentedTag`.
+ * Pinned, all sixteen, by `RaftWireGoldenVectorTest.everyFrameTypeCarriesItsDocumentedTag`.
  *
  * **Adding a tag is a smaller break than changing one, but it is still a break.** There is no
  * unknown-subtype fallback in the polymorphic decoder, so a build without the new subtype refuses
@@ -354,8 +354,8 @@ internal sealed interface ForwardOutcome {
     /**
      * The proposal failed for a non-retryable reason.
      *
-     * A leader returns this when a cached request key is retried with different command bytes.
-     * Leadership failures instead map to [NotLeader], and size refusals to [PayloadTooLarge].
+     * No leader produces this today: leadership failures map to [NotLeader], size refusals to
+     * [PayloadTooLarge], and a reused request id with changed bytes to [RequestIdConflict].
      * The originator surfaces it as `ForwardedProposalFailedException`, which is not a
      * `LeadershipLostException`, so a retry loop catching that type does not resend it (#2922).
      */
@@ -403,4 +403,23 @@ internal sealed interface ForwardOutcome {
             }
         }
     }
+
+    /**
+     * The leader still holds a committed result for the forward's request id, and the forward
+     * carries different command bytes (#2923). Nothing was appended.
+     *
+     * The originator rethrows it as `RequestIdConflictException`, the same type a leader-local
+     * propose throws for the same mistake, so a caller's `catch` does not depend on which node led.
+     * It carries no fields: the originator already holds the request id it forwarded.
+     *
+     * **What an older peer does with it.** Like [PayloadTooLarge], the `ric` tag is added inside the
+     * still-unreleased wire epoch of #2160, so no tagged release ever receives it. A snapshot build
+     * from inside that epoch but before this variant drops the reply as `FrameUndecodable`, and its
+     * forward stays outstanding until the caller's own timeout or until the node closes. Only a
+     * caller already breaking the same-bytes rule pays that, and it pays with a hang rather than a
+     * false commit receipt.
+     */
+    @Serializable
+    @SerialName("ric")
+    data object RequestIdConflict : ForwardOutcome
 }

@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
  * `ForwardOutcome.NotLeader` means "retry on the next leader" and surfaces as
  * [LeadershipLostException]. `ForwardOutcome.Failed` means "failed for a non-retryable reason" and
  * must surface as [ForwardedProposalFailedException] — a type a `catch (LeadershipLostException)`
- * retry loop does not catch. To isolate response classification, the response is injected from the
+ * retry loop does not catch. No leader produces `Failed` today, so the response is injected from the
  * peer the forward was registered to, exactly as a real leader's reply would arrive.
  *
  * Each test severs only victim → leader, so the `Forward` is emitted and registered to the leader but

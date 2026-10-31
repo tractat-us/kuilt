@@ -165,11 +165,15 @@ public class SpeculativeSequencer<S, A>(
      * Mirrors [TurnSequencer.propose]`(action, requestId)`: replay the *same* [requestId] on a
      * post-crash retry and the consumer's [ClientSessionTable] (and this sequencer's internal
      * table) will skip the duplicate. [requestId] must be a per-client monotonic serial the
-     * caller owns — do not pass a log index or a random value.
+     * caller owns — do not pass a log index or a random value. A retry must resend the **same**
+     * [action], which must encode to the same bytes; a [requestId] names one action.
      *
      * @throws [us.tractat.kuilt.raft.LeadershipLostException] if the leader steps down while
      *   awaiting commit. The speculative apply is rolled back. The caller may retry with the
      *   same [requestId].
+     * @throws [us.tractat.kuilt.raft.RequestIdConflictException] if the leader still holds a
+     *   committed result for [requestId] and [action] encodes differently. The speculative apply is
+     *   rolled back; do not retry under the same [requestId].
      */
     public suspend fun propose(action: A, requestId: Long): IndexedAction<A> {
         applySpeculatively(action)

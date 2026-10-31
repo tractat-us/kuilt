@@ -54,6 +54,7 @@ import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.RaftTraceEvent
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.RefusalGate
+import us.tractat.kuilt.raft.RequestIdConflictException
 import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.raft.SnapshotMeta
 import us.tractat.kuilt.raft.StepDownReason
@@ -3504,7 +3505,11 @@ internal class RaftEngine(
                 } else {
                     // A ForwardResponse carries only index/term; acknowledging different bytes
                     // would make the originator manufacture a commit receipt for those new bytes.
-                    response.completeExceptionally(IllegalArgumentException("requestId reused with a different command"))
+                    // onForward maps this type to ForwardOutcome.RequestIdConflict, so the forwarder
+                    // throws the same type a leader-local caller sees.
+                    response.completeExceptionally(
+                        RequestIdConflictException("requestId ${committed.dedupKey?.requestId} reused with a different command"),
+                    )
                 }
                 return
             }
@@ -4247,6 +4252,7 @@ internal class RaftEngine(
                 if (e is CancellationException) throw e
                 when (e) {
                     is PayloadTooLarge -> ForwardOutcome.PayloadTooLarge(e.payloadBytes, e.budgetBytes, e.reservedBytes)
+                    is RequestIdConflictException -> ForwardOutcome.RequestIdConflict
                     is NotLeaderException, is LeadershipLostException -> ForwardOutcome.NotLeader
                     else -> ForwardOutcome.Failed
                 }
@@ -4306,6 +4312,12 @@ internal class RaftEngine(
             // type must not resend a command the leader judged permanently failed (#2922).
             ForwardOutcome.Failed ->
                 pf.deferred.completeExceptionally(ForwardedProposalFailedException())
+            // The leader-local type, not ForwardedProposalFailedException: one catch must cover a
+            // caller whose node leads and one whose node forwards (#2923).
+            ForwardOutcome.RequestIdConflict ->
+                pf.deferred.completeExceptionally(
+                    RequestIdConflictException("requestId ${pf.dedupKey?.requestId} reused with a different command"),
+                )
         }
     }
 
