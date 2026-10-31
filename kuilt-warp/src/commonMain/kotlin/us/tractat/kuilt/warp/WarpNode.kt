@@ -70,8 +70,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   log plus the leader-side gates below — is the sole arbiter of who executes, so the
  *   intent path's ad-hoc lowest-PeerId election never runs for them (and can no longer
  *   leak per-task intent entries).
- * - Each ring owner *proposes* the task to [raftNode] with a stable `requestId` (derived
- *   from [TaskId]) — preventing the same node from double-proposing after a retry.
+ * - Each ring owner *proposes* the task to [raftNode] under an auto-drawn raft serial. A
+ *   retry or re-drive may therefore commit a second entry for the same task; the gates
+ *   below, keyed by [TaskId], absorb it.
  * - Execution is *driven from the committed log*, not from the `propose()` return. The
  *   background [onCoordinatedCommit] listener fires on every committed entry; only the
  *   current Raft leader proceeds, and it must first pass the **quorum fence** — a
@@ -1396,7 +1397,7 @@ public class WarpNode(
         }
 
     /**
-     * Proposes the task to the Raft cluster with a stable [requestId] derived from [taskId].
+     * Proposes the task to the Raft cluster under an auto-drawn raft serial.
      *
      * The call suspends until a quorum has committed the log entry, guaranteeing durability.
      * [coordinatedExecutor] is **not** invoked here — execution is driven from the committed
@@ -1404,13 +1405,17 @@ public class WarpNode(
      * double-execution that occurred when two ring owners both called `coordinatedExecutor`
      * inline after their respective `propose()` calls returned under warp-roster churn.
      *
-     * The stable [requestId] (hash of [TaskId.value]) ensures that if this node retries the
-     * same proposal after a leadership failover, the Raft dedup table recognises the serial
-     * and avoids appending a duplicate entry under this node's own client identity.
+     * **Why no pinned request id (#2923).** A pinned id names one command, and the leader keeps
+     * every key it applies for the rest of its tenure. This used to pin `taskId.value.hashCode()`,
+     * so two task ids with the same 32-bit hash (`"Aa"` and `"BB"`) shared a key: the second
+     * task's propose found the first one's committed entry and the second task never ran. A
+     * stable id bought nothing to offset that. A retry after a failover reaches a leader whose
+     * cache started cold, so it appends again regardless; and [onCoordinatedCommit] already
+     * deduplicates per [TaskId] when two entries for one task commit. An auto serial is unique
+     * per proposal, so a retry or a re-drive always gets a fresh entry to fire from.
      */
     private suspend fun executeViaRaft(taskId: TaskId) {
-        val requestId = taskId.value.hashCode().toLong()
-        checkNotNull(raftNode).propose(taskId.value.encodeToByteArray(), requestId)
+        checkNotNull(raftNode).propose(taskId.value.encodeToByteArray())
         // Execution driven from raftNode.committed in onCoordinatedCommit.
     }
 
