@@ -169,7 +169,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 
 ## Modules: Observability
 
-- [kuilt-otel](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-otel/module.md): Offline-first OpenTelemetry: record traces, metrics and logs on any device and have them reconcile when connectivity returns, with no duplicates and no data loss.
+- [kuilt-otel](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-otel/module.md): Offline-first OpenTelemetry: record traces, metrics and logs on any device and have them reconcile when connectivity returns. Syncing saved state twice never counts it twice.
 - [kuilt-otel-tap](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-otel-tap/module.md): Pull the logs off a running device by joining it as a peer and reading the offline-first buffer it already keeps.
 - [kuilt-otel-logging](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-otel-logging/module.md): Routes an app's kotlin-logging output into the kuilt offline-first telemetry buffer, through one call on every platform.
 - [kuilt-otel-logback](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-otel-logback/module.md): Captures Logback output — including other libraries' — into the kuilt offline-first telemetry buffer.

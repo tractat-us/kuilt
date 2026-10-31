@@ -35,5 +35,5 @@ module.
 | `kuilt-webrtc` | WebRTC data-channel fabric (wasmJs) |
 | `kuilt-stream` | Turns any ordered pipe of bytes — a socket, your own in-house protocol — into a fabric: `framed()` puts the message boundaries back and rejects an oversized frame before allocating for it |
 | `kuilt-conformance` | `SeamConformanceSuite` + `RoomConformanceSuite` — prove any fabric or room implementation correct |
-| `kuilt-otel` | Offline-first telemetry: record logs, metrics, and traces on any device; they sync up when the network returns, with no duplicates. Companion modules pick up what your app and its libraries already log and carry it to your dashboard — see [Device to dashboard](observability.md) |
+| `kuilt-otel` | Offline-first telemetry: record logs, metrics, and traces on any device; they sync up when the network returns. Syncing saved state twice never counts it twice, though retrying a failed export can. Companion modules pick up what your app and its libraries already log and carry it to your dashboard — see [Device to dashboard](observability.md) |
 | `kuilt-warp` | Spreads a pile of work across whoever is connected — no central boss, and no peer doing the same job twice (`WarpNode`). It and the modules around it are a preview, not a foundation — see [Warp](warp.md) |
