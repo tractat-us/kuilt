@@ -47,6 +47,15 @@ public interface DurableStore {
      *
      * Returns after the write is fsync'd (or equivalent). Never returns before
      * the bytes are committed — the caller relies on this for crash safety.
+     *
+     * A thrown exception or cancellation has an **indeterminate commit outcome**: the bytes
+     * may already have been committed, or an outstanding write may commit after the caller
+     * has stopped waiting. Neither failure nor cancellation promises to leave the old value
+     * intact. Cancellation does not, by itself, abort the underlying storage operation.
+     *
+     * Callers must account for this when rolling back memory, retrying, or recovering. An
+     * immediate read of the old value is not proof that an outstanding write cannot land later;
+     * this interface provides no operation for awaiting or aborting such a write.
      */
     public suspend fun write(key: StoreKey, bytes: ByteArray)
 

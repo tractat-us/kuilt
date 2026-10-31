@@ -80,7 +80,7 @@ and `docs/usage.md` for how to consume it.
 
 | Module | Targets | Role |
 |--------|---------|------|
-| `:kuilt-otel` | all | Offline-first OpenTelemetry: record traces, metrics and logs on any target and have them reconcile across devices when connectivity returns, with no duplicates and no data loss (`WarpTelemetry`, `WarpOtlpBridge`, `WarpLogRecordExporter`). CRDT-backed, so re-merging a snapshot is idempotent. Depends on `:kuilt-crdt` + `:kuilt-core` + `:kuilt-store`. |
+| `:kuilt-otel` | all | Offline-first OpenTelemetry: record traces, metrics and logs on any target and have them reconcile across devices when connectivity returns (`WarpTelemetry`, `WarpOtlpBridge`, `WarpLogRecordExporter`). Re-merging a saved snapshot is idempotent by full value; retrying an unstamped span export after an indeterminate write can leave distinct stamped copies with the same span id. Depends on `:kuilt-crdt` + `:kuilt-core` + `:kuilt-store`. |
 | `:kuilt-otel-tap` | all | Pull the logs off a device by **joining it as a peer** — a test or CI process connects to a running app over a fabric and reads the offline-first buffer it already keeps (`LogTapClient`). |
 | `:kuilt-otel-logging` | all | The uniform capture edge: `installLogCapture` routes an app's existing `kotlin-logging` output into the durable telemetry buffer, through one call on every platform. |
 | `:kuilt-otel-logback` | JVM, Android | Catches what *other* libraries log through Logback (frameworks, transitive deps) into the same buffer. |

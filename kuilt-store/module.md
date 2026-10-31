@@ -18,6 +18,12 @@ its own job as done at that moment, rather than holding everything open until so
 slower thing further downstream confirms it. Storage is not the interesting part of
 most programs, but *when* a write became permanent usually is.
 
+A failed or cancelled call gives no such answer. Its bytes may already be stored,
+or may appear after the caller stops waiting. Even reading the old value immediately
+is not proof that a pending write will leave it alone. The store has no method for
+waiting for an abandoned operation to settle. Recovery and retry rules belong to the
+caller; see the caller audit below.
+
 ## Quick start
 
 <!-- verbatim from kuilt-store/src/commonSamples/kotlin/us/tractat/kuilt/store/Samples.kt#sampleDurableStore -->
@@ -26,7 +32,7 @@ most programs, but *when* a write became permanent usually is.
 val store: DurableStore = InMemoryDurableStore()
 val key = StoreKey("draft")
 
-// `write` returns only once the bytes are committed — that is the whole contract.
+// A successful `write` returns only once the bytes are committed.
 store.write(key, byteArrayOf(1, 2, 3))
 
 // A later session (a fresh store over the same backing directory or database)
@@ -103,3 +109,33 @@ Coroutines and atomicfu. That is the entire bill: no CRDT lattice, no serializat
 format, no logging facade. A consumer that wants a durable key→bytes store on one
 platform should not inherit a telemetry stack along with it — which is exactly why this
 module was split out of `kuilt-otel` (#2497).
+
+## Failed-write caller audit
+
+A missing acknowledgement is not an undo. The tests named below inject a write that
+lands before throwing an exception or cancellation, and assert that the injection
+fired. They characterize recovery as well as the result the caller reported.
+The in-memory backing models visibility between handles, not a physical crash.
+
+| Caller | Verdict for a landed, unacknowledged write | Coverage |
+|---|---|---|
+| `DurableStoreRaftStorage` | **Unsafe to reuse the handle.** Meta, log and snapshot caches change only after acknowledgement. A later meta or log update can overwrite landed state using the stale cache. Once outstanding writes have settled, a fresh handle reads the landed state. An immediate reopen cannot prove settlement. | `DurableStoreIndeterminateWriteTest` demonstrates stale meta and a later overwrite. Log and snapshot verdicts follow the same write-then-adopt ordering. |
+| `WarpSpanExporter` | **Rollback does not undo persistence.** An ordinary failure removes a newly stamped span from memory, though recovery can still find it. Cancellation bypasses that rollback. Retrying an unstamped span after recovery mints another dot and can duplicate the span. Merge and clear rewrite state; neither can interpret failure as absence. | `IndeterminateWriteAuditTest.stampedSpanRollbackDoesNotUndoTheDurableWriteAndRestartRetryDuplicates` exercises ordinary failure, cancellation and recovery. |
+| `WarpMetricExporter` | **Snapshot rewrite is benign once writes settle; replaying an operation is different.** Memory already holds each mutation. Recovery reads the landed snapshot. Re-merging the same snapshot does not increment again; retrying an increment or sample does. This does not establish ordering against a late, outstanding write. | `IndeterminateWriteAuditTest.metricSnapshotsRecoverAndRewriteWithoutReapplyingTheOperation` covers each persisted metric kind. |
+| `WarpCausalClock` | **A landed high-water mark is recoverable.** Persist does not roll back the live clock; recovery advances beyond the landed dot. An outstanding old snapshot still needs settlement before restart or later persistence. | `IndeterminateWriteAuditTest.clockCommitBeforeFailureRecoversItsHighWaterMark`. |
+| `WarpLogRecordExporter` | **Adopted-segment cancellation and retirement are both covered.** The merge records the segment before awaiting its write and repairs bookkeeping on failure, which prevents the orphan/phantom cases. A segment retires only on durable suppression, which only an acknowledged covering write or recovery advances; a refused or cancelled write never does, even if it landed (#2988). This does not prove every ledger schedule safe. | `WarpLogRecordExporterRetirementTest.aMergeCancelledAfterItsSegmentLandedLeavesNoOrphanKey` and `aMergeCancelledBeforeItsSegmentLandedLeavesNoPhantomAcrossARestart` assert landed/cancelled counts and inspect the next roll and restart. `WarpLogRecordExporterDurableSuppressionTest` covers refused and cancelled covering writes, before and after landing. |
+| `OtlpHttpEdge` | **A landed sent-set is benign for the completed delivery.** Persistence follows a successful HTTP response. The next digest reads the store, so a landed sent-set suppresses a redundant send even if the call failed. Span/log ids and metric versions use this ordering. This is not an exactly-once collector guarantee or a proof about concurrent sends. | `IndeterminateWriteAuditTest.committedSentSetSurvivesFailureAfterSuccessfulPost` exercises spans; the log and metric verdicts follow the same POST-then-record ordering. |
+| `AppliedOpSink` | **No store write.** Receives operations when applied in memory, before the exporter's write returns; receipt is not a durability acknowledgement. | `AppliedOpSink` contract and exporter call sites. |
+| `ExporterHealth` | **No store write.** Reports exporter health. A write-failure report does not establish that the bytes are absent. | `ExporterHealth` declarations and exporter failure paths. |
+
+These are audit verdicts, not changes to recovery policy. In particular, the Raft
+cache and stamped-span retry hazards need caller-specific remedies; this contract
+clarification introduces no settlement API or serialization change.
+
+There is no universal conformance property requiring a cancelled write to land:
+both leaving the old value intact and committing the candidate are permitted. Adding
+that requirement to `DurableStoreConformanceSuite` would reject valid backends, and
+wrapping its in-memory reference would test the wrapper alone. Instead,
+`IndeterminateWriteTest.cancellationCanPrecedeDurableVisibility` demonstrates the
+permitted late-commit schedule explicitly, while the IndexedDB test exercises a real
+transaction whose caller abandons the await.

@@ -19,8 +19,10 @@ import kotlinx.serialization.encoding.Encoder
  * then picks up and encodes as major type 2 (byte string) when
  * `alwaysUseByteString = true`.
  *
- * Value-based equality is preserved by [ByteString] itself — the ORSet keys by
- * spanId correctly because two [ByteString]s wrapping identical bytes are `==`.
+ * [ByteString] preserves value-based equality: identical bytes compare equal.
+ * This applies to the byte fields of a full [SpanRecord], not an ORSet key made
+ * solely from its span id. Different causal stamps still make distinct elements;
+ * see [SpanRecord] for snapshot-merge and failed-export retry semantics.
  */
 internal object ByteStringSerializer : KSerializer<ByteString> {
 

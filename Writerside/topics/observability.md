@@ -8,7 +8,7 @@ Browsers get closed. Laptops sleep. When a device is offline, the usual approach
 just *loses* whatever it couldn't send.
 
 kuilt **saves the note on the device first** and sends it when the network
-returns, even hours later. A flaky link may send it twice; it is counted once.
+returns, even hours later. Sharing the same saved state twice does not count it twice.
 
 The rest of this page walks the whole path, in the order you'll build it:
 
@@ -61,11 +61,15 @@ instead succeeds the moment the note is **durably written to local storage**. Ge
 it onward is a separate step that happens whenever a connection is available —
 possibly much later, and possibly from a *different device* (more on that below).
 
-That "no double-counting" property isn't politeness — it's structural. Every kind of
-note is stored as a [replicated data type](crdt-overview.md): traces as a set keyed
-by id, metrics as mergeable counters, logs as an ordered append-only sequence.
-Re-sending something you already sent is a merge with itself, which changes nothing.
-The classic "my retry counted the request twice" bug simply can't happen here.
+Sharing the same saved state twice does not count it twice. Each kind of note is
+stored as a [replicated data type](crdt-overview.md): traces as a set of full span
+records, metrics as mergeable counters, logs as an ordered append-only sequence.
+Merging the same snapshot again changes nothing.
+
+That rule applies to sharing saved state, not to retrying a failed export. A failed
+or cancelled call may still have saved the span. After recovery, exporting the
+original unstamped span again can give it a new causal stamp. The set then holds distinct
+values with the same span id. Rolling back memory cannot undo a write that landed.
 
 The same machinery reconciles notes *between devices*. Two devices that briefly meet
 exchange only the records the other is missing — so telemetry recorded on a phone
@@ -81,8 +85,11 @@ Collector, whatever you already run.
 OpenTelemetry backends receive data over a common wire protocol, **OTLP** (the
 OpenTelemetry Protocol). You write one small adapter — an `OtlpEdge` — that knows how
 to talk OTLP to *your* backend, and hand it to a `WarpOtlpBridge`. The bridge does the
-careful part: on every reconnect it asks the backend what it already has, and sends
-only what's missing.
+comparison: on every reconnect it gets a digest of records already delivered, and
+skips their ids. For OTLP/HTTP, that digest is saved on the producer; it is not a
+query of the collector. Lost acknowledgements or a lost digest can cause another
+send. Your edge must handle those delivery retries idempotently. This does not
+repair duplicate stamped spans already in the local buffer.
 
 <!-- condensed from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpOtlpBridge and #sampleOtlpEdge -->
 
@@ -100,7 +107,7 @@ class MyCollectorEdge(private val endpoint: String) : OtlpEdge {
 val bridge = WarpOtlpBridge(telemetry, Clock.System)
 
 // Safe to call on every reconnect: the bridge compares against the backend's digest
-// and sends only what's missing, so a resend can never double-count or re-flood.
+// and skips known ids. A lost digest or failed acknowledgement may cause another send.
 when (val result = bridge.drain(MyCollectorEdge("https://otel-collector.example.com"))) {
     is DrainResult.Success -> log.info {
         "delivered ${result.spansSent} span(s), ${result.logsSent} log(s), ${result.metricPointsSent} metric point(s)"
@@ -117,8 +124,8 @@ records that synced over from peers — you don't need every device online at on
 device with a connection can carry the room's telemetry to your dashboard.
 
 > **All three signals travel this path** — traces, metrics, and logs. The bridge reconciles
-> each one independently by digest, so every device delivers exactly what it holds and never
-> the same record twice. If your backend speaks OTLP over HTTP, you don't even write the
+> each one independently by digest, skipping records the digest lists as delivered.
+> If your backend speaks OTLP over HTTP, you don't even write the
 > adapter: `:kuilt-otel-otlp` ships a ready-made `OtlpHttpEdge` that POSTs to `/v1/traces`,
 > `/v1/logs`, and `/v1/metrics`.
 

@@ -61,7 +61,7 @@
     <!-- 5 Telemetry (amber) -->
     <rect x="646" y="96" width="138" height="404" rx="11" fill="#211c17" stroke="#e5c07b55"/>
     <text class="role" x="715" y="122" fill="#e5c07b">Telemetry</text><text class="use" x="715" y="138">offline-first</text>
-    <rect x="658" y="158" width="114" height="64" rx="8" fill="#10130f" stroke="#98c37944"/><text class="prim" x="715" y="183">durable buf +</text><text class="prim" x="715" y="197">idempotent</text><text class="ships" x="715" y="215">~ships ✓</text>
+    <rect x="658" y="158" width="114" height="64" rx="8" fill="#10130f" stroke="#98c37944"/><text class="prim" x="715" y="183">durable buf +</text><text class="prim" x="715" y="197" font-size="10">idempotent merge</text><text class="ships" x="715" y="215">~ships ✓</text>
     <rect x="658" y="300" width="114" height="186" rx="8" fill="#1d1812" stroke="#e5c07b33"/>
     <text class="blabel" x="715" y="320">BACKED BY · 5 issues</text>
     <text class="iss" x="715" y="342">durable store</text><text class="iss" x="715" y="360">metric exporter</text><text class="iss" x="715" y="378">OTLP bridge</text><text class="iss" x="715" y="396">eviction · glue</text>
