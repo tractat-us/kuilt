@@ -146,8 +146,73 @@ class MuxAdmissionOwnershipTest {
         }
     }
 
+    /**
+     * Cancels admission at each of its dispatches on the loom's own scope in turn, from the client's
+     * `MeshHello` until the record is registered. One of them resumes the admitting caller after the
+     * handshake has produced a link but before any seam owns it. A cancellation there must still
+     * close the connection and stop its wrapper pump. Before registration the loom owns the conn, so
+     * every cancellation must close it; after registration the provider-owned lifecycle applies.
+     */
     @Test
-    fun bufferedApplicationWorkCannotExtendTheAdmissionTimeout() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+    fun cancellationAtEveryAdmissionDispatchClosesOrRegistersTheConnection() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val delegate = StandardTestDispatcher(testScheduler)
+        var unregisteredFires = 0
+        var reachedRegistration = false
+        var target = 1
+        while (!reachedRegistration && target <= MAX_ADMISSION_DISPATCHES) {
+            var armed = false
+            var seen = 0
+            var fired = false
+            var registeredAtFire = false
+            lateinit var loom: MuxServerLoom
+            val dispatcher = object : CoroutineDispatcher() {
+                override fun dispatch(context: CoroutineContext, block: Runnable) {
+                    if (armed && !fired && ++seen == target) {
+                        fired = true
+                        registeredAtFire = loom.connectedPeers.value.isNotEmpty()
+                        loom.close()
+                    }
+                    delegate.dispatch(context, block)
+                }
+            }
+            val (raw, remote) = connectionPair()
+            val conn = CloseCountingConnection(raw)
+            loom = MuxServerLoom(
+                InMemoryConnectionSource().also { it.offer(conn) },
+                CoroutineScope(backgroundScope.coroutineContext + dispatcher), PeerId("server"),
+                RoomAuthorizer.AllowAll, delegate, Random(7),
+            )
+            runCurrent()
+            armed = true
+            remote.send(MeshWire.encodeHello(PeerId("client"), meshNonce(1)))
+            runCurrent()
+            try {
+                assertTrue(fired, "rig: admission made at least $target dispatches")
+                if (registeredAtFire) {
+                    reachedRegistration = true
+                } else {
+                    unregisteredFires++
+                    assertAll(
+                        { assertTrue(loom.connectedPeers.value.isEmpty(), "dispatch $target: never registered") },
+                        { assertEquals(1, conn.closeCalls, "dispatch $target: an unregistered connection must be closed") },
+                        { assertTrue(conn.collectionEnded.isCompleted, "dispatch $target: its wrapper pump must stop") },
+                    )
+                }
+            } finally {
+                loom.close()
+                remote.close()
+                runCurrent()
+            }
+            target++
+        }
+        assertAll(
+            { assertTrue(reachedRegistration, "rig: the sweep reached a dispatch after registration") },
+            { assertTrue(unregisteredFires >= 1, "rig: the sweep cancelled admission before registration") },
+        )
+    }
+
+    @Test
+    fun bufferedApplicationWorkCannotExtendTheAdmissionTimeout()= runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val (raw, remote) = connectionPair()
         val conn = CloseCountingConnection(raw)
         var authorizations = 0
@@ -198,4 +263,8 @@ class MuxAdmissionOwnershipTest {
         }
     }
 
+    private companion object {
+        /** Ceiling on the sweep; admission takes a handful of dispatches, so reaching it is a rig fault. */
+        const val MAX_ADMISSION_DISPATCHES = 20
+    }
 }
