@@ -3,6 +3,7 @@ package us.tractat.kuilt.nearby
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -46,6 +47,11 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.ConnectStateMach
  * came up and then failed identity does not stay up with nobody listening to it. That is all a failed
  * attempt costs: whether anyone tries again is the caller's business ([NearbyLoom] does on the
  * advertiser side, and fails the `join` on the discoverer side).
+ *
+ * One exit has nothing to disconnect: a dial the radio itself turned down. Nothing of this machine's
+ * is on that endpoint, and something else's may be, since the radio answers
+ * `STATUS_ALREADY_CONNECTED_TO_ENDPOINT` for the link this loom's own host took from that device. A
+ * dial that was only cancelled is different, by [radioCallMayStillBeRunning], and is still released.
  *
  * ## Subscribe-before-trigger
  * All event collectors are launched with [CoroutineStart.UNDISPATCHED] so they
@@ -130,7 +136,7 @@ internal class ConnectStateMachine(
             val endpoint = claimed.await()
             val link =
                 withTimeoutOrNull(handshakeTimeout) {
-                    trigger()
+                    kickOff(trigger, handshake)
                     deferred.await()
                 } ?: throw ConnectionFailedException(endpoint, "no handshake within $handshakeTimeout")
             resolved = true
@@ -141,6 +147,15 @@ internal class ConnectStateMachine(
             // neither behind: a stale binding would make the id look taken to the next endpoint that
             // legitimately announces it, and a link nobody reads stays up on the radio.
             if (!resolved) abandon(handshake)
+        }
+    }
+
+    private suspend fun kickOff(trigger: suspend () -> Unit, handshake: HandshakeState) {
+        try {
+            trigger()
+        } catch (failure: Throwable) {
+            if (!failure.radioCallMayStillBeRunning()) handshake.markDialRefused()
+            throw failure
         }
     }
 
@@ -322,6 +337,13 @@ internal class ConnectStateMachine(
          */
         private var abandoned: Boolean = false
 
+        /** The radio turned the dial down, so the endpoint is not this handshake's to disconnect. */
+        private var dialRefused: Boolean = false
+
+        fun markDialRefused() {
+            lock.withLock { dialRefused = true }
+        }
+
         fun endpointOrUnclaimed(): String = lock.withLock { endpoint ?: "unclaimed" }
 
         fun hasIdentity(): Boolean = lock.withLock { remoteSelfId != null }
@@ -378,7 +400,7 @@ internal class ConnectStateMachine(
         /**
          * End this handshake: give the id back if it bound one, identity-scoped through
          * [PeerIdentityRegistry.unbind] so it can only ever release *this* endpoint's own binding, and
-         * return the endpoint it claimed, if any, for the caller to disconnect.
+         * return the endpoint it holds, if any, for the caller to disconnect.
          */
         fun abandon(registry: PeerIdentityRegistry<String>): String? =
             lock.withLock {
@@ -387,7 +409,7 @@ internal class ConnectStateMachine(
                 val bound = remoteSelfId
                 if (bound != null && claimedEndpoint != null) registry.unbind(bound, claimedEndpoint)
                 remoteSelfId = null
-                claimedEndpoint
+                claimedEndpoint.takeUnless { dialRefused }
             }
 
         // Called with [lock] held.
@@ -402,6 +424,13 @@ internal class ConnectStateMachine(
         }
     }
 }
+
+/**
+ * Whether a [NearbyApi] call that threw this may still be running on the radio, and so may yet take
+ * effect. A failure means the radio answered no. A cancellation means nobody heard an answer, which is
+ * what the Play services binding does when cancelled: it stops awaiting a Task, and the Task carries on.
+ */
+internal fun Throwable.radioCallMayStillBeRunning(): Boolean = this is CancellationException
 
 /** A resolved, live Nearby connection. */
 internal data class ConnectedLink(
