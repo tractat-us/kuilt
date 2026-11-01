@@ -23,7 +23,9 @@ package us.tractat.kuilt.core
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -346,5 +348,46 @@ class MuxChannelViewOwnLifecycleTest {
             assertIs<SeamState.Torn>(chat.state.value).reason,
             "the terminal reason is single-shot — the second close must not rewrite it",
         )
+    }
+
+    /**
+     * A caller the base has refused can read why (#3022). The state pump has not run in this test, so
+     * each view still reads `Woven` when its send starts, and passes its own liveness check.
+     */
+    @Test
+    fun aViewReadsTornByTheTimeItsBasesRefusalReachesTheCaller() = runTest(StandardTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val base = loom.host(Pattern("view-lagging-pump"))
+        val joiner = loom.join(InMemoryTag("joiner"))
+        val mux = NamedMux(base, backgroundScope)
+        val addressed = mux.channel("addressed")
+        val broadcasting = mux.channel("broadcasting")
+        runCurrent()
+
+        base.close(CloseReason.RemoteRequested)
+        val addressedBefore = addressed.state.value
+        val broadcastingBefore = broadcasting.state.value
+        assertFailsWith<IllegalStateException> { addressed.sendTo(joiner.selfId, byteArrayOf(1)) }
+        assertFailsWith<IllegalStateException> { broadcasting.broadcast(byteArrayOf(1)) }
+
+        assertAll(
+            { assertIs<SeamState.Woven>(addressedBefore, "the rig: the pump must not have mirrored the tear") },
+            { assertIs<SeamState.Woven>(broadcastingBefore, "the rig: the pump must not have mirrored the tear") },
+            { assertEquals(CloseReason.RemoteRequested, assertIs<SeamState.Torn>(addressed.state.value).reason) },
+            { assertEquals(CloseReason.RemoteRequested, assertIs<SeamState.Torn>(broadcasting.state.value).reason) },
+            { assertEquals(setOf(addressed.selfId), addressed.peers.value, "the roster collapses with the latch") },
+        )
+    }
+
+    /** A refusal that is not a tear must not latch anything: an absent peer says nothing about the view. */
+    @Test
+    fun aRefusalFromALiveBaseLeavesTheViewLive() = runTest(StandardTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val view = NamedMux(loom.host(Pattern("view-live-refusal")), backgroundScope).channel("chat")
+        runCurrent()
+
+        assertFailsWith<PeerNotConnected> { view.sendTo(PeerId("nobody"), byteArrayOf(1)) }
+
+        assertIs<SeamState.Woven>(view.state.value)
     }
 }

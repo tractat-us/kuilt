@@ -13,6 +13,7 @@ kotlin {
             // transitive weight beyond three suspend methods over opaque bytes.
             api(project(":kuilt-store"))
             implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.serialization.core)
             implementation(libs.kotlinx.serialization.cbor)
             implementation(libs.kotlin.logging)
