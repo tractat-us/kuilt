@@ -2,7 +2,6 @@
 
 package us.tractat.kuilt.nearby
 
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -119,7 +118,7 @@ class NearbyLoomKnobsTest {
             val startedAt = currentTime
             // SupervisorJob'd backgroundScope: the stalled join fails, and that must not fail the test.
             val join = backgroundScope.async { loom.join(NearbyTag("device", HOST_ENDPOINT)) }
-            assertFailsWith<TimeoutCancellationException>("a handshake nothing answers must not hang") {
+            assertFailsWith<ConnectionFailedException>("a handshake nothing answers must not hang") {
                 join.await()
             }
 
