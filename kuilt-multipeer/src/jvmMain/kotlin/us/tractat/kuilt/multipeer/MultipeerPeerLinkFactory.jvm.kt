@@ -95,10 +95,10 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * passes a non-null advertisement, `PeerLostCallback` passes `null`.
      *
      * [session] is the browse generation the calling callback was created under. `mc_browser_stop`
-     * does not wait for callbacks already in flight, so one can arrive after [clearVisiblePeers] has
-     * ended its session; it is then discarded, and `false` tells the caller not to report a departure
-     * either. The check and the update share [discoveryLock] with teardown, so no callback can slip
-     * between them.
+     * waits for callbacks already in flight, so none should arrive after [clearVisiblePeers] has ended
+     * its session. This check is the backstop if one does: it is discarded, and `false` tells the
+     * caller not to report a departure either. The check and the update share [discoveryLock] with
+     * teardown, so no callback can slip between them.
      */
     internal fun setVisiblePeer(
         session: MultipeerBrowseGeneration,

@@ -90,6 +90,7 @@ public actual class MultipeerServiceBrowser actual constructor(
                     } finally {
                         // JNA retains only weak callback references. Keep both trampolines
                         // alive through the native stop call, including exceptional teardown.
+                        // That call returns only once no callback of this session is running.
                         Reference.reachabilityFence(stopped)
                         factory.clearVisiblePeers()
                     }
@@ -99,12 +100,14 @@ public actual class MultipeerServiceBrowser actual constructor(
     }.flowOn(Dispatchers.IO)
 
     // Called with lock held; callbacks only publish to thread-safe flows and the factory snapshot,
-    // never take this lock. A synchronous callback cannot deadlock session startup or shutdown.
+    // never take this lock and never wait for a collector. A synchronous callback cannot deadlock
+    // session startup, and shutdown depends on the same thing: `mc_browser_stop` blocks under this
+    // lock until every callback in flight has returned.
     private fun startSession(): BrowseSession? {
         val lib = loadLib() ?: return null
         // Teardown advances the generation under this lock, so this is the generation the session
-        // runs in. `mc_browser_stop` does not wait for in-flight callbacks; carrying the generation
-        // lets the factory discard one that lands after this session has stopped.
+        // runs in. `mc_browser_stop` waits for in-flight callbacks, so none should land after this
+        // session has stopped; carrying the generation makes the factory discard one if it does.
         val session = factory.discoveryUpdates.generation
         val found = MultipeerNativeLib.PeerFoundCallback { handle, displayName ->
             val ad = MultipeerAdvertisement(handle, displayName, factory.serviceType)

@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -152,10 +153,10 @@ class MultipeerSharedBrowseTest {
     }
 
     /**
-     * `mc_browser_stop` does not wait for callbacks already in flight, so a found callback that was
-     * blocked on the factory's discovery lock can run after teardown. Invoking the stopped session's
-     * captured callback after `cancelAndJoin` is that interleaving, forced: the stale peer must reach
-     * neither [MultipeerPeerLinkFactory.visiblePeers] nor the next session's discovery snapshot.
+     * `mc_browser_stop` waits for callbacks in flight, so this interleaving needs a bridge breaking
+     * that promise; the factory's generation check is the backstop. Invoking the stopped session's
+     * captured callback after `cancelAndJoin` forces it: the stale peer must reach neither
+     * [MultipeerPeerLinkFactory.visiblePeers] nor the next session's discovery snapshot.
      */
     @Test
     fun foundCallbackFromAStoppedSessionNeverReachesTheNextSession() = runBlocking {
@@ -217,6 +218,51 @@ class MultipeerSharedBrowseTest {
         } finally {
             second.cancelAndJoin()
         }
+    }
+
+    /**
+     * The native stop blocks until callbacks in flight have returned, and the JVM holds its lifecycle
+     * lock across that call, so a callback that needed the lock, or that waited for a collector, would
+     * deadlock teardown. This fake stop models that wait: it fires both callbacks from another thread
+     * and refuses to finish until they return. More firings than either flow buffers, so a callback
+     * that suspended on a full buffer would show too.
+     */
+    @Test
+    fun callbacksFiredDuringStopReturnWhileTheLifecycleLockIsHeld() = runBlocking {
+        val completed = AtomicInteger()
+        val lockHeldDuringStop = AtomicReference<Boolean?>()
+        lateinit var browser: MultipeerServiceBrowser
+        lateinit var lib: BrowseLib
+        lib = BrowseLib(
+            beforeStop = {
+                val lockField = browser.javaClass.getDeclaredField("lock").apply { isAccessible = true }
+                lockHeldDuringStop.set((lockField.get(browser) as ReentrantLock).isLocked)
+                val returned = CountDownLatch(1)
+                thread {
+                    repeat(CALLBACKS_DURING_STOP) { index ->
+                        lib.fireFound("peer-$index")
+                        lib.fireLost("peer-$index")
+                        completed.incrementAndGet()
+                    }
+                    returned.countDown()
+                }
+                assertTrue(returned.await(30, TimeUnit.SECONDS), "a callback must never wait on teardown")
+            },
+        )
+        browser = lib.browser()
+        val ready = CountDownLatch(1)
+        val collector = launch(Dispatchers.Default) { browser.departures().collect { ready.countDown() } }
+        assertTrue(ready.await(5, TimeUnit.SECONDS), "the session must start")
+        collector.cancelAndJoin()
+        assertAll(
+            { assertEquals(true, lockHeldDuringStop.get(), "the rig must fire with the lifecycle lock held") },
+            { assertEquals(CALLBACKS_DURING_STOP, completed.get(), "every callback must have returned") },
+            { assertEquals(1, lib.stops.get()) },
+        )
+    }
+
+    private companion object {
+        const val CALLBACKS_DURING_STOP = 200
     }
 
     /** Callbacks fire inline during registration, before the native start call returns. */
