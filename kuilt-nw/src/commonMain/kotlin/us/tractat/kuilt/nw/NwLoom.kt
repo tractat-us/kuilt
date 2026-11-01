@@ -124,11 +124,19 @@ public class NwUnreachableException(message: String) : Exception(message)
  *  - **After the seam is closed**, a weave starts fresh, waiting first until the closed seam has finished with
  *    the binding ([NwSeam.tornDown]), or [weaveTimeout] if it never does. `Torn` is published before the last
  *    collector has let go of the byte stream and before the close's `stopListening` has run, and a new session
- *    overlapping either of those loses its bytes or its listener.
+ *    overlapping either of those loses its bytes or its listener. A repeat already waiting on a seam that
+ *    closes is the same case, and it starts fresh the same way.
+ *
+ * **To start another session, wait for the old one to be closed, which for a room means waiting for `leave` to
+ * return.** Do not react to `MembershipEvent.HostLost`, which a room emits before its `leave` closes the seam.
+ * In that window the seam is still live, so a different rendezvous is refused with the [IllegalStateException]
+ * above, and a repeat of the same one can be answered with a seam about to close.
  *
  * A second room built over the same tag while the first is live cannot be told from a re-weave, so it gets the
  * same seam. Two looms over one [NwApi] cannot be seen from here at all: the second seam's collection fails, and
- * that seam tears itself ([CloseReason.Error]) and fails its [weave].
+ * that seam tears itself ([CloseReason.Error]) and fails its [weave]. Its close then stops the listener and the
+ * browser on that binding, which are the first seam's. Only a consumer-authored [NwApi] can reach this, since
+ * `nwHost` and `nwJoin` build a binding per loom.
  *
  * ## Scope
  * Background collectors (the seam's three loops + this loom's discovery/dial loop) run on
@@ -201,9 +209,10 @@ public class NwLoom(
     private val weaveMutex = Mutex()
 
     /**
-     * A one-line, `grep`-able snapshot of every in-flight formation: what this peer advertises, what it can
+     * A one-line, `grep`-able snapshot of the session this loom holds: what this peer advertises, what it can
      * see, what it has stopped dialling and **why**, what it is still dialling and how hard, which links
-     * exist, and what the radio says (#2420).
+     * exist, and what the radio says (#2420). A session still closing renders as `state=Torn`, because it still
+     * holds the binding; `formations=none` means it has let go, and a weave would start at once.
      *
      * ## Why this exists
      * This fabric's failure mode is **silence**. A redialer parked on a wrongly-settled endpoint emits
@@ -223,9 +232,9 @@ public class NwLoom(
      * capture.
      */
     public fun dumpFormationState(): String {
-        val live = formationLock.withLock { formation }?.takeUnless { it.seam.state.value is SeamState.Torn }
+        val held = formationLock.withLock { formation }
             ?: return "self=${selfId.value} serviceType=$serviceType formations=none (no seam is being woven)"
-        return render(live)
+        return render(held)
     }
 
     /** Compose one formation's line from its three collaborators' read-only snapshots. */
@@ -317,18 +326,23 @@ public class NwLoom(
         TransportCapability(roles = NW_ROLES, availability = api.availability())
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
-        val (session, started) = weaveMutex.withMutex {
-            val held = heldSessionAfterAnyClose()
-            when {
-                held == null -> startSession(rendezvous) to true
-                held.rendezvous == rendezvous -> held to false
-                else -> error(
-                    "NwLoom holds a live session (${held.rendezvous}) and one NwApi carries one session: " +
-                        "close its seam before weaving $rendezvous.",
-                )
+        while (true) {
+            val (session, started) = weaveMutex.withMutex {
+                val held = heldSessionAfterAnyClose()
+                when {
+                    held == null -> startSession(rendezvous) to true
+                    held.rendezvous == rendezvous -> held to false
+                    else -> error(
+                        "NwLoom holds a live session (${held.rendezvous}) and one NwApi carries one session: " +
+                            "close its seam before weaving $rendezvous.",
+                    )
+                }
             }
+            if (started) return formSession(session)
+            // `null` is a seam that closed while this repeat waited on it: round again, to wait out the close
+            // and start fresh. Each turn either returns, throws, or found a session that closed in the meantime.
+            awaitHeldSession(session)?.let { return it }
         }
-        return if (started) formSession(session) else awaitHeldSession(session)
     }
 
     /**
@@ -352,12 +366,17 @@ public class NwLoom(
      * Answer a repeat of the rendezvous with the session already held, keeping [weave]'s promise of a connected
      * seam. Never closes it on the way out, by timeout or by this caller's cancellation: the seam belongs to
      * whoever started it, and a peer may yet come back.
+     *
+     * Returns `null` when the seam closes during the wait, which says nothing about whether a peer can be
+     * reached: a room emits `HostLost` before its `leave` closes the seam, so a consumer reacting to it gets
+     * here first. It throws only for the wait that really did run out.
      */
-    private suspend fun awaitHeldSession(session: Formation): Seam {
+    private suspend fun awaitHeldSession(session: Formation): Seam? {
         val seam = session.seam
         log.info { "nw.loom.weave-repeat self=${selfId.value} rendezvous=${session.rendezvous::class.simpleName} state=${seam.state.value} → the live seam" }
         val settled = withTimeoutOrNull(weaveTimeout) { awaitFirstPeerOrTorn(seam) } != null
-        if (settled && seam.state.value !is SeamState.Torn) return seam
+        if (seam.state.value is SeamState.Torn) return null
+        if (settled) return seam
         throw NwUnreachableException(
             "nw weave: the session on serviceType=$serviceType has no peer after $weaveTimeout | ${render(session)}",
         )
