@@ -44,6 +44,8 @@ import kotlin.time.Duration.Companion.seconds
  *   rule, and only the max arm is reachable by a spec-valid module (see
  *   [loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap] for the algebra and for the vector
  *   that reaches the other one);
+ * - a second linear memory, which the cap does not cover (see
+ *   [loadRejectsModuleDeclaringASecondMemory]);
  * - malformed bytes; missing `warp_alloc`/`warp_run` ABI exports; no linear memory at all.
  *
  * **Run-time guards** — each fault is a [WasmExecutionException], never a hang or a raw error:
@@ -327,6 +329,38 @@ public abstract class WasmRuntimeConformanceSuite {
             op.invoke(ByteArray(0)),
             "a module declaring the largest memory the sandbox permits must instantiate and run, " +
                 "not merely survive load — the browser stands the guest up at first invoke",
+        )
+    }
+
+    /**
+     * The cap covers one memory, so a module with two is refused however well its first behaves.
+     *
+     * [WasmKernelFixtures.SECOND_MEMORY_NO_MAX] is a live breach rather than a shape: with no guard,
+     * its `warp_run` grows the second memory by 100 pages against a 16-page cap and reports success.
+     * Measured before the guard: Chicory and the browser both loaded and ran it, and only wasm3
+     * refused it, because its parser allows one memory.
+     */
+    @Test
+    public fun loadRejectsModuleDeclaringASecondMemory() {
+        assertFailsWith<WasmLoadException> { newRuntime().load(WasmKernelFixtures.SECOND_MEMORY_NO_MAX) }
+    }
+
+    /**
+     * A memory64 max too big for a 32-bit decode must still be refused: a decoder that overflows
+     * reads 2^32 as 0 and 2^31 as negative, and both pass a `max > cap` check.
+     *
+     * **This is a non-regression pin.** Chicory calls the limits flag invalid, and V8 reports a max
+     * above its 262,144-page limit, so going red there takes an engine change and a guard removal
+     * together: the browser runtime's flag guard refuses memory64 before it decodes any limit. wasm3
+     * reads the flag as "has a max" and lands on the sandbox's own guards, truncating 2^32 to 0 for
+     * the no-max guard and leaving 2^31 for the cap guard. The decode's own reds are unit-level,
+     * beside the browser runtime, where the parser lives.
+     */
+    @Test
+    public fun loadRejectsMemory64MaxPastThe32BitRange() {
+        assertAll(
+            { assertFailsWith<WasmLoadException> { newRuntime().load(WasmKernelFixtures.MEMORY64_MAX_2_POW_32) } },
+            { assertFailsWith<WasmLoadException> { newRuntime().load(WasmKernelFixtures.MEMORY64_MAX_2_POW_31) } },
         )
     }
 

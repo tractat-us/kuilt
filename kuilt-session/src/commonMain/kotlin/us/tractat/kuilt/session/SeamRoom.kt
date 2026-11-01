@@ -765,7 +765,7 @@ internal class SeamRoom(
     /**
      * Admitted roster as a [StateFlow] of [PeerId]s, including self.
      *
-     * Updated with [_roster] under [lock] by [addToRoster] and [removeFromRoster].
+     * Updated with [_roster] under [lock] by [addToRoster], [removeFromRoster] and [leave].
      * Used by [RoomChannelSeam.peers] to provide the admit-gated peer set to consumers such as
      * [us.tractat.kuilt.quilter.Quilter].
      */
@@ -3841,9 +3841,18 @@ internal class SeamRoom(
                 .also { admitLanes.clear(); relayLanes.clear() }
         }
         lanesToDrain.forEach { it.close() }
-        // A terminal room has ended every admission: complete each member's incomingFrom reader.
-        // `closed` is already set, so addToRoster cannot open another inbox behind this.
-        lock.withLock { memberInboxes.values.toList().also { memberInboxes.clear() } }.forEach { it.close() }
+        // A terminal room has ended every admission, so it lists nobody, and it says so BEFORE it
+        // completes the incomingFrom readers: "reader completed, peer still listed" means a newer
+        // admission and nothing else, exactly as in [removeFromRoster], and a reader resumed by the
+        // close below reads the roster at that instant (#2822). `closed` is already set, so
+        // addToRoster cannot open another inbox or relist anyone behind this. No Left: nobody left.
+        lock.withLock {
+            admittedById.clear()
+            episodeDetectedAtMs.clear()
+            _roster.value = emptySet()
+            _rosterPeers.value = setOf(selfId)
+            memberInboxes.values.toList().also { memberInboxes.clear() }
+        }.forEach { it.close() }
         jobsToCancel.forEach { it.cancel() }
         detectorJobsToCancel.forEach { it.cancel() }
         seam.close(
