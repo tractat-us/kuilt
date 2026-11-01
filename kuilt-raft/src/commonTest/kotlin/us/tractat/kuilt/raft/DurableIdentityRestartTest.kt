@@ -305,8 +305,9 @@ class DurableIdentityRestartTest {
     /**
      * A node that retained nothing and the never-issued follower in
      * `RaftEngineDedupIntegrationTest.sharedDurableClientIdSurfacesCollision` make the same
-     * observation: an empty log, then their own id at serial 1. `clusterClient` is always this case,
-     * since it builds its node over an `InMemoryRaftStorage` that does not outlive it.
+     * observation: an empty log, then their own id at serial 1. A `clusterClient` restarted under a
+     * durable id is this case, since it builds its node over an `InMemoryRaftStorage` that does not
+     * outlive it.
      */
     @Test
     fun aWipedDurableLearnerStillReadsItsOwnHistoryAsASecondWriter() = raftRunTest {

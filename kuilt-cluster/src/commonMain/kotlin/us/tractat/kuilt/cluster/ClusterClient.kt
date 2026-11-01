@@ -236,7 +236,11 @@ public data class ClusterEndpoints(
  * @param raftConfig Raft timing and dedup configuration.
  * @param identity How this client obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default)
  *   mints a per-incarnation id; pass [ClientIdentity.Durable] with a stable [ClientId] for
- *   cross-crash exactly-once.
+ *   cross-crash exactly-once. **A restart is exposed under that id:** this client keeps its log in
+ *   memory, so when replication brings the earlier incarnation's entries back they read as another
+ *   writer, and its node fails with [us.tractat.kuilt.raft.ClientIdCollisionException]. Re-proposing
+ *   your highest persisted `requestId` straight after building the client raises the bar first, but
+ *   that is a race with replication, not a guarantee. Tracked by #3060.
  * @param clock Injected clock for session resume-token timestamps. **Required** — no real-clock
  *   default (prevents silent virtual-time breakage per the "optional ≠ tuning" policy).
  *   Threaded into the room-layer [SeamRoomFactory], which stamps reconnect-token `issuedAt`
