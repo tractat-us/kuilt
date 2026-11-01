@@ -235,7 +235,9 @@ public class WarpSpanExporter(
      * (through its own timeout, say) and retries the unstamped span holds one stamped copy,
      * and an export that is cancelled or fails with no retry **loses its span from memory**.
      * The clock is not rolled back: its sequence stays advanced and its frontier keeps the
-     * removed dot, so the next stamp can name a predecessor that never resolves.
+     * removed dot, so the next stamp can name a predecessor that never resolves. That loses a
+     * real edge too: [WarpCausalClock.tick] collapses the frontier, so the next span's only
+     * path to earlier spans ran through the removed dot. The lost edge is tracked by #3028.
      *
      * This only undoes the live add. A failed or cancelled write may already have committed,
      * or may commit later, and because the stamp enters memory before the write section, a

@@ -22,9 +22,9 @@ Metrics are mergeable counters. Logs are an ordered append-only sequence.
 Merging the same saved snapshot again is idempotent: it does not add another copy.
 
 Retrying `export()` is different from merging a snapshot. A span write may land
-even when the call fails or is cancelled. Either way the call removes its new
-causal stamp from memory, so a retry in the same process holds one copy, and with
-no retry the span is gone from memory. After a restart, recovery can read a landed
+even when the call fails or is cancelled. Either way the call removes a freshly
+stamped span from memory, so a retry in the same process holds one copy, and with
+no retry that span is gone from memory. After a restart, recovery can read a landed
 write. Retrying the original unstamped span then mints a new stamp and adds another
 value with the same span id. Rollback affects live memory, not a write that already
 landed. Retrying a metric increment adds it again; a log record whose id was
