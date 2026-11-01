@@ -1937,7 +1937,7 @@ internal class SeamRoom(
      * precisely the reachable set.
      *
      * On a host-relayed **star** (`RoomHubSeam`/`MuxServerLoom`, `MeshSeam` as a hub spoke,
-     * `:kuilt-multipeer`, `:kuilt-nearby`) a joiner has no route to a co-joiner, so its pings
+     * `:kuilt-multipeer`) a joiner has no route to a co-joiner, so its pings
      * could never be answered — and the detector's *timeout* branch is not gated on the peer
      * being in `link.peers` (only its `TransportClosed` branch is). Silence from an unroutable
      * peer therefore matured into [PartitionEvent.PeerLost] and evicted a healthy member. That

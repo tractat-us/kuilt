@@ -42,9 +42,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbySeam")
  * [NearbyApi.sendBytesPayload] for each chunk.
  *
  * @param selfId              This peer's stable identity.
- * @param endpointPeers       Mutable map from Nearby endpointId → remote [PeerId],
- *                            pre-populated with the just-connected peer after handshake.
- *                            Shared with the owning [NearbyLoom] so later joiners update it.
+ * @param endpointPeers       Mutable map from Nearby endpointId → remote [PeerId]. Empty until
+ *                            [NearbyLoom] hands this seam its one completed handshake through
+ *                            [admitEndpoint]: a host takes one joiner and a joiner dials one host,
+ *                            so it never holds more than one entry.
  * @param endpointPeersMutex  The single [Mutex] that guards [endpointPeers]. Created once
  *                            by [NearbyLoom] and passed here so both sides serialise every
  *                            read and write on the same lock instance.
