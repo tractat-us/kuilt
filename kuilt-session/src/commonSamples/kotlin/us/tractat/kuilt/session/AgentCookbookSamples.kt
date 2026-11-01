@@ -297,8 +297,12 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
         // Re-running electLobby(...) would weave a FRESH seam and strand them; calling leave() first
         // would close the shared seam and collapse them.
         ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2")
-        // A genuine mid-2PC collapse: the co-electors are gone. Retryable — re-run electLobby(...).
-        is ElectionOutcome.Torn -> null
+        // A genuine mid-2PC collapse: the co-electors are gone. Retryable — leave this lobby, then
+        // re-run electLobby(...). A lobby left open stays on the mesh and can hold a host's start().
+        is ElectionOutcome.Torn -> {
+            lobby.leave()
+            null
+        }
     }
 
 /** Send arbitrary bytes, including reserved Room prefixes, inside a named channel. */
