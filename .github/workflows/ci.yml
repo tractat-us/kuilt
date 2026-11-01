@@ -998,6 +998,14 @@ jobs:
           ./gradlew :kuilt-session:jvmTest -Pconcurrency.stress.tests=true
           --tests "*ConcurrencyTest"
 
+      # `:kuilt-heddle`'s submit-versus-halt probe (#1738). Own step, same reason as above. Gated
+      # identically in kuilt-heddle/build.gradle.kts.
+      - name: Run :kuilt-heddle concurrency probes (isolated runner, NON-BLOCKING)
+        if: always()
+        run: >-
+          ./gradlew :kuilt-heddle:jvmTest -Pconcurrency.stress.tests=true
+          --tests "*ConcurrencyTest"
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v7
