@@ -30,8 +30,8 @@ public class NotElectedHostException(message: String) : Exception(message)
  * tear** (the underlying seam latches [us.tractat.kuilt.core.SeamState.Torn], e.g. a 2-peer mesh whose
  * only link dropped) and a **membership drain** (`Seam.peers` collapses to `{self}` while `state`
  * stays `Woven` — the last member simply left the roster). **Retryable, not fatal:** the caller may
- * re-run `electLobby(...)` to rejoin and re-elect. It exists so the collapse surfaces a terminal
- * signal the caller can act on, rather than suspending [start] forever.
+ * [ElectionLobby.leave] this lobby and re-run `electLobby(...)` to rejoin and re-elect. It exists so
+ * the collapse surfaces a terminal signal the caller can act on, rather than suspending [start] forever.
  *
  * [ElectionLobby.awaitRoom] reports the same collapse as [ElectionOutcome.Torn] instead of throwing —
  * a member has a second, non-collapse way to stop being a member (it gets promoted), and a sealed
@@ -57,8 +57,9 @@ public sealed interface ElectionOutcome {
 
     /**
      * The election collapsed mid-2PC: the co-elector(s) needed to finish it are gone, either through
-     * a transport tear or through a membership drain that left this peer alone. Retryable — re-run
-     * `electLobby(...)` to rejoin and re-elect. [reason] is the seam's own
+     * a transport tear or through a membership drain that left this peer alone. Retryable — call
+     * [ElectionLobby.leave] on this lobby, then re-run `electLobby(...)` to rejoin and re-elect. [reason]
+     * is the seam's own
      * [us.tractat.kuilt.core.CloseReason] when it tore, else
      * [us.tractat.kuilt.core.CloseReason.Unreachable].
      */
@@ -89,9 +90,14 @@ public sealed interface ElectionOutcome {
 
 /**
  * A pre-session lobby over a symmetric mesh. **Not a [Room]** — during the lobby there is no admit
- * handshake, no admitted roster, no heartbeat: just the live connected peers and a reactive elected
- * host. A [Room] is created exactly once, at [start]/[awaitRoom], by adopting the woven seam with a
- * now-fixed role. See `docs/host-election-design.md`.
+ * handshake and no admitted roster: just the live connected peers and a reactive elected host. A [Room]
+ * is created exactly once, at [start]/[awaitRoom], by adopting the woven seam with a now-fixed role. See
+ * `docs/host-election-design.md`.
+ *
+ * A lobby does run a heartbeat. Every lobby answers pings from the moment it exists, so a host may take
+ * as long as its user likes to call [start]. [start] and [awaitRoom] also watch their counterparts, so a
+ * peer that stays connected but stops answering ends the election. A lobby that answers is only open,
+ * though, not necessarily taking part, so **a peer abandoning a lobby must call [leave]**.
  */
 public interface ElectionLobby {
     /** This peer's own identifier. */
@@ -118,12 +124,16 @@ public interface ElectionLobby {
 
     /**
      * **HOST-ONLY.** Close the lobby and begin the session: run the freeze/ack round, then adopt the
-     * seam as [us.tractat.kuilt.session.SessionRole.Host]. Retries internally while membership churns;
-     * returns the admitted [Room] once every member has acknowledged.
+     * seam as [us.tractat.kuilt.session.SessionRole.Host]. Retries internally while membership churns
+     * and while a live member has not acknowledged; returns the admitted [Room] once every member has.
+     *
+     * **There is no overall bound.** A member whose lobby is open with nothing waiting in it answers
+     * this peer's pings and never acknowledges, so this keeps retrying until that member calls [leave],
+     * goes silent, or this call is cancelled. An app that wants a limit sets its own.
      *
      * @throws NotElectedHostException if this peer is not currently [host].
-     * @throws LobbyTornException if the underlying seam tears mid-election (co-electors permanently
-     *   gone). Terminal and retryable — never suspends indefinitely on a mid-2PC collapse.
+     * @throws LobbyTornException if the underlying seam tears mid-election, or a member drains away or
+     *   goes silent (co-electors permanently gone). Terminal and retryable.
      */
     public suspend fun start(memberName: String? = null): Room
 
@@ -138,11 +148,19 @@ public interface ElectionLobby {
      * same lobby. All three are terminal and reached within a bound: [awaitRoom] never suspends
      * forever on a mid-2PC peer-set collapse.
      *
-     * It **does** suspend indefinitely while the lobby is simply empty or still weaving in — waiting
-     * for peers to show up is what a lobby is for, and is not a collapse. Cancel it to stop waiting.
+     * It **does** suspend indefinitely while the lobby is simply empty or still weaving in, or while
+     * the elected host is alive and has not called [start] — waiting is what a lobby is for, and is not
+     * a collapse. An app that wants a limit sets its own: cancel this call, then [leave].
      */
     public suspend fun awaitRoom(memberName: String? = null): ElectionOutcome
 
-    /** Leave the lobby, closing the underlying seam — unless a [Room] has already adopted it. Idempotent. */
+    /**
+     * Leave the lobby, closing the underlying seam — unless a [Room] has already adopted it. Idempotent.
+     *
+     * **Abandoning a lobby requires this**, including after [ElectionOutcome.Torn], after a [start] that
+     * threw, after cancelling [awaitRoom], or when [awaitRoom] was never called. Until then this peer
+     * stays on the mesh and can keep answering its peers' pings, so a host's [start] can wait forever
+     * for an acknowledgement that is never coming.
+     */
     public suspend fun leave()
 }

@@ -33,12 +33,17 @@ impossibility result would deny us.
 
 ## The shape: the lobby is not a Room
 
-The key decision. During the lobby there is **no `Room`** — no admitted-member roster, no admit
-handshake, no per-peer heartbeat. A lobby is just:
+The key decision. During the lobby there is **no `Room`** — no admitted-member roster and no admit
+handshake. A lobby is just:
 
 - the live set of connected transport peers (`Seam.peers` — join / leave / two-group-merge are all
-  simply set changes), and
-- a reactive `host = min(peers ∪ self)` that every peer computes identically.
+  simply set changes),
+- a reactive `host = min(peers ∪ self)` that every peer computes identically, and
+- a heartbeat, so a peer that is connected but silent cannot strand an election. Every lobby answers
+  pings from the moment it exists, so a host can wait as long as it likes for its Start tap. `start()`
+  watches the current members and `awaitRoom()` watches the elected host, and each ends the election
+  with a collapse if its counterpart stops answering. An answer proves a lobby is open, not that anyone
+  is waiting in it, so a peer abandoning a lobby has to call `leave()`.
 
 A `Room` (with its admit handshake and role-specific machinery) is created **exactly once**, at
 **Start**, by adopting the already-woven seam with a now-fixed role. Because the role is decided before
@@ -112,8 +117,11 @@ pre-adopt — parallel to `AdmitMessage`, distinct prefix so the two never colli
 1. Reject early if `host.value != selfId` (`NotElectedHostException`).
 2. Snapshot `members = peers.value − self`; `epoch++`; broadcast `Freeze(self, peers.value, epoch)`.
 3. Await `FreezeAck(self, epoch)` from **every** member, within `freezeTimeout`. **Abort** on: any
-   `peers` change, `host.value != self`, or timeout → broadcast `Reopen(epoch)`, return to step 1
-   (retry the tap) — `start` surfaces the abort so the UI can re-enable Start.
+   `peers` change, `host.value != self`, or timeout → broadcast `Reopen(epoch)`, return to step 1.
+   `start` retries on its own, so an abort is not surfaced. It ends only by committing, by a collapse
+   (a seam tear, a roster drained to `{self}`, a member's heartbeat lost), or by being cancelled. A
+   member whose lobby is open with nothing waiting in it causes none of those, so `start` has no
+   overall bound; an app that wants one sets its own and re-enables Start itself.
 4. On unanimous ack: broadcast `Commit(self, epoch)`; `adopt(seam, role = Host, roomKey)`; return Room.
 
 **Member (`awaitRoom`)**

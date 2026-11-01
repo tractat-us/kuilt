@@ -404,7 +404,8 @@ class SeamElectionLobbyTest {
         runCurrent()
         assertTrue(seam.directed.any { it.first == oldHost }, "old host detector must be running")
 
-        // Leave the old host present: a leaked detector could still send to it and answer pings.
+        // Leave the old host present: a leaked detector could still send to it and answer pings. The
+        // lobby itself answers each ping below once (#2995), so a leak reads as anything beyond that pong.
         seam.addPeer(newHost)
         runCurrent()
         val oldFrames = seam.directed.count { it.first == oldHost }
@@ -423,10 +424,10 @@ class SeamElectionLobbyTest {
         advanceTimeBy(2.seconds)
         runCurrent()
         assertAll(
-            { assertEquals(oldFrames, oldFramesAfterReplacement, "retired detector must neither ping nor pong") },
+            { assertEquals(oldFrames + 1, oldFramesAfterReplacement, "retired detector must neither ping nor pong") },
             { assertTrue(currentDetectorSent, "current detector must send pings") },
             { assertTrue(outcome.isCancelled) },
-            { assertEquals(framesAfterCancel, seam.directed.size, "cancelled detector must neither ping nor pong") },
+            { assertEquals(framesAfterCancel + 1, seam.directed.size, "cancelled detector must neither ping nor pong") },
         )
     }
 

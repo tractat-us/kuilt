@@ -58,8 +58,9 @@ public suspend fun chunkToTheRoomsBudgetSample(room: Room, peer: PeerId, blob: B
         val end = minOf(start + budget, blob.size)
         // Index arithmetic, not `asSequence().chunked()` — the latter boxes every byte and builds
         // an ArrayList<Byte> per chunk. On a blob big enough to need chunking that is the point.
-        // Past the budget, sendTo reports PayloadTooLarge (addressed sends do) while broadcast
-        // drops with a log (lossy by contract) — neither surfaces the fabric's own oversize error.
+        // A frame that will not fit the wire makes sendTo report PayloadTooLarge (addressed sends
+        // do) while broadcast drops it with a log (lossy by contract) — neither surfaces the
+        // fabric's own oversize error. A chunk at the budget fits on every route.
         ch.sendTo(peer, blob.copyOfRange(start, end))
         start = end
     }
@@ -297,8 +298,12 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
         // Re-running electLobby(...) would weave a FRESH seam and strand them; calling leave() first
         // would close the shared seam and collapse them.
         ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2")
-        // A genuine mid-2PC collapse: the co-electors are gone. Retryable — re-run electLobby(...).
-        is ElectionOutcome.Torn -> null
+        // A genuine mid-2PC collapse: the co-electors are gone. Retryable — leave this lobby, then
+        // re-run electLobby(...). A lobby left open stays on the mesh and can hold a host's start().
+        is ElectionOutcome.Torn -> {
+            lobby.leave()
+            null
+        }
     }
 
 /** Send arbitrary bytes, including reserved Room prefixes, inside a named channel. */

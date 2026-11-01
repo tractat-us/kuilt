@@ -5,14 +5,15 @@ package us.tractat.kuilt.warp.test
  *
  * One canonical byte set for every target: Kotlin/Native and wasmJs have no classpath
  * resources, so the fixtures are embedded as byte literals and shared from `commonMain` —
- * every `WasmRuntime` implementation is verified against **identical bytes**. Each vector's
+ * every `WasmRuntime` implementation is verified against **identical bytes**. A vector's
  * `.wat` source lives in this module's `wat/` directory with a `wat2wasm` reproduction
- * command in its header.
+ * command in its header. The `MEMORY64_*` vectors are the exception: they splice their limits
+ * into [OVERSIZE_MAX_MEMORY]'s bytes, and each KDoc gives the memory declaration as text.
  *
  * All loadable vectors declare linear memory with an explicit bounded max (the uniform
  * contract — see [us.tractat.kuilt.warp.WasmRuntime]); the deliberate exceptions are the
- * guard vectors themselves ([NO_MAX_MEMORY], [OVERSIZE_INITIAL_MEMORY], [MISSING_MEMORY]), plus
- * [INITIAL_ABOVE_DECLARED_MAX], which declares a bounded max the WebAssembly spec would refuse
+ * guard vectors themselves ([NO_MAX_MEMORY], [OVERSIZE_INITIAL_MEMORY], [MISSING_MEMORY],
+ * [SECOND_MEMORY_NO_MAX]), plus [INITIAL_ABOVE_DECLARED_MAX], which declares a bounded max the WebAssembly spec would refuse
  * to validate against its own initial — see its KDoc for why that is the only way to reach the
  * guard it targets.
  *
@@ -92,6 +93,47 @@ public object WasmKernelFixtures {
         0x72, 0x70, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x08, 0x77, 0x61, 0x72, 0x70, 0x5f,
         0x72, 0x75, 0x6e, 0x00, 0x01, 0x0a, 0x0b, 0x02, 0x04, 0x00, 0x41, 0x00, 0x0b, 0x04, 0x00, 0x42,
         0x00, 0x0b,
+    )
+
+    /**
+     * The [OVERSIZE_MAX_MEMORY] kernel with its memory section's payload replaced, for limits
+     * `wat2wasm` needs extra flags to emit. The two offsets bound that section: id `0x05` at 27,
+     * through the max byte at 32.
+     */
+    private fun kernelWithMemoryPayload(vararg payload: Int): ByteArray =
+        OVERSIZE_MAX_MEMORY.copyOfRange(0, 27) + wasm(0x05, payload.size, *payload) +
+            OVERSIZE_MAX_MEMORY.copyOfRange(33, OVERSIZE_MAX_MEMORY.size)
+
+    /**
+     * `(memory i64 1 4294967296)`: a memory64 max of 2^32 pages (`80 80 80 80 10`). A parser that
+     * decodes LEB128 into an `Int` overflows this to 0, which passes any `max > cap` check.
+     */
+    public val MEMORY64_MAX_2_POW_32: ByteArray =
+        kernelWithMemoryPayload(0x01, 0x05, 0x01, 0x80, 0x80, 0x80, 0x80, 0x10)
+
+    /**
+     * `(memory i64 1 2147483648)`: a memory64 max of 2^31 pages (`80 80 80 80 08`). The same `Int`
+     * decode makes this negative, which also passes a `max > cap` check.
+     */
+    public val MEMORY64_MAX_2_POW_31: ByteArray =
+        kernelWithMemoryPayload(0x01, 0x05, 0x01, 0x80, 0x80, 0x80, 0x80, 0x08)
+
+    /** `(memory i64 1 16)`: memory64 with limits inside the cap, so its flag is the only thing wrong. */
+    public val MEMORY64_WITHIN_CAP: ByteArray = kernelWithMemoryPayload(0x01, 0x05, 0x01, 0x10)
+
+    /**
+     * `secondmem.wat` (88 bytes) — the multi-memory feature: the first memory is an exemplary `1 16`
+     * and the second has no max, so a guard reading only the first entry never sees the unbounded
+     * one. `warp_run` grows that second memory by 100 pages and returns the old size as the result
+     * length, so a run that returns one byte means the grow succeeded past the cap.
+     */
+    public val SECOND_MEMORY_NO_MAX: ByteArray = wasm(
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+        0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7e, 0x03, 0x03, 0x02, 0x00, 0x01, 0x05, 0x06, 0x02, 0x01, 0x01,
+        0x10, 0x00, 0x01, 0x07, 0x22, 0x03, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x0a,
+        0x77, 0x61, 0x72, 0x70, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x08, 0x77, 0x61, 0x72,
+        0x70, 0x5f, 0x72, 0x75, 0x6e, 0x00, 0x01, 0x0a, 0x0f, 0x02, 0x04, 0x00, 0x41, 0x00, 0x0b, 0x08,
+        0x00, 0x41, 0xe4, 0x00, 0x40, 0x01, 0xad, 0x0b,
     )
 
     /**
