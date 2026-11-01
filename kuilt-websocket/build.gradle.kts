@@ -6,8 +6,9 @@ plugins {
 // Forward the two opt-in gates to the JVM test process so the tests that read them via
 // System.getProperty() can actually run — without this a `-P` flag never leaves the Gradle JVM and
 // both suites self-skip while reporting green, which is dead coverage that looks live (#1748).
-//   -Pserver.realnet.tests=true   → WebSocketPeerLinkRealNetworkTest (real Netty + real OkHttp on a
-//                                   loopback socket; opt-in because it binds a real port).
+//   -Pserver.realnet.tests=true   → WebSocketPeerLinkRealNetworkTest and WebSocketHostDepartureTest (real
+//                                   Netty + real OkHttp on a loopback socket; opt-in because they bind a
+//                                   real port, and the second runs a real 100 ms race).
 //   -Pintegration.tests=true      → WebSocketPeerLinkFactoryTest (Ktor testApplication, wall-clock
 //                                   awaits rather than virtual time).
 // Mirrors :kuilt-cluster's cluster.realsocket.tests and :kuilt-mdns's mdns.multicast.tests.

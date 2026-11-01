@@ -124,6 +124,12 @@ the host drops permanently, the room emits `MembershipEvent.HostLost` and
 `broadcast`/`sendTo` become silent no-ops. The room does not promote a new host;
 the consumer decides what to do (tear down, start a new session, etc.).
 
+A host that calls `room.leave()` says so: its joiners get `HostLost` at once, with
+`reason = FailureReason.HostLeft`, instead of waiting out the reconnect window. That
+message is best effort, and if it is lost the joiner falls back to the window, so
+any other reason does not prove the host did not mean to go. See the
+[cookbook entry](agent-cookbook/session.md#rejoin--reconnect).
+
 **Reconnect/resume.** Keep the existing room after a transport tear. A
 `SeamRoomFactory` joiner attempts resume automatically within the host's reconnect
 window, using its `room.resumeToken` (non-null once admitted). The loom must heal

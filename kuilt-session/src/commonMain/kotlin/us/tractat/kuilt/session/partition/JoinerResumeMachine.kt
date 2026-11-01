@@ -191,7 +191,7 @@ internal class JoinerResumeMachine(
     private val heartbeatConfig: HeartbeatConfig,
     private val reweave: (suspend () -> Seam)?,
     private val lock: ReentrantLock,
-    private val host: JoinerResumeHost,
+    internal val host: JoinerResumeHost,
 ) {
     /**
      * The [ResumeToken] minted at admit time.

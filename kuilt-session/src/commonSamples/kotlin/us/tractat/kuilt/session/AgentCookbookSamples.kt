@@ -221,7 +221,8 @@ public suspend fun retryWithBackoffSample(random: Random, dial: suspend () -> Bo
 public suspend fun reconnectBannerSample(room: Room) {
     room.events.collect { event ->
         // The tag inverts attribution only for silence *we* observed — our own detector, or our own
-        // link tearing. `HostLost` is always that. `Partitioned` is not: on a joiner in a 3+-peer
+        // link tearing. `HostLost` is that, except `HostLeft`: the host told us, so it is true whatever
+        // our end is doing. `Partitioned` is not either: on a joiner in a 3+-peer
         // room the host relays "peer C paused", and that report is host-authoritative — it arrived
         // over a link working well enough to deliver it, so an `Unavailable` tag there says our end
         // was down when we *processed* the report, not that the report is unfounded. Suppressing it
@@ -231,7 +232,8 @@ public suspend fun reconnectBannerSample(room: Room) {
         // tell the two apart from the event alone. In a two-peer session it does not matter (the only
         // peer you watch *is* the host). In a larger room, scope this to peers you observe yourself.
         val ourOwnEndWasDown = when (event) {
-            is MembershipEvent.HostLost -> event.localFabric is FabricAvailability.Unavailable
+            is MembershipEvent.HostLost ->
+                event.reason != FailureReason.HostLeft && event.localFabric is FabricAvailability.Unavailable
             else -> false
         }
         when {
@@ -245,6 +247,7 @@ public suspend fun reconnectBannerSample(room: Room) {
                 FailureReason.WindowExpired -> Unit // "Lost the host — rejoin"
                 FailureReason.Unrecoverable -> Unit // "Can't reconnect — return to lobby"
                 is FailureReason.Refused -> Unit // show reason.message (auth-expired / version, …)
+                FailureReason.HostLeft -> Unit // "The host ended the game" — no rejoin to offer
             }
             else -> Unit
         }
