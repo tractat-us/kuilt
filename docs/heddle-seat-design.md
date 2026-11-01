@@ -13,9 +13,11 @@
 >   ~40-line legacy `KSerializer` that would keep writing a `0` seat element on the wire,
 >   because #1713 said the field had to be *retained*. The field was deleted instead
 >   (@keddie, 2026-08-12: *"just break it… no one is using it at the moment"*), so there
->   is nothing left to make inexpressible and no legacy element to carry. §7.1's analysis
->   of what deleting it costs — undecodable historical `Prepare` entries are **silently
->   skipped** on replay — is still accurate, and is the price that was knowingly paid.
+>   is nothing left to make inexpressible and no legacy element to carry. §7.1 prices that
+>   deletion as undecodable historical `Prepare` entries being **silently skipped** on
+>   replay, which was the behaviour then. That price has since changed: under #1738 such an
+>   entry **halts the node**, so a log holding one stops there and refuses writes until a
+>   compatible build or an offline migration recovers it.
 > - **§9's fork is decided, the same way.** "Is a breaking `EntitlementLedger` wire change
 >   acceptable?" — yes; the relocation design's precedent held.
 > - **§5.4's deletions all happened**, including `prepareNeutral`'s `readIndex()` fence and
