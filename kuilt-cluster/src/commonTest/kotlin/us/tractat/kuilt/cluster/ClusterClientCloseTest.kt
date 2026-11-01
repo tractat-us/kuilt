@@ -5,6 +5,8 @@ package us.tractat.kuilt.cluster
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestResult
@@ -12,6 +14,8 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -23,6 +27,8 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
+import us.tractat.kuilt.raft.RaftNode
+import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -70,9 +76,13 @@ class ClusterClientCloseTest {
             )
         }
 
-    /** The control for the next test: an open client re-dials on a tear, so a count of one means something. */
+    /**
+     * The control for the next test: an open client re-dials on a tear, so a count of one means
+     * something. Exactly once, because the torn room is left rather than left to resume by itself, which
+     * would dial again and could leave this client holding two rooms.
+     */
     @Test
-    fun `a tear re-dials while the client is open`(): TestResult =
+    fun `a tear re-dials once while the client is open`(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val rig = rig()
             rig.client()
@@ -82,7 +92,7 @@ class ClusterClientCloseTest {
             advanceTimeBy(settle)
             runCurrent()
 
-            assertTrue(rig.loom.dials > 1, "the loop must re-dial after a tear: dials=${rig.loom.dials}")
+            assertEquals(2, rig.loom.dials, "the loop re-dials, and the torn room must not dial as well")
         }
 
     @Test
@@ -147,6 +157,50 @@ class ClusterClientCloseTest {
             assertAll(
                 { assertEquals(emptyList(), rig.loom.seams, "the dial must not complete into a seam") },
                 { assertEquals(1, rig.loom.dials, "and nothing may dial after it") },
+            )
+        }
+
+    /**
+     * The shield, seen where it can be. The reconnect loop ends itself once cancelled, so the fabric
+     * cannot tell whether `close` ran to the end. A node whose close suspends and a connection that
+     * takes time to finish can: without the shield the first throws at its suspension and the second
+     * is not waited for.
+     */
+    @Test
+    fun `close finishes the node and waits for the connection when its caller is cancelled`(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            var nodeClosed = false
+            val node = object : RaftNode by FakeRaftNode() {
+                override suspend fun close() {
+                    yield()
+                    nodeClosed = true
+                }
+            }
+            // Takes time to end after it is cancelled, as a seam slow to close does.
+            val release = CompletableDeferred<Unit>()
+            val connection = backgroundScope.launch {
+                try {
+                    awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) { release.await() }
+                }
+            }
+            runCurrent()
+            val client = ClusterClient(node, connection)
+
+            val caller = launch {
+                coroutineContext[Job]?.cancel()
+                client.close()
+            }
+            runCurrent()
+            val returnedBeforeConnectionEnded = caller.isCompleted
+            release.complete(Unit)
+            caller.join()
+
+            assertAll(
+                { assertTrue(nodeClosed, "the node's close must run to its end") },
+                { assertFalse(returnedBeforeConnectionEnded, "close must wait for the connection to end") },
+                { assertTrue(connection.isCancelled, "rig: close cancelled the connection") },
             )
         }
 
