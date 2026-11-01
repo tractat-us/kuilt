@@ -121,9 +121,10 @@ internal class SeamElectionLobby(
     private var adopted = false
     private var epoch: Long = 0L
 
-    // Peers with a pong on its way. Declared above [collectorJob], whose launch can run on a real
-    // dispatcher before this class finishes initializing.
+    // Peers with a pong on its way, and whether this lobby still answers at all. Declared above
+    // [collectorJob], whose launch can run on a real dispatcher before this class finishes initializing.
     private val pongsInFlight = MutableStateFlow<Set<PeerId>>(emptySet())
+    private val answersPings = MutableStateFlow(true)
 
     private val collectorJob: Job = scope.launch {
         seam.incoming.collect { swatch ->
@@ -144,6 +145,10 @@ internal class SeamElectionLobby(
      * tap read as dead to every member waiting on it (#2995). The answer comes from the lobby itself,
      * so a host that really is gone still reads as gone.
      *
+     * An answer proves this lobby is open, not that anyone is taking part. So a lobby whose election
+     * collapsed stops answering (see [stopAnsweringPings]), and a peer that collapsed with it is released
+     * rather than kept waiting. An app that walks away by any other route has to call [leave].
+     *
      * Launched as a child of the collector so it ends with the lobby's collector at adoption, and off
      * the collector's own path because [Seam.sendTo] can stall on a wedged link, and that collector is
      * what carries `Freeze` and `Commit`. One send per peer at a time: a pong is only evidence of life,
@@ -151,9 +156,12 @@ internal class SeamElectionLobby(
      *
      * A peer with a detector running here also gets that detector's own pong. That is harmless, since a
      * detector counts inbound frames rather than pongs, and tracking it would cost more than the frame.
+     * That detector sends its pong inline, though, so a wedged link can still park its collection, and
+     * [rawIncoming] can then back up into the collector. This path is only clear of that for a peer
+     * with no detector running here.
      */
     private fun CoroutineScope.answerPing(sender: PeerId) {
-        if (sender == selfId) return
+        if (!answersPings.value) return
         if (sender in pongsInFlight.getAndUpdate { it + sender }) return
         launch {
             try {
@@ -168,6 +176,7 @@ internal class SeamElectionLobby(
     override suspend fun start(memberName: String?): Room {
         // Host collapse (the transport-tear watcher in guardElection handles a fabric that latches Torn;
         // startElection itself handles the membership-drain case where the seam stays Woven).
+        answersPings.value = true
         return try {
             // The freeze round runs INSIDE guardElection (collapse-abortable); adoption runs OUTSIDE it
             // (finding #1) so a collapse signal cannot cancel adoptRoom mid-commit and wedge the lobby.
@@ -176,10 +185,23 @@ internal class SeamElectionLobby(
                 runHostElection()
             }
             adoptAfterCommit(SessionRole.Host, memberName)
+        } catch (e: LobbyTornException) {
+            stopAnsweringPings()
+            throw e
         } catch (e: Throwable) {
             logger.debug { "lobby.start.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
             throw e
         }
+    }
+
+    /**
+     * This lobby's election collapsed, so it has stopped taking part: answering would keep a peer that
+     * is still watching it waiting on nobody. The KDoc on [ElectionOutcome.Torn] sends the app to a fresh
+     * lobby, and this covers one that does not [leave] this one first. Calling [start] or [awaitRoom]
+     * here again answers again.
+     */
+    private fun stopAnsweringPings() {
+        answersPings.value = false
     }
 
     /** Run the host freeze round until it commits (broadcasting `Commit`); adoption is the caller's job. */
@@ -271,6 +293,7 @@ internal class SeamElectionLobby(
         }
 
     override suspend fun awaitRoom(memberName: String?): ElectionOutcome {
+        answersPings.value = true
         return try {
             guardElection(
                 collapseSignals = listOf(
@@ -291,6 +314,7 @@ internal class SeamElectionLobby(
             ElectionOutcome.BecameHost
         } catch (e: LobbyTornException) {
             logger.debug { "lobby.awaitRoom.exit self=${selfId.value} collapsed: ${e.reason}" }
+            stopAnsweringPings()
             ElectionOutcome.Torn(e.reason)
         } catch (e: Throwable) {
             logger.debug { "lobby.awaitRoom.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
@@ -486,7 +510,10 @@ internal class SeamElectionLobby(
      * Follow the host's members for the whole of [start]. Each roster change cancels and joins the
      * previous signal before watching the new set, so a member that joined late is pinged and watched
      * (#2995), and one that left is not reported lost while the rest can still complete the election.
-     * A change restarts every member's silence clock, which delays a detection and does not lose one.
+     *
+     * A change restarts every member's silence clock, so roster churn delays detection, and churn faster
+     * than the detector's roughly 6 s to [PartitionEvent.PeerLost] holds it off for as long as it lasts.
+     * Each change also aborts the freeze round, so [start] does not end during that churn.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun membersLostSignal(): suspend () -> LobbyTornException = {

@@ -222,6 +222,88 @@ class LobbyHeartbeatTest {
             )
         }
 
+    /**
+     * The limit of answering pings, stated as a test. A member's lobby that is open with nothing waiting
+     * in it reads as alive and never acks, so `start` has no overall bound. `leave` is what ends it.
+     */
+    @Test
+    fun `start is unbounded while a member's lobby is open with nothing waiting in it until that member leaves`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val loom = InMemoryLoom()
+            val hostLobby = lobbyOver(loom.weave(Rendezvous.New(Pattern("g"))))
+            val memberLobby = lobbyOver(loom.weave(Rendezvous.Existing(InMemoryTag("g"))))
+            runCurrent()
+            assertEquals(hostLobby.selfId, memberLobby.host.value, "rig: the second peer is the member")
+
+            val started = backgroundScope.async { runCatchingForTest { hostLobby.start() } }
+            // Several freeze timeouts, and far past the 6 s a silent member would take to be lost.
+            advanceTimeBy(60.seconds)
+            runCurrent()
+            assertFalse(started.isCompleted, "nothing ends this wait while the member's lobby stays open")
+
+            memberLobby.leave()
+            assertIs<LobbyTornException>(started.await(), "the member's leave drains the roster and ends it")
+        }
+
+    /**
+     * A member that walks away after [ElectionOutcome.Torn] releases whoever is still watching it, even
+     * if the app never calls `leave`. [bystander] has no detector here, so only the lobby's own answer
+     * can reach it, and it is the probe for all three phases.
+     */
+    @Test
+    fun `a lobby stops answering after awaitRoom returned Torn and answers again in a new wait`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val self = PeerId("peer-z")
+            val host = PeerId("peer-a")
+            val bystander = PeerId("peer-b")
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, host, bystander))
+            val lobby = lobbyOver(seam)
+            suspend fun pongsAfterAPing(): Int {
+                seam.deliver(bystander, ping)
+                runCurrent()
+                return seam.framesTo(bystander, HeartbeatPartitionDetector.PONG_PREFIX)
+            }
+            val outcome = backgroundScope.async { lobby.awaitRoom() }
+            runCurrent()
+
+            val whileWaiting = pongsAfterAPing()
+            val ended = outcome.await()
+            val afterTorn = pongsAfterAPing()
+            val secondWait = backgroundScope.async { lobby.awaitRoom() }
+            runCurrent()
+            val duringASecondWait = pongsAfterAPing()
+            secondWait.cancel()
+
+            assertAll(
+                { assertEquals(1, whileWaiting, "rig: the lobby answers while it waits") },
+                { assertIs<ElectionOutcome.Torn>(ended, "rig: the silent host collapsed the wait") },
+                { assertEquals(1, afterTorn, "a lobby whose election collapsed has stopped taking part") },
+                { assertEquals(2, duringASecondWait, "and calling awaitRoom again takes part again") },
+            )
+        }
+
+    /** The host's side: a member must not be left waiting on a lobby whose `start` threw. */
+    @Test
+    fun `a lobby stops answering once its start has thrown`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val self = PeerId("peer-a")
+            val member = PeerId("peer-b")
+            val seam = FakeSeam(selfId = self, initialPeers = setOf(self, member))
+            val lobby = lobbyOver(seam)
+            val started = backgroundScope.async { runCatchingForTest { lobby.start() } }
+            runCurrent()
+
+            val ended = started.await()
+            val pongsBefore = seam.framesTo(member, HeartbeatPartitionDetector.PONG_PREFIX)
+            seam.deliver(member, ping)
+            runCurrent()
+
+            assertAll(
+                { assertIs<LobbyTornException>(ended, "rig: the silent member collapsed the election") },
+                { assertEquals(pongsBefore, seam.framesTo(member, HeartbeatPartitionDetector.PONG_PREFIX), "no pong after the throw") },
+            )
+        }
+
     /** Hands back the failure as a value so a thrown collapse does not cancel the test's scope. */
     private suspend fun runCatchingForTest(block: suspend () -> Any?): Any? =
         try {
