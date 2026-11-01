@@ -1,11 +1,13 @@
 package us.tractat.kuilt.core
 
 /**
- * Thrown by an addressed send whose payload exceeds the published send budget — [Seam.maxPayloadBytes],
- * or a budgeted derivative of it such as `Room.maxPayloadBytes`.
+ * Thrown by an addressed send that is over its limit. A seam's limit is [Seam.maxPayloadBytes]. A room
+ * and its channel views measure the encoded frame instead, because `Room.maxPayloadBytes` is a promise
+ * that holds on every route rather than the refusal threshold, so a payload above that number can
+ * still be delivered.
  *
- * Reported *before* the payload is framed, so the caller learns the number it should have respected
- * rather than the fabric's own frame error for framing it never asked for. That distinction is the
+ * Reported *before* the frame reaches the fabric, so the caller learns a number it can use rather
+ * than the fabric's own frame error for framing it never asked for. That distinction is the
  * whole point: an oversize relayed frame used to surface as a `FrameTooLargeException` naming a
  * limit the caller could not see, from a send that would have succeeded a moment earlier on a
  * different route (#2047).
