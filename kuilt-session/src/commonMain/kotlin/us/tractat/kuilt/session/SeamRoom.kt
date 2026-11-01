@@ -3857,12 +3857,14 @@ internal class SeamRoom(
                 .also { admitLanes.clear(); relayLanes.clear() }
         }
         lanesToDrain.forEach { it.close() }
-        if (hostFarewellQueued) awaitHostFarewellHandoff()
         // A terminal room has ended every admission: complete each member's incomingFrom reader.
         // `closed` is already set, so addToRoster cannot open another inbox behind this.
         lock.withLock { memberInboxes.values.toList().also { memberInboxes.clear() } }.forEach { it.close() }
         jobsToCancel.forEach { it.cancel() }
         detectorJobsToCancel.forEach { it.cancel() }
+        // Last, with the room already quiet: a joiner reacting to the frame drops its link during this
+        // wait, and a detector still running here would open a window for a room that has left.
+        if (hostFarewellQueued) awaitHostFarewellHandoff()
         seam.close(
             when (reason) {
                 is LeaveReason.Normal -> CloseReason.Normal
