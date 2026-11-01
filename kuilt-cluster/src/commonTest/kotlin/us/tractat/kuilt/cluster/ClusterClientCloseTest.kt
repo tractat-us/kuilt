@@ -8,6 +8,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
@@ -25,9 +29,14 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.raft.ClusterConfig
+import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftConfig
+import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftNode
+import us.tractat.kuilt.raft.RaftTransport
+import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -36,6 +45,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -157,6 +167,134 @@ class ClusterClientCloseTest {
             assertAll(
                 { assertEquals(emptyList(), rig.loom.seams, "the dial must not complete into a seam") },
                 { assertEquals(1, rig.loom.dials, "and nothing may dial after it") },
+            )
+        }
+
+    /**
+     * A fabric can finish a weave its caller has stopped wanting. The seam it hands back is still this
+     * client's to close: the loop must take the room, then find it is cancelled, and `close` must wait.
+     */
+    @Test
+    fun `a weave that completes through the cancel has its seam closed`(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            val gate = CompletableDeferred<Unit>()
+            rig.loom.uncancellableGate = gate
+            val client = rig.client()
+            runCurrent()
+            assertEquals(1, rig.loom.dials, "rig: the dial is parked in the loom")
+
+            val closer = launch { client.close() }
+            runCurrent()
+            val returnedBeforeWeaveEnded = closer.isCompleted
+            gate.complete(Unit)
+            closer.join()
+            runCurrent()
+
+            assertAll(
+                { assertFalse(returnedBeforeWeaveEnded, "close must wait for a weave it cannot cancel") },
+                { assertIs<SeamState.Torn>(rig.loom.seams.single().state.value, "the late seam must be closed") },
+                { assertEquals(1, rig.loom.dials, "and nothing may dial after it") },
+            )
+        }
+
+    /**
+     * A tear starts a leave that parks in a slow seam close, and `close` lands during it. That leave
+     * cannot be interrupted, and returning from it does not check for cancellation, so the loop must
+     * check before it dials.
+     */
+    @Test
+    fun `close during the leave of a torn room dials nothing more`(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            val seamClose = CompletableDeferred<Unit>()
+            rig.loom.closeGate = seamClose
+            val client = rig.client()
+            joined()
+
+            rig.loom.seams.single().close(CloseReason.Unreachable)
+            advanceTimeBy(settle)
+            runCurrent()
+            val dialsDuringLeave = rig.loom.dials
+
+            val closer = launch { client.close() }
+            runCurrent()
+            val returnedDuringLeave = closer.isCompleted
+            seamClose.complete(Unit)
+            closer.join()
+            advanceTimeBy(settle)
+            runCurrent()
+
+            assertAll(
+                { assertEquals(1, dialsDuringLeave, "rig: the loop is parked in the leave, not yet re-dialling") },
+                { assertFalse(returnedDuringLeave, "rig: close waits for that leave") },
+                { assertEquals(1, rig.loom.dials, "a closed client must not dial again") },
+            )
+        }
+
+    /**
+     * The relay transport's two pumps are this client's background work as well. A bare node over a
+     * transport with no pumps is the reference, so this does not hard-code how many collectors a node
+     * keeps parked until its scope ends.
+     */
+    @Test
+    fun `close ends the transport's pumps`(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            val (client, scopeJob) = rig.clientInOwnScope()
+            joined()
+            val activeBeforeClose = scopeJob.activeChildren()
+            val nodeAlone = bareNodeActiveChildrenAfterClose()
+
+            client.close()
+            runCurrent()
+
+            assertAll(
+                { assertTrue(activeBeforeClose > nodeAlone, "rig: an open client runs more than a closed node") },
+                { assertEquals(nodeAlone, scopeJob.activeChildren(), "only the node's own collectors may remain") },
+            )
+        }
+
+    /** A loop cancelled before its first dispatch never runs a line of its body, `finally` included. */
+    @Test
+    fun `close before the loop first runs still ends the transport's pumps`(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            val (client, scopeJob) = rig.clientInOwnScope()
+
+            client.close()
+            advanceTimeBy(settle)
+            runCurrent()
+            val nodeAlone = bareNodeActiveChildrenAfterClose()
+
+            assertAll(
+                { assertEquals(0, rig.loom.dials, "rig: the loop never ran") },
+                { assertEquals(nodeAlone, scopeJob.activeChildren(), "only the node's own collectors may remain") },
+            )
+        }
+
+    /**
+     * The real engine's half of what `close` promises. [FakeRaftNode] completes [ClusterClient.committed]
+     * when closed; the engine's is a shared flow that never does, so `close` must not be read as ending
+     * a collector.
+     */
+    @Test
+    fun `on the real engine close refuses a propose and leaves committed open`(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            val client = rig.client()
+            joined()
+            val collector = backgroundScope.launch { client.committed.collect {} }
+            runCurrent()
+
+            client.close()
+            advanceTimeBy(settle)
+            runCurrent()
+
+            val refusal = assertFailsWith<NotLeaderException> { client.propose(byteArrayOf(1)) }
+            assertAll(
+                { assertEquals("node is closed", refusal.message) },
+                { assertTrue(collector.isActive, "committed does not complete, so its collector stays parked") },
             )
         }
 
@@ -310,6 +448,31 @@ class ClusterClientCloseTest {
         return Rig(DialRecordingLoom(inMemory), server, backgroundScope, clock)
     }
 
+    private fun Job.activeChildren(): Int = children.count { it.isActive }
+
+    /** What a node leaves running in its scope after `close`, over a transport with no pumps of its own. */
+    private suspend fun TestScope.bareNodeActiveChildrenAfterClose(): Int {
+        val job = Job(backgroundScope.coroutineContext[Job])
+        val node = CoroutineScope(backgroundScope.coroutineContext + job).raftNode(
+            clusterConfig = CLUSTER_CONFIG,
+            transport = PumplessTransport,
+            storage = InMemoryRaftStorage(),
+            raftConfig = RaftConfig(random = Random(0)),
+        )
+        runCurrent()
+        node.close()
+        runCurrent()
+        return job.activeChildren().also { job.cancel() }
+    }
+
+    /** Its `incoming` parks like the relay transport's, so a node's collector of it stays parked too. */
+    private object PumplessTransport : RaftTransport {
+        override val selfId: NodeId = CLIENT
+        override val peers: StateFlow<Set<NodeId>> = MutableStateFlow(emptySet())
+        override val incoming: Flow<RaftEnvelope> = flow { awaitCancellation() }
+        override suspend fun sendTo(peer: NodeId, message: ByteArray) = Unit
+    }
+
     private class Rig(
         val loom: DialRecordingLoom,
         val server: Room,
@@ -318,11 +481,17 @@ class ClusterClientCloseTest {
     ) {
         fun client(): ClusterClient = scope.client()
 
+        /** A client in a scope of its own, returned with that scope's job so a test can read its children. */
+        fun clientInOwnScope(): Pair<ClusterClient, Job> {
+            val job = Job(scope.coroutineContext[Job])
+            return CoroutineScope(scope.coroutineContext + job).client() to job
+        }
+
         fun CoroutineScope.client(): ClusterClient = clusterClient(
             loom = loom,
             clusterEndpoints = ClusterEndpoints(listOf(InMemoryTag(SERVER))),
             clientNodeId = CLIENT,
-            clusterConfig = ClusterConfig(voters = setOf(NodeId("voter")), learners = setOf(CLIENT)),
+            clusterConfig = CLUSTER_CONFIG,
             raftConfig = RaftConfig(random = Random(0)),
             clock = clock,
         )
@@ -340,6 +509,12 @@ class ClusterClientCloseTest {
         /** Parks each dial until completed, the shape of a slow network. */
         var gate: CompletableDeferred<Unit>? = null
 
+        /** Parks each dial until completed and finishes it even if cancelled: a weave a cancel cannot stop. */
+        var uncancellableGate: CompletableDeferred<Unit>? = null
+
+        /** Parks the close of each seam handed out until completed. [seams] holds the seam underneath. */
+        var closeGate: CompletableDeferred<Unit>? = null
+
         /** Runs inside the dial, so inside whichever coroutine is dialling. */
         var onDial: (suspend () -> Unit)? = null
 
@@ -347,12 +522,28 @@ class ClusterClientCloseTest {
             dials++
             onDial?.invoke()
             gate?.await()
-            return delegate.weave(rendezvous).also { seams += it }
+            val seam = uncancellableGate?.let { uncancellable ->
+                withContext(NonCancellable) {
+                    uncancellable.await()
+                    delegate.weave(rendezvous)
+                }
+            } ?: delegate.weave(rendezvous)
+            seams += seam
+            return closeGate?.let { SlowClosingSeam(seam, it) } ?: seam
+        }
+    }
+
+    private class SlowClosingSeam(private val delegate: Seam, private val gate: CompletableDeferred<Unit>) :
+        Seam by delegate {
+        override suspend fun close(reason: CloseReason) {
+            gate.await()
+            delegate.close(reason)
         }
     }
 
     private companion object {
         const val SERVER = "server"
         val CLIENT = NodeId("client")
+        val CLUSTER_CONFIG = ClusterConfig(voters = setOf(NodeId("voter")), learners = setOf(CLIENT))
     }
 }
