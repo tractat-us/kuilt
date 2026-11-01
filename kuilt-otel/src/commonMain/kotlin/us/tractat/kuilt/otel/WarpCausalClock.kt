@@ -24,8 +24,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * predecessors point back here — building the happens-before chain a
  * [SpanLink][inferCausalLinks] is later derived from.
  *
- * The clock is **span-scoped**: it advances on span events only, which keeps
- * inference total — every predecessor dot resolves to a span in the set.
+ * The clock is **span-scoped**: it advances on span events only. A predecessor dot
+ * can still fail to resolve: a rolled-back export or an evicted span leaves a dot no
+ * span in the set holds, and [inferCausalLinks] skips it. Because [tick] collapses the
+ * frontier, that also drops the path through the missing span to its own predecessors;
+ * the lost edge is tracked by #3028.
  * Cross-signal causality (a log or metric happening-before a span) is future work.
  *
  * ## Recovery is mandatory
