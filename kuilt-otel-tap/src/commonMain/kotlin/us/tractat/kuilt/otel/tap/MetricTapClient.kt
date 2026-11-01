@@ -18,6 +18,9 @@ import us.tractat.kuilt.quilter.Quilter
 /**
  * A reconstructed snapshot of a device's metric buffer — the CRDTs collapsed to the plain
  * numbers they report.
+ *
+ * A histogram reports a distribution rather than one number, so [histograms] carries the
+ * sketch itself: ask it for [DDSketch.quantile] or [DDSketch.count].
  */
 public data class MetricSnapshot(
     public val sums: Map<MetricKey, Long>,
@@ -107,10 +110,12 @@ public class MetricTapClient(
         // (the key exists only because setGauge wrote one). requireNotNull, never `!!`.
         gauges = cat.gauges.mapValues { requireNotNull(it.value.value) { "gauge ${it.key} has no value" } },
         cardinalities = cat.cardinalities.mapValues { it.value.estimate() },
+        histograms = cat.histograms,
     )
 
     private fun MetricCatalog.isNotEmpty(): Boolean =
-        sums.isNotEmpty() || doubleSums.isNotEmpty() || gauges.isNotEmpty() || cardinalities.isNotEmpty()
+        sums.isNotEmpty() || doubleSums.isNotEmpty() || gauges.isNotEmpty() || cardinalities.isNotEmpty() ||
+            histograms.isNotEmpty()
 
     override fun onClose() {
         replicator.close()
