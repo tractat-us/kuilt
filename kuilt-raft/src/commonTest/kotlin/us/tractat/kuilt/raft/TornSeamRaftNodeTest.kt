@@ -188,7 +188,12 @@ class TornSeamRaftNodeTest {
     )
 
     private fun assertSurvivedElectionTimerAfterTear(rig: Rig) = assertAll(
-        { assertTrue(rig.seam.sendsAfterTear > 0, "the rig: the election timer must try to send") },
+        {
+            assertTrue(
+                rig.seam.sendsAfterTear >= 2,
+                "the rig: the election timer must try again after the first refusal, sends=${rig.seam.sendsAfterTear}",
+            )
+        },
         { assertTrue(rig.seam.refusals.isNotEmpty(), "the rig: the seam must refuse that send") },
         { assertEquals(emptyList(), rig.escapes, "a refused send must not reach the node's scope") },
         { assertTrue(rig.job.isActive, "the node's scope must survive") },
