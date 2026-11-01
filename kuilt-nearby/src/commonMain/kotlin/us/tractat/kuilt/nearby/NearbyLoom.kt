@@ -104,7 +104,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbyLoom")
  * in flight: such a host owes this `join` nothing, and since acceptance is long-lived, a wait for "the
  * host's first link" would last until somebody happened to join it. That was the deferred this
  * replaced, which also never completed if the host's wait ended any other way, so hosting a room,
- * leaving it and joining somebody else's hung forever on a real device.
+ * leaving it and joining somebody else's left the `join` waiting forever.
  *
  * @param api               [NearbyApi] to use (real GMS or fake for tests).
  * @param serviceId         Nearby Connections service ID. Must match on both devices.
