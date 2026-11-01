@@ -7,6 +7,7 @@ package us.tractat.kuilt.otel.tap.admit
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -214,15 +215,53 @@ class TapAdmissionAttackTest {
      */
     @Test
     fun aRelayWearingBothIdsAcrossTwoSessionsIsStillAdmitted() = runTest(UnconfinedTestDispatcher()) {
+        val relay = relayAcrossTwoSessions(wearsDevicesIdToPuller = true, wearsPullersIdToDevice = true)
+        assertTrue(relay.attackerAdmitted, "this relay is not closed, and the docs must keep saying so")
+    }
+
+    /**
+     * The same relay wearing one id short. Either id alone refuses a relayer on one session, so the
+     * tests above would pass with one of them missing from the tag; these are what need both.
+     */
+    @Test
+    fun aRelayWearingOnlyTheDevicesIdIsRefused() = runTest(UnconfinedTestDispatcher()) {
+        val relay = relayAcrossTwoSessions(wearsDevicesIdToPuller = true, wearsPullersIdToDevice = false)
+        assertFalse(relay.attackerAdmitted, "the tag names the prover, and the attacker is not the puller at the device")
+    }
+
+    @Test
+    fun aRelayWearingOnlyThePullersIdIsRefused() = runTest(UnconfinedTestDispatcher()) {
+        val relay = relayAcrossTwoSessions(wearsDevicesIdToPuller = false, wearsPullersIdToDevice = true)
+        assertFalse(relay.attackerAdmitted, "the tag names the verifier, and the attacker is not the device at the puller")
+    }
+
+    private class TwoSessionRelay(val attackerAdmitted: Boolean)
+
+    /**
+     * Run a relay across two [InMemoryLoom]s, each of which numbers its peers from `peer-1` in the order
+     * they arrive: the puller hosts its own as `peer-1`, and the device joins its own as `peer-2`. The
+     * attacker's arrival order on each is what decides which id it wears there, and the rig asserts it.
+     */
+    private suspend fun TestScope.relayAcrossTwoSessions(
+        wearsDevicesIdToPuller: Boolean,
+        wearsPullersIdToDevice: Boolean,
+    ): TwoSessionRelay {
         val pullerSession = InMemoryLoom()
         val pullerGate = pullerSession.host(Pattern("puller-session")).tokenGated(prover(), backgroundScope)
+        if (!wearsDevicesIdToPuller) pullerSession.join(InMemoryTag("bystander"))
         val attackerToPuller = pullerSession.join(InMemoryTag("attacker"))
+
         val deviceSession = InMemoryLoom()
-        val attackerToDevice = deviceSession.host(Pattern("device-session"))
+        val firstOnDeviceSession = deviceSession.host(Pattern("device-session"))
+        val deviceSeam = deviceSession.join(InMemoryTag("device"))
+        val attackerToDevice = if (wearsPullersIdToDevice) firstOnDeviceSession else deviceSession.join(InMemoryTag("attacker"))
+
+        var forwarded = 0
         backgroundScope.launch {
             attackerToPuller.incoming.collect { swatch ->
                 if (TapAdmitMessage.decode(swatch.toByteArray()) is TapAdmitMessage.Proof) {
-                    attackerToDevice.broadcast(swatch.toByteArray())
+                    attackerToDevice.sendTo(deviceSeam.selfId, swatch.toByteArray())
+                    forwarded++
                 }
             }
         }
@@ -234,14 +273,27 @@ class TapAdmissionAttackTest {
             }
         }
 
-        val deviceGate = deviceSession.join(InMemoryTag("device")).tokenGated(verifier(), backgroundScope)
+        val deviceGate = deviceSeam.tokenGated(verifier(), backgroundScope)
         runCurrent()
 
         assertAll(
-            { assertEquals(pullerGate.selfId, attackerToDevice.selfId, "rig: the attacker wears the puller's id to the device") },
-            { assertEquals(deviceGate.selfId, attackerToPuller.selfId, "rig: the attacker wears the device's id to the puller") },
-            { assertTrue(attackerToDevice.selfId in deviceGate.peers.value, "this relay is not closed, and the docs must keep saying so") },
+            { assertEquals(1, forwarded, "rig: the attacker must have carried the puller's answer to the device") },
+            {
+                assertEquals(
+                    wearsDevicesIdToPuller,
+                    attackerToPuller.selfId == deviceGate.selfId,
+                    "rig: whether the attacker wears the device's id to the puller",
+                )
+            },
+            {
+                assertEquals(
+                    wearsPullersIdToDevice,
+                    attackerToDevice.selfId == pullerGate.selfId,
+                    "rig: whether the attacker wears the puller's id to the device",
+                )
+            },
         )
+        return TwoSessionRelay(attackerToDevice.selfId in deviceGate.peers.value)
     }
 
     // ── mixed versions ─────────────────────────────────────────────────────────────────────────
