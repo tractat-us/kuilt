@@ -1013,7 +1013,7 @@ internal class SeamRoom(
      * host-lost teardown — through the [JoinerResumeHost] callbacks below, each of which
      * takes the (reentrant) lock itself.
      */
-    private val resumeMachine: JoinerResumeMachine? =
+    internal val resumeMachine: JoinerResumeMachine? =
         if (role == SessionRole.Joiner) {
             JoinerResumeMachine(
                 seam = seam,
@@ -2149,7 +2149,7 @@ internal class SeamRoom(
      * On the **host** the announcement is also a [AdmitMessage.Paused] fan-out to the remaining
      * members — see [propagatePaused] for why local detection alone is not enough.
      */
-    private fun markPartitioned(peerId: PeerId, at: Instant, reason: ReconnectReason) {
+    internal fun markPartitioned(peerId: PeerId, at: Instant, reason: ReconnectReason) {
         // Hoisted above the role gate: previously computed only in the host-only propagatePaused
         // branch, so a joiner had no deadline at all (#1724). The level needs it on both roles.
         // Arithmetic in epoch-millis, converted once — same operands, same order, same truncation
@@ -3405,7 +3405,7 @@ internal class SeamRoom(
     }
 
     /** The single-shot latch for going terminal on the host's account. Once it is set, no window opens. */
-    private fun claimHostLost(): Boolean = lock.withLock {
+    internal fun claimHostLost(): Boolean = lock.withLock {
         val first = !hostLost
         hostLost = true
         first

@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
@@ -21,6 +22,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.election.ElectionOutcome
 import us.tractat.kuilt.session.election.SeamElectionLobby
 import us.tractat.kuilt.test.FakeSeam
@@ -30,6 +32,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -103,6 +106,15 @@ class HostDepartureTest {
             sent += peer to payload
             delegate.sendTo(peer, payload)
         }
+    }
+
+    /** Hands out [RecordingSeam]s; [seam] is the last one woven. */
+    private class RecordingLoom(private val delegate: Loom) : Loom {
+        lateinit var seam: RecordingSeam
+            private set
+
+        override suspend fun weave(rendezvous: Rendezvous): Seam =
+            RecordingSeam(delegate.weave(rendezvous)).also { seam = it }
     }
 
     /** Parks every addressed send to [wedged] forever: the #1655 black hole, for one recipient only. */
@@ -367,7 +379,8 @@ class HostDepartureTest {
                 clock = clock(),
                 heartbeatConfig = config,
             ).also { it.start() }
-            seam.deliver(joinerId, AdmitMessage.encode(AdmitMessage.Hello("Joiner", "session")))
+            val hello = AdmitMessage.Hello("Joiner", "session", protocolVersion = ProtocolVersion.CURRENT)
+            seam.deliver(joinerId, AdmitMessage.encode(hello))
             testScheduler.runCurrent()
             assertEquals(joinerId, host.roster.value.single().id, "rig: the joiner must be admitted first")
 
@@ -487,5 +500,145 @@ class HostDepartureTest {
             )
         }
 
+    /**
+     * `LoomRoomHost` and `KtorRoomHost` build their factory with `scope = this` and document cancelling
+     * that scope as their shutdown, so their `leave` runs with the room's scope already cancelled. A lane
+     * writer launched on it never runs, and one already running is dead, while `trySend` into its lane
+     * still succeeds. So the frame has to leave some other way.
+     */
+    @Test
+    fun aHostShutDownByCancellingItsScopeStillSaysSo() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val loom = InMemoryLoom()
+            val hostLoom = RecordingLoom(loom)
+            val hostRoom = CompletableDeferred<Room>()
+            val hostJob = backgroundScope.launch {
+                LoomRoomHost(hostLoom, Pattern("Host"), clock(), config).start { hostRoom.complete(it) }
+            }
+            val host = hostRoom.await()
+            val joiner = SeamRoomFactory(loom, backgroundScope, clock(), config).join(InMemoryTag("Host"))
+            joiner.roster.first { it.isNotEmpty() }
+            host.roster.first { it.isNotEmpty() }
+            val events = recordEvents(joiner)
+
+            hostJob.cancel()
+            testScheduler.advanceTimeBy(HOST_FAREWELL_HANDOFF)
+            testScheduler.runCurrent()
+            val endedWithinTheHandoff = events.hostLost().map { it.reason }
+            testScheduler.advanceTimeBy(config.reconnectWindow * 2)
+            testScheduler.runCurrent()
+
+            val farewells = hostLoom.seam.sent
+                .filter { (to, payload) -> to == joiner.selfId && AdmitMessage.decode(payload) is AdmitMessage.Farewell }
+            assertAll(
+                { assertEquals(1, farewells.size, "rig: the seam must have been handed the frame exactly once") },
+                { assertEquals(listOf<FailureReason>(FailureReason.HostLeft), endedWithinTheHandoff) },
+                { assertTrue(!events.openedAWindow(), "no window on a clean shutdown: $events") },
+                { assertTrue(hostJob.isCompleted, "and the host's start() returned") },
+            )
+        }
+
     private fun CoroutineScope.launchLeave(room: Room) = launch { room.leave() }
+
+    // ── No window behind the latch ────────────────────────────────────────────
+
+    /** A joiner admitted over a [FakeSeam]. [events] includes what the replay hands a late subscriber. */
+    private class AdmittedJoiner(val room: SeamRoom, val host: PeerId, val events: List<MembershipEvent>)
+
+    private suspend fun TestScope.admittedJoiner(): AdmittedJoiner {
+        val self = PeerId("joiner")
+        val hostId = PeerId("host")
+        val seam = FakeSeam(selfId = self, initialPeers = setOf(self, hostId))
+        val joiner = SeamRoom(
+            seam = seam,
+            role = SessionRole.Joiner,
+            memberName = "Joiner",
+            scope = backgroundScope,
+            clock = clock(),
+            heartbeatConfig = config,
+        ).also { it.start() }
+        seam.deliver(
+            hostId,
+            AdmitMessage.encode(AdmitMessage.Welcome(hostId.value, "Host", hostId.value, roomId = "room")),
+        )
+        seam.deliver(
+            hostId,
+            AdmitMessage.encode(AdmitMessage.Welcome(self.value, "Joiner", self.value, roomId = "room")),
+        )
+        testScheduler.runCurrent()
+        assertEquals(hostId, joiner.roster.value.single().id, "rig: the joiner must be admitted first")
+        return AdmittedJoiner(joiner, hostId, recordEvents(joiner))
+    }
+
+    private fun AdmittedJoiner.heartbeatTimedOut(at: Instant) =
+        room.markPartitioned(host, at, ReconnectReason.LinkTimeout)
+
+    private fun AdmittedJoiner.reconnectStarted(at: Instant) =
+        assertNotNull(room.resumeMachine).host.onReconnectStarted(host, at, at + config.reconnectWindow)
+
+    /**
+     * A window path that loses the race to the latch must announce nothing, whichever path it is.
+     *
+     * The race itself needs a second thread: the path passes its own check, the frame's handler claims the
+     * latch, and `Partitioned` and `WindowOpened` then follow the terminal event. A single-threaded test
+     * dispatcher cannot produce that order, so this calls each path directly with the latch set and the room
+     * not yet torn down. It says nothing about a path already past its check when the latch lands.
+     */
+    private suspend fun TestScope.assertSilentBehindTheLatch(path: AdmittedJoiner.(Instant) -> Unit) {
+        val at = Instant.fromEpochMilliseconds(testScheduler.currentTime)
+
+        // Positive control: with the latch free the same call does announce, so the silence below is the
+        // guard's and not a path that was never going to say anything.
+        val free = admittedJoiner()
+        free.path(at)
+        testScheduler.runCurrent()
+
+        val latched = admittedJoiner()
+        val claimed = latched.room.claimHostLost()
+        val hostStillListed = latched.room.roster.value.any { it.id == latched.host }
+        val beforeThePath = latched.events.toList()
+        latched.path(at)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertTrue(free.events.any { it is MembershipEvent.Partitioned }, "control: ${free.events}") },
+            { assertTrue(free.events.openedAWindow(), "control: ${free.events}") },
+            { assertTrue(claimed, "rig: this call must be what set the latch") },
+            { assertTrue(hostStillListed, "rig: not torn down, so an empty roster is not what stops the path") },
+            { assertEquals(beforeThePath, latched.events.toList(), "nothing may be announced behind the latch") },
+            {
+                assertTrue(
+                    latched.room.roster.value.none { it.liveness is Liveness.Partitioned },
+                    "nor may the level move: ${latched.room.roster.value}",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun aHeartbeatTimeoutBehindTheLatchAnnouncesNothing() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            assertSilentBehindTheLatch { at -> heartbeatTimedOut(at) }
+        }
+
+    @Test
+    fun aReconnectStartingBehindTheLatchAnnouncesNothing() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            assertSilentBehindTheLatch { at -> reconnectStarted(at) }
+        }
+
+    /** The `closed` half of the same guard: a reconnect job `leave` has not yet cancelled. */
+    @Test
+    fun aReconnectStartingAfterLeaveAnnouncesNothing() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val joiner = admittedJoiner()
+            joiner.room.leave()
+            testScheduler.runCurrent()
+            val beforeThePath = joiner.events.toList()
+
+            joiner.reconnectStarted(Instant.fromEpochMilliseconds(testScheduler.currentTime))
+            testScheduler.runCurrent()
+
+            assertEquals(beforeThePath, joiner.events.toList())
+        }
 }
