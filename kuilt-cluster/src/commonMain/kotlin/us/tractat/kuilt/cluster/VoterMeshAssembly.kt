@@ -172,13 +172,14 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
     // exactly "`addLink` has not returned yet" — which on the failure path below means "abandoned
     // before any seam took ownership" (#2587).
     //
-    // **This register is still load-bearing after `handshakeLink` learned to close its own conn.**
-    // The two cover different slices of the same window: `handshakeLink` owns the preamble exchange
-    // (both suspension points), while this register also spans what happens *after* it returns a
-    // Link and before `addLink` does — admission, the dedup lottery, publication. A cancellation
-    // landing in that tail leaves a conn no frame is holding, so removing the register would
-    // reintroduce a narrower version of the same leak. The overlap costs one extra `close()` on a
-    // conn abandoned mid-preamble, which is contract-legal (`Connection.close` is idempotent).
+    // **This register is now redundant.** `Mesh.addLink` takes ownership of the conn on entry: every
+    // exit before the seam adopts the link closes it — a torn seam, a failed or cancelled preamble, an
+    // admission rejection, a refusal at the dedup lottery, and a cancellation anywhere in between. Once
+    // adopted, the conn is the seam's, and the seam close below reaches it. No suspension point
+    // separates `dial` returning from `addLink` being entered, and `withTimeout`'s `coroutineScope`
+    // joins every dial coroutine before the failure path runs, so each conn still in the register there
+    // has already been closed by `addLink`. Its close below is a second, idempotent one. Deleting the
+    // register is a separate change from the one that made it redundant.
     //
     // Neither boundary can be skipped by a cancellation: no suspension point separates `dial`
     // returning from the join, or `addLink` returning from the leave, and a coroutine is only
@@ -283,18 +284,15 @@ internal suspend fun CoroutineScope.assembleVoterMesh(
                 }
             }
             // And the dials no seam ever took ownership of (#2587). The loop above closes every link a
-            // seam PUBLISHED; a dial the timeout caught before `addLink` returned never got that far, so
-            // the seam close cannot reach it, and neither can `meshScope.cancel()`: the conn belongs to
-            // the caller's transport, not to any scope this function owns. Left open it is a live session
-            // per stalled dial (over WebSockets, one held until the caller-owned HttpClient is closed,
-            // with the peer seeing an ESTABLISHED session from a voter that has given up) — the same
-            // zombie shape the seam close prevents, one layer down. A stalled dial is not an edge case:
-            // it is what a crashed or slow voter produces, i.e. the ordinary formation timeout.
+            // seam PUBLISHED; a dial the timeout caught before `addLink` returned never got that far, and
+            // `meshScope.cancel()` cannot reach it either: the conn belongs to the caller's transport, not
+            // to any scope this function owns. Left open it would be a live session per stalled dial (over
+            // WebSockets, one held until the caller-owned HttpClient is closed) — and a stalled dial is
+            // what a crashed or slow voter produces, i.e. the ordinary formation timeout.
             //
-            // Since #2587 `handshakeLink` also closes a conn abandoned during the MeshHello exchange
-            // itself, so for the common stall this close is the second one on that conn (idempotent, and
-            // deliberate). It is not redundant: see the register's own comment above for the slice of the
-            // window — after the handshake returns a Link, before `addLink` does — that only this reaches.
+            // `addLink` now discharges that itself: it closes every conn it abandons before adoption,
+            // including on cancellation, so each close here is the second one on that conn (idempotent).
+            // It reaches nothing `addLink` has not already closed; see the register's own comment above.
             //
             // ONLY the abandoned ones. A conn leaves the register the instant `addLink` returns, so a
             // published link is never in it. That boundary is the point, not an optimisation: closing a

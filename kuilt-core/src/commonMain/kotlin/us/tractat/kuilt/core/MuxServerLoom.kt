@@ -3,14 +3,19 @@ package us.tractat.kuilt.core
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.ConnectionSource
+import us.tractat.kuilt.core.fabric.Mesh
 import us.tractat.kuilt.core.fabric.acceptPump
 import us.tractat.kuilt.core.fabric.hubMesh
 import kotlin.coroutines.ContinuationInterceptor
@@ -73,8 +78,9 @@ import kotlin.time.Duration.Companion.seconds
  * pump, and [close] tears the loom down explicitly — it halts the accept loop, cancels all
  * per-connection pumps, and (via each read loop's teardown) deregisters the connection from the
  * rooms it joined. [close] is **idempotent**. It does **not** tear the hosted [RoomHubSeam]s or the
- * per-connection mesh seams: those have independent lifecycles owned by their consumers and by the
- * [source]/connection provider respectively.
+ * registered per-connection mesh seams: those have independent lifecycles owned by their consumers
+ * and by the [source]/connection provider respectively. A temporary mesh that admission abandons
+ * before registration is closed by the loom, including when admission is cancelled.
  *
  * ## Thread safety
  *
@@ -217,24 +223,48 @@ public class MuxServerLoom(
      * demuxed by channel name and pushed into the matching live [RoomHubSeam].
      */
     private suspend fun admit(conn: Connection) {
-        val rawSeam = hubMesh(
-            selfId = selfId,
-            connections = listOf(conn),
-            dispatcher = dispatcher,
-            random = random,
-        )
-        val connPeerId = rawSeam.peers.first { peers -> peers.any { it != selfId } }.first { it != selfId }
-        val record = ConnRecord(rawSeam)
-        lock.withLock {
-            connRecords[connPeerId] = record
-            _connectedPeers.value = connRecords.keys.toSet()
-        }
+        // The mesh starts empty and takes the conn through `addLink`, which owns it from entry: an
+        // exit before adoption closes it, and an adopted link is closed with the seam below. Building
+        // the mesh around the conn instead would hand a handshaken link back through `buildMesh`'s
+        // `awaitAll`, where a cancellation drops it with nothing left holding it.
+        var rawSeam: Mesh? = null
+        var registered = false
+        try {
+            val seam = hubMesh(
+                selfId = selfId,
+                connections = emptyList(),
+                dispatcher = dispatcher,
+                random = random,
+            )
+            rawSeam = seam
+            seam.addLink(conn)
+            val connPeerId = seam.peers.first { peers -> peers.any { it != selfId } }.first { it != selfId }
+            val record = ConnRecord(seam)
+            lock.withLock {
+                connRecords[connPeerId] = record
+                _connectedPeers.value = connRecords.keys.toSet()
+                registered = true
+            }
 
-        val readJob = scope.launch { readLoop(connPeerId, record) }
-        val watchJob = scope.launch { watchDrop(connPeerId, record) }
-        lock.withLock {
-            launchedJobs += readJob
-            launchedJobs += watchJob
+            // Enter readLoop's teardown guard even if the loom is cancelled before dispatch.
+            // Once registered, the existing provider-owned seam lifecycle applies.
+            val readJob = scope.launch(start = CoroutineStart.UNDISPATCHED) { readLoop(connPeerId, record) }
+            val watchJob = scope.launch { watchDrop(connPeerId, record) }
+            lock.withLock {
+                launchedJobs += readJob
+                launchedJobs += watchJob
+            }
+        } finally {
+            val built = rawSeam
+            if (!registered) withContext(NonCancellable) {
+                try {
+                    // No mesh means `addLink` was never entered (building the empty mesh was
+                    // cancelled), so the conn is still this frame's to close.
+                    if (built != null) built.close() else conn.close()
+                } catch (_: Throwable) {
+                    // Preserve the original admission failure, including cancellation.
+                }
+            }
         }
     }
 
@@ -249,6 +279,10 @@ public class MuxServerLoom(
         // populated. Null when the connection carried no attestation.
         val principal = (record.rawSeam as? PrincipalRoster)?.attestedPrincipals?.value?.get(connPeerId)
         try {
+            // Keep the undispatched prefix inside this teardown guard, but yield before reading
+            // buffered frames: synchronous authorizer work must not extend the admitting caller's
+            // handshake timeout. Cancellation at this dispatch boundary still deregisters the record.
+            yield()
             record.rawSeam.incoming.collect { frame ->
                 val name = NamedFrame.decodeName(frame) ?: return@collect
                 val room = lock.withLock { rooms[name] } ?: return@collect

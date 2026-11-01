@@ -42,15 +42,13 @@ private const val MAX_ACCEPT_RETRY_DELAY_MILLIS: Long = 1_000
  * ownership of — and **[handle] is always handed the conn**: the child starts
  * [UNDISPATCHED][kotlinx.coroutines.CoroutineStart.UNDISPATCHED], which runs its body even on an
  * already-cancelled [Job], so [handle] is entered before the pump next suspends and a cancellation
- * surfaces at a suspension point inside [handle], not in a dispatch queue ahead of it (#2954). Every in-tree
- * [handle] discharges the **mid-preamble half** of this by going through the mesh handshake, which
- * closes a conn abandoned during the `MeshHello` exchange under a `NonCancellable` shield; **a
- * third-party [handle] that suspends while holding a conn owes the same guarantee.**
- *
- * The **tail is not discharged here**, and no `acceptPump` call site carries the per-conn register
- * `assembleVoterMesh` keeps for its *dials*: a cancellation landing after the handshake returns a
- * `Link` but before `addLink` returns — inside `admission.admit`, or `startDrain`'s ordering hold —
- * still escapes with the conn unclosed. Tracked by #2710.
+ * surfaces at a suspension point inside [handle], not in a dispatch queue ahead of it (#2954).
+ * In-tree handlers discharge this through [Mesh.addLink]'s ownership guard: cancellation before
+ * adoption closes the conn, while startup after adoption belongs to the seam. Mux admission hands
+ * the conn to an empty hub mesh's `addLink` for that reason, and closes that mesh if it is
+ * abandoned before registration. A third-party [handle] that suspends while holding a conn owes the
+ * same guarantee. After adoption it must also avoid a cancellable wait that could outlast this
+ * pump's [handshakeTimeout], since the timeout path closes the accepted conn.
  *
  * @param source the accept source drained forever until the pump [Job] is cancelled.
  * @param handshakeTimeout the ceiling on a single conn's [handle]; a conn whose handling exceeds it is

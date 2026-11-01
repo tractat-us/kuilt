@@ -40,11 +40,10 @@ import kotlin.time.Duration.Companion.seconds
  *    seam ever learned the connection exists. Those are the connections a crashed or slow voter
  *    produces, i.e. the ordinary cause of a formation timeout.
  *
- *    Since #2587 this close is **shared, not a monopoly**: `handshakeLink` closes a conn abandoned
- *    during the `MeshHello` exchange itself, so for the common stall the teardown's is the second
- *    close on that conn (idempotent, and deliberate). What only the teardown reaches is the **tail** —
- *    after the handshake has returned a `Link`, before `addLink` returns — so neither subsumes the
- *    other. See [formationTimeoutClosesTheDialsAbandonedMidHandshake] for the argument in full.
+ *    `addLink` now discharges this itself: it owns the conn from entry and closes it on every exit
+ *    before the seam adopts the link, cancellation included. The teardown's register close is
+ *    therefore always the second close on that conn (idempotent), and this test pins the outcome,
+ *    not which of the two closes delivered it.
  *
  * ## Why this lives in commonTest rather than only over WebSockets
  *
@@ -127,10 +126,10 @@ class VoterMeshFormationTimeoutTest {
      * The published end's `closeCalls == 1` is the over-reach arm, and it is not a formality: it is
      * green today (the seam closes it once), stays green under the fix, and reds under the wrong fix.
      * It reads the **dialer** end of a handshake this test asserts *succeeded*, so it is deliberately
-     * blind to what happens on the abandoned ends — and since #2587 each of those is closed twice, by
-     * `handshakeLink` and then by the teardown's register. That double is contract-legal
-     * (`Connection.close` is idempotent) and intended; the two closes cover different slices of the
-     * window between `dial` returning and `addLink` returning, so neither subsumes the other.
+     * blind to what happens on the abandoned ends — each of those is closed twice, by `addLink` and
+     * then by the teardown's register. That double is contract-legal (`Connection.close` is
+     * idempotent): the register is redundant now that `addLink` closes every conn it abandons before
+     * adoption.
      */
     @Test
     fun formationTimeoutClosesTheDialsAbandonedMidHandshake() =
