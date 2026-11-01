@@ -2,8 +2,14 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.test.assertAll
@@ -33,6 +39,7 @@ import kotlin.time.Duration.Companion.seconds
  * Every over-budget case is paired with an in-budget positive control in the same test, per the
  * convention `StarRelayTest` sets: a room that dropped every frame would otherwise pass.
  */
+@OptIn(ExperimentalSerializationApi::class)
 class RelayPayloadBudgetTest {
 
     /**
@@ -51,11 +58,19 @@ class RelayPayloadBudgetTest {
     private val fabricLimit = 1024
 
     /**
-     * A payload sized **exactly** to the fabric limit: it fits a direct send, and cannot fit once
-     * the envelope is wrapped around it. Zero-filled, so its leading byte is not one of
-     * [RoomFramePrefix]'s reserved values.
+     * Every payload in this file is filled with this byte, and the choice decides whether the file can
+     * fail (#2958). Encoded as an integer array, a byte in `0..23` or `-24..-1` costs 1 B and the rest
+     * cost 2 B, so a zero-filled payload hid an envelope whose real cost doubled with its contents.
+     * `0x62` costs 2 B there, which a control below keeps proving, and it is not one of
+     * [RoomFramePrefix]'s reserved leading bytes, unlike `0x61`.
      */
-    private fun fabricSizedPayload(): ByteArray = ByteArray(fabricLimit)
+    private fun filler(size: Int): ByteArray = ByteArray(size) { 0x62 }
+
+    /**
+     * A payload sized **exactly** to the fabric limit: it fits a direct send, and cannot fit once
+     * the envelope is wrapped around it.
+     */
+    private fun fabricSizedPayload(): ByteArray = filler(fabricLimit)
 
     @Test
     fun `a relayed broadcast that no longer fits the fabric is dropped rather than thrown`() =
@@ -117,7 +132,7 @@ class RelayPayloadBudgetTest {
             val envelope = relayOverhead(star.joinerAId, RelayDest.One(star.joinerBId), fabricLimit)
 
             val refusal = assertFailsWith<PayloadTooLarge> {
-                star.joinerA.room.sendTo(star.joinerBId, ByteArray(fabricLimit))
+                star.joinerA.room.sendTo(star.joinerBId, filler(fabricLimit))
             }
 
             assertAll(
@@ -207,8 +222,8 @@ class RelayPayloadBudgetTest {
             star.joinerA.wire.limitFrames(fabricLimit)
             val budget = assertNotNull(star.joinerA.room.maxPayloadBytes, "the fabric named a ceiling")
 
-            star.joinerA.room.sendTo(star.joinerBId, ByteArray(budget))
-            star.joinerA.room.broadcast(ByteArray(budget))
+            star.joinerA.room.sendTo(star.joinerBId, filler(budget))
+            star.joinerA.room.broadcast(filler(budget))
             testScheduler.runCurrent()
 
             val written = star.wireFramesFrom(star.joinerAId)
@@ -243,7 +258,7 @@ class RelayPayloadBudgetTest {
     fun `the reserved budget covers the envelope for realistic and pathological peer ids`() {
         val probe = 100
         fun overhead(origin: String, dest: RelayDest): Int =
-            RelayEnvelope.encode(RelayEnvelope(PeerId(origin), dest, ByteArray(probe))).size - probe
+            RelayEnvelope.encode(RelayEnvelope(PeerId(origin), dest, filler(probe))).size - probe
 
         val uuid = "550e8400-e29b-41d4-a716-446655440000"
         val other = "550e8400-e29b-41d4-a716-446655440001"
@@ -283,11 +298,11 @@ class RelayPayloadBudgetTest {
             val view = star.joinerA.room.channel("data")
             val viewBudget = assertNotNull(view.maxPayloadBytes)
 
-            view.sendTo(star.joinerBId, ByteArray(viewBudget))
+            view.sendTo(star.joinerBId, filler(viewBudget))
             testScheduler.runCurrent()
             // Sized to overflow the wire, not merely to exceed the published budget — the published
             // number under-promises deliberately, so a payload one byte past it still fits.
-            val refusal = assertFailsWith<PayloadTooLarge> { view.sendTo(star.joinerBId, ByteArray(fabricLimit)) }
+            val refusal = assertFailsWith<PayloadTooLarge> { view.sendTo(star.joinerBId, filler(fabricLimit)) }
 
             assertAll(
                 { assertEquals(roomBudget - RoomChannel.HEADER_BYTES, viewBudget, "the channel header is reserved") },
@@ -329,7 +344,7 @@ class RelayPayloadBudgetTest {
             val star = relayStar(coJoiners = 2)
             star.host.wire.limitFrames(fabricLimit)
             val budget = assertNotNull(star.host.room.maxPayloadBytes)
-            val overBudgetButOnTheWire = ByteArray(fabricLimit)
+            val overBudgetButOnTheWire = filler(fabricLimit)
 
             star.host.room.sendTo(star.joinerAId, overBudgetButOnTheWire)
             star.host.room.broadcast(overBudgetButOnTheWire)
@@ -373,8 +388,8 @@ class RelayPayloadBudgetTest {
             testScheduler.runCurrent()
             val beforeAnyDrop = star.joinerA.oversizeFramesDropped()
 
-            star.joinerA.room.broadcast(ByteArray(fabricLimit))
-            star.joinerA.room.broadcast(ByteArray(fabricLimit))
+            star.joinerA.room.broadcast(filler(fabricLimit))
+            star.joinerA.room.broadcast(filler(fabricLimit))
             testScheduler.runCurrent()
 
             assertAll(
@@ -404,7 +419,7 @@ class RelayPayloadBudgetTest {
             val hopCeiling = 512
             star.host.wire.limitFrames(hopCeiling)
 
-            star.joinerA.room.broadcast(ByteArray(hopCeiling))
+            star.joinerA.room.broadcast(filler(hopCeiling))
             testScheduler.runCurrent()
 
             assertAll(
@@ -421,7 +436,130 @@ class RelayPayloadBudgetTest {
             )
         }
 
+    /**
+     * The rig for everything in this file, kept honest against the encoding that defect lived in: if
+     * [filler] stopped costing double there, each test here could pass with the defect back.
+     */
+    @Test
+    fun `the filler would cost double as an integer array`() {
+        val integerArrays = Cbor { ignoreUnknownKeys = true }
+        val size = 100
+        fun encoded(payload: ByteArray) =
+            integerArrays.encodeToByteArray(RelayEnvelope(PeerId("a"), RelayDest.Everyone, payload)).size
+
+        assertEquals(size, encoded(filler(size)) - encoded(ByteArray(size)), "one extra byte per payload byte")
+    }
+
+    /** What an envelope costs must not depend on what it carries, or no flat reservation can cover it. */
+    @Test
+    fun `an envelope costs the same whatever bytes it carries`() {
+        val size = 100
+        fun encoded(payload: ByteArray) =
+            RelayEnvelope.encode(RelayEnvelope(PeerId("a"), RelayDest.Everyone, payload)).size
+
+        assertEquals(encoded(ByteArray(size)), encoded(filler(size)), "zeros and non-zeros must cost the same")
+    }
+
+    /** The issue's reproducer: a relayed member sizes channel chunks to the budget its view publishes. */
+    @Test
+    fun `a relayed channel payload filling the budget is delivered and the refusal is exact`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            assertBudgetHolds(star, star.joinerA, channelSurfaceOf(star.joinerA, star.joinerB, star.joinerBId))
+        }
+
+    @Test
+    fun `a relayed room payload filling the budget is delivered and the refusal is exact`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            assertBudgetHolds(star, star.joinerA, roomSurfaceOf(star.joinerA, star.joinerB, star.joinerBId))
+        }
+
+    @Test
+    fun `a direct channel payload filling the budget is delivered and the refusal is exact`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            assertBudgetHolds(star, star.host, channelSurfaceOf(star.host, star.joinerA, star.joinerAId))
+        }
+
+    @Test
+    fun `a direct room payload filling the budget is delivered and the refusal is exact`() =
+        runTest(StandardTestDispatcher(), timeout = backstop) {
+            val star = relayStar(coJoiners = 2)
+            assertBudgetHolds(star, star.host, roomSurfaceOf(star.host, star.joinerA, star.joinerAId))
+        }
+
+    /** One sending surface and how to read what its recipient got. */
+    private class BudgetSurface(
+        val budget: () -> Int?,
+        val send: suspend (ByteArray) -> Unit,
+        val delivered: () -> List<Int>,
+    )
+
+    private fun TestScope.channelSurfaceOf(sender: StarMember, receiver: StarMember, peer: PeerId): BudgetSurface {
+        val view = sender.room.channel("data")
+        val sizes = mutableListOf<Int>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            receiver.room.channel("data").incoming.collect { sizes += it.payloadSize }
+        }
+        return BudgetSurface({ view.maxPayloadBytes }, { view.sendTo(peer, it) }, { sizes.toList() })
+    }
+
+    private fun TestScope.roomSurfaceOf(sender: StarMember, receiver: StarMember, peer: PeerId): BudgetSurface {
+        val senderId = sender.room.selfId
+        return BudgetSurface(
+            { sender.room.maxPayloadBytes },
+            { sender.room.sendTo(peer, it) },
+            { receiver.rawAppFramesFrom(senderId).map { it.size } },
+        )
+    }
+
+    /**
+     * The contract a caller chunking to the budget relies on, at the fabric's ceiling and on a real
+     * route. A payload of exactly the published budget is delivered. The published number is
+     * deliberately a promise rather than the refusal threshold (see `SeamRoom.maxPayloadBytes`), so
+     * "one byte more is refused" is asserted at the threshold the refusal itself reports: filling that
+     * delivers, and one byte past it is refused.
+     *
+     * Refusals are caught and asserted on, so a defect reds as an assertion here rather than as a
+     * [PayloadTooLarge] escaping the test.
+     */
+    private suspend fun TestScope.assertBudgetHolds(star: RelayStar, sender: StarMember, surface: BudgetSurface) {
+        star.host.wire.limitFrames(fabricLimit)
+        sender.wire.limitFrames(fabricLimit)
+        testScheduler.runCurrent()
+
+        suspend fun refusalOf(size: Int): PayloadTooLarge? = try {
+            surface.send(filler(size))
+            null
+        } catch (refused: PayloadTooLarge) {
+            refused
+        }
+
+        val budget = assertNotNull(surface.budget(), "the fabric named a ceiling")
+        val atBudget = refusalOf(budget)
+        testScheduler.runCurrent()
+        val threshold = assertNotNull(refusalOf(fabricLimit + 1), "a payload past the ceiling is over on any route").budgetBytes
+        val atThreshold = refusalOf(threshold)
+        val pastThreshold = refusalOf(threshold + 1)
+        testScheduler.runCurrent()
+
+        assertAll(
+            { assertEquals(null, atBudget, "a payload of exactly the published budget ($budget B) must be accepted") },
+            { assertTrue(budget <= threshold, "the budget must be a promise the route can keep: $budget B vs $threshold B") },
+            { assertEquals(null, atThreshold, "the threshold a refusal reports ($threshold B) must fit") },
+            { assertNotNull(pastThreshold, "and one byte past it must be refused") },
+            {
+                assertEquals(
+                    listOf(budget, threshold),
+                    surface.delivered(),
+                    "both accepted payloads must arrive intact and nothing else",
+                )
+            },
+        )
+    }
+
     /** The envelope's real cost for [origin]/[dest] at a payload of exactly [payloadBytes]. */
     private fun relayOverhead(origin: PeerId, dest: RelayDest, payloadBytes: Int): Int =
-        RelayEnvelope.encode(RelayEnvelope(origin, dest, ByteArray(payloadBytes))).size - payloadBytes
+        RelayEnvelope.encode(RelayEnvelope(origin, dest, filler(payloadBytes))).size - payloadBytes
 }
