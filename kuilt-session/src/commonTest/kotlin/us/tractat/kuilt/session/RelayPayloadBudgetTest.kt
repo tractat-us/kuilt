@@ -457,7 +457,10 @@ class RelayPayloadBudgetTest {
         fun encoded(payload: ByteArray) =
             RelayEnvelope.encode(RelayEnvelope(PeerId("a"), RelayDest.Everyone, payload)).size
 
-        assertEquals(encoded(ByteArray(size)), encoded(filler(size)), "zeros and non-zeros must cost the same")
+        assertAll(
+            { assertEquals(encoded(ByteArray(size)), encoded(filler(size)), "zeros and non-zeros must cost the same") },
+            { assertEquals(size + 35, encoded(filler(size)), "the 1-byte-id row of RELAY_ENVELOPE_BUDGET's table") },
+        )
     }
 
     /** The issue's reproducer: a relayed member sizes channel chunks to the budget its view publishes. */

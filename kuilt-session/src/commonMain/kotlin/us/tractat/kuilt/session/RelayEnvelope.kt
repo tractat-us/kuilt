@@ -128,8 +128,18 @@ internal class RelayEnvelope(
          * `ignoreUnknownKeys` for the same forward-compatibility reason `AdmitMessage`'s codec has
          * it: a frame minted by a newer build carrying an extra field still decodes here instead
          * of being dropped as malformed.
+         *
+         * `alwaysUseByteString` because without it a `ByteArray` encodes as an integer array, where
+         * every byte outside `-24..23` costs 2 B. The envelope's cost then scales with its payload,
+         * so no flat [RELAY_ENVELOPE_BUDGET] can cover it, and a relayed member refused payloads
+         * well under the budget it published (#2958). It is a wire break for relayed frames: a build
+         * on either side of it drops the other's as malformed, so a room upgrades all its members
+         * together.
          */
-        private val cbor = Cbor { ignoreUnknownKeys = true }
+        private val cbor = Cbor {
+            ignoreUnknownKeys = true
+            alwaysUseByteString = true
+        }
 
         /** Encode [envelope] with the [RoomFramePrefix.Relay] framing prefix. */
         fun encode(envelope: RelayEnvelope): ByteArray {
