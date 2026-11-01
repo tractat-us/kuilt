@@ -5,9 +5,18 @@
 
 package us.tractat.kuilt.game
 
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
@@ -18,14 +27,18 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.Committed
+import us.tractat.kuilt.raft.DurableStoreRaftStorage
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
 class GameNodeTest {
