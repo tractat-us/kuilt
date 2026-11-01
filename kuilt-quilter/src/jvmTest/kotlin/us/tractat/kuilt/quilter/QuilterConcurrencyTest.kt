@@ -480,9 +480,11 @@ class QuilterConcurrencyTest {
      * **What this does not reliably pin: that the "nothing in flight" check is atomic with the close.**
      * Moving the close outside the lock opens a gap of a few nanoseconds that a writer must land in, and
      * nothing in that gap can be hooked to force it. Measured with that mutation: red once at round 297
-     * of 300, then green in 4 runs of 1 000 rounds. So that property rests on the code's shape and its
-     * comment, not on this test. The mutations it does catch reliably, a drain that stops looking after
-     * one snapshot and a write send the drain cannot see, red it within the first 100 rounds.
+     * of 300, then green in 4 runs of 1 000 rounds. [drainClosesWhileHoldingTheLockAWriteMustTake] pins
+     * the close being under the lock without needing the race. A check and a close under two separate
+     * holds is the part left: that test cannot see it, and this one only by chance, so it rests on the
+     * code's shape and its comment. The mutations this does catch reliably, a drain that stops looking
+     * after one snapshot and a write send the drain cannot see, red it within the first 100 rounds.
      */
     @Test
     fun aWriteThatReturnedIsNeverLostToARacingDrain() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
@@ -574,9 +576,9 @@ class QuilterConcurrencyTest {
      *
      * **What this does not catch: `lock { snapshot }; lock { close() }`.** That shape holds the lock
      * during the close and lets a write in between the two blocks, so it is not atomic, and this test
-     * stays green on it. Only [aWriteThatReturnedIsNeverLostToARacingDrain] can see that shape, and
-     * then only by chance. So this pins that the close is under the lock, not that it is the same hold
-     * as the check.
+     * stays green on it (measured). Only [aWriteThatReturnedIsNeverLostToARacingDrain] can see that
+     * shape, and then only by chance. So this pins that the close is under the lock, not that it is
+     * the same hold as the check.
      */
     @Test
     fun drainClosesWhileHoldingTheLockAWriteMustTake() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
