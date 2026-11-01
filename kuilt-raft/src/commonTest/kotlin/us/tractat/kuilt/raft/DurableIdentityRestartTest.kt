@@ -293,6 +293,12 @@ class DurableIdentityRestartTest {
 
         assertEquals(emptyList(), retained.filter { it.clientId == ClientId(followerId.value) }, "the rig: never received")
         rig.assertCollisionKilled(followerId, foreignSerial = 1L, survivor = leaderId)
+
+        // The entry was durable before it committed, so the boot after this one finds it and recovers.
+        rig.failures.clear()
+        rig.restart(followerId)
+        rig.awaitReplay(followerId, through = before.index + 1)
+        rig.assertStayedUpHavingWalked(followerId, listOf(1L))
     }
 
     /**
