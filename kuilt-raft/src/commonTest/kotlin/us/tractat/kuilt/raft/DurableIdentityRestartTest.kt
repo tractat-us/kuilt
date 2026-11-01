@@ -7,6 +7,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -15,6 +17,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
@@ -146,34 +149,42 @@ class DurableIdentityRestartTest {
         rig.restart(SOLO_ID)
         rig.awaitReplay(SOLO_ID, through = last.index)
         val table = ClientSessionTable()
-        rig.keysWalkedBy(SOLO_ID).forEach { table.shouldApply(it) }
+        val replayed = rig.keysWalkedBy(SOLO_ID)
+        replayed.forEach { table.shouldApply(it) }
 
         val fresh = rig.node(SOLO_ID).propose(command(4L))
 
         assertAll(
-            { assertEquals(3, rig.keysWalkedBy(SOLO_ID).size, "the table must have folded the replay") },
+            { assertEquals(3, replayed.size, "the table must have folded the replay") },
             { assertEquals(4L, fresh.dedupKey?.requestId, "the serial resumes above the replayed maximum") },
             { assertTrue(table.shouldApply(fresh.dedupKey), "a fresh command must not read as a duplicate") },
         )
     }
 
+    /**
+     * A restarted single voter leads through its own replay, so its best-effort cache holds the old
+     * entries again. Same bytes coalesce, and other bytes under an old serial are refused rather than
+     * acknowledged: that is the conflict a caller restarting its own serials at 1 would meet.
+     */
     @Test
-    fun aPinnedRetryOfAnOldSerialAfterARestartIsAnOrdinaryDuplicate() = raftRunTest {
+    fun aPinnedRetryOfAnOldSerialAfterARestartCoalesces() = raftRunTest {
         val rig = durableRig(SOLO)
         rig.sim.awaitLeader()
 
-        val last = (1L..3L).map { rig.node(SOLO_ID).propose(command(it), requestId = it) }.last()
+        val entries = (1L..3L).map { rig.node(SOLO_ID).propose(command(it), requestId = it) }
         rig.restart(SOLO_ID)
-        rig.awaitReplay(SOLO_ID, through = last.index)
-        val table = ClientSessionTable()
-        rig.keysWalkedBy(SOLO_ID).forEach { table.shouldApply(it) }
+        rig.awaitReplay(SOLO_ID, through = entries.last().index)
 
         val retried = rig.node(SOLO_ID).propose(command(3L), requestId = 3L)
 
         assertAll(
             { assertEquals(emptyList(), rig.failures.map { it.toString() }) },
-            { assertTrue(retried.index > last.index, "the restarted leader's cold cache appends it again") },
-            { assertFalse(table.shouldApply(retried.dedupKey), "the consumer's table skips the replay") },
+            { assertEquals(entries.last().index, retried.index, "the retry lands on the replayed entry") },
+            {
+                assertFailsWith<RequestIdConflictException> {
+                    rig.node(SOLO_ID).propose(command(99L), requestId = 2L)
+                }
+            },
         )
     }
 
@@ -405,9 +416,19 @@ private class DurableRestartRig(
 
     fun node(id: NodeId): RaftNode = sim.nodes.getValue(id)
 
-    /** Runs [block] apart from the node scopes, for a proposal whose answer may never come. */
-    fun launch(block: suspend () -> Unit) {
-        background.launch { block() }
+    /**
+     * Runs a proposal apart from the node scopes, for when its answer may never come. A proposer
+     * crashing out from under its own call ends it with [LeadershipLostException], which here is the
+     * expected end of the caller, not a failure of the node under observation.
+     */
+    fun launch(proposal: suspend () -> Unit) {
+        background.launch {
+            try {
+                proposal()
+            } catch (_: LeadershipLostException) {
+                currentCoroutineContext().ensureActive()
+            }
+        }
     }
 
     /** The operator's mistake: [to]'s next incarnation is handed the durable id [of] already holds. */
