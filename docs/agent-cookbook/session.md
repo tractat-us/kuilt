@@ -188,6 +188,7 @@ branch above.
 A host's `room.leave()` sends every member a `Farewell` naming itself. A joiner that receives it goes
 terminal at once: `HostLost(HostLeft)`, no `Partitioned`, no `WindowOpened`, no minute of a room that
 looks alive. If a tear beat the frame and a window is already open, the frame ends the window early.
+A `LoomRoomHost` or `KtorRoomHost` stopped the documented way, by cancelling its scope, says the same.
 
 It is best effort, so treat the reason as one-way evidence. `HostLeft` proves the host meant it.
 `WindowExpired` does not prove the host did not: the `Farewell` can be lost, most easily behind a large

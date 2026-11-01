@@ -45,7 +45,7 @@ import kotlin.time.Instant
  * **What this file can and cannot prove.** Everything here runs over seams that cannot lose a frame on
  * their own, so it pins the *room's reaction* and the wait inside `leave`, never the transport's
  * *delivery*. Delivery lives in `NwHostDepartureRoomTest` and `NwHostDepartureLoopbackTest` (`:kuilt-nw`)
- * and `WebSocketHostDepartureTest` (`:kuilt-websocket`), and on real iPhones after that.
+ * and the opt-in `WebSocketHostDepartureTest` (`:kuilt-websocket`), and on real iPhones after that.
  */
 class HostDepartureTest {
 
