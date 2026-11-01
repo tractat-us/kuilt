@@ -28,6 +28,7 @@ class MetricTapConvergenceTest {
         exporter.incrementSumDouble(MetricKey("cpu", MetricKind.SUM), by = 2.5)
         exporter.setGauge(MetricKey("temp", MetricKind.GAUGE), 21.0, timestamp = 1L)
         exporter.addCardinality(MetricKey("users", MetricKind.CARDINALITY), "u1")
+        exporter.recordHistogram(MetricKey("latency", MetricKind.EXPONENTIAL_HISTOGRAM), 100.0)
 
         val loom = InMemoryLoom()
         val host = installMetricTap(loom, exporter, backgroundScope, config)
@@ -38,6 +39,7 @@ class MetricTapConvergenceTest {
         assertEquals(2.5, snap.doubleSums.getValue(MetricKey("cpu", MetricKind.SUM)))
         assertEquals(21.0, snap.gauges.getValue(MetricKey("temp", MetricKind.GAUGE)))
         assertEquals(1L, snap.cardinalities.getValue(MetricKey("users", MetricKind.CARDINALITY)))
+        assertEquals(1L, snap.histograms.getValue(MetricKey("latency", MetricKind.EXPONENTIAL_HISTOGRAM)).count)
 
         client.close()
         host.close()

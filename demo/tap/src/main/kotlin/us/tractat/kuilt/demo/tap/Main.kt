@@ -95,10 +95,11 @@ private fun printPanel(logs: List<LogRecord>, metrics: MetricSnapshot) {
     println("metrics:")
     metrics.gauges.forEach { (key, value) -> println("  ${key.name.padEnd(28)} = $value  (gauge)") }
     metrics.sums.forEach { (key, value) -> println("  ${key.name.padEnd(28)} = $value  (sum)") }
+    metrics.doubleSums.forEach { (key, value) -> println("  ${key.name.padEnd(28)} = $value  (sum)") }
     metrics.cardinalities.forEach { (key, value) -> println("  ${key.name.padEnd(28)} ~ $value  (distinct)") }
     metrics.histograms.forEach { (key, sketch) -> println("  ${key.name.padEnd(28)} = ${sketch.count}  (samples)") }
-    if (metrics.gauges.isEmpty() && metrics.sums.isEmpty() && metrics.cardinalities.isEmpty() &&
-        metrics.histograms.isEmpty()
+    if (metrics.gauges.isEmpty() && metrics.sums.isEmpty() && metrics.doubleSums.isEmpty() &&
+        metrics.cardinalities.isEmpty() && metrics.histograms.isEmpty()
     ) {
         println("  (none reported yet)")
     }
