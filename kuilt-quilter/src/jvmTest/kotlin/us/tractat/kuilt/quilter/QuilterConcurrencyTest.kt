@@ -390,7 +390,7 @@ class QuilterConcurrencyTest {
      */
     @Test
     fun aWriteThatReturnedIsNeverLostToARacingDrain() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
-        val rounds = 300
+        val rounds = 1000
         val writers = 4
         val perWriter = 300
         val refusedWrites = AtomicInteger()
