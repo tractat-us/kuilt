@@ -219,7 +219,7 @@ public sealed interface AdmitMessage {
 
     /**
      * Sent by the host to every other member when a paused member's link recovered inside its
-     * reconnect window — the release counterpart of [Paused] (#1557).
+     * reconnect window, or it resumed there — the release counterpart of [Paused] (#1557, #2908).
      *
      * On receipt a member restores [us.tractat.kuilt.session.Liveness.Connected] for [peerId]
      * and emits [us.tractat.kuilt.session.MembershipEvent.Recovered]. **Idempotent** — a no-op

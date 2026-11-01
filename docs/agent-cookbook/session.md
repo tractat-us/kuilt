@@ -338,7 +338,9 @@ public suspend fun observePausedPeersSample(room: Room) {
 > Liveness is detected locally, which is enough on a mesh but blind on a star — so the host
 > also fans out an authoritative `AdmitMessage.Paused` / `Unpaused`, and a `Farewell` when a
 > window expires (#1557). Receipt is idempotent: a peer that detects the drop itself *and*
-> receives the fan-out emits one event, not two.
+> receives the fan-out emits one event, not two. A peer that returns through `Room.resume` emits
+> `Resumed` on the host and on itself; every other member sees `Recovered` (#2908). The exception is
+> a peer re-admitted by a fresh `Hello` under the same id, which they keep holding as paused (#3026).
 
 **Intent:** the same pause/resume presence, but your session is a **game** bootstrapped over a room — "how do I know a player dropped?" should have one answer for a game and a room, not two.
 **Primitive:** `RoomGameSession.presence` + `RoomGameSession.roster` (`:kuilt-game`). Bootstrap the game with `gameOverRoom(adoptedRoom)` and it returns a `RoomGameSession` whose `presence` **is** `room.events` and whose `roster` **is** `room.roster` — the exact `MembershipEvent` + `Member.liveness` vocabulary above. Don't hand-wire a `room.events` → game-presence adapter (and don't infer presence from Raft roster churn — that is where a "premature Resumed" lives). Presence here is **link liveness**: a `Resumed` a few seconds after a drop can be a legitimate link heal, so layer human "seated / away" state on top. `gameOverRoom` owns the room — tear both down with `RoomGameSession.close`, never `room.leave()`. See the compiled `sampleGameOverRoom` (`kuilt-game/src/commonSamples/kotlin/us/tractat/kuilt/game/GameSamples.kt`).

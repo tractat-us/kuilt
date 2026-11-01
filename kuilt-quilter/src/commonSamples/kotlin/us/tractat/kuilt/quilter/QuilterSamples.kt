@@ -21,6 +21,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlinx.serialization.serializer
 import kotlin.test.assertEquals
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Samples for the quilter (replicator) API used by `@sample` KDoc tags.
@@ -97,6 +98,38 @@ internal fun sampleQuilterMutateOrSkip() = runTest(
     assertEquals(true, claim("north", "alice", 1L), "the seat was free — published")
     assertEquals(false, claim("north", "bob", 2L), "already taken — nothing published, no frame sent")
     assertEquals("alice", seats.state.value["north"])
+}
+
+// ── Quilter teardown ──────────────────────────────────────────────────────────
+
+/**
+ * [Quilter.drainAndClose]: publish a last write, then leave, without the close cancelling it.
+ *
+ * `apply` and `mutate` return with the frame still queued on the replica's own scope, and a plain
+ * `close()` cancels that scope. Here Alice's goodbye reaches Bob because she drains first; the
+ * timeout is hers to choose, since a seam can hold a send for as long as it likes.
+ */
+@Suppress("unused")
+internal fun sampleQuilterDrainAndClose() = runTest(
+    StandardTestDispatcher(),
+    timeout = TEST_WEDGE_BACKSTOP,
+) {
+    val loom = InMemoryLoom()
+    val seamAlice = loom.host(Pattern("table"))
+    val seamBob = loom.join(InMemoryTag("bob"))
+
+    val serializer = LWWMap.serializer(serializer<String>(), serializer<String>())
+    val cfg = QuilterConfig(expectVirtualTime = true)
+    val alice = Quilter(seamAlice, LWWMap.empty<String, String>(), serializer, backgroundScope, config = cfg)
+    val bob = Quilter(seamBob, LWWMap.empty<String, String>(), serializer, backgroundScope, config = cfg)
+    kotlinx.coroutines.delay(1)
+
+    // Publish the goodbye, then wait for it to reach the seam before closing.
+    alice.mutate { it.set(alice.replica, 1L, "alice", "left") }
+    kotlinx.coroutines.withTimeout(5.seconds) { alice.drainAndClose() }
+
+    kotlinx.coroutines.delay(1)
+    assertEquals("left", bob.state.value["alice"])
 }
 
 // ── Quilter basic setup ───────────────────────────────────────────────────────

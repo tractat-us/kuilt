@@ -91,7 +91,10 @@ public sealed interface MembershipEvent {
      * A partitioned peer's link recovered before the window expired.
      *
      * The member's [Liveness] transitions back to [Liveness.Connected].
-     * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerRecovered].
+     * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerRecovered], or on a member
+     * other than the host by the host's announcement that the peer is back. That announcement covers
+     * a peer that came back through [Room.resume], so those members see this event where the host and
+     * the resuming peer see [Resumed].
      */
     public data class Recovered(val peerId: PeerId, val at: Instant) : MembershipEvent
 

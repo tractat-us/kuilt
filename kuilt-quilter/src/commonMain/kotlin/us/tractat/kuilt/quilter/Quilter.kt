@@ -5,8 +5,10 @@ package us.tractat.kuilt.quilter
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,6 +17,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.serialization.BinaryFormat
 import kotlinx.serialization.KSerializer
@@ -136,6 +139,24 @@ private object SystemMonotonicMillis : MonotonicMillis {
  * Peers absent from [Seam.peers] beyond [QuilterConfig.evictionAfter] are
  * evicted from the known-peer set, releasing their buffer pin. They receive a fresh
  * [QuiltMessage.FullState] if they rejoin.
+ *
+ * ## Closing
+ * **[close] loses a write that has not left yet.** [apply] returns once [state] holds the write, with
+ * the frame still queued on this replica's own scope, and [close] cancels that scope. So the natural
+ * teardown is the one that fails:
+ *
+ * ```kotlin
+ * quilter.apply(departingPresence)   // queues the broadcast on the replica's scope
+ * quilter.close()                    // cancels that scope, and the queued broadcast with it
+ * ```
+ *
+ * A peer that left cleanly then lingers as present on the others until something else times it out.
+ * A `yield()` between the two calls does not fix it: it carries the send as far as its first
+ * suspension inside the seam, and [close] cancels it there instead.
+ *
+ * Use [drainAndClose] when the last write matters. [close] stays as it is for everything else, since
+ * it is non-suspending and required by [AutoCloseable], and it is inherited from [ScopedCloseable],
+ * which is why this warning lives here rather than on [close] itself.
  *
  * @param replica this peer's [ReplicaId].
  * @param seam the [Seam] to ride. Collect [Seam.incoming] exactly once — this class
@@ -364,6 +385,24 @@ public class Quilter<S : Quilted<S>>(
 
     // ownJob, scope, and closed are inherited from ScopedCloseable.
 
+    /**
+     * The parent of every send [apply] launches, so that [drainAndClose] can name exactly those.
+     * [ownJob]'s own children are no use for that: they include loops that never finish.
+     *
+     * A parent [Job] rather than a set of jobs because it needs no bookkeeping that could leak on a
+     * long-lived replica: a child leaves [Job.children] when it completes, so this holds the sends
+     * in flight and nothing else, and it is thread-safe without [lock]. It is a child of [ownJob],
+     * so [close] cancels these sends with everything else, and a [SupervisorJob] so that one failed
+     * send takes no others with it.
+     *
+     * Read and launched into only under [lock], which is what makes [drainAndClose]'s "nothing in
+     * flight, so close" one atomic step against a concurrent [apply].
+     */
+    private val writeSends: CompletableJob = SupervisorJob(ownJob)
+
+    /** Exposed internally so tests can verify [writeSends] holds only what is in flight. */
+    internal val writeSendsForTest: List<Job> get() = writeSends.children.toList()
+
     private val backgroundJobs: List<Job>
 
     /** Exposed internally so tests can verify [close] cancels every background job. */
@@ -430,6 +469,9 @@ public class Quilter<S : Quilted<S>>(
      * [lock] — and remains **synchronous** (non-suspending): it returns once [state] reflects the
      * mutation, the broadcast having been handed off to a child coroutine.
      *
+     * Returning therefore says nothing about the frame: a [close] straight after this call cancels
+     * it. Use [drainAndClose] to tear down without losing it.
+     *
      * @throws IllegalStateException if this replicator has been [close]d.
      */
     public fun apply(patch: Patch<S>): Unit = lock.withLock {
@@ -438,7 +480,7 @@ public class Quilter<S : Quilted<S>>(
         val seq = ++nextSeq
         pendingDeltas[seq] = patch.delta
         recomputeDeliveredLocal()
-        broadcastDelta(seq, patch.delta)
+        broadcastDelta(seq, patch.delta, parent = writeSends)
     }
 
     /**
@@ -515,6 +557,71 @@ public class Quilter<S : Quilted<S>>(
         val patch = transform(state.value) ?: return@withLock false
         apply(patch)
         true
+    }
+
+    /**
+     * [close], after every local write's frame has been handed to the [Seam]. The teardown to use
+     * when the last write matters, such as a departure notice: [close] alone would cancel it.
+     *
+     * Suspends until no [apply] send is in flight, then closes. Bound it with your own timeout,
+     * because a seam can hold a send for as long as it likes:
+     *
+     * ```kotlin
+     * quilter.apply(departingPresence)
+     * withTimeoutOrNull(2.seconds) { quilter.drainAndClose() }
+     * ```
+     *
+     * **It always ends closed.** If the caller is cancelled or its timeout fires, the replica closes
+     * anyway, which cancels whatever is still in flight, and the cancellation goes on to
+     * the caller. A send stuck in the seam therefore cannot leave an unclosed replica behind.
+     *
+     * **What a normal return promises:** every [apply] that returned normally has had its
+     * [Seam.broadcast] call *finish*. It does **not** promise delivery, for three reasons, and this
+     * method reports none of them:
+     * - A returning `broadcast` means the seam accepted the frame. Whether the seam then delivers it
+     *   before its own close is the seam's business, not this replica's.
+     * - A `broadcast` that throws is logged and counted as finished, exactly as it is on the live path.
+     * - A send cancelled by something else counts too: a plain [close] from elsewhere, the parent scope
+     *   being cancelled, or the [Seam] tearing, which closes this replica by itself. Each of those ends
+     *   the wait instead of hanging it.
+     *
+     * **A write that races the drain is drained too.** [apply], [mutate] and [mutateOrSkip] keep
+     * working until the moment of closing, and the check that nothing is in flight is atomic with the
+     * close, so every write either has its send waited for or throws [IllegalStateException] because
+     * the replica has closed. No write is accepted and then silently lost. This was chosen over
+     * refusing writes from the moment the drain starts, because that would turn an in-flight send into
+     * a window where a [RgaGcCoordinator] compaction, or anything else reacting to [state], throws.
+     * The cost is that writers who never leave a gap between sends keep the drain waiting, which is
+     * one more reason to bound it. Stop your own writers first if you can.
+     *
+     * **Only local writes hold it open.** Acks, digests, gossip, retries and a [QuiltMessage.Resend]'s
+     * retransmission are all cancelled at the close, so a peer's traffic cannot keep a departing
+     * replica alive. Inbound frames are still applied until then.
+     *
+     * Idempotent and safe to call concurrently, or after [close]. Do not call it from inside the
+     * [Seam]'s own `broadcast`: it would be waiting for itself.
+     *
+     * @sample us.tractat.kuilt.quilter.sampleQuilterDrainAndClose
+     */
+    public suspend fun drainAndClose() {
+        try {
+            while (true) {
+                val inFlight = lock.withLock {
+                    // A finished child can linger in `children` for an instant; waiting on it would
+                    // not suspend, so filter it out rather than go round again for nothing.
+                    writeSends.children.filterNot { it.isCompleted }.toList().also { sends ->
+                        if (sends.isEmpty()) close() // under the lock: atomic against a racing apply
+                    }
+                }
+                if (inFlight.isEmpty()) return
+                inFlight.joinAll() // then look again, because a racing apply may have added more
+            }
+        } finally {
+            // Reached with the replica still open only when the wait was cancelled. `close` does not
+            // suspend, so it needs no NonCancellable, and there is no catch: the cancellation belongs
+            // to the caller, and it keeps going once this has run.
+            close()
+        }
     }
 
     // ---- private helpers ----
@@ -769,10 +876,15 @@ public class Quilter<S : Quilted<S>>(
         return (nowMs - seenAt) >= config.evictionAfter.inWholeMilliseconds
     }
 
-    private fun broadcastDelta(seq: Long, delta: S) {
+    /**
+     * Launches the send of one delta under [parent]. Required rather than defaulted because it is the
+     * line between a send [drainAndClose] waits for ([writeSends], a local write) and one it does not
+     * ([ownJob], a retransmission a peer asked for).
+     */
+    private fun broadcastDelta(seq: Long, delta: S, parent: Job) {
         val msg = QuiltMessage.Delta(sender = replica, seq = seq, delta = delta)
         val bytes = encode(msg)
-        scope.launch {
+        scope.launch(parent) {
             runCatchingCancellable { seam.broadcast(bytes) }
                 .onFailure { logger.debug { "broadcastDelta failed: ${it.message}" } }
         }
@@ -1168,7 +1280,7 @@ public class Quilter<S : Quilted<S>>(
         }
         for (seq in msg.fromSeq..msg.toSeq) {
             val delta = pendingDeltas[seq] ?: continue
-            broadcastDelta(seq, delta)
+            broadcastDelta(seq, delta, parent = ownJob)
         }
     }
 
