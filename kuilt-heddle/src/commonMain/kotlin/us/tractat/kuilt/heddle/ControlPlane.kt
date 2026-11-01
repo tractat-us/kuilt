@@ -559,6 +559,10 @@ internal class HeddleControlPlane(
      */
     suspend fun submit(command: ControlCommand, timeout: Duration? = null): ControlOutcome {
         val movesGate = movesOwnGate(command)
+        val deferred = CompletableDeferred<ControlOutcome>()
+        // One step against [latch], which holds the same lock: a call either sees the halt here and
+        // writes nothing, or is registered in time for the latch to release it. Split in two, a call
+        // could pass the check and then register after the latch, with nothing left to complete it.
         val (key, requestId) = lock.withLock {
             halt()?.let { return refusedAsHalted(it) }
             val base = "${self.value}#$incarnation#$seq"
@@ -566,15 +570,12 @@ internal class HeddleControlPlane(
             if (movesGate) ownGateActs += k
             val r = seq
             seq++
+            applied[k]?.let { return it }
+            pending[k] = deferred
             k to r
         }
-        val deferred = CompletableDeferred<ControlOutcome>()
-        lock.withLock {
-            applied[key]?.let { return it }
-            pending[key] = deferred
-        }
-        val bytes = ControlLogCodec.encode(ControlEnvelope(key, command, self))
         try {
+            val bytes = ControlLogCodec.encode(ControlEnvelope(key, command, self))
             // The timeout spans BOTH the propose and the apply-await, so a leader *crash* (a forwarded
             // proposal that never commits and never rejects) surfaces instead of hanging forever.
             return if (timeout == null) {
@@ -701,7 +702,7 @@ internal class HeddleControlPlane(
         val outcome = decideAndApply(envelope, index)
         applied[envelope.requestKey] = outcome
         // Before the completion below, so a caller that does resume reads the gate it just moved.
-        if (ownGateActs.remove(envelope.requestKey)) {
+        if (ownGateActs.remove(envelope.requestKey) && outcome is ControlOutcome.Applied) {
             closedBecause.value = if (envelope.command is ControlCommand.Depart) GateClosed.Reason.Departed else null
         }
         pending[envelope.requestKey]?.complete(outcome)
