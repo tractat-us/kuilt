@@ -455,7 +455,8 @@ private const val RELAY_FORWARD_CAPACITY = 64
  *   out an authoritative [AdmitMessage.Paused] / [AdmitMessage.Unpaused] to the other members,
  *   so a member with no heartbeat edge to the paused peer (a star topology's other joiners)
  *   sees the same events a mesh peer detects for itself (#1557). Receipt is idempotent, so a
- *   mesh peer that detects locally *and* receives the fan-out emits once.
+ *   mesh peer that detects locally *and* receives the fan-out emits once. A pause ended by a
+ *   resume fans out the same [AdmitMessage.Unpaused], so those members see `Recovered` (#2908).
  * - **Clean leave** (a peer's [AdmitMessage.Goodbye]): the host evicts with
  *   [MembershipEvent.Left(Normal)] and propagates an authoritative [AdmitMessage.Farewell]
  *   to every remaining member ([propagateFarewell]), so joiners also evict promptly with
@@ -1292,11 +1293,20 @@ internal class SeamRoom(
      * send a [AdmitMessage.ResumeAck] to the joiner so the joiner's pending resume flight
      * ([JoinerResumeMachine]) resolves as [ResumeResult.Success].
      *
+     * Announces the release to the other members only when this call is what ended the pause (#2908).
+     * The `Resume` frame and the detector's [PartitionEvent.PeerRecovered] race: whichever arrives
+     * first restores [Liveness.Connected], and the loser finds nothing to do. [markRecovered] gates
+     * its own [propagateUnpaused] on the same transition, so exactly one of the two sends it.
+     *
      * State mutation under lock; suspend send outside lock.
      */
     private suspend fun handleReconnectResumed(peerId: PeerId) {
-        val updated = lock.withLock { updateMemberLiveness(peerId, Liveness.Connected) } ?: return
+        val (wasPartitioned, updated) = lock.withLock {
+            val wasPartitioned = admittedById[peerId]?.liveness is Liveness.Partitioned
+            wasPartitioned to (updateMemberLiveness(peerId, Liveness.Connected) ?: return)
+        }
         emitEvent(MembershipEvent.Resumed(updated.id))
+        if (wasPartitioned) propagateUnpaused(peerId)
         val ackBytes = AdmitMessage.encode(AdmitMessage.ResumeAck)
         runCatchingCancellable { seam.sendTo(peerId, ackBytes) }
     }
