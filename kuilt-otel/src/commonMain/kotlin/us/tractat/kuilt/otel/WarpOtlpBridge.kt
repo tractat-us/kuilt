@@ -30,8 +30,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpOtlpBridge"
  * digest-gated delta skips span ids already recorded as delivered. A lost digest or
  * failed acknowledgement can cause another send, which relies on [OtlpEdge.send]'s
  * idempotency requirement. Snapshot merge is separately idempotent by full record
- * equality. Retrying an unstamped export after an indeterminate write can leave
- * distinct stamped copies with one span id; this bridge does not coalesce them.
+ * equality. Retrying an unstamped export after an indeterminate write and a restart
+ * can leave distinct stamped copies with one span id; this bridge does not coalesce them.
  * If their id is absent from the digest, both copies are eligible for delivery.
  *
  * ## Best-effort, per-signal isolation

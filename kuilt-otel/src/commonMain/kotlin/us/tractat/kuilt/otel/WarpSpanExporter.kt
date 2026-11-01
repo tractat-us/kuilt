@@ -5,6 +5,7 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -228,15 +229,20 @@ public class WarpSpanExporter(
      * older concurrent snapshot. The span snapshot is re-encoded inside that section, so a
      * concurrent add is never dropped by a stale snapshot either.
      *
-     * On a non-cancellation failure in the durable-write section, a freshly stamped
-     * span is removed from the in-memory set. The clock sequence is not rolled back.
-     * This only undoes the live add: a failed write may already have committed, or may
-     * commit later. Recovery can therefore restore that span, and retrying the original
-     * unstamped span can mint another dot and create a second stamped copy. Cancellation
-     * propagates without running this rollback, leaving the live add in place, whether it
-     * arrives while waiting for the write section or inside the write. A caller that cancels
-     * an export (through its own timeout, say) and retries the unstamped span therefore holds
-     * two stamped copies in memory, with no landed write and no recovery involved.
+     * On a failure or a cancellation, a freshly stamped span is removed from the in-memory
+     * set, whether cancellation arrives inside the write or while waiting for the write
+     * section, and the cancellation then propagates. So a caller that cancels an export
+     * (through its own timeout, say) and retries the unstamped span holds one stamped copy,
+     * and an export that is cancelled or fails with no retry **loses its span from memory**.
+     * The clock is not rolled back: its sequence stays advanced and its frontier keeps the
+     * removed dot, so the next stamp can name a predecessor that never resolves.
+     *
+     * This only undoes the live add. A failed or cancelled write may already have committed,
+     * or may commit later, and because the stamp enters memory before the write section, a
+     * concurrent export's successful write can carry it as well. The store then holds a copy
+     * memory has dropped, until the next write replaces the snapshot. A restart in that
+     * window recovers it, and retrying the original unstamped span mints another dot and
+     * creates a second stamped copy.
      *
      * Returns [ExportResult.Success] after the durable write returns. A non-cancellation
      * failure in that section returns [ExportResult.Failure]; neither failure nor
@@ -264,40 +270,50 @@ public class WarpSpanExporter(
         }
         // Serialize the durable-write section across concurrent export()/merge() so the
         // clock persist and the span write are one ordered unit (#1053).
-        return ioMutex.withLock {
-            runCatchingCancellable {
-                // Re-encode the *latest* spans inside the section so no concurrent add is
-                // dropped by a stale snapshot; encoding before the persist keeps the
-                // persisted seq ≥ every dot in this snapshot (seq is monotonic).
-                val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
-                // Persist the clock BEFORE the span so the durable clock seq is always ≥
-                // every durable span's dot — a crash between the two writes can only lose
-                // the span, never re-mint its dot on recover (#1053).
-                causalClock?.persist(store)
-                store.write(STORE_KEY, encoded)
-            }.fold(
-                onSuccess = {
-                    persistence.acknowledged(clockAndSpanWork)
-                    durableWriteSucceeded()
-                    ExportResult.Success
-                },
-                onFailure = { cause ->
-                    persistence.failed(clockAndSpanWork, cause)
-                    if (minted) {
-                        // Remove this freshly stamped value from memory. This does not undo
-                        // a landed store write or prevent a duplicate on retry after recovery.
-                        // remove() leaves concurrent adds of different spans alone.
-                        lock.withLock { spans = spans.piece { current -> current.remove(stamped) } }
-                    }
-                    // Roll back before the outage report; the health count above records the turn
-                    // either way. Cancellation propagates above without reaching this fold, so it
-                    // is counted as neither acknowledged nor failed; reporting only opens an outage once.
-                    durableWriteFailed(cause) {
-                        logger.error(it) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
-                    }
-                },
-            )
+        return try {
+            ioMutex.withLock {
+                runCatchingCancellable {
+                    // Re-encode the *latest* spans inside the section so no concurrent add is
+                    // dropped by a stale snapshot; encoding before the persist keeps the
+                    // persisted seq ≥ every dot in this snapshot (seq is monotonic).
+                    val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
+                    // Persist the clock BEFORE the span so the durable clock seq is always ≥
+                    // every durable span's dot — a crash between the two writes can only lose
+                    // the span, never re-mint its dot on recover (#1053).
+                    causalClock?.persist(store)
+                    store.write(STORE_KEY, encoded)
+                }.fold(
+                    onSuccess = {
+                        persistence.acknowledged(clockAndSpanWork)
+                        durableWriteSucceeded()
+                        ExportResult.Success
+                    },
+                    onFailure = { cause ->
+                        persistence.failed(clockAndSpanWork, cause)
+                        if (minted) removeFromMemory(stamped)
+                        // Roll back before the outage report; the health count above records the turn
+                        // either way. Cancellation propagates past this fold, so it is counted as
+                        // neither acknowledged nor failed; reporting only opens an outage once.
+                        durableWriteFailed(cause) {
+                            logger.error(it) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
+                        }
+                    },
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            // Around the whole section, not the write: a waiter on ioMutex has its stamp in memory too.
+            // The removal takes no suspension point, so it completes while this coroutine is cancelled.
+            if (minted) removeFromMemory(stamped)
+            throw cancelled
         }
+    }
+
+    /**
+     * Remove a freshly stamped value from memory. This does not undo a landed store write or prevent
+     * a duplicate on retry after recovery. `remove` leaves concurrent adds of different spans alone.
+     */
+    private fun removeFromMemory(stamped: SpanRecord) {
+        lock.withLock { spans = spans.piece { current -> current.remove(stamped) } }
     }
 
     /**
