@@ -105,7 +105,7 @@ class NwFactoryJoinHostDropLoopbackTest {
 
                 recorder.cancel()
                 assertAll(
-                    { assertContentEquals(payload, received.bytes, "events: $events") },
+                    { assertContentEquals(payload, received.payload, "events: $events") },
                     { assertTrue(!hostLost.isCompleted, "the seat survived the drop: $events") },
                     { assertTrue(events.any { it is MembershipEvent.WindowOpened }, "the drop was seen: $events") },
                 )
