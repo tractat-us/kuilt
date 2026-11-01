@@ -15,6 +15,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -82,8 +83,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ClusterClient")
 public class ClusterClient internal constructor(
     private val raftNode: RaftNode,
     /**
-     * Everything this client started besides [raftNode], and which it must end. An already-completed
-     * job when the caller manages the transport itself ([clusterClientWithNode]).
+     * The job whose end releases what this client started besides [raftNode]: the reconnect loop, which
+     * leaves its room and closes the relay as it ends, and stops the relay transport's pumps once it
+     * has. An already-completed job when the caller manages the transport itself
+     * ([clusterClientWithNode]).
      */
     private val connection: Job,
 ) {
@@ -126,16 +129,26 @@ public class ClusterClient internal constructor(
         raftNode.propose(command, requestId)
 
     /**
-     * Close this client and end its connection: no further dials reach the fabric, and the room it
-     * joined has been left, including when a join was still in flight. Idempotent.
+     * Close this client and end its connection: no further dials reach the fabric, the room it joined
+     * has been left, and the relay transport's pumps have stopped. Idempotent.
      *
-     * After this call [committed] terminates and further [propose] calls throw. As [RaftNode.close]
-     * says, collectors tied directly to the owning scope stay parked until that scope ends; none of
-     * them dials.
+     * A join still in flight is cancelled. If the fabric finishes it anyway and hands back a seam, this
+     * call waits for that and closes the seam. A fabric whose dial outlives the cancel without handing
+     * anything back keeps its link: that case on `KtorClientLoom` is tracked by #3044.
+     *
+     * After this call further [propose] calls throw, but [committed] does **not** complete: it is a hot
+     * flow on the real engine, so a collector of it stays suspended until its own scope is cancelled.
+     * As [RaftNode.close] says, collectors tied directly to the owning scope stay parked until that scope
+     * ends; none of them dials.
      *
      * Runs to the end even if the caller is already cancelled, since a host usually closes its clients
      * from a teardown path. Called from inside the reconnect loop itself, through a [Loom] that closes
      * the client, it returns without waiting for that loop, which ends at its next suspension.
+     *
+     * **This call can hang.** It waits for the room's leave, which is shielded from cancellation, sends
+     * its goodbye first and closes the seam only after that. Against a peer that has stopped reading,
+     * with the outbound queue full, the goodbye never gets out, so this call does not return, and a
+     * cancelled owning scope cannot finish either. That is tracked by #3043.
      */
     public suspend fun close() {
         // Read before the shield: inside it, the current job's parent is NonCancellable, not the caller.
@@ -335,6 +348,9 @@ internal fun buildClusterClient(
         var room: Room? = null
         try {
             while (true) {
+                // The shielded leave below cannot be interrupted and returning from it checks nothing,
+                // so a cancel that landed during it would otherwise reach the fabric as one more dial.
+                currentCoroutineContext().ensureActive()
                 val joined = factory.join(reconnect.currentEndpoint())
                 room = joined
                 val channel = joined.channel("raft")
@@ -361,6 +377,9 @@ internal fun buildClusterClient(
             room?.let { leaveShielded(it) }
         }
     }
+
+    // Not in the loop's `finally`: a loop cancelled before its first dispatch never runs its body.
+    reconnectLoop.invokeOnCompletion { transport.close() }
 
     return ClusterClient(raftNode, connection = reconnectLoop)
 }

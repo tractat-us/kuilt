@@ -31,7 +31,8 @@ Wraps a Raft learner `RaftNode` and exposes:
   model.
 - **`close()`** — closes the underlying `RaftNode`, stops the reconnect loop and
   leaves the room it joined, so the fabric sees no further dials. Idempotent, and
-  finishes even if its caller is already cancelled.
+  runs on even if its caller is already cancelled. It can hang on a peer that has
+  stopped reading; see its KDoc.
 
 Obtain an instance via `clusterClientWithNode(raftNode)` (tests / caller-managed
 transport) or via `CoroutineScope.clusterClient()` (production relay-room path).
