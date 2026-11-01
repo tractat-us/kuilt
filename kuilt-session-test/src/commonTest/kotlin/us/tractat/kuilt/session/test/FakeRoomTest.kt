@@ -830,12 +830,15 @@ class FakeRoomTest {
         }
 
         room.hostLost(Instant.fromEpochMilliseconds(5000L))
-        reader.join()
+        runCurrent()
+        val readerCompleted = reader.isCompleted
+        reader.cancel()
 
-        val events = room.events.toList()
+        val event = room.events.first { it is MembershipEvent.HostLost }
         assertAll(
-            { assertIs<MembershipEvent.HostLost>(events.last(), "the event still arrives, last") },
-            { assertEquals(emptySet(), rosterAtCompletion, "the roster is already empty when the flow completes") },
+            { assertIs<MembershipEvent.HostLost>(event, "the event still arrives") },
+            { assertTrue(readerCompleted, "the member's flow has completed") },
+            { assertEquals(emptySet(), rosterAtCompletion, "the roster was already empty when it did") },
             { assertEquals(emptySet(), room.roster.value, "a room that lost its host has no members") },
         )
     }
