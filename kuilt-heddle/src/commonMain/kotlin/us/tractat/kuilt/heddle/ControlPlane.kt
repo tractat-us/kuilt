@@ -190,7 +190,10 @@ internal data class ControlEnvelope(
  * peer derives the **same** outcome for a given index — the proposer reads back its own act's outcome.
  */
 public sealed interface ControlOutcome {
-    /** The Raft log index this act committed at, or [NOT_COMMITTED] for a locally-refused act. */
+    /**
+     * The Raft log index this act committed at, [NOT_COMMITTED] for an act refused before it reached
+     * the log, or [COMMIT_UNKNOWN] when this peer cannot say ([Indeterminate]).
+     */
     public val index: Long
 
     /** The act was admitted and applied to the log-order control state (and published to the data plane). */
@@ -198,19 +201,36 @@ public sealed interface ControlOutcome {
 
     /**
      * The act was **refused** — it lost an overlapping-reshape race, its precondition no longer held
-     * once ordered, or it was refused locally before proposing (a non-drained retire). The
-     * entitlement state is untouched; the loser is surfaced as a structured [conflict], never
-     * silently dropped and never resolved by a clock (design §4.6, §9).
+     * once ordered, or it was refused locally before proposing (a non-drained retire, or a peer already
+     * halted at a control act it cannot read). The entitlement state is untouched; the loser is
+     * surfaced as a structured [conflict], never silently dropped and never resolved by a clock
+     * (design §4.6, §9). Retrying is safe, because this act will never take effect.
      */
     public data class Conflict(override val index: Long, public val conflict: ControlConflict) : ControlOutcome
 
+    /**
+     * **This peer cannot say what became of the act.** It was proposed, and before this peer saw it
+     * apply, this peer halted at the control act [halt] names. It applies nothing past that entry, so
+     * it cannot see the act's own entry, which sits later in the log.
+     *
+     * That entry can still commit, or already has, and a peer that can read the log will apply it. So
+     * this is not a refusal, and it is a separate type so that code retrying on [Conflict] does not
+     * retry on it. A fresh call is a new logical act: a mint retried elsewhere after this answer can
+     * mint twice. Resubmit only once a read on a peer that can still apply the log shows the act did
+     * not land.
+     *
+     * @property halt the entry that stopped this peer, the same reason its write gate now reports.
+     */
+    public data class Indeterminate(public val halt: GateClosed.Reason.UnreadableControlEntry) : ControlOutcome {
+        override val index: Long get() = COMMIT_UNKNOWN
+    }
+
     public companion object {
-        /**
-         * [index] sentinel for an act refused locally, before it ever reached the log. One exception:
-         * a call in flight when this peer halts at a control act it cannot read gets this answer too,
-         * and its act may still commit, since nothing past that entry will apply here.
-         */
+        /** [index] sentinel for an act refused locally, so it never reached the log and never will. */
         public const val NOT_COMMITTED: Long = -1L
+
+        /** [index] sentinel for an [Indeterminate] act, which may or may not have a log index by now. */
+        public const val COMMIT_UNKNOWN: Long = -2L
     }
 }
 
@@ -234,7 +254,8 @@ public sealed interface ControlConflict {
      * unknown/divergent or retired edge, a retire of a non-CLOSING edge, or a retire refused
      * **locally** because the edge is not drained (retiring a non-drained edge would strand its
      * outstanding entitlement, since a RETIRED edge is no longer on the live lineage the data plane
-     * drains through). The [reason] is a diagnostic string.
+     * drains through). Also any act a peer refuses because it has already halted at a control act it
+     * cannot read. The [reason] is a diagnostic string.
      */
     public data class Refused(public val reason: String) : ControlConflict
 }
@@ -325,8 +346,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControl
  * ## Exactly-once
  *
  * Each act carries a [ControlEnvelope.requestKey] unique per logical act and stable across a retry
- * (`self#incarnation#seq`). The apply loop dedups on it ([applied]), and a mint derives its [MintId]
- * from it — so a distinct act never collides (no silent mint loss) and a retry never double-mints.
+ * (`self#incarnation#seq`, plus a per-run nonce on the two acts that move the write gate, below). The
+ * apply loop dedups on it ([applied]), and a mint derives its [MintId] from it — so a distinct act
+ * never collides (no silent mint loss) and a retry never double-mints.
  * [submit] retries on [LeadershipLostException] reusing the same key + Raft `requestId`, and can be
  * bounded by a timeout.
  *
@@ -530,14 +552,15 @@ internal class HeddleControlPlane(
      * the timeout or commits after it (see the class KDoc).
      *
      * **Halted.** Once this peer has met a control act it cannot read, this answers a
-     * [ControlOutcome.Conflict] at [ControlOutcome.NOT_COMMITTED] without proposing. A call already in
-     * flight when the halt happens gets the same answer rather than hanging, though its act may yet
-     * commit: nothing past the unreadable entry will ever apply here, so this peer cannot say.
+     * [ControlOutcome.Conflict] at [ControlOutcome.NOT_COMMITTED] without proposing, so that answer
+     * means the act was never written. A call registered before the halt gets
+     * [ControlOutcome.Indeterminate] instead, once its proposal returns: its act may still commit, and
+     * nothing past the unreadable entry will ever apply here, so this peer cannot say.
      */
     suspend fun submit(command: ControlCommand, timeout: Duration? = null): ControlOutcome {
         val movesGate = movesOwnGate(command)
         val (key, requestId) = lock.withLock {
-            halt()?.let { return haltedOutcome(it) }
+            halt()?.let { return refusedAsHalted(it) }
             val base = "${self.value}#$incarnation#$seq"
             val k = if (movesGate) "$base#$gateNonce" else base
             if (movesGate) ownGateActs += k
@@ -592,7 +615,7 @@ internal class HeddleControlPlane(
     private fun halt(): GateClosed.Reason.UnreadableControlEntry? =
         closedBecause.value as? GateClosed.Reason.UnreadableControlEntry
 
-    private fun haltedOutcome(halt: GateClosed.Reason.UnreadableControlEntry): ControlOutcome =
+    private fun refusedAsHalted(halt: GateClosed.Reason.UnreadableControlEntry): ControlOutcome =
         ControlOutcome.Conflict(
             ControlOutcome.NOT_COMMITTED,
             ControlConflict.Refused(
@@ -644,11 +667,14 @@ internal class HeddleControlPlane(
         }
     }
 
-    /** Close the gate for good and release every caller still waiting. Called under [lock]. */
+    /**
+     * Close the gate for good and release every caller still waiting, none of whom can be told whether
+     * their act commits (see [ControlOutcome.Indeterminate]). Called under [lock].
+     */
     private fun latch(index: Long, version: Int?) {
         val reason = GateClosed.Reason.UnreadableControlEntry(index, version)
         closedBecause.value = reason
-        val outcome = haltedOutcome(reason)
+        val outcome = ControlOutcome.Indeterminate(reason)
         pending.values.forEach { it.complete(outcome) }
     }
 

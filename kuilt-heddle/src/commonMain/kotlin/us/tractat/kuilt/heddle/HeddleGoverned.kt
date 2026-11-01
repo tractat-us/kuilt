@@ -442,7 +442,9 @@ public class GovernedHeddleNode internal constructor(
         for (edge in control.projectionSnapshot().retiredInboundEdges(child)) {
             if (control.pendingAcks(edge) == null) {
                 val opened = quiesce(edge, timeout)
-                if (opened is ControlOutcome.Conflict) return opened
+                // Not just a refusal: an indeterminate barrier must not be masked by the definite
+                // refusal the Reconcile below would then draw, which says nothing about this act.
+                if (opened !is ControlOutcome.Applied) return opened
             }
         }
         return control.submit(ControlCommand.Reconcile(child), timeout)

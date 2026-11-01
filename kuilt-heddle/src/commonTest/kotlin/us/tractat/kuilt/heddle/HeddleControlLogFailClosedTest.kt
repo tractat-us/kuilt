@@ -188,11 +188,12 @@ class HeddleControlLogFailClosedTest {
             val entry = raft.pushCommitted(ControlLogVectors.taggedAtVersion(99))
             runCurrent()
             release.complete(Unit)
-            val outcome = assertIs<ControlOutcome.Conflict>(enrolling.await(), "the caller is told, not left hanging")
+            val outcome = assertIs<ControlOutcome.Indeterminate>(enrolling.await(), "the caller is told, not left hanging")
             runCurrent()
 
             assertAll(
-                { assertIs<ControlConflict.Refused>(outcome.conflict) },
+                { assertEquals(GateClosed.Reason.UnreadableControlEntry(entry.index, 99), outcome.halt) },
+                { assertEquals(ControlOutcome.COMMIT_UNKNOWN, outcome.index, "not the never-reached-the-log sentinel") },
                 { assertTrue(raft.commitIndex.value > entry.index, "rig: its entry committed past the latch") },
                 { assertEquals(emptySet(), governed.enrolledReplicas(), "its entry must not apply") },
                 { assertFalse(governed.isWritable, "and must not reopen the gate") },
@@ -203,6 +204,75 @@ class HeddleControlLogFailClosedTest {
                     )
                 },
             )
+        }
+
+    /**
+     * The failure this type exists for: automation that retries a refused mint on another peer would
+     * mint twice if this answer read as a refusal, because the original commits. It must not, and the
+     * call refused up front must stay distinguishable from it.
+     */
+    @Test
+    fun aMintInFlightAtTheHaltIsNotARefusalButOneAfterItIs() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val raft = FakeRaftNode(initialRole = RaftRole.Leader)
+            val governed = boot(raft, "in-flight-mint")
+            val release = CompletableDeferred<Unit>()
+            raft.proposeBehavior = { command ->
+                release.await()
+                raft.pushCommitted(command)
+            }
+            val inFlight = async { governed.mint(SELF, 5L) }
+            runCurrent()
+            assertEquals(1, raft.proposals.size, "rig: the mint was proposed before the halt")
+
+            raft.pushCommitted(ControlLogVectors.taggedAtVersion(99))
+            runCurrent()
+            release.complete(Unit)
+            val first = inFlight.await()
+            runCurrent()
+            val committedAfter = raft.commitIndex.value
+            val second = governed.mint(SELF, 5L)
+
+            assertAll(
+                { assertIs<ControlOutcome.Indeterminate>(first, "the act may still commit: not a refusal") },
+                { assertEquals(2L, committedAfter, "rig: and here it did commit, past the halt") },
+                { assertIs<ControlOutcome.Conflict>(second, "refused up front: certainly not written") },
+                { assertEquals(ControlOutcome.NOT_COMMITTED, second.index) },
+                { assertEquals(1, raft.proposals.size, "the refused call wrote nothing") },
+            )
+        }
+
+    /**
+     * `reconcile` opens its barriers one call at a time. An indeterminate barrier has to reach the
+     * caller, not be replaced by the definite refusal the `Reconcile` act would then draw: that answer
+     * would say nothing was written, while the barrier may yet commit.
+     */
+    @Test
+    fun anIndeterminateBarrierIsWhatReconcileReturns() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val raft = FakeRaftNode(initialRole = RaftRole.Leader)
+            val governed = boot(raft, "reconcile")
+            val edge = AttachmentId("edge")
+            val child = GroupId("child")
+            assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(edge, ROOT, child, Weight.of(1))))
+            assertIs<ControlOutcome.Applied>(governed.activate(edge))
+            assertIs<ControlOutcome.Applied>(governed.close(edge))
+            assertIs<ControlOutcome.Applied>(governed.retire(edge))
+            val release = CompletableDeferred<Unit>()
+            raft.proposeBehavior = { command ->
+                release.await()
+                raft.pushCommitted(command)
+            }
+            val proposalsBefore = raft.proposals.size
+
+            val reconciling = async { governed.reconcile(child) }
+            runCurrent()
+            assertEquals(proposalsBefore + 1, raft.proposals.size, "rig: the barrier is in flight")
+            raft.pushCommitted(ControlLogVectors.taggedAtVersion(99))
+            runCurrent()
+            release.complete(Unit)
+
+            assertIs<ControlOutcome.Indeterminate>(reconciling.await())
         }
 
     /** A restart replays the same log to the same entry, so restarting cannot clear the latch either. */
