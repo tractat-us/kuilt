@@ -89,7 +89,8 @@ class DurableIdentityRestartTest {
         TRIO.forEach { rig.start(it) }
 
         TRIO.forEach { rig.awaitReplay(it, through) }
-        assertAll(TRIO.map { id -> { rig.assertStayedUpHavingWalked(id, listOf(1L, 2L)) } })
+        val perNode: List<() -> Unit> = TRIO.map { id -> { rig.assertStayedUpHavingWalked(id, listOf(1L, 2L)) } }
+        assertAll(*perNode.toTypedArray())
     }
 
     @Test
