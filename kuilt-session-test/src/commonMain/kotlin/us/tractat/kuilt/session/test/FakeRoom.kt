@@ -517,16 +517,18 @@ public class FakeRoom(
     }
 
     /**
-     * Emit [MembershipEvent.HostLost] (terminal event on a joiner's room).
-     * After this, [broadcast] and [sendTo] become silent no-ops per the contract.
+     * Emit [MembershipEvent.HostLost] (terminal event on a joiner's room), then [leave], as the real
+     * room does. After this, [broadcast] and [sendTo] become silent no-ops per the contract, the roster
+     * is empty and every [incomingFrom] flow has completed. A no-op on a room that has already left.
      *
      * Tagged with this fake's **current** [Room.localFabric], as [partition] is — so a test can
      * reproduce #1712's headline case (our own radio died, so "the host is gone" is not a claim
      * about the host) by calling [setLocalFabric] with [FabricAvailability.Unavailable] first.
      */
     public suspend fun hostLost(at: Instant, reason: FailureReason = FailureReason.WindowExpired) {
-        left.value = true
+        if (left.value) return
         eventsChannel.send(MembershipEvent.HostLost(at, reason, localFabric = _localFabric.value))
+        leave(LeaveReason.Error("host lost"))
     }
 
     /**

@@ -819,6 +819,28 @@ class FakeRoomTest {
     }
 
     @Test
+    fun `hostLost ends the room after its event as the real room does`() = runTest {
+        val room = FakeRoom()
+        val host = PeerId("host")
+        room.addMember(member(host))
+        var rosterAtCompletion: Set<PeerId>? = null
+        val reader = launch(UnconfinedTestDispatcher(testScheduler)) {
+            room.incomingFrom(host).toList()
+            rosterAtCompletion = room.roster.value.mapTo(mutableSetOf()) { it.id }
+        }
+
+        room.hostLost(Instant.fromEpochMilliseconds(5000L))
+        reader.join()
+
+        val events = room.events.toList()
+        assertAll(
+            { assertIs<MembershipEvent.HostLost>(events.last(), "the event still arrives, last") },
+            { assertEquals(emptySet(), rosterAtCompletion, "the roster is already empty when the flow completes") },
+            { assertEquals(emptySet(), room.roster.value, "a room that lost its host has no members") },
+        )
+    }
+
+    @Test
     fun `re-adding a present member keeps its inbox and re-adding after removal starts a fresh one`() = runTest {
         val room = FakeRoom()
         val alice = PeerId("alice")

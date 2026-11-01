@@ -1089,6 +1089,39 @@ public abstract class RoomConformanceSuite {
             hostRoom.leave()
         }
 
+    /** Losing the host ends a joiner's room the same way, so the same inference has to hold. */
+    @Test
+    public fun hostLostEmptiesTheRosterBeforeItCompletesTheHostsReader(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val faultyLoom = h.faults.injectorOrDeclaredGap("HostLost empties the roster before completing the host's reader")
+                ?: return@runTest
+
+            h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val hostId = joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }.single().id
+
+            var rosterAtCompletion: Set<PeerId>? = null
+            val reader = async(UnconfinedTestDispatcher(testScheduler)) {
+                joinerRoom.awaitEnd(joinerRoom.incomingFrom(hostId), mutableListOf(), "the host's reader when the host was lost")
+                    .also { rosterAtCompletion = joinerRoom.roster.value.mapTo(mutableSetOf()) { it.id } }
+            }
+            val hostLost = async {
+                joinerRoom.awaitEvent("MembershipEvent.HostLost") { it as? MembershipEvent.HostLost }
+            }
+            faultyLoom.setFaultProfileOnAll(FaultProfile.DropAll(Direction.Both))
+            repeat(9) { h.advanceClock(100L); advanceTimeBy(100L) }
+
+            val event = hostLost.await()
+            val failure = reader.await()
+            assertAll(
+                { assertIs<MembershipEvent.HostLost>(event, "rig: the host really was lost") },
+                { assertEquals(null, failure, "rig: the reader completed, which is what makes the next line a claim about completion") },
+                { assertEquals(emptySet(), rosterAtCompletion, "when the host's flow completes, the published roster is already empty") },
+                { assertEquals(emptySet(), joinerRoom.roster.value, "a room that lost its host has no members") },
+            )
+        }
+
     private suspend fun TestScope.assertLeaveEndsTheRosterFirst(room: Room, member: PeerId) {
         val channelView = room.channel("terminal-room")
         val leftEvents = mutableListOf<MembershipEvent.Left>()

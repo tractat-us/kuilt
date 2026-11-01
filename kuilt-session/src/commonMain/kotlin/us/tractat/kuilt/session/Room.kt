@@ -44,7 +44,8 @@ public interface Room {
      *
      * A peer is absent until the admit/identify handshake completes.
      * A peer is removed on clean [leave] or transport disconnect.
-     * A room that has itself called [leave] has no members: see [leave].
+     * A room that has itself called [leave], or lost its host, has no members: see [leave] and
+     * [MembershipEvent.HostLost].
      *
      * **This is the authoritative, replay-safe source of current membership.** Being a
      * [StateFlow], a new collector immediately receives the current set. Reach for [roster]

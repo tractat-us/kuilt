@@ -122,6 +122,11 @@ public sealed interface MembershipEvent {
      * Terminal state — no further events follow. [Room.broadcast] and [Room.sendTo]
      * become silent no-ops after this event.
      *
+     * The room then ends itself as [Room.leave] does: [Room.roster] empties and every
+     * [Room.incomingFrom] flow completes. The event comes first and the room does not wait for a
+     * handler, so a handler reading `room.roster.value` may see either the old list or an empty one.
+     * Keep what you need from the roster before this event rather than reading it here.
+     *
      * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerLost] for the
      * host peer. The room does not auto-elect a new host.
      *
