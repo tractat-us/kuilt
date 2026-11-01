@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToByteArray
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.PeerId
@@ -27,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -113,6 +115,71 @@ class MuxRaftViewBurstProbeTest {
         val result = Trial(torn != null, emitted.get(), failure.get(), torn?.reason)
         scope.cancel()
         return result
+    }
+
+    @Test
+    fun printFrame() {
+        println("w2863 frameHex=" + heartbeat().joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') } + " size=" + heartbeat().size)
+    }
+
+    /** Control: the same burst, the same dispatcher, with a reader that does nothing per frame. */
+    @Test
+    fun controlTrivialReader() {
+        val frame = heartbeat()
+        for (burst in listOf(300, 600, 1000, 5000)) {
+            val tornCount = (0 until 10).count {
+                val scope = CoroutineScope(Dispatchers.Default + Job())
+                val start = CompletableDeferred<Unit>()
+                val done = CompletableDeferred<Unit>()
+                val base = object : Seam by FakeSeam(selfId = PeerId("a")) {
+                    override val incoming: Flow<Swatch> = flow {
+                        start.await()
+                        repeat(burst) { emit(Swatch(frame, sender = sender)) }
+                        done.complete(Unit)
+                    }
+                }
+                val view = MuxSeam(base, scope).channel(raftTag)
+                scope.launch { view.incoming.collect { } }
+                Thread.sleep(5)
+                start.complete(Unit)
+                val deadline = System.nanoTime() + 5_000_000_000L
+                while (!done.isCompleted && view.state.value !is SeamState.Torn && System.nanoTime() < deadline) {
+                    Thread.sleep(1)
+                }
+                Thread.sleep(20)
+                val torn = view.state.value is SeamState.Torn
+                scope.cancel()
+                torn
+            }
+            println("w2863 control trivialReader default burst=$burst torn=$tornCount/10")
+        }
+    }
+
+    /** What a tear of the BASE does to a node over a view today, independent of overflow. */
+    @Test
+    fun baseTearReachesTheEngine() {
+        val failure = AtomicReference<Throwable?>(null)
+        val handler = CoroutineExceptionHandler { _, e -> failure.compareAndSet(null, e) }
+        val scope = CoroutineScope(Dispatchers.Default + Job() + handler)
+        val fake = FakeSeam(selfId = PeerId("a"))
+        val mux = MuxSeam(fake, scope)
+        val view = mux.channel(raftTag)
+        scope.raftNode(
+            clusterConfig = ClusterConfig(voters = setOf(NodeId("a"), NodeId("b"), NodeId("c"))),
+            transport = SeamRaftTransport(view),
+            storage = InMemoryRaftStorage(),
+            raftConfig = RaftConfig(
+                electionTimeoutMin = 200.milliseconds,
+                electionTimeoutMax = 300.milliseconds,
+                heartbeatInterval = 50.milliseconds,
+                random = Random(1),
+            ),
+        )
+        Thread.sleep(50)
+        runBlocking { view.close(CloseReason.Normal) }
+        Thread.sleep(1000)
+        println("w2863 tornView=${view.state.value} scopeFailure=${failure.get()} scopeActive=${scope.coroutineContext[Job]?.isActive}")
+        scope.cancel()
     }
 
     @Test
