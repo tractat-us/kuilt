@@ -204,7 +204,10 @@ class TcpLoomFactoryTest {
         host = tcpLoomHost(serverSocket, selector),
         joiner = tcpLoomJoin(selector, policy = DeliveryPolicy(capacity = 1, overflow = Overflow.FAIL)),
     ) { hostSeam, joinerSeam ->
-        repeat(4) { hostSeam.broadcast(byteArrayOf(it.toByte())) }
+        repeat(2) { hostSeam.broadcast(byteArrayOf(it.toByte())) }
+        // Forces the order CI hit by luck: the joiner's tear reaches the host before frames 3 and 4.
+        withTimeout(5.seconds) { hostSeam.state.first { it is SeamState.Torn } }
+        repeat(2) { hostSeam.broadcast(byteArrayOf((it + 2).toByte())) }
         val torn = withTimeoutOrNull(5.seconds) { joinerSeam.state.first { it is SeamState.Torn } }
         assertTrue(
             torn is SeamState.Torn,
