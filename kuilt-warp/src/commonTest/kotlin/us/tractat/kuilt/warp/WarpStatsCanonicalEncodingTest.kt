@@ -162,7 +162,10 @@ class WarpStatsCanonicalEncodingTest {
          * shares nothing with kotlinx-serialization. Do not regenerate it to clear a red: a change
          * here is a wire change, and that wants a conversation first.
          */
-        const val GOLDEN: String = "TODO-golden"
+        const val GOLDEN: String = 
+            "bf68736b657463686573bf624161bf69707265636973696f6e04697265676973746572739f0000000000010000000000" +
+            "00ffff624242bf69707265636973696f6e04697265676973746572739f000000000001000000000000ffff624323bf69" +
+            "707265636973696f6e04697265676973746572739f000000000001000000000000ffffffff"
     }
 }
 
