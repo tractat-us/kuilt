@@ -80,6 +80,7 @@ internal class EntitlementLedgerConvergenceTest : LatticeLawSuite<EntitlementLed
                 )
             },
             LatticeOp("lifecycle", OpKind.ASSERT) { state, _, random ->
+                // ALLOW-hashOrderedDraw: an enum's `entries` is a declared-order list, not a Map view.
                 val stage = Lifecycle.entries.random(random)
                 state.piece(EntitlementLedger.of(lifecycle = mapOf(random.edge() to stage)))
             },
