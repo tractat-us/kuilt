@@ -2,6 +2,7 @@ package us.tractat.kuilt.warp
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.crdt.CanonicalMapSerializer
 import us.tractat.kuilt.crdt.HyperLogLog
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
@@ -27,7 +28,8 @@ import us.tractat.kuilt.crdt.piece
  *
  * **No networking in this type.** [WarpStats] is a pure CRDT value — no `Seam`,
  * no coroutines. Gossip transport is the [us.tractat.kuilt.quilter.Quilter]'s job;
- * this class only defines *what* gets gossiped.
+ * this class only defines *what* gets gossiped. Equal stats encode to equal bytes whichever order
+ * they merged in, since that transport hashes this encoding for its anti-entropy root.
  *
  * @sample us.tractat.kuilt.warp.sampleWarpStats
  * @see HyperLogLog
@@ -36,7 +38,9 @@ import us.tractat.kuilt.crdt.piece
 public class WarpStats private constructor(
     // @SerialName preserves the "sketches" wire-format name while freeing the
     // Kotlin identifier so the public fun sketches() accessor can use it.
-    @SerialName("sketches") private val _sketches: Map<OpId, HyperLogLog>,
+    @SerialName("sketches")
+    @Serializable(with = CanonicalMapSerializer::class)
+    private val _sketches: Map<OpId, HyperLogLog>,
 ) : Quilted<WarpStats> {
 
     /**

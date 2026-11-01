@@ -1,5 +1,7 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.crdt.CanonicalMapSerializer
+import us.tractat.kuilt.crdt.CanonicalSetSerializer
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
@@ -165,27 +167,51 @@ import kotlinx.serialization.Serializable
  * from **log-recorded per-peer promises** rather than any peer's gossip view — see
  * [relocationPatch] and `ControlCommand.Quiesce`.
  *
+ * ## Equal ledgers encode to equal bytes
+ *
+ * [piece] builds its maps through a `HashMap` and its record sets with `+`, so iteration order follows
+ * the merge history. A `Quilter` hashes this encoding for its anti-entropy root, and two peers whose
+ * bytes differ would ship the whole ledger to each other on every round, so every unordered field,
+ * at every level, goes through a canonical serializer. A new field must too; a binding in
+ * `EntitlementLedgerConvergenceTest` is what reds if it does not.
+ *
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerMerge
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerLifecycle
  */
 @Serializable
 public class EntitlementLedger private constructor(
-    private val records: Map<AttachmentId, Set<AttachmentRecord>>,
+    @Serializable(with = CanonicalMapSerializer::class)
+    private val records: Map<AttachmentId, @Serializable(with = CanonicalSetSerializer::class) Set<AttachmentRecord>>,
+    @Serializable(with = CanonicalMapSerializer::class)
     private val minted: Map<MintId, MintRecord>,
+    @Serializable(with = CanonicalMapSerializer::class)
     private val issued: Map<AttachmentId, GCounter>,
+    @Serializable(with = CanonicalMapSerializer::class)
     private val returned: Map<AttachmentId, GCounter>,
+    @Serializable(with = CanonicalMapSerializer::class)
     private val leafSpent: Map<AttachmentId, GCounter>,
+    @Serializable(with = CanonicalMapSerializer::class)
     private val rollupSpent: Map<AttachmentId, GCounter>,
-    private val transfers: Map<PathKey, Map<ReplicaId, GCounter>>,
+    @Serializable(with = CanonicalMapSerializer::class)
+    private val transfers: Map<PathKey, @Serializable(with = CanonicalMapSerializer::class) Map<ReplicaId, GCounter>>,
+    @Serializable(with = CanonicalMapSerializer::class)
     private val lifecycle: Map<AttachmentId, Lifecycle> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
     private val issuedRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
     private val leafRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
     private val leafRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
     private val rollupRelocIn: Map<AttachmentId, GCounter> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
     private val rollupRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
     private val gauges: Map<AttachmentId, Gauge> = emptyMap(),
-    private val transferRelocIn: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
-    private val transferRelocOut: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
+    private val transferRelocIn: Map<PathKey, @Serializable(with = CanonicalMapSerializer::class) Map<ReplicaId, GCounter>> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
+    private val transferRelocOut: Map<PathKey, @Serializable(with = CanonicalMapSerializer::class) Map<ReplicaId, GCounter>> = emptyMap(),
 ) : Quilted<EntitlementLedger> {
 
     /** The join: the componentwise least-upper-bound of `this` and [other]. */
