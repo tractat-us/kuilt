@@ -621,40 +621,65 @@ internal class NwSeam(
     ) { event -> receiveChunk(event) }
 
     /**
-     * What a failure of [bytesReceivedLoop] costs.
+     * What a failure of [bytesReceivedLoop] costs: the seam, either way.
      *
-     * An item's failure costs that chunk's frames, and the framer has already consumed the chunk, so the
-     * next one still parses: log and go on. Nothing known reaches this arm, since a framing failure is
-     * handled inside [receiveChunk].
-     *
-     * The stream's own failure costs the seam its hearing, for good. A seam that is deaf and not `Torn` is
+     * The stream's own failure costs it its hearing for good. An item's failure means [receiveChunk] could not
+     * even evict the link it failed on, so that link may be live with its framer out of step, and carrying on
+     * would read the next chunk's bytes as a length prefix. A seam that is deaf or misparsing and not `Torn` is
      * the one state nothing above it can see, so it tears, carrying the cause. That is the third and last way
      * this seam reaches [SeamState.Torn], and like the other two it goes through [close].
+     *
+     * The tear sits in a `finally` because [pumpIn] reads a throw from here as `CONTINUE`: a logger that throws
+     * must not be what keeps a broken pump running.
      */
     private fun onBytesPumpFailure(failure: PumpFailure, cause: Throwable): PumpVerdict {
-        when (failure) {
-            PumpFailure.ITEM ->
-                log.error(cause) { "nw.seam.bytes.item-failed self=${selfId.value} — that chunk's frames are lost" }
-            PumpFailure.UPSTREAM -> {
-                log.error(cause) { "nw.seam.bytes.stream-failed self=${selfId.value} peers=${_peers.value.map { it.value }} → tearing" }
-                // `close` cancels `scope`, which is what this coroutine runs on, and has work to do after that.
-                scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                    withContext(NonCancellable) {
-                        try {
-                            close(CloseReason.Error(cause))
-                        } catch (closeFailure: Throwable) {
-                            log.debug { "nw.seam.bytes.tear-failed self=${selfId.value}: $closeFailure" }
-                        }
+        try {
+            when (failure) {
+                PumpFailure.ITEM ->
+                    log.error(cause) { "nw.seam.bytes.item-failed self=${selfId.value} peers=${_peers.value.map { it.value }} → tearing" }
+                PumpFailure.UPSTREAM ->
+                    log.error(cause) { "nw.seam.bytes.stream-failed self=${selfId.value} peers=${_peers.value.map { it.value }} → tearing" }
+            }
+        } finally {
+            // `close` cancels `scope`, which is what this coroutine runs on, and has work to do after that.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                withContext(NonCancellable) {
+                    try {
+                        close(CloseReason.Error(cause))
+                    } catch (closeFailure: Throwable) {
+                        log.debug { "nw.seam.bytes.tear-failed self=${selfId.value}: $closeFailure" }
                     }
                 }
             }
         }
-        return PumpVerdict.CONTINUE
+        return PumpVerdict.STOP
     }
 
+    /**
+     * One chunk off the shared byte stream, and the rule that a chunk that fails costs its link.
+     *
+     * The stream is ordered and framed, so there is no skipping a chunk: one that never reached the framer
+     * leaves the next one's bytes to be read as a length prefix, and a throw between two frames of a chunk
+     * leaves a hole nobody downstream can see. So anything thrown past `connId` evicts through the #1528
+     * backstop and the redial heals it. `ensureActive`, not a rethrow by type: a binding is consumer-authored,
+     * and a cancellation it minted is this chunk's failure rather than this seam being closed.
+     *
+     * An [Error] is not caught: [pumpIn] lets one end the process, and evicting a link would only delay that.
+     * What the eviction itself throws goes on to [onBytesPumpFailure].
+     */
     private suspend fun receiveChunk(event: NwBytesReceived) {
         if (closed.value) return
         val connId = event.connectionId
+        try {
+            demuxChunk(connId, event.bytes)
+        } catch (failure: Exception) {
+            currentCoroutineContext().ensureActive()
+            log.error(failure) { "nw.seam.bytes.chunk-failed connId=${connId.value} self=${selfId.value} → the link goes, its redial heals it" }
+            evictCorruptConn(connId, "chunk failed: $failure")
+        }
+    }
+
+    private suspend fun demuxChunk(connId: NwConnectionId, bytes: ByteArray) {
         // Snapshot (get-or-create, minting its nonce once) the ConnState under the lock; decode OUTSIDE it.
         // A frame for a TOMBSTONED (recently-removed) connId is DROPPED — not resurrected (#1528).
         val (cs, created) = getOrCreateConnForBytes(connId) ?: run {
@@ -672,7 +697,7 @@ internal class NwSeam(
         // the SAME corrupt-inbound backstop instead of escaping the collector and killing the receive loop.
         // A real structured-concurrency cancel is always re-thrown, never swallowed.
         val frames = try {
-            cs.framer.decode(event.bytes)
+            cs.framer.decode(bytes)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
