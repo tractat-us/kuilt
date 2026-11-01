@@ -27,7 +27,6 @@ import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
-import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
@@ -46,6 +45,16 @@ import kotlin.time.Instant
  * and `WebSocketHostDepartureTest` (`:kuilt-websocket`), and on real iPhones after that.
  */
 class HostDepartureTest {
+
+    private companion object {
+        /**
+         * `AdmitMessage.encode(Farewell("host"))`, captured by running the encoder at `f83d01b43`, before
+         * #2670 touched anything. A literal, so a codec change cannot move both sides of the comparison.
+         * Reading it: the `0x61` admit prefix, the `farewell` type name, `peerId` = `host`, and no `expired`
+         * key, since a default is not encoded.
+         */
+        const val FAREWELL_NAMING_HOST = "619f686661726577656c6cbf6670656572496464686f7374ffff"
+    }
 
     private val config = HeartbeatConfig(
         interval = 100.milliseconds,
@@ -341,30 +350,37 @@ class HostDepartureTest {
      * What keeps an older joiner safe: the frame is an ordinary `Farewell` on the wire, a shape every
      * shipped joiner decodes. Its `handleFarewell` then returned on `departed == host`, and that gate is
      * what this PR removes, so it can only be read rather than run here (`f83d01b43`,
-     * `SeamRoom.handleFarewell`). This pins the half that is still checkable: no new message, no new
-     * field, the same bytes as the `Farewell` that has always named a joiner.
+     * `SeamRoom.handleFarewell`). This pins the half that is still checkable: the bytes a host really
+     * sends, against [FAREWELL_NAMING_HOST], which was captured from the codec before this frame existed.
      */
     @Test
     fun theFrameIsAnOrdinaryFarewellOnTheWire() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val loom = InMemoryLoom()
-            val factory = SeamRoomFactory(loom, backgroundScope, clock(), config)
-            val hostSeam = RecordingSeam(loom.host(Pattern("Host")))
-            val host = factory.adopt(hostSeam, SessionRole.Host)
-            val joiner = factory.join(InMemoryTag("Host"))
-            joiner.roster.first { it.isNotEmpty() }
-            host.roster.first { it.isNotEmpty() }
+            val hostId = PeerId("host")
+            val joinerId = PeerId("joiner")
+            val seam = FakeSeam(selfId = hostId, initialPeers = setOf(hostId, joinerId))
+            val host = SeamRoom(
+                seam = seam,
+                role = SessionRole.Host,
+                memberName = "Host",
+                scope = backgroundScope,
+                clock = clock(),
+                heartbeatConfig = config,
+            ).also { it.start() }
+            seam.deliver(joinerId, AdmitMessage.encode(AdmitMessage.Hello("Joiner", "session")))
+            testScheduler.runCurrent()
+            assertEquals(joinerId, host.roster.value.single().id, "rig: the joiner must be admitted first")
 
             host.leave()
             testScheduler.runCurrent()
 
-            val farewell = hostSeam.sent
-                .filter { (to, _) -> to == joiner.selfId }
+            val farewell = seam.directed
+                .filter { (to, _) -> to == joinerId }
                 .map { (_, payload) -> payload }
                 .single { AdmitMessage.decode(it) is AdmitMessage.Farewell }
             assertAll(
-                { assertEquals(AdmitMessage.Farewell(host.selfId.value, expired = false), AdmitMessage.decode(farewell)) },
-                { assertContentEquals(AdmitMessage.encode(AdmitMessage.Farewell(host.selfId.value)), farewell) },
+                { assertEquals(AdmitMessage.Farewell(hostId.value, expired = false), AdmitMessage.decode(farewell)) },
+                { assertEquals(FAREWELL_NAMING_HOST, farewell.toHexString()) },
             )
         }
 
