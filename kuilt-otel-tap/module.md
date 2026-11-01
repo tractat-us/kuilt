@@ -99,8 +99,8 @@ in.
   `os_log`/logcat), so surfacing it is the app's call.
 - **In the puller:** pass
   [LogTapAdmission.Present][us.tractat.kuilt.otel.tap.LogTapAdmission.Present] with
-  the code you read off the device. A wrong or expired code is refused, and the
-  replicator never sees the unauthorized peer.
+  the code you read off the device, plus the same secure source. A wrong or expired
+  code is refused, and the device's replicator never sees the unauthorized peer.
 
 <!-- verbatim from kuilt-otel-tap/src/commonSamples/kotlin/us/tractat/kuilt/otel/tap/Samples.kt#sampleGatedLogTap -->
 ```kotlin
@@ -220,11 +220,36 @@ Worth stating before you rely on it in an incident.
 The full procedure, including what to set and in what order, is in
 [`docs/log-capture-and-extraction.md`](../docs/log-capture-and-extraction.md).
 
-### The one honest limitation
+### The honest limitations
 
-Over a plain LAN WebSocket the log bytes themselves travel **unencrypted**. The
-join code controls *who is allowed to pull* — it does not encrypt the traffic, so
-someone already positioned to snoop the network could read logs of a session that
-was legitimately admitted. Where that matters, use the encrypted Multipeer path
-above (Apple-only), or another encrypted fabric. On the WebSocket path this module's
+The join code keeps a stranger on the network from walking up to your phone and
+reading its logs. It is a debugging lock, and four things sit outside it.
+
+**Over a plain LAN WebSocket the log bytes travel unencrypted.** The join code
+controls *who is allowed to pull* — it does not encrypt the traffic, so someone
+already positioned to snoop the network could read logs of a session that was
+legitimately admitted. Where that matters, use the encrypted Multipeer path above
+(Apple-only), or another encrypted fabric. On the WebSocket path this module's
 guarantee is *admission control*, deliberately and only.
+
+**The lock is on the device, and the puller has none.** The puller shares what it
+holds with whoever reaches it, and it takes what they send. Where peers can see each
+other, as on Multipeer, a stranger who cannot get past the phone can get the same logs
+from the laptop that pulled them, and can hand that laptop forged ones. Keep the
+puller on a link only it and the device can reach, and close it when you are done.
+
+**The code is short.** It has about a trillion possible values, and anyone who
+reaches the puller can get one answer out of it to test guesses against at home.
+That answer is only useful while the code is valid, which is why a code lasts five
+minutes. A machine built for the job can still get there in time, so this keeps out a
+curious stranger, not someone who came prepared.
+
+**An attacker in the middle can still get in.** One who can sit on two connections
+at once, passing as the laptop to the phone and as the phone to the laptop, can be
+admitted without knowing the code by passing the handshake along. The handshake stops
+this when the attacker has to appear as itself, as on a single session. It cannot stop
+it when nothing vouches for who a peer says it is.
+
+Under the surface: an answer is an HMAC under the code over a nonce from each side and
+both peers' ids. Peers from before this format and peers after it refuse each other,
+so upgrade both ends together.

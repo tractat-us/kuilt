@@ -29,7 +29,7 @@ the **iPhone** and call `installMultipeerLogTap(factory, exporter, scope, admiss
 LogTapAdmission.Verify(token, clock, cryptoRandom()))`, surfacing the join code out-of-band (a
 pairing screen or a `println` to the Xcode console); on the **Mac**, discover the iPhone over
 Multipeer, join its session, and construct a `LogTapClient(seam, scope, admission =
-LogTapAdmission.Present(code))` with the code shown on the phone. The discovery and real
+LogTapAdmission.Present(code, cryptoRandom()))` with the code shown on the phone. The discovery and real
 Multipeer transport are what only two devices can exercise.
 
 - [x] **[manual]** Confirm `client.pull()` returns the iPhone's captured log records, in order,
@@ -41,8 +41,10 @@ Multipeer transport are what only two devices can exercise.
       `wrongCodeNeverConvergesThePullOnApple`; only the real transport is manual.)*
 - [x] **[manual]** Repeat with `installMultipeerMetricTap` + `MetricTapClient` and confirm the
       iPhone's converged metric buffer pulls across. *(The metric round-trip is **[automated]** over
-      an injected fabric by `metricTapRoundTripsOverAnInjectedFabricOnApple`; the metric path carries
-      no join code — confidentiality is the fabric's — so there is no wrong-code variant to check.)*
+      an injected fabric by `metricTapRoundTripsOverAnInjectedFabricOnApple`. The metric path takes
+      the same join code as the log path, and its gate is **[automated]** by
+      `gatedMetricTapComposesOverAnInjectedFabricOnApple` and
+      `wrongCodeNeverConvergesTheMetricPullOnApple`.)*
 - [x] **[manual]** Confirm the transport is **encrypted end to end**: the underlying `MCSession`
       is created with `encryptionPreference = MCEncryptionRequired`. Verify no plaintext log/metric
       bytes are observable on the wire (e.g. a packet capture on the shared network shows only
@@ -64,6 +66,9 @@ fresh Mac-side join converged cleanly afterward. The encryption check captured t
 session's traffic (`en0`, ~300 packets during a pull) and grepped the raw payloads for every
 plaintext marker the test data would produce (log bodies, the metric value, both join codes)
 — zero hits, all payload bytes high-entropy, consistent with `MCEncryptionRequired`.
+
+The admission handshake's `Proof` frame has changed since this run. The handshake is covered over an
+injected fabric, but these checks have not been repeated on real Multipeer with the new frame.
 
 One discovery-side gotcha worth recording for whoever builds the next manual harness: the
 `MultipeerServiceBrowser` must have at least one feed **collected** across the `join()` call

@@ -176,6 +176,19 @@ class GatedTapEndToEndTest {
         assertTrue(replicated.any { "log 1" in it }, "the stranger must be reading the log body off the puller")
     }
 
+    /** The other half of the same limit: nothing tells a puller that what it pulled came from a device. */
+    @Test
+    fun aStrangerCanHandThePullerLogsTheDeviceNeverWrote() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val puller = LogTapClient(
+            loom.host(us.tractat.kuilt.core.Pattern("forged")), backgroundScope, config, LogTapAdmission.Present("CODE1234", Random(11)),
+        ).also { client = it }
+
+        host = installLogTapJoining(loom, exporterWith(1), backgroundScope, InMemoryTag("forged"), config, LogTapAdmission.Open)
+
+        assertEquals(listOf("log 1"), puller.pull().map { it.body }, "the puller takes what an unauthenticated peer offers")
+    }
+
     @Test
     fun openAdmissionMatchesUngatedBehaviour() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
