@@ -21,6 +21,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
@@ -139,6 +140,33 @@ class GatedTapEndToEndTest {
             .also { client = it }
 
         assertEquals(listOf("log 1", "log 2", "log 3"), puller.pull().map { it.body })
+    }
+
+    /**
+     * A known limit, pinned so the claim about it is a measurement. The gate guards the device and not
+     * the puller: a puller's gate is transparent, so on a fabric where joiners reach each other, its
+     * replicator hands what it has pulled to any peer on the mesh, code or no code. The device never
+     * admitted this stranger, and the stranger reads the logs anyway. See "the one honest limitation"
+     * in `module.md`. If this reds because the puller stopped leaking, delete it and fix that section.
+     */
+    @Test
+    fun aStrangerOnTheMeshReadsWhatTheAdmittedPullerReplicates() = runTest(UnconfinedTestDispatcher()) {
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val loom = InMemoryLoom()
+        val stranger = loom.join(InMemoryTag("stranger"))
+        val replicated = mutableListOf<String>()
+        backgroundScope.launch {
+            stranger.incoming.collect { swatch ->
+                val frame = swatch.toByteArray()
+                if (!TapAdmitMessage.isAdmitFrame(frame)) replicated += frame.decodeToString()
+            }
+        }
+        host = installLogTap(loom, exporterWith(1), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
+        val puller = LogTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
+            .also { client = it }
+
+        assertEquals(listOf("log 1"), puller.pull().map { it.body }, "rig: the honest puller must have pulled")
+        assertTrue(replicated.any { "log 1" in it }, "the stranger must be reading the log body off the puller")
     }
 
     @Test

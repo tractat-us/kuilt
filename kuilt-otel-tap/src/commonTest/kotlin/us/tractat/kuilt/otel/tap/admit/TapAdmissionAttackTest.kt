@@ -104,6 +104,13 @@ class TapAdmissionAttackTest {
         assertAll(
             { assertEquals(1, attacker.deviceChallenges.size, "rig: the device must have challenged the attacker") },
             { assertEquals(1, attacker.forwarded.size, "rig: the attacker must have sent the puller's tag to the device") },
+            {
+                // A garbage frame would be refused too, so this has to be a tag the puller really made.
+                val nonce = attacker.deviceChallenges.single().nonce
+                val proof = TapAdmitMessage.decode(attacker.forwarded.single()) as TapAdmitMessage.Proof
+                val genuine = admissionTag(code, attacker.selfId, pullerGate.selfId, nonce, proof.proverNonce)
+                assertContentEquals(genuine, proof.tag.toByteArray(), "rig: what was forwarded must be the puller's real answer")
+            },
             { assertFalse(attacker.selfId in deviceGate.peers.value, "the relayer must not be admitted") },
             { assertEquals(listOf(deviceGate.selfId), attacker.rejectedBy, "the device must refuse the relayed tag out loud") },
             { assertTrue(pullerGate.selfId in deviceGate.peers.value, "the honest puller must still be admitted") },
@@ -191,6 +198,49 @@ class TapAdmissionAttackTest {
             },
             { assertFalse(harvester.seam.selfId in deviceGate.peers.value, "a replayed tag must not admit") },
             { assertEquals(listOf(deviceGate.selfId), harvester.rejectedBy, "the device must refuse the replay out loud") },
+        )
+    }
+
+    // ── what this does not close ───────────────────────────────────────────────────────────────
+
+    /**
+     * A known limit, pinned so the claim about it is a measurement. Nothing authenticates a peer id, so
+     * a relayer on two separate sessions can be the puller's id to the device and the device's id to the
+     * puller, and then every id in the tag is the one each side expects. Two [InMemoryLoom]s number their
+     * peers the same way, which hands this test exactly those ids; on a real fabric the attacker claims
+     * them. See "What the peer ids buy" on [TokenGatedSeam].
+     *
+     * If this reds because the relay is now refused, the handshake got stronger: delete it and say so.
+     */
+    @Test
+    fun aRelayWearingBothIdsAcrossTwoSessionsIsStillAdmitted() = runTest(UnconfinedTestDispatcher()) {
+        val pullerSession = InMemoryLoom()
+        val pullerGate = pullerSession.host(Pattern("puller-session")).tokenGated(prover(), backgroundScope)
+        val attackerToPuller = pullerSession.join(InMemoryTag("attacker"))
+        val deviceSession = InMemoryLoom()
+        val attackerToDevice = deviceSession.host(Pattern("device-session"))
+        backgroundScope.launch {
+            attackerToPuller.incoming.collect { swatch ->
+                if (TapAdmitMessage.decode(swatch.toByteArray()) is TapAdmitMessage.Proof) {
+                    attackerToDevice.broadcast(swatch.toByteArray())
+                }
+            }
+        }
+        backgroundScope.launch {
+            attackerToDevice.incoming.collect { swatch ->
+                if (TapAdmitMessage.decode(swatch.toByteArray()) is TapAdmitMessage.Challenge) {
+                    attackerToPuller.sendTo(pullerGate.selfId, swatch.toByteArray())
+                }
+            }
+        }
+
+        val deviceGate = deviceSession.join(InMemoryTag("device")).tokenGated(verifier(), backgroundScope)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(pullerGate.selfId, attackerToDevice.selfId, "rig: the attacker wears the puller's id to the device") },
+            { assertEquals(deviceGate.selfId, attackerToPuller.selfId, "rig: the attacker wears the device's id to the puller") },
+            { assertTrue(attackerToDevice.selfId in deviceGate.peers.value, "this relay is not closed, and the docs must keep saying so") },
         )
     }
 
@@ -322,6 +372,7 @@ class TapAdmissionAttackTest {
 
     private companion object {
         const val VERIFIER_SEED = 7
+        const val PROVER_SEED = 11
     }
 }
 
