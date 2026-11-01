@@ -58,7 +58,7 @@ public object SealedBox {
      * has replaced the platform CSPRNG or the provider fails its self-test, and [SealedBoxException]
      * with [SealedBoxException.Reason.SEAL_FAILED] if a sealing step fails.
      */
-    public suspend fun seal(recipient: SealPublicKey, plaintext: ByteArray, associatedData: ByteArray): ByteArray =
+    public suspend fun seal(recipient: SealPublicKey, plaintext: ByteArray, associatedData: ByteArray = ByteArray(0)): ByteArray =
         seal(recipient, plaintext, associatedData, CryptographySystem.getDefaultRandom())
 
     /** [seal] with the process random passed in, so a test can show the guard is on the path. */
