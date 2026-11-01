@@ -10,7 +10,7 @@ Read the **one** cookbook file your symptom names before building a primitive.
 ## Don't build this yourself
 
 Prefix `Jump to` with `docs/agent-cookbook/`. Within a row, pair `;`-separated symptom
-and primitive groups in order. The cookbook index splits them out.
+and primitive groups in order.
 
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
@@ -59,4 +59,4 @@ Inside kuilt, read it directly; consumers take the first working rung:
 **Editing this skill:** `verifySkillDescriptionBudget` caps the eager `description:` at
 1,536 characters and rejects YAML-breaking `: `/` #`; adding a trigger means removing one.
 `verifySkillBodyBudget` caps this body at 8,192 bytes (8 KiB). Move explanatory prose to
-`docs/agent-cookbook*`, never drop a route. See kuilt's root `CLAUDE.md` for the rationale.
+`docs/agent-cookbook*`, never drop a route. Rationale: kuilt's root `CLAUDE.md`.
