@@ -380,9 +380,11 @@ class QuilterConcurrencyTest {
      * normally has been handed to the seam by the time the drain returns**, with `apply` and the drain
      * genuinely overlapping, which the virtual-time `QuilterDrainAndCloseTest` cannot arrange.
      *
-     * The rig asserts it fired. `refusedWrites` counts writers that met the closed replica: with that
-     * at zero every drain merely outlasted its writers, and the equality below would hold for a drain
-     * that waited for nothing.
+     * The rig asserts it fired. `racedRounds` counts rounds where a write was accepted **and** a writer
+     * met the closed replica. A refusal alone is not enough: a drain that closes before any writer has
+     * written refuses all of them, and `accepted == handed == 0` then holds with nothing raced. With
+     * no refusal at all, every drain merely outlasted its writers, and the equality below would hold
+     * for a drain that waited for nothing.
      *
      * **What this does not reliably pin: that the "nothing in flight" check is atomic with the close.**
      * Moving the close outside the lock opens a gap of a few nanoseconds that a writer must land in, and
@@ -396,14 +398,15 @@ class QuilterConcurrencyTest {
         val rounds = 300
         val writers = 4
         val perWriter = 300
-        val refusedWrites = AtomicInteger()
         var roundsRun = 0
+        var racedRounds = 0
 
         withContext(Dispatchers.Default) {
             repeat(rounds) { round ->
                 val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
                 try {
                     val accepted = AtomicInteger()
+                    val refused = AtomicInteger()
                     val handed = AtomicInteger()
                     val raw = InMemoryLoom().host(Pattern("drain-race-$round"))
                     val seam = object : Seam by raw {
@@ -430,7 +433,7 @@ class QuilterConcurrencyTest {
                                     } catch (e: kotlinx.coroutines.CancellationException) {
                                         throw e
                                     } catch (_: IllegalStateException) {
-                                        refusedWrites.incrementAndGet()
+                                        refused.incrementAndGet()
                                         break
                                     }
                                     accepted.incrementAndGet()
@@ -450,6 +453,7 @@ class QuilterConcurrencyTest {
                         "round $round: every accepted write should have been handed to the seam by " +
                             "the time the drain returned",
                     )
+                    if (accepted.get() > 0 && refused.get() > 0) racedRounds++
                     roundsRun++
                 } finally {
                     scope.cancel()
@@ -457,10 +461,12 @@ class QuilterConcurrencyTest {
             }
         }
 
+        println("aWriteThatReturnedIsNeverLostToARacingDrain: racedRounds=$racedRounds of $rounds")
         assertEquals(rounds, roundsRun, "every round should have run")
         assertTrue(
-            refusedWrites.get() > 0,
-            "rig never fired: no writer ever met the closed replica, so no drain raced a write",
+            racedRounds > 0,
+            "rig never fired: in no round did a writer get a write accepted and a writer then meet the " +
+                "closed replica, so no drain overlapped a write",
         )
     }
 }
