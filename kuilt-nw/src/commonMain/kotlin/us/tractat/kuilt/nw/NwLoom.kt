@@ -15,10 +15,12 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock as withMutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -108,6 +110,25 @@ public class NwUnreachableException(message: String) : Exception(message)
  * [NwUnreachableException] — a plain exception, NOT a `CancellationException`, so a caller wrapping
  * `weave` in `runCatchingCancellable` sees a fabric failure rather than its own cancellation.
  *
+ * ## One session at a time (#3031)
+ * A device has one [NwApi] and [NwApi.bytesReceived] has one collector, so this loom holds at most one live
+ * seam, and that is the first thing [weave] looks at:
+ *  - **The same rendezvous while that seam is live** gets that seam, once it has a peer, so a re-weave heals in
+ *    place. A seam here re-forms by itself (`Woven → Weaving → Woven`), which is the same-instance heal a
+ *    joiner's `reweave` asks for. The seam stays its first caller's: a repeat that times out throws and leaves
+ *    it open.
+ *  - **Any other rendezvous while that seam is live** is a different session, which cannot run beside it. It
+ *    is refused with an [IllegalStateException], thrown at the caller. Sharing the seam would merge two
+ *    sessions without telling either.
+ *  - **After the seam is closed**, a weave starts fresh, waiting first until the closed seam has finished with
+ *    the binding ([NwSeam.tornDown]), or [weaveTimeout] if it never does. `Torn` is published before the last
+ *    collector has let go of the byte stream and before the close's `stopListening` has run, and a new session
+ *    overlapping either of those loses its bytes or its listener.
+ *
+ * A second room built over the same tag while the first is live cannot be told from a re-weave, so it gets the
+ * same seam. Two looms over one [NwApi] cannot be seen from here at all: the second seam's collection fails, and
+ * that seam tears itself ([CloseReason.Error]) and fails its [weave].
+ *
  * ## Scope
  * Background collectors (the seam's three loops + this loom's discovery/dial loop) run on
  * `CoroutineScope(currentCoroutineContext() + SupervisorJob())`, inheriting the caller's dispatcher
@@ -149,25 +170,34 @@ public class NwLoom(
      */
     public val visiblePeers: StateFlow<Set<NwEndpoint>> = _visiblePeers.asStateFlow()
 
-    /** One live [weave]: the seam, the dial campaign driving it, and the name this loom asked to advertise. */
+    /**
+     * One [weave]'s session: the rendezvous that started it, the seam and the scope it runs on, the dial
+     * campaign driving it, and the name this loom asked to advertise.
+     */
     private class Formation(
+        val rendezvous: Rendezvous,
         val seam: NwSeam,
+        val scope: CoroutineScope,
         val redial: RedialCoordinator,
         val requestedServiceName: String,
     )
 
-    /** Guards [formations]. A plain lock, not confinement: [dumpFormationState] is callable from any thread. */
-    private val formationsLock = reentrantLock()
+    /** Guards [formation]. A plain lock, not confinement: [dumpFormationState] is callable from any thread. */
+    private val formationLock = reentrantLock()
 
     /**
-     * Every formation this loom currently has in flight. Added by [weave] before it awaits its first peer;
-     * removed when the seam's scope completes, which `NwSeam.close` guarantees by cancelling it — so a
-     * closed seam cannot linger here and make a dump describe a session that ended.
-     *
-     * A list rather than a single slot because [weave] is callable more than once on one loom; in the
-     * ordinary case it holds exactly one entry. Guarded by [formationsLock].
+     * The session this loom holds. Set by [weave] before it awaits its first peer; cleared once the seam is
+     * [torn down][NwSeam.tornDown], and not before, because that is what a later weave has to wait for. So a
+     * value here may read `Torn` and still be releasing the binding. Guarded by [formationLock].
      */
-    private val formations = mutableListOf<Formation>()
+    private var formation: Formation? = null
+
+    /**
+     * Serializes [weave]'s decision to answer with the held session or start another, so two callers cannot
+     * both start one. A [Mutex] rather than [formationLock] because the decision can wait out a close, and
+     * starting a session runs the seam's collectors up to their first suspension.
+     */
+    private val weaveMutex = Mutex()
 
     /**
      * A one-line, `grep`-able snapshot of every in-flight formation: what this peer advertises, what it can
@@ -192,11 +222,9 @@ public class NwLoom(
      * capture.
      */
     public fun dumpFormationState(): String {
-        val live = formationsLock.withLock { formations.toList() }
-        if (live.isEmpty()) {
-            return "self=${selfId.value} serviceType=$serviceType formations=none (no seam is being woven)"
-        }
-        return live.joinToString(separator = " || ") { render(it) }
+        val live = formationLock.withLock { formation }?.takeUnless { it.seam.state.value is SeamState.Torn }
+            ?: return "self=${selfId.value} serviceType=$serviceType formations=none (no seam is being woven)"
+        return render(live)
     }
 
     /** Compose one formation's line from its three collaborators' read-only snapshots. */
@@ -288,6 +316,58 @@ public class NwLoom(
         TransportCapability(roles = NW_ROLES, availability = api.availability())
 
     override suspend fun weave(rendezvous: Rendezvous): Seam {
+        val (session, started) = weaveMutex.withMutex {
+            val held = heldSessionAfterAnyClose()
+            when {
+                held == null -> startSession(rendezvous) to true
+                held.rendezvous == rendezvous -> held to false
+                else -> error(
+                    "NwLoom holds a live session (${held.rendezvous}) and one NwApi carries one session: " +
+                        "close its seam before weaving $rendezvous.",
+                )
+            }
+        }
+        return if (started) formSession(session) else awaitHeldSession(session)
+    }
+
+    /**
+     * The session this loom holds if it is live, or `null` when a new one may start, which can mean waiting
+     * out a close still in flight.
+     *
+     * Bounded by [weaveTimeout] like the other waits in [weave]: a close that never finishes is a failure to
+     * reach anyone, and a weave does not get to hang on it.
+     */
+    private suspend fun heldSessionAfterAnyClose(): Formation? {
+        val held = formationLock.withLock { formation } ?: return null
+        if (held.seam.state.value !is SeamState.Torn) return held
+        withTimeoutOrNull(weaveTimeout) { held.seam.tornDown.await() }
+            ?: throw NwUnreachableException(
+                "nw weave: the previous session on serviceType=$serviceType did not finish closing within $weaveTimeout",
+            )
+        return null
+    }
+
+    /**
+     * Answer a repeat of the rendezvous with the session already held, keeping [weave]'s promise of a connected
+     * seam. Never closes it on the way out, by timeout or by this caller's cancellation: the seam belongs to
+     * whoever started it, and a peer may yet come back.
+     */
+    private suspend fun awaitHeldSession(session: Formation): Seam {
+        val seam = session.seam
+        log.info { "nw.loom.weave-repeat self=${selfId.value} rendezvous=${session.rendezvous::class.simpleName} state=${seam.state.value} → the live seam" }
+        val settled = withTimeoutOrNull(weaveTimeout) { awaitFirstPeerOrTorn(seam) } != null
+        if (settled && seam.state.value !is SeamState.Torn) return seam
+        throw NwUnreachableException(
+            "nw weave: the session on serviceType=$serviceType has no peer after $weaveTimeout | ${render(session)}",
+        )
+    }
+
+    /** Returns `true` so a `withTimeoutOrNull` around it can tell finishing from expiring. */
+    private suspend fun awaitFirstPeerOrTorn(seam: NwSeam): Boolean =
+        combine(seam.peers, seam.state) { peers, state -> peers.size > 1 || state is SeamState.Torn }.first { it }
+
+    /** Build a session and take the [formation] slot. The listen, the browse and the wait are [formSession]'s. */
+    private suspend fun startSession(rendezvous: Rendezvous): Formation {
         // Derive from the caller so background work runs on the test dispatcher; independent Job
         // so seam close() cancels only this session's coroutines.
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
@@ -321,29 +401,34 @@ public class NwLoom(
         )
         redial.start()
 
-        // Register the formation BEFORE anything can go wrong, so a dump taken at any point from here on
-        // describes a real session; deregister on the seam scope's completion, which `NwSeam.close`
-        // guarantees by cancelling it (`latchTorn`). Tying removal to the scope rather than to a close
-        // callback means every exit — consumer close, weave timeout, caller cancellation — is covered by
-        // one mechanism.
-        val formation = Formation(seam, redial, serviceName)
-        formationsLock.withLock { formations += formation }
-        seamScope.coroutineContext.job.invokeOnCompletion {
-            formationsLock.withLock { formations -= formation }
+        // Register the session BEFORE anything can go wrong, so a dump taken at any point from here on
+        // describes a real one; deregister when the seam is torn down, which every exit reaches through
+        // `NwSeam.close` — consumer close, weave timeout, caller cancellation, a failed byte stream. One
+        // mechanism. By identity, because this can run after a waiter in [heldSessionAfterAnyClose] has
+        // already started the next session.
+        val session = Formation(rendezvous, seam, seamScope, redial, serviceName)
+        formationLock.withLock { formation = session }
+        seam.tornDown.invokeOnCompletion {
+            formationLock.withLock { if (formation === session) formation = null }
         }
         // Not UNDISPATCHED: it subscribes to nothing that must be live before a trigger, and its first act
         // is a park. Cancelled with the seam's scope.
-        seamScope.launch { formationStuckLoop(formation) }
+        seamScope.launch { formationStuckLoop(session) }
+        return session
+    }
+
+    /** Listen, browse and await the first peer, for the session this [weave] call started. */
+    private suspend fun formSession(session: Formation): Seam {
+        val seam = session.seam
+        val serviceName = session.requestedServiceName
+        val seamScope = session.scope
 
         // The listen — including the FIRST one — belongs to the supervisor (#2449). `startListening` returns
         // Unit and the OS reports the registration later on a callback, so a failure is invisible to any
         // `runCatchingCancellable` around the call; and a listen that throws synchronously must still start
         // the campaign at attempt 1 rather than leave a supervisor parked on a verdict that never comes.
         // One call site, one failure policy.
-        ListenSupervisor(api, seamScope, serviceName, serviceType, selfId).startSeededWithInitialListen()
-        runCatchingCancellable { api.startBrowsing(serviceType) }
-            .onFailure { log.debug { "nw.browse failed serviceType=$serviceType selfId=${selfId.value}" } }
-
+        //
         // Await the first resolved remote so the returned seam is already connected. On ANY exit before
         // the seam is returned, the caller can never close() it — so we MUST close it here, or its scope
         // (a parentless SupervisorJob, NOT cancelled by the caller) leaks the RedialCoordinator loops,
@@ -355,10 +440,14 @@ public class NwLoom(
         //    for a friend" back-out: a user leaving the lobby, a withTimeout wrapper, scope teardown) —
         //    close the seam (under NonCancellable so the in-flight cancellation can't skip the close) and
         //    rethrow unchanged.
+        //
+        // The listen and the browse sit inside the `try` for the same reason: a caller cancelled at either
+        // used to leak only a seam, and now it would also leave that seam holding this loom's one session.
         try {
-            withTimeout(weaveTimeout) {
-                seam.peers.first { it.size > 1 }
-            }
+            ListenSupervisor(api, seamScope, serviceName, serviceType, selfId).startSeededWithInitialListen()
+            runCatchingCancellable { api.startBrowsing(serviceType) }
+                .onFailure { log.debug { "nw.browse failed serviceType=$serviceType selfId=${selfId.value}" } }
+            withTimeout(weaveTimeout) { awaitFirstPeerOrTorn(seam) }
         } catch (_: TimeoutCancellationException) {
             log.info { "nw.loom.weave-timeout self=${selfId.value} serviceType=$serviceType after=$weaveTimeout → Unreachable" }
             // UNCONDITIONALLY, and BEFORE the discard — a failed weave must leave behind the state that
@@ -373,7 +462,7 @@ public class NwLoom(
             // throwable is the only artifact that is always there, and a bare "no peer reached … within 30s"
             // makes a contended host indistinguishable from a broken fabric. Computed BEFORE the discard for
             // the same reason the log line is: `close` wipes `settledEndpoints` and cancels every redialer.
-            val state = render(formation)
+            val state = render(session)
             logFormationStuck("weave-timeout after=$weaveTimeout", state)
             discardUnreturnedSeam(seam)
             throw NwUnreachableException(
@@ -383,6 +472,10 @@ public class NwLoom(
             log.info { "nw.loom.weave-aborted self=${selfId.value} serviceType=$serviceType reason=${e::class.simpleName} → closing seam so redial stops" }
             discardUnreturnedSeam(seam)
             throw e
+        }
+        // Torn without a timeout: the seam's own byte stream failed, or a repeat caller already holding it closed it.
+        (seam.state.value as? SeamState.Torn)?.let { torn ->
+            throw NwUnreachableException("nw weave: the seam tore before it reached a peer: ${torn.reason}")
         }
         log.debug { "nw.loom.wove self=${selfId.value} peers=${seam.peers.value.map { it.value }} state=${seam.state.value}" }
         return seam
