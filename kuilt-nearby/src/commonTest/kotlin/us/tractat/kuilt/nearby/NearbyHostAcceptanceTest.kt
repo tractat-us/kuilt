@@ -418,6 +418,58 @@ class NearbyHostAcceptanceTest {
             assertTrue(FAR_PEER in join.await().peers.value)
         }
 
+    /**
+     * Closing the host mid-handshake is an exit too: the same wait, released by a cancel rather than
+     * by the bound, and well before the bound would have released it.
+     */
+    @Test
+    fun closingAHostMidHandshakeReleasesAWaitingJoinAndItsLink() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.COMPLETES)
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            val host = loom.host(Pattern("mine"))
+            api.connInit.emit(ConnectionInitiated(FIRST_ENDPOINT, "joiner"))
+            runCurrent()
+            val join = backgroundScope.async { loom.joinFar() }
+            runCurrent()
+            assertTrue(join.isActive, "rig: the join really is waiting on the host's handshake")
+            val closedAt = currentTime
+
+            host.close()
+            runCurrent()
+
+            assertAll(
+                { assertEquals(closedAt, currentTime, "no time passed: the bound did not release it") },
+                { assertTrue(join.isCompleted, "the join is released") },
+                { assertEquals(listOf(FIRST_ENDPOINT), api.disconnected, "and the half-made link is down") },
+            )
+        }
+
+    /**
+     * The radio does not stop for a closing seam, so a handshake can finish as one closes. Nothing
+     * under virtual time can land in that window, so this drives the two ends of it directly: a seam
+     * that refuses is what tells the host the link is still its own to take down.
+     */
+    @Test
+    fun aClosedSeamRefusesALateLinkAndAnOpenOneTakesIt() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            val link = ConnectedLink(FIRST_ENDPOINT, PeerId("joiner"))
+
+            val open = assertIs<NearbySeam>(loom.host(Pattern("device")))
+            val closed = assertIs<NearbySeam>(loom.host(Pattern("device")))
+            closed.close()
+
+            assertAll(
+                { assertTrue(open.admitEndpoint(link), "rig: an open seam takes the same link") },
+                { assertTrue(link.remotePeerId in open.peers.value) },
+                { assertFalse(closed.admitEndpoint(link), "a closed one refuses, leaving it to the caller") },
+                { assertEquals(setOf(closed.selfId), closed.peers.value, "and its roster stays collapsed") },
+            )
+            open.close()
+        }
+
     // ── a joiner cleans up after itself ───────────────────────────────────────────────────────────
 
     /**
