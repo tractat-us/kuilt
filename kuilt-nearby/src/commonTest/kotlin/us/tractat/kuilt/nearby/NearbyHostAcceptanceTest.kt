@@ -219,21 +219,24 @@ class NearbyHostAcceptanceTest {
         host: Seam,
         failedEndpoint: String,
     ) {
-        assertAll(
-            { assertTrue(failedEndpoint in api.accepted, "rig: the failed attempt really reached accept") },
-            { assertEquals(listOf(failedEndpoint), api.disconnected, "a failed attempt releases its link") },
-            { assertIs<SeamState.Weaving>(host.state.value, "a failed attempt does not end the session") },
-            { assertEquals(0, api.advertisingStops, "a failed attempt does not touch the advertiser") },
-            { assertEquals(setOf(host.selfId), host.peers.value, "and it never became a peer") },
-        )
+        val acceptedAfterFailure = api.accepted.toList()
+        val disconnectedAfterFailure = api.disconnected.toList()
+        val stateAfterFailure = host.state.value
+        val peersAfterFailure = host.peers.value
+        val stopsAfterFailure = api.advertisingStops
 
         val second = PeerId("second-joiner")
         admitJoiner(api, SECOND_ENDPOINT, second)
 
         assertAll(
+            { assertTrue(failedEndpoint in acceptedAfterFailure, "rig: the failed attempt really reached accept") },
+            { assertEquals(listOf(failedEndpoint), disconnectedAfterFailure, "a failed attempt releases its link") },
+            { assertIs<SeamState.Weaving>(stateAfterFailure, "a failed attempt does not end the session") },
+            { assertEquals(0, stopsAfterFailure, "a failed attempt does not touch the advertiser") },
+            { assertEquals(setOf(host.selfId), peersAfterFailure, "and it never became a peer") },
             { assertTrue(SECOND_ENDPOINT in api.accepted, "the host is still accepting after the failure") },
             { assertTrue(second in host.peers.value, "and the next joiner gets in") },
-            { assertIs<SeamState.Woven>(host.state.value) },
+            { assertIs<SeamState.Woven>(host.state.value, "and the host weaves to it") },
         )
     }
 
