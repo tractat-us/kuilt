@@ -54,6 +54,18 @@ import kotlin.time.Duration.Companion.seconds
  * 4. A subsequent propose commits — on the **same Raft log** (the new entry's index is later
  *    than the pre-failover entry's, and both replicate to the voters).
  *
+ * That is what a healthy run of the plain test does, not a sequence either test guarantees. If the
+ * first admit on relay A fails, the client rotates to B and leg 1's retry commits there, so the kill
+ * in step 2 tears nothing the client uses, step 4 can commit first try, and every assertion passes.
+ * So a regression where relay A always fails admission once the client has learned the leader, which
+ * reds at leg 1 without the retry, can go green here with only the printed try count hinting at it.
+ * The forced test kills A before leg 1 and has the same gap: a client that has already left A is
+ * untouched by that kill, and leg 1 commits first try.
+ *
+ * Two things still hold. A healthy run exercises the kill: the first leg-2 try was lost in 12 of 12
+ * measured runs. A client that cannot rotate still reds, at [leg2Backstop] on the plain path. Pinning
+ * the sequence needs a witness that the client was on A when A died, and [ClusterClient] exposes none.
+ *
  * ## Why this needs the single-relay-peer addressing fix (#544)
  *
  * Leadership is **not** moved on failover: it stays on whichever voter the election picked
@@ -69,9 +81,10 @@ import kotlin.time.Duration.Companion.seconds
  *
  * [KtorRoomHost] and [us.tractat.kuilt.raft.RaftNode] use real wall-clock delays. Every outer
  * [withTimeout] is a backstop against a wedge, not a measure of how long the work takes: the
- * healthy runs below finish far inside them, and the 106% and 107% failures this test recorded
- * in CI were a proposal lost at leg 1, which no wider bound could have saved. Measured at ambient
- * load over 12 runs, not under synthetic saturation; the numbers sit beside each constant.
+ * healthy runs measured below finish far inside them, and the 106% and 107% failures this test
+ * recorded in CI were a proposal lost at leg 1, which no wider bound could have saved. Measured at
+ * ambient load over 12 runs, not under synthetic saturation, and before leg 1 retried or the forced
+ * test existed. The numbers sit beside each constant and are the plain scenario's alone.
  */
 class ClusterClientFailoverE2ETest {
 
@@ -86,7 +99,10 @@ class ClusterClientFailoverE2ETest {
     private val voterB = NodeId(serverPeerIdB.value)
     private val voterC = NodeId("cluster-voter-c")
 
-    /** M=3 real-socket election timing — wide enough to converge on a cold CI runner. */
+    /**
+     * M=3 real-socket election timing. A leader's quorum check runs on this same window. Whether that
+     * explains the CI step-down is not established, which is tracked by #3038.
+     */
     private val raftCfg = RaftConfig(
         electionTimeoutMin = 100.milliseconds,
         electionTimeoutMax = 200.milliseconds,
@@ -95,18 +111,29 @@ class ClusterClientFailoverE2ETest {
     )
 
     /**
-     * How long one try waits before proposing again. A retry period, not a ceiling: the first
-     * leg-2 try was lost in 12 of 12 measured runs, so this sets how long leg 2 takes.
+     * How long one try waits before proposing again. A retry period, not a ceiling. In the plain
+     * scenario the first leg-2 try was lost in 12 of 12 measured runs, so this sets how long leg 2
+     * takes there. In the forced scenario it sets how long leg 1 takes instead.
      */
     private val proposeRetryPeriod = 3.seconds
 
-    /** Backstop for the first election. Measured 197–258 ms. */
+    /**
+     * Backstop for the first election, measured 197–258 ms. The forced scenario reuses it for the
+     * client's first committed entry, a different wait with no measurement.
+     */
     private val leaderBackstop = 20.seconds
 
-    /** Backstop for leg 1, retries included. Measured 111–232 ms. */
+    /**
+     * Backstop for leg 1, retries included. A leg that commits on its first try measured 111–232 ms.
+     * The forced scenario needed 2 tries in every run, and a first try lost silently costs a whole
+     * [proposeRetryPeriod]. No number was recorded for that path.
+     */
     private val leg1Backstop = 20.seconds
 
-    /** Backstop for leg 2, retries included. Measured 3003–3012 ms, always 2 tries. */
+    /**
+     * Backstop for leg 2, retries included. The plain scenario measured 3003–3012 ms, always 2 tries.
+     * No number was recorded for the forced scenario, whose relay A is already gone by then.
+     */
     private val leg2Backstop = 40.seconds
 
     /** Backstop for each voter to see its command. Measured 0–1 ms. */
@@ -122,13 +149,14 @@ class ClusterClientFailoverE2ETest {
     /**
      * Proposes [command] under the pinned [requestId] until a try commits, within [backstop].
      *
-     * A proposal sent while the client is between relays is lost, and the caller's contract is to
-     * retry with the same `requestId`. A try ends when [proposeRetryPeriod] passes or when the
-     * leader it reached has stepped down.
+     * A proposal sent while the client is between relays is lost, and `propose` can then hang.
+     * [ClusterClient.propose] documents a retry with the same `requestId` after a tear throws, not
+     * a time-bounded retry on a silent hang. Bounding the call is one of the undecided options
+     * tracked by #3037, and this helper follows that reading until it is decided. A try ends when
+     * [proposeRetryPeriod] passes or when the leader it reached has stepped down.
      *
-     * This follows the contract as it stands and repairs no production defect. `propose` hanging
-     * on a lost forward is tracked by #3037, and the leader step-down that starts the leg-1
-     * sequence is tracked by #3038.
+     * This repairs no production defect. The leader step-down that starts the leg-1 sequence is
+     * tracked by #3038.
      *
      * Prints the try count, which lands in the test-results XML. It is not asserted: how many tries
      * a run needs depends on the reconnect race.
@@ -160,8 +188,8 @@ class ClusterClientFailoverE2ETest {
 
     /**
      * Forces leg 1's first proposal into a reconnect gap, which the scenario above reaches only
-     * when its first admit fails. With a bare `propose` at leg 1 this reds at [leg1Backstop], 4 of 4
-     * measured.
+     * when its first admit fails. With a bare `propose` at leg 1 this reds at [leg1Backstop] in every
+     * run measured, 3 of 3 against the final suite.
      *
      * Killing the relay stands in for the failed admit. It reproduces the lost forward and not the
      * leader step-down that caused it in CI, so it says nothing about the step-down itself.
@@ -250,28 +278,34 @@ class ClusterClientFailoverE2ETest {
                     relayScopeA.cancel()
                 }
 
-                // ── Leg 1: connect to relay A → propose → commit ──────────────────────
+                // ── Leg 1: propose → commit ───────────────────────────────────────────
+                // Through relay A when the client's first admit held and A is alive. Otherwise
+                // through relay B, as in the forced scenario, which has already killed A.
                 val cmd1 = "action:before-failover".encodeToByteArray()
                 val entry1 = proposeUntilCommitted(client, "leg-1", cmd1, preFailoverRequestId, leg1Backstop)
                 assertContentEquals(cmd1, entry1.command, "leg-1 commit payload")
 
                 // ── Kill relay A: cancel its scope → rooms tear → client seam tears ───
+                // Only if the client is still on A. Nothing here can tell, see the class KDoc. In
+                // the forced scenario A is already dead and this does nothing.
                 relayScopeA.cancel()
 
                 // ── Leg 2: client rotates to relay B, re-admits, proposes → commit ────
+                // A client already on B skips the rotation and can commit first try.
                 // A propose issued during the reconnect gap forwards to a torn seam and is
                 // lost (the engine does not auto-resend a forward it believed delivered).
-                // The real-client contract is to RETRY with the same requestId until it
-                // lands on the surviving relay; the pinned requestId makes it exactly-once
-                // for a consumer folding ClientSessionTable, which skips any second copy. This
-                // is the #532 "fresh-join + dedup intact" failover path.
+                // This test RETRIES with the same requestId until it lands on the surviving
+                // relay, a reading #3037 has yet to decide. The pinned requestId makes it
+                // exactly-once for a consumer folding ClientSessionTable, which skips any second
+                // copy. This is the #532 "fresh-join + dedup intact" failover path.
                 val cmd2 = "action:after-failover".encodeToByteArray()
                 val entry2 = proposeUntilCommitted(client, "leg-2", cmd2, failoverRequestId, leg2Backstop)
                 assertContentEquals(cmd2, entry2.command, "leg-2 commit payload")
 
                 // Same shared log: leg 2 began only after entry1 committed, so a leader appends
-                // cmd2 above it whichever copy entry1 names if leg 1 retried. The re-admit's config
-                // entry sits between them too, so this is later, not next.
+                // cmd2 above it whichever copy entry1 names if leg 1 retried. This is later, not
+                // next: when A dies after leg 1 the re-admit's config entry sits between them. When
+                // A died before leg 1 that entry is not between them, and nothing else need be.
                 assertTrue(
                     entry2.index > entry1.index,
                     "post-failover commit (${entry2.index}) extends the same log past ${entry1.index}",
