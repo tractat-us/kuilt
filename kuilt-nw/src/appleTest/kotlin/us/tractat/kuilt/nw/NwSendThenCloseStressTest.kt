@@ -63,7 +63,9 @@ class NwSendThenCloseStressTest {
                 0 to 25.milliseconds,
                 0 to 100.milliseconds,
                 64 * 1024 to 0.milliseconds,
+                64 * 1024 to 100.milliseconds,
                 1024 * 1024 to 0.milliseconds,
+                1024 * 1024 to 100.milliseconds,
                 8 * 1024 * 1024 to 0.milliseconds, // the control: a rig that cannot lose a frame reds nothing
                 8 * 1024 * 1024 to 100.milliseconds,
             ).map { (cargo, wait) -> measureRow(cargo, wait) }

@@ -330,7 +330,7 @@ class HostDepartureTest {
 
             // Positive control: the identical bytes from the host itself do end the room, so the
             // refusal above is about the sender and not about a frame that was never going to act.
-            seam.deliver(hostId, frame)
+            if (stillOpen) seam.deliver(hostId, frame) // a torn seam refuses delivery; the assertions name why
             testScheduler.runCurrent()
 
             assertAll(
