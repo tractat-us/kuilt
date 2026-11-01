@@ -205,7 +205,11 @@ public sealed interface ControlOutcome {
     public data class Conflict(override val index: Long, public val conflict: ControlConflict) : ControlOutcome
 
     public companion object {
-        /** [index] sentinel for an act refused locally, before it ever reached the log. */
+        /**
+         * [index] sentinel for an act refused locally, before it ever reached the log. One exception:
+         * a call in flight when this peer halts at a control act it cannot read gets this answer too,
+         * and its act may still commit, since nothing past that entry will apply here.
+         */
         public const val NOT_COMMITTED: Long = -1L
     }
 }
