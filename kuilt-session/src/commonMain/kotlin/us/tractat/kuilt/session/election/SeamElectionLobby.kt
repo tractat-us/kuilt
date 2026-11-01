@@ -18,11 +18,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -64,6 +66,9 @@ private class PromotedToHostSignal(val roster: Set<PeerId>) :
  * [lobbyMessages] for [start]/[awaitRoom] to consume. At adopt time that collector is cancelled and
  * joined BEFORE [SeamRoomFactory.adopt] starts the room's own collector — preserving the
  * single-collection `incoming` contract (ADR-034).
+ *
+ * That collector also answers every heartbeat ping (see [answerPing]), so a peer's detector reads this
+ * lobby as alive for as long as it is, whichever role it is in and however long its user takes to act.
  */
 internal class SeamElectionLobby(
     private val seam: Seam,
@@ -116,12 +121,47 @@ internal class SeamElectionLobby(
     private var adopted = false
     private var epoch: Long = 0L
 
+    // Peers with a pong on its way. Declared above [collectorJob], whose launch can run on a real
+    // dispatcher before this class finishes initializing.
+    private val pongsInFlight = MutableStateFlow<Set<PeerId>>(emptySet())
+
     private val collectorJob: Job = scope.launch {
         seam.incoming.collect { swatch ->
             rawIncoming.emit(swatch)
             val sender = swatch.sender ?: return@collect
+            if (swatch.decodeToString().startsWith(HeartbeatPartitionDetector.PING_PREFIX)) {
+                answerPing(sender)
+                return@collect
+            }
             val msg = LobbyMessage.decode(swatch.toByteArray()) ?: return@collect
             _lobbyMessages.emit(sender to msg)
+        }
+    }
+
+    /**
+     * Answers a heartbeat ping whatever this lobby is doing. Without this only a running detector
+     * answers, and a host creates its detectors inside [start], so a host waiting for its user's Start
+     * tap read as dead to every member waiting on it (#2995). The answer comes from the lobby itself,
+     * so a host that really is gone still reads as gone.
+     *
+     * Launched as a child of the collector so it ends with the lobby's collector at adoption, and off
+     * the collector's own path because [Seam.sendTo] can stall on a wedged link, and that collector is
+     * what carries `Freeze` and `Commit`. One send per peer at a time: a pong is only evidence of life,
+     * so one already on its way is as good as a second, and a wedged peer cannot grow a queue of them.
+     *
+     * A peer with a detector running here also gets that detector's own pong. That is harmless, since a
+     * detector counts inbound frames rather than pongs, and tracking it would cost more than the frame.
+     */
+    private fun CoroutineScope.answerPing(sender: PeerId) {
+        if (sender == selfId) return
+        if (sender in pongsInFlight.getAndUpdate { it + sender }) return
+        launch {
+            try {
+                runCatchingCancellable { seam.sendTo(sender, PONG) }
+                    .onFailure { logger.debug { "lobby.pong.failed self=${selfId.value} to=${sender.value}: $it" } }
+            } finally {
+                pongsInFlight.update { it - sender }
+            }
         }
     }
 
@@ -132,7 +172,7 @@ internal class SeamElectionLobby(
             // The freeze round runs INSIDE guardElection (collapse-abortable); adoption runs OUTSIDE it
             // (finding #1) so a collapse signal cannot cancel adoptRoom mid-commit and wedge the lobby.
             // Host monitors the current members (roster - self) for the silent-but-present collapse (#1480).
-            guardElection(collapseSignals = listOf(coElectorLostSignal(peers.value - selfId))) {
+            guardElection(collapseSignals = listOf(membersLostSignal())) {
                 runHostElection()
             }
             adoptAfterCommit(SessionRole.Host, memberName)
@@ -443,6 +483,17 @@ internal class SeamElectionLobby(
     }
 
     /**
+     * Follow the host's members for the whole of [start]. Each roster change cancels and joins the
+     * previous signal before watching the new set, so a member that joined late is pinged and watched
+     * (#2995), and one that left is not reported lost while the rest can still complete the election.
+     * A change restarts every member's silence clock, which delays a detection and does not lose one.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun membersLostSignal(): suspend () -> LobbyTornException = {
+        peers.mapLatest { roster -> coElectorLostSignal(roster - selfId)() }.first()
+    }
+
+    /**
      * A [guardElection] collapse-signal that catches the **present-but-silent** co-elector — the
      * #1478 root condition (a path-lost `waiting` connection that never fires a close): `seam.peers`
      * still lists the peer and `state` stays [SeamState.Woven], so no set-based abort (the Torn
@@ -536,6 +587,8 @@ internal class SeamElectionLobby(
         }
 
     private companion object {
+        private val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
+
         /**
          * Lobby-tuned heartbeat profile. The default [HeartbeatConfig] (5s/15s/60s) targets a
          * long-lived [Room]; its 60s reconnect window outlives the entire lobby, so a dead co-elector

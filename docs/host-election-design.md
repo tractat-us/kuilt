@@ -33,12 +33,16 @@ impossibility result would deny us.
 
 ## The shape: the lobby is not a Room
 
-The key decision. During the lobby there is **no `Room`** — no admitted-member roster, no admit
-handshake, no per-peer heartbeat. A lobby is just:
+The key decision. During the lobby there is **no `Room`** — no admitted-member roster and no admit
+handshake. A lobby is just:
 
 - the live set of connected transport peers (`Seam.peers` — join / leave / two-group-merge are all
-  simply set changes), and
-- a reactive `host = min(peers ∪ self)` that every peer computes identically.
+  simply set changes),
+- a reactive `host = min(peers ∪ self)` that every peer computes identically, and
+- a heartbeat, so a peer that is connected but silent cannot strand an election. Every lobby answers
+  pings from the moment it exists, so a host can wait as long as it likes for its Start tap. `start()`
+  watches the current members and `awaitRoom()` watches the elected host, and each ends the election
+  with a collapse if its counterpart stops answering.
 
 A `Room` (with its admit handshake and role-specific machinery) is created **exactly once**, at
 **Start**, by adopting the already-woven seam with a now-fixed role. Because the role is decided before

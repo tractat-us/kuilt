@@ -89,9 +89,13 @@ public sealed interface ElectionOutcome {
 
 /**
  * A pre-session lobby over a symmetric mesh. **Not a [Room]** — during the lobby there is no admit
- * handshake, no admitted roster, no heartbeat: just the live connected peers and a reactive elected
- * host. A [Room] is created exactly once, at [start]/[awaitRoom], by adopting the woven seam with a
- * now-fixed role. See `docs/host-election-design.md`.
+ * handshake and no admitted roster: just the live connected peers and a reactive elected host. A [Room]
+ * is created exactly once, at [start]/[awaitRoom], by adopting the woven seam with a now-fixed role. See
+ * `docs/host-election-design.md`.
+ *
+ * A lobby does run a heartbeat. Every lobby answers pings from the moment it exists, so a host may take
+ * as long as its user likes to call [start]. [start] and [awaitRoom] also watch their counterparts, so a
+ * peer that stays connected but stops answering ends the election.
  */
 public interface ElectionLobby {
     /** This peer's own identifier. */

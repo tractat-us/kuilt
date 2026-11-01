@@ -142,7 +142,10 @@ class LobbyHeartbeatTest {
             val late = PeerId("peer-c")
             val seam = FakeSeam(selfId = self, initialPeers = setOf(self, early))
             val lobby = lobbyOver(seam)
-            val started = backgroundScope.async { runCatchingForTest { lobby.start() } }
+            var endedAt = -1L
+            val started = backgroundScope.async {
+                runCatchingForTest { lobby.start() }.also { endedAt = testScheduler.currentTime }
+            }
             runCurrent()
 
             seam.addPeer(late)
@@ -164,8 +167,8 @@ class LobbyHeartbeatTest {
                 { assertIs<LobbyTornException>(ended, "a silent late member must collapse the election") },
                 {
                     assertTrue(
-                        testScheduler.currentTime - joinedAt in 3_000..10_999,
-                        "past a transient blip and inside the freeze window, was ${testScheduler.currentTime - joinedAt}ms",
+                        endedAt - joinedAt in 3_000..9_999,
+                        "past a transient blip and inside the freeze window, was ${endedAt - joinedAt}ms",
                     )
                 },
             )
