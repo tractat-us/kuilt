@@ -1,5 +1,6 @@
 package us.tractat.kuilt.game
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
@@ -11,6 +12,8 @@ import kotlinx.coroutines.launch
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.DedupKey
 import us.tractat.kuilt.raft.Snapshot
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.game.SpeculativeSequencer")
 
 /**
  * A wrapper over [TurnSequencer] that applies local actions optimistically before
@@ -94,7 +97,7 @@ public class SpeculativeSequencer<S, A>(
     private val stateLock = reentrantLock()
 
     /** Pending inputs submitted locally but not yet confirmed by the committed log. */
-    private val pendingBuffer = ArrayDeque<A>()
+    private val pendingBuffer = ArrayDeque<PendingEntry<A>>()
 
     /** The last confirmed authoritative state (snapshot after each confirmed commit). */
     private var authoritativeSnapshot: S = game.snapshot(initialState)
@@ -149,11 +152,11 @@ public class SpeculativeSequencer<S, A>(
      *   treat it as lost and retry with an idempotent action or deduplication key.
      */
     public suspend fun propose(action: A): IndexedAction<A> {
-        applySpeculatively(action)
+        val entry = applySpeculatively(action)
         return try {
             sequencer.propose(action)
         } catch (e: Throwable) {
-            rollbackSpeculative()
+            withdraw(entry)
             throw e
         }
     }
@@ -176,24 +179,27 @@ public class SpeculativeSequencer<S, A>(
      *   rolled back; do not retry under the same [requestId].
      */
     public suspend fun propose(action: A, requestId: Long): IndexedAction<A> {
-        applySpeculatively(action)
+        val entry = applySpeculatively(action)
         return try {
             sequencer.propose(action, requestId)
         } catch (e: Throwable) {
-            rollbackSpeculative()
+            withdraw(entry)
             throw e
         }
     }
 
     // ── Private: speculative apply and rollback ───────────────────────────────
 
-    private fun applySpeculatively(action: A) = stateLock.withLock {
-        pendingBuffer.addLast(action)
-        _speculativeState.value = game.apply(_speculativeState.value, action)
+    private fun applySpeculatively(action: A): PendingEntry<A> = stateLock.withLock {
+        val next = game.apply(_speculativeState.value, action)
+        PendingEntry(action).also { entry ->
+            pendingBuffer.addLast(entry)
+            _speculativeState.value = next
+        }
     }
 
-    private fun rollbackSpeculative() = stateLock.withLock {
-        pendingBuffer.removeLastOrNull()
+    private fun withdraw(entry: PendingEntry<A>): Unit = stateLock.withLock {
+        pendingBuffer.remove(entry)
         _speculativeState.value = replayPendingOnSnapshot()
     }
 
@@ -245,47 +251,34 @@ public class SpeculativeSequencer<S, A>(
      * Distinct legitimate actions never collide here: the auto-serial [propose] draws a fresh serial
      * per call, so only an explicit same-`requestId` retry shares a key — exactly what dedup drops.
      */
-    private fun onCommit(indexed: IndexedAction<A>): Unit = stateLock.withLock {
-        val fresh = dedupTable.shouldApply(indexed.dedupKey)
-        val oldest = pendingBuffer.firstOrNull()
-        val matchesPending = oldest != null && actionsMatch(oldest, indexed.action)
-        when {
-            !fresh -> if (matchesPending) {
-                // Already-applied duplicate that still has a stale pending twin — drop the twin.
-                pendingBuffer.removeFirst()
-                _speculativeState.value = replayPendingOnSnapshot()
-            }
-            matchesPending -> confirmOldestPending(indexed.action)
-            else -> applyForeignAndReplay(indexed.action)
+    private fun onCommit(indexed: IndexedAction<A>) {
+        val rejection = stateLock.withLock {
+            val fresh = dedupTable.shouldApply(indexed.dedupKey)
+            val claimed = pendingBuffer.indexOfFirst { it.action == indexed.action }
+            if (claimed >= 0) pendingBuffer.removeAt(claimed)
+            val refused = if (fresh) advanceAuthoritative(indexed.action) else null
+            val predictionHolds = if (fresh) claimed == 0 else claimed < 0
+            if (!predictionHolds) _speculativeState.value = replayPendingOnSnapshot()
+            _confirmedCount.value++
+            refused
         }
-        _confirmedCount.value++
+        rejection?.let { e ->
+            logger.warn(e) { "committed action at index ${indexed.index} was rejected by apply; state unchanged" }
+        }
     }
 
     /**
-     * Confirms the oldest pending input: it matched the committed action, so we advance
-     * the authoritative snapshot without touching the remaining pending entries.
-     *
-     * The speculative state already reflects this action (it was applied optimistically),
-     * so no re-computation is needed — just pop the buffer and advance the snapshot.
-     * Caller holds [stateLock].
+     * Folds a committed action into the authoritative snapshot, returning the exception if
+     * [SpeculativeGame.apply] rejected it. Caller holds [stateLock].
      */
-    private fun confirmOldestPending(committed: A) {
-        pendingBuffer.removeFirst()
-        authoritativeSnapshot = game.snapshot(game.apply(authoritativeSnapshot, committed))
-        // speculativeState is already correct — no update needed.
-    }
-
-    /**
-     * Applies a foreign (non-predicted) action to the authoritative snapshot, then
-     * replays all remaining pending inputs on top.
-     *
-     * This is the rollback path: the authoritative snapshot advances, and speculative
-     * state is recomputed from scratch by replaying the pending buffer.
-     * Caller holds [stateLock].
-     */
-    private fun applyForeignAndReplay(foreign: A) {
-        authoritativeSnapshot = game.snapshot(game.apply(authoritativeSnapshot, foreign))
-        _speculativeState.value = replayPendingOnSnapshot()
+    private fun advanceAuthoritative(committed: A): Exception? {
+        val next = try {
+            game.apply(authoritativeSnapshot, committed)
+        } catch (rejection: Exception) {
+            return rejection
+        }
+        authoritativeSnapshot = game.snapshot(next)
+        return null
     }
 
     /**
@@ -294,19 +287,14 @@ public class SpeculativeSequencer<S, A>(
      * Caller holds [stateLock].
      */
     private fun replayPendingOnSnapshot(): S =
-        pendingBuffer.fold(game.restore(authoritativeSnapshot)) { state, action ->
-            game.apply(state, action)
+        pendingBuffer.fold(game.restore(authoritativeSnapshot)) { state, entry ->
+            try {
+                game.apply(state, entry.action)
+            } catch (rejection: Exception) {
+                logger.debug { "pending action skipped by this replay: $rejection" }
+                state
+            }
         }
-
-    /**
-     * Compares two actions for equality to determine if a commit matches the oldest
-     * pending input.
-     *
-     * Uses structural equality (`==`) which works correctly for data classes. If [A]
-     * does not implement meaningful equality, override [SpeculativeGame] to provide a
-     * custom comparator — or ensure [A] is a data class or sealed class with `==`.
-     */
-    private fun actionsMatch(pending: A, committed: A): Boolean = pending == committed
 
     // ── Test utilities ────────────────────────────────────────────────────────
 
@@ -322,3 +310,9 @@ public class SpeculativeSequencer<S, A>(
         confirmedCount.first { it >= count }
     }
 }
+
+/**
+ * One local proposal's place in the pending buffer. Deliberately not a data class: two proposals of
+ * equal actions are two entries, and identity is what lets a failed propose find its own.
+ */
+private class PendingEntry<A>(val action: A)
