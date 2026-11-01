@@ -157,11 +157,10 @@ class TornSeamRaftNodeTest {
 
     private fun assertSurvivedBufferedTear(rig: Rig) = assertAll(
         { assertTrue(rig.seam.framesReadAfterTear > 0, "the rig: frames must be read after the tear") },
-        { assertTrue(rig.seam.sendsAfterTear > 0, "the rig: the engine must reply after the tear") },
-        { assertTrue(rig.seam.refusals.isNotEmpty(), "the rig: the seam must refuse those replies") },
+        { assertEquals(frames, rig.seam.sendsAfterTear, "the engine must answer every queued frame") },
+        { assertEquals(frames, rig.seam.refusals.size, "the rig: the seam must refuse every one of those") },
         { assertEquals(emptyList(), rig.escapes, "a refused reply must not reach the node's scope") },
         { assertTrue(rig.job.isActive, "the node's scope must survive") },
-        { assertEquals(frames, rig.seam.framesRead, "every queued frame must still reach the engine") },
     )
 
     private fun assertSurvivedElectionTimerAfterTear(rig: Rig) = assertAll(
