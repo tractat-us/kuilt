@@ -86,12 +86,24 @@ internal fun interface OutboundSender {
  * @param selfId this server peer's own [PeerId].
  * @param authorizer required authorization policy — invoked on first frame from each
  *   connection. Use [RoomAuthorizer.AllowAll] for open-access rooms and in tests.
+ * @param onClose told this hub on every [close], before the roster collapses. It is how the
+ *   [MuxServerLoom] that owns the hub drops it from its room table, so the next host of
+ *   [channelName] gets a live room rather than this closed one (#3041). It must tolerate repeat
+ *   calls. A hub built through the public constructor has no owner, so nothing is told.
  */
-public class RoomHubSeam(
+public class RoomHubSeam internal constructor(
     internal val channelName: String,
     override val selfId: PeerId,
     private val authorizer: RoomAuthorizer,
+    private val onClose: (RoomHubSeam) -> Unit,
 ) : Seam, PrincipalRoster {
+
+    /** A hub no loom owns: closing it tells nobody. */
+    public constructor(
+        channelName: String,
+        selfId: PeerId,
+        authorizer: RoomAuthorizer,
+    ) : this(channelName, selfId, authorizer, onClose = {})
 
     private val lock = reentrantLock()
 
@@ -300,6 +312,12 @@ public class RoomHubSeam(
     }
 
     override suspend fun close(reason: CloseReason) {
+        // Leave the owner's room table FIRST, before `closed` is set. From this point a frame on this
+        // channel, or a host of this name, reaches a successor hub (or none) and never this one. Told
+        // after the collapse instead, a host landing in between would be handed this hub, closed and
+        // still listed, which is #3041 again in a narrower window. Outside [lock], so the owner's own
+        // lock is never taken inside this hub's.
+        onClose(this)
         // Collapse the roster to { selfId } BEFORE latching Torn. [Seam.peers] makes that an ORDERED
         // obligation — a consumer woken by the terminal state must already observe the collapse — and
         // it is `{ selfId }`, not `emptySet()`: the hub is a peer in its own room roster, so an empty
