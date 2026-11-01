@@ -86,6 +86,16 @@ class HostDepartureTest {
         }
     }
 
+    /** Everything the host addressed to a peer, in order. */
+    private class RecordingSeam(private val delegate: Seam) : Seam by delegate {
+        val sent = mutableListOf<Pair<PeerId, ByteArray>>()
+
+        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+            sent += peer to payload
+            delegate.sendTo(peer, payload)
+        }
+    }
+
     /** Parks every addressed send to [wedged] forever: the #1655 black hole, for one recipient only. */
     private class WedgedRecipientSeam(private val delegate: Seam) : Seam by delegate {
         var wedged: PeerId? = null
@@ -340,32 +350,24 @@ class HostDepartureTest {
     @Test
     fun theFrameIsAnOrdinaryFarewellOnTheWire() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val hostId = PeerId("h")
-            val seam = FakeSeam(selfId = hostId, initialPeers = setOf(hostId))
-            val host = SeamRoom(
-                seam = seam,
-                role = SessionRole.Host,
-                memberName = "Host",
-                scope = backgroundScope,
-                clock = clock(),
-                heartbeatConfig = config,
-            ).also { it.start() }
-            val joinerId = PeerId("j")
-            seam.addPeer(joinerId)
-            seam.deliver(joinerId, AdmitMessage.encode(AdmitMessage.Hello("Joiner", "joiner-session")))
-            testScheduler.runCurrent()
+            val loom = InMemoryLoom()
+            val factory = SeamRoomFactory(loom, backgroundScope, clock(), config)
+            val hostSeam = RecordingSeam(loom.host(Pattern("Host")))
+            val host = factory.adopt(hostSeam, SessionRole.Host)
+            val joiner = factory.join(InMemoryTag("Host"))
+            joiner.roster.first { it.isNotEmpty() }
             host.roster.first { it.isNotEmpty() }
 
             host.leave()
             testScheduler.runCurrent()
 
-            val farewell = seam.directed
-                .filter { (to, _) -> to == joinerId }
+            val farewell = hostSeam.sent
+                .filter { (to, _) -> to == joiner.selfId }
                 .map { (_, payload) -> payload }
                 .single { AdmitMessage.decode(it) is AdmitMessage.Farewell }
             assertAll(
-                { assertEquals(AdmitMessage.Farewell(hostId.value, expired = false), AdmitMessage.decode(farewell)) },
-                { assertContentEquals(AdmitMessage.encode(AdmitMessage.Farewell("h")), farewell) },
+                { assertEquals(AdmitMessage.Farewell(host.selfId.value, expired = false), AdmitMessage.decode(farewell)) },
+                { assertContentEquals(AdmitMessage.encode(AdmitMessage.Farewell(host.selfId.value)), farewell) },
             )
         }
 

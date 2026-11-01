@@ -8,6 +8,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
@@ -1853,16 +1856,34 @@ internal class SeamRoom(
      * **Host-authoritative gate:** only a Farewell from the identified host ([hostPeerId]) is
      * honored. Anything else — a forged Farewell from another joiner, or one arriving before
      * the host is identified — is dropped; the [HeartbeatPartitionDetector] fallback still
-     * evicts genuinely-vanished peers. A Farewell naming the host itself is also ignored:
-     * host departure is transport-level ([runJoinerTornWatcher] / host-liveness detection),
-     * never a roster eviction.
+     * evicts genuinely-vanished peers. That gate is what stops any other peer naming the host and
+     * ending this room.
+     *
+     * **A Farewell naming the host itself is the host leaving on purpose (#2670).** It is not a roster
+     * eviction: the room goes terminal with [FailureReason.HostLeft], without opening a reconnect
+     * window, and cuts short one a tear already opened ([JoinerResumeMachine]'s loop sees the room
+     * terminal, and [leave] cancels it). The claim happens here, under [lock], so a tear racing this
+     * frame finds the room terminal and opens nothing. The teardown is handed to a **detached**
+     * `scope.launch` because this runs on the room's main loop and [leave] cancels the main loop: inline,
+     * that would cancel its own `seam.close` (the discipline of [watchAdmitDeadline]).
+     *
+     * A joiner older than #2670 returned on `departed == host` here, so it ignores this frame and falls
+     * back to the window, which is why a host can send it to anybody.
      */
     private fun handleFarewell(sender: PeerId, farewell: AdmitMessage.Farewell) {
         val departed = PeerId(farewell.peerId)
-        lock.withLock {
+        val hostDeparted = lock.withLock {
             val host = hostPeerId
-            if (host == null || sender != host || departed == host) return
-            stopDetector(departed)
+            if (closed || host == null || sender != host) return
+            if (departed != host) stopDetector(departed)
+            departed == host
+        }
+        if (hostDeparted) {
+            if (claimHostLost()) {
+                val at = clock()
+                scope.launch { finishHostLost(at, FailureReason.HostLeft) }
+            }
+            return
         }
         removeFromRoster(
             departed,
@@ -3361,12 +3382,17 @@ internal class SeamRoom(
     }
 
     private suspend fun markHostLost(at: Instant, reason: FailureReason) {
-        val alreadyLost = lock.withLock {
-            val was = hostLost
-            hostLost = true
-            was
-        }
-        if (alreadyLost) return
+        if (claimHostLost()) finishHostLost(at, reason)
+    }
+
+    /** The single-shot latch for going terminal on the host's account. Once it is set, no window opens. */
+    private fun claimHostLost(): Boolean = lock.withLock {
+        val first = !hostLost
+        hostLost = true
+        first
+    }
+
+    private suspend fun finishHostLost(at: Instant, reason: FailureReason) {
         emitEvent(MembershipEvent.HostLost(at, reason, localFabric = localFabric.value))
         leave(LeaveReason.Error("host lost"))
     }
@@ -3785,8 +3811,12 @@ internal class SeamRoom(
 
     override suspend fun leave(reason: LeaveReason) {
         // Flip closed + snapshot jobs under lock; announce, cancel, and close outside.
+        var hostFarewellQueued = false
         val plan = lock.withLock {
             if (closed) return
+            // Queued BEFORE `closed` flips, since a closed room refuses to mint a lane, and in the same
+            // critical section, so this is the last thing any lane carries. Nothing here suspends.
+            hostFarewellQueued = queueHostFarewell(reason)
             closed = true
             Triple(
                 _role.value == SessionRole.Joiner && reason is LeaveReason.Normal,
@@ -3812,10 +3842,10 @@ internal class SeamRoom(
         // #2048), so each [runAdmitFanOutWriter] / [runRelayForwardWriter] completes when its lane
         // drains instead of dying mid-item. Anything already enqueued MAY still be attempted,
         // best-effort, before the seam tears — but do not read that as a guarantee: the writers are
-        // separate coroutines and `seam.close` below is reached without necessarily yielding to them,
-        // so in practice they typically do not resume until the seam is already `Torn` and their
-        // remaining sends fail fast. That matches the pre-existing behaviour, where [leave] never
-        // cancelled the per-call `scope.launch`es either.
+        // separate coroutines and, outside [awaitHostFarewellHandoff]'s wait, `seam.close` below is
+        // reached without necessarily yielding to them, so they typically do not resume until the seam
+        // is already `Torn` and their remaining sends fail fast. That matches the pre-existing
+        // behaviour, where [leave] never cancelled the per-call `scope.launch`es either.
         //
         // No lane can leak past this point: `closed` was set under [lock] above, and both
         // [admitLaneFor] and [relayLaneFor] refuse to mint a lane once it is set — so the maps are
@@ -3827,6 +3857,7 @@ internal class SeamRoom(
                 .also { admitLanes.clear(); relayLanes.clear() }
         }
         lanesToDrain.forEach { it.close() }
+        if (hostFarewellQueued) awaitHostFarewellHandoff()
         // A terminal room has ended every admission: complete each member's incomingFrom reader.
         // `closed` is already set, so addToRoster cannot open another inbox behind this.
         lock.withLock { memberInboxes.values.toList().also { memberInboxes.clear() } }.forEach { it.close() }
@@ -3840,10 +3871,66 @@ internal class SeamRoom(
             },
         )
     }
+
+    /**
+     * **Host only, on a clean leave.** Tell every member this host is leaving on purpose (#2670), so a
+     * joiner ends its room with [FailureReason.HostLeft] rather than holding a live-looking one for the
+     * whole reconnect window. Returns whether anything was queued, and so whether [leave] owes the wait.
+     *
+     * A `Farewell` naming the host, on each recipient's own [admitLanes], for the reasons every other
+     * fan-out is there: a wedged recipient delays only itself, and the frame cannot overtake an
+     * announcement already queued for that recipient. There is nobody to tell on a seam that is already
+     * [SeamState.Torn], which is how [runTornWatcher] reaches [leave].
+     *
+     * [LeaveReason.Normal] only, mirroring the joiner's [AdmitMessage.Goodbye]. Callers must hold [lock],
+     * and `closed` must not have flipped yet.
+     */
+    private fun queueHostFarewell(reason: LeaveReason): Boolean {
+        if (_role.value != SessionRole.Host || reason !is LeaveReason.Normal) return false
+        if (seam.state.value is SeamState.Torn || admittedById.isEmpty()) return false
+        fanOutToOtherMembers(selfId, AdmitMessage.Farewell(selfId.value))
+        return true
+    }
+
+    /**
+     * Give the host's `Farewell` time to leave before [leave] closes the seam under it. See
+     * [HOST_FAREWELL_HANDOFF].
+     *
+     * Shielded, because a cancelled caller must not strand an open seam behind a closed room: what closes
+     * it is the code below this call in [leave]. The wait is short and fixed, so the shield delays a
+     * cancel by at most [HOST_FAREWELL_HANDOFF].
+     */
+    private suspend fun awaitHostFarewellHandoff() {
+        withContext(NonCancellable) { delay(HOST_FAREWELL_HANDOFF) }
+    }
 }
 
 /**
- * How long a host's [SeamRoom.leave] holds its seam open after queuing the `Farewell`.
+ * How long a host's [SeamRoom.leave] holds its seam open after queuing the `Farewell` (#2670).
+ *
+ * **A measured wait standing in for a missing signal.** `Seam.sendTo` promises only that the local
+ * transport accepted the frame, and neither `Seam.close` nor `Connection.close` promises anything about
+ * accepted frames: `LinkSeam.close` does not drain its outbox, and `nw_connection_cancel` makes *"no
+ * guarantee that any outstanding sends that have not yet delivered send completion handlers will send
+ * data"*. The frame also has to get off the room's own lane first. The real fix is the explicit
+ * `flush(timeout)` ruled for #2830, and this constant should go when that lands.
+ *
+ * A frame sent and closed at once, against a pause before the close, on a box at load 50 of 16 cores:
+ *
+ * | Fabric | no pause | 5 ms | 25 ms | 100 ms |
+ * |---|---|---|---|---|
+ * | WebSocket, real localhost socket | 10/60 | 60/60 | 60/60 | 60/60 |
+ * | kuilt-nw, real loopback TLS-PSK | 58/60 | 40/40 | 60/60 | 40/40 |
+ *
+ * 100 ms is that margin again, for a slower radio and a slower phone. It is a hand-off wait rather than a
+ * round trip, so link latency is not what it has to cover. **Loopback is not AWDL**, so a real two-iPhone
+ * run still owes this number its confirmation.
+ *
+ * **What it does not cover.** A backlog ahead of the frame: with 8 MiB queued in front of it the frame
+ * was lost at 100 ms on kuilt-nw. The joiner then falls back to the reconnect window, the behaviour every
+ * joiner had before this, so a lost `Farewell` costs time and nothing else.
+ *
+ * Paid only by a host leaving cleanly with someone to tell.
  */
 internal val HOST_FAREWELL_HANDOFF: Duration = 100.milliseconds
 
