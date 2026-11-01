@@ -349,11 +349,12 @@ public abstract class WasmRuntimeConformanceSuite {
      * A memory64 max too big for a 32-bit decode must still be refused: a decoder that overflows
      * reads 2^32 as 0 and 2^31 as negative, and both pass a `max > cap` check.
      *
-     * **Today this is a tripwire, and no sandbox mutation reds it.** Each engine refuses both vectors
-     * on its own: Chicory calls the limits flag invalid, V8 reports a max above its 262,144-page
-     * limit, and wasm3 reads the flag as "has a max", truncates 2^32 to 0, and lands on the no-max
-     * guard. It reds the day an engine raises that limit. The decode itself is pinned beside the
-     * browser runtime, where the parser lives.
+     * **This is a non-regression pin.** Chicory calls the limits flag invalid, and V8 reports a max
+     * above its 262,144-page limit, so going red there takes an engine change and a guard removal
+     * together: the browser runtime's flag guard refuses memory64 before it decodes any limit. wasm3
+     * reads the flag as "has a max" and lands on the sandbox's own guards, truncating 2^32 to 0 for
+     * the no-max guard and leaving 2^31 for the cap guard. The decode's own reds are unit-level,
+     * beside the browser runtime, where the parser lives.
      */
     @Test
     public fun loadRejectsMemory64MaxPastThe32BitRange() {

@@ -14,9 +14,10 @@ import kotlin.test.assertFailsWith
 class BrowserWasmDeclaredMemoryTest {
 
     /**
-     * V8 refuses any module carrying these limits, so no module can put them in front of the cap
-     * check today (see the TCK's `loadRejectsMemory64MaxPastThe32BitRange`). The decode is what
-     * would stand between the sandbox and an engine that raised its limit, so it is read directly.
+     * No module can put these values in front of the cap check. The flag guard refuses memory64
+     * first, and V8 caps a 32-bit limit at 65,536 pages (see the TCK's
+     * `loadRejectsMemory64MaxPastThe32BitRange`). The `Long` decode is a second layer behind them,
+     * and only a unit-level read like this one reaches it.
      */
     @Test
     fun lebDecodesPastThe32BitRange() {

@@ -5,14 +5,15 @@ package us.tractat.kuilt.warp.test
  *
  * One canonical byte set for every target: Kotlin/Native and wasmJs have no classpath
  * resources, so the fixtures are embedded as byte literals and shared from `commonMain` —
- * every `WasmRuntime` implementation is verified against **identical bytes**. Each vector's
+ * every `WasmRuntime` implementation is verified against **identical bytes**. A vector's
  * `.wat` source lives in this module's `wat/` directory with a `wat2wasm` reproduction
- * command in its header.
+ * command in its header. The `MEMORY64_*` vectors are the exception: they splice their limits
+ * into [OVERSIZE_MAX_MEMORY]'s bytes, and each KDoc gives the memory declaration as text.
  *
  * All loadable vectors declare linear memory with an explicit bounded max (the uniform
  * contract — see [us.tractat.kuilt.warp.WasmRuntime]); the deliberate exceptions are the
- * guard vectors themselves ([NO_MAX_MEMORY], [OVERSIZE_INITIAL_MEMORY], [MISSING_MEMORY]), plus
- * [INITIAL_ABOVE_DECLARED_MAX], which declares a bounded max the WebAssembly spec would refuse
+ * guard vectors themselves ([NO_MAX_MEMORY], [OVERSIZE_INITIAL_MEMORY], [MISSING_MEMORY],
+ * [SECOND_MEMORY_NO_MAX]), plus [INITIAL_ABOVE_DECLARED_MAX], which declares a bounded max the WebAssembly spec would refuse
  * to validate against its own initial — see its KDoc for why that is the only way to reach the
  * guard it targets.
  *
