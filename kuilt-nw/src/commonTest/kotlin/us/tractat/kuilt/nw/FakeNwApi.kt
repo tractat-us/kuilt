@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.FabricAvailability
 import kotlin.concurrent.Volatile
@@ -120,10 +122,39 @@ internal class FakeNwApi(
     private var devicePathUnsatisfied = false
     private val devicePathLostConns = mutableSetOf<NwConnectionId>()
 
+    // Whether a collector currently holds [bytesReceived]. Guarded by [lock] (#3031).
+    private var bytesCollected = false
+
     override val endpointFound: Flow<NwEndpoint> = _endpointFound.asSharedFlow()
     override val endpointLost: Flow<NwEndpoint> = _endpointLost.asSharedFlow()
     override val connectionOpened: Flow<NwConnectionOpened> = _connectionOpened.asSharedFlow()
-    override val bytesReceived: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
+
+    /**
+     * Single-collection, enforced, exactly as `RealNwApi.bytesReceived` enforces it (#3031). A
+     * [MutableSharedFlow] would happily serve a second collector a duplicate of every chunk, so a second
+     * `NwSeam` over one device used to be invisible here while it aborted the process on hardware.
+     *
+     * Same message and same exception type as the binding, and the latch clears when the collector has
+     * actually unwound, not when its seam was asked to close. One deliberate difference: the binding's flow
+     * is buffered, so its throw lands on a dispatched producer, while this one throws inline in the collector.
+     * Both reach the same place, the coroutine collecting. Buffering here would lose the synchronous
+     * subscribe `NwSubscribeBeforeTriggerTest` measures.
+     */
+    override val bytesReceived: Flow<NwBytesReceived> = flow {
+        lock.withLock {
+            check(!bytesCollected) {
+                "NwApi.bytesReceived is single-collection: a second collector would SPLIT the byte stream, " +
+                    "interleaving one connection's chunks across two framers. Fan out with shareIn instead."
+            }
+            bytesCollected = true
+        }
+        try {
+            emitAll(_bytesReceived)
+        } finally {
+            lock.withLock { bytesCollected = false }
+        }
+    }
+
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
     override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> = _connectionStates.asStateFlow()
     override val pathState: StateFlow<NwPathState?> = _pathState.asStateFlow()
