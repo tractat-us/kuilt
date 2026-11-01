@@ -24,6 +24,7 @@
 package us.tractat.kuilt.warp
 
 import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
@@ -187,6 +188,103 @@ class WarpNodeCoordinatedWindowsTest {
             assertAll(
                 { assertEquals(1, executions.value, "stranded task re-driven exactly once") },
                 { assertNotNull(node.results[task], "result recorded after re-drive") },
+            )
+            node.close()
+        }
+
+    /**
+     * A task this node proposed as leader in an *earlier* tenure is re-driven when it leads again
+     * (#2923). The proposed-as-leader guard may only skip a task tagged with the re-drive's own
+     * tenure.
+     *
+     * The first propose never commits: a hung forward to a leader that then crashed. The tenure-1
+     * re-drive rightly skips the task, since this node's own entry for it may still fire. After an
+     * observed step-down and re-election that entry is gone for good, so the tenure-2 re-drive must
+     * re-propose it.
+     *
+     * Two mechanisms each keep an old tag from suppressing a later re-drive: `beginTenure` clears
+     * the tags, and the scan compares the tag with its own tenure. This test reds only when both are
+     * gone, so it pins the behaviour, not either mechanism alone.
+     */
+    @Test
+    fun taskProposedAsLeaderInAnEarlierTenureIsRedriven() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = InMemoryLoom().host(Pattern("coord-redrive-earlier-tenure"))
+            val fakeRaft = FakeRaftNode(initialRole = RaftRole.Leader)
+            val proposes = atomic(0)
+            fakeRaft.proposeBehavior = { command ->
+                if (proposes.incrementAndGet() == 1) awaitCancellation()
+                fakeRaft.pushCommitted(command)
+            }
+            val executions = atomic(0)
+            val node = warpNode(seam, fakeRaft, ClaimStrategy.Ring) {
+                executions.incrementAndGet()
+                "redriven"
+            }
+
+            val task = TaskId("coord-earlier-tenure-task")
+            node.enqueue(task, CoordinationKind.Coordinated)
+            drain()
+            assertAll(
+                { assertEquals(0, executions.value, "the first propose hangs, so nothing commits in tenure 1") },
+                { assertEquals(1, proposes.value, "rig: the tenure-1 re-drive skipped the task it proposed as leader") },
+            )
+
+            fakeRaft.setRole(RaftRole.Follower)
+            drain()
+            fakeRaft.setRole(RaftRole.Leader)
+            drain()
+
+            assertAll(
+                { assertEquals(1, executions.value, "a task tagged in an earlier tenure is re-driven exactly once") },
+                { assertEquals(2, proposes.value, "rig: the tenure-2 re-drive proposed the task again") },
+                { assertNotNull(node.results[task], "result recorded after re-drive") },
+            )
+            node.close()
+        }
+
+    /**
+     * Known gap, pinned: a step-down and re-election the role collector never sees loses the
+     * re-drive.
+     *
+     * [RaftRole.Leader] carries no term, so `Leader -> Follower -> Leader` with no collection in
+     * between leaves the role StateFlow equal to what it held; the collector observes nothing. No
+     * new tenure begins and no re-drive runs, so the task whose only entry was lost stays stranded.
+     * The pre-#2923 code has the same gap (#879 b class). The structural fix is a term on the
+     * leader role or a `RaftNode.currentTerm` flow, with the tenure keyed by term; that changes the
+     * kuilt-raft API and is tracked separately (issue drafted on #3008, not yet filed).
+     *
+     * This test goes red when that fix lands. Invert it then: the task should run exactly once.
+     */
+    @Test
+    fun conflatedReElectionLosesTheRedriveKnownGap() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = InMemoryLoom().host(Pattern("coord-redrive-conflated"))
+            val fakeRaft = FakeRaftNode(initialRole = RaftRole.Leader)
+            val proposes = atomic(0)
+            fakeRaft.proposeBehavior = { command ->
+                if (proposes.incrementAndGet() == 1) awaitCancellation()
+                fakeRaft.pushCommitted(command)
+            }
+            val executions = atomic(0)
+            val node = warpNode(seam, fakeRaft, ClaimStrategy.Ring) {
+                executions.incrementAndGet()
+                "redriven"
+            }
+
+            val task = TaskId("coord-conflated-task")
+            node.enqueue(task, CoordinationKind.Coordinated)
+            drain()
+
+            // No drain between the two: the collector never runs while the role reads Follower.
+            fakeRaft.setRole(RaftRole.Follower)
+            fakeRaft.setRole(RaftRole.Leader)
+            drain()
+
+            assertAll(
+                { assertEquals(0, executions.value, "known gap: the unobserved re-election re-drives nothing") },
+                { assertEquals(1, proposes.value, "known gap: no second propose") },
+                { assertNull(node.results[task], "known gap: the task stays stranded") },
             )
             node.close()
         }
