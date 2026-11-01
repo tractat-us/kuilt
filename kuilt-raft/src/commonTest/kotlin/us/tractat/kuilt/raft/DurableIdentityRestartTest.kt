@@ -176,15 +176,11 @@ class DurableIdentityRestartTest {
         rig.awaitReplay(SOLO_ID, through = entries.last().index)
 
         val retried = rig.node(SOLO_ID).propose(command(3L), requestId = 3L)
+        assertFailsWith<RequestIdConflictException> { rig.node(SOLO_ID).propose(command(99L), requestId = 2L) }
 
         assertAll(
             { assertEquals(emptyList(), rig.failures.map { it.toString() }) },
             { assertEquals(entries.last().index, retried.index, "the retry lands on the replayed entry") },
-            {
-                assertFailsWith<RequestIdConflictException> {
-                    rig.node(SOLO_ID).propose(command(99L), requestId = 2L)
-                }
-            },
         )
     }
 
