@@ -841,7 +841,7 @@ public abstract class RoomConformanceSuite {
      * A peer with no current admission reads as an empty, completed stream — never a failure. From a
      * consumer's side "there is no admission" and "the admission just ended" are the same fact, and a
      * consumer claiming from a roster snapshot legitimately races both (a snapshot read just before an
-     * eviction; its own [Room.leave], which closes inboxes while the roster still holds the member).
+     * eviction, or just before its own [Room.leave]).
      */
     @Test
     public fun incomingFromForAPeerWithNoAdmissionCompletes(): TestResult =

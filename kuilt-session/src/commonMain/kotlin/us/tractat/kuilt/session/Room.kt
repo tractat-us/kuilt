@@ -44,6 +44,7 @@ public interface Room {
      *
      * A peer is absent until the admit/identify handshake completes.
      * A peer is removed on clean [leave] or transport disconnect.
+     * A room that has itself called [leave] has no members: see [leave].
      *
      * **This is the authoritative, replay-safe source of current membership.** Being a
      * [StateFlow], a new collector immediately receives the current set. Reach for [roster]
@@ -416,6 +417,13 @@ public interface Room {
 
     /**
      * Leave the room cleanly. Idempotent.
+     *
+     * **A room that has left has no members, on either role.** Its [roster] reads empty, each of its
+     * [channel] views lists only this peer, and every [incomingFrom] flow completes. The roster empties
+     * first, so a reader that sees its flow complete already reads the empty roster. That keeps one
+     * inference sound: a member's flow completed while the member is still listed means a newer
+     * admission, never the end of this room. No [MembershipEvent.Left] is emitted for those members,
+     * because none of them left; this room stopped.
      *
      * A leave failure must **not** be reported as a cancellation — the obligation
      * [us.tractat.kuilt.core.Seam.close] states in full (#1826). A host calls this from a teardown path

@@ -422,6 +422,9 @@ public class FakeRoom(
         if (!left.compareAndSet(expect = false, update = true)) return
         eventsChannel.close()
         incomingChannel.close()
+        // A terminal room lists nobody, and says so before its readers complete, as the real room does.
+        _roster.value = emptySet()
+        _rosterPeers.value = setOf(selfId)
         inboxLock.withLock { memberInboxes.values.toList().also { memberInboxes.clear() } }.forEach { it.close() }
     }
 
