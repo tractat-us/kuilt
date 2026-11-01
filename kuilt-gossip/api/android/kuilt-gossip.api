@@ -1,0 +1,90 @@
+public final class us/tractat/kuilt/gossip/FullFanout : us/tractat/kuilt/gossip/TopologyPolicy {
+	public static final field INSTANCE Lus/tractat/kuilt/gossip/FullFanout;
+	public fun activeView-t5-yf_A (Ljava/lang/String;Ljava/util/Set;)Ljava/util/Set;
+	public fun antiEntropyPool-t5-yf_A (Ljava/lang/String;Ljava/util/Set;)Ljava/util/Set;
+}
+
+public final class us/tractat/kuilt/gossip/GossipSeam : us/tractat/kuilt/core/PrincipalRoster, us/tractat/kuilt/core/Seam {
+	public static final field Companion Lus/tractat/kuilt/gossip/GossipSeam$Companion;
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;ILkotlin/ranges/ClosedRange;ILus/tractat/kuilt/gossip/TopologyPolicy;Lus/tractat/kuilt/core/DeliveryPolicy;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;ILkotlin/ranges/ClosedRange;ILus/tractat/kuilt/gossip/TopologyPolicy;Lus/tractat/kuilt/core/DeliveryPolicy;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getActivePeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getAttestedPrincipals ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getPlies ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public final fun getSpares ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun sendTo-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun start (Lkotlinx/coroutines/CoroutineScope;)V
+}
+
+public final class us/tractat/kuilt/gossip/GossipSeam$Companion {
+	public final fun getDEFAULT_REORDER_GRACE-UwyO8pc ()J
+}
+
+public final class us/tractat/kuilt/gossip/GossipView {
+	public static final field Companion Lus/tractat/kuilt/gossip/GossipView$Companion;
+	public static final field DEFAULT_SPARE_COUNT I
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/SharedFlow;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;ILkotlin/ranges/ClosedRange;Lus/tractat/kuilt/gossip/TopologyPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/SharedFlow;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;ILkotlin/ranges/ClosedRange;Lus/tractat/kuilt/gossip/TopologyPolicy;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getActive ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getSpares ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun start (Lkotlinx/coroutines/CoroutineScope;)V
+}
+
+public final class us/tractat/kuilt/gossip/GossipView$Companion {
+	public final fun getDEFAULT_JITTER ()Lkotlin/ranges/ClosedRange;
+}
+
+public final class us/tractat/kuilt/gossip/HostedOverlayKt {
+	public static final fun hostedMesh-BRC9ihU (Lkotlinx/coroutines/CoroutineScope;Ljava/lang/String;Lus/tractat/kuilt/core/fabric/ConnectionSource;Lkotlin/coroutines/CoroutineContext;Lus/tractat/kuilt/core/fabric/LinkAdmission;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun hostedMesh-BRC9ihU$default (Lkotlinx/coroutines/CoroutineScope;Ljava/lang/String;Lus/tractat/kuilt/core/fabric/ConnectionSource;Lkotlin/coroutines/CoroutineContext;Lus/tractat/kuilt/core/fabric/LinkAdmission;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun hostedOverlay-X5IRKBU (Lkotlinx/coroutines/CoroutineScope;Ljava/lang/String;Lus/tractat/kuilt/core/fabric/ConnectionSource;Lkotlin/coroutines/CoroutineContext;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/core/fabric/LinkAdmission;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun hostedOverlay-X5IRKBU$default (Lkotlinx/coroutines/CoroutineScope;Ljava/lang/String;Lus/tractat/kuilt/core/fabric/ConnectionSource;Lkotlin/coroutines/CoroutineContext;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/core/fabric/LinkAdmission;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun policyOverlay (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/gossip/TopologyPolicy;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;)Lus/tractat/kuilt/core/Seam;
+	public static synthetic fun policyOverlay$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/gossip/TopologyPolicy;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)Lus/tractat/kuilt/core/Seam;
+	public static final fun starOverlay (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;)Lus/tractat/kuilt/core/Seam;
+	public static synthetic fun starOverlay$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)Lus/tractat/kuilt/core/Seam;
+}
+
+public final class us/tractat/kuilt/gossip/PartialView {
+	public fun <init> (Ljava/util/Set;Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/Set;
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (Ljava/util/Set;Ljava/util/List;)Lus/tractat/kuilt/gossip/PartialView;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/gossip/PartialView;Ljava/util/Set;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/gossip/PartialView;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getActive ()Ljava/util/Set;
+	public final fun getSpares ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/gossip/PartialViewKt {
+	public static final fun partialView-IclkiQY (Ljava/lang/String;Ljava/util/Set;IILkotlin/random/Random;)Lus/tractat/kuilt/gossip/PartialView;
+	public static final fun recommendedActiveViewSize (I)I
+}
+
+public final class us/tractat/kuilt/gossip/RandomKRegular : us/tractat/kuilt/gossip/TopologyPolicy {
+	public fun <init> (Lkotlin/random/Random;)V
+	public fun activeView-t5-yf_A (Ljava/lang/String;Ljava/util/Set;)Ljava/util/Set;
+	public fun antiEntropyPool-t5-yf_A (Ljava/lang/String;Ljava/util/Set;)Ljava/util/Set;
+}
+
+public abstract interface class us/tractat/kuilt/gossip/TopologyPolicy {
+	public abstract fun activeView-t5-yf_A (Ljava/lang/String;Ljava/util/Set;)Ljava/util/Set;
+	public abstract fun antiEntropyPool-t5-yf_A (Ljava/lang/String;Ljava/util/Set;)Ljava/util/Set;
+}
+
+public final class us/tractat/kuilt/gossip/TwoTier : us/tractat/kuilt/gossip/TopologyPolicy {
+	public fun <init> (Ljava/util/Set;Lkotlin/jvm/functions/Function1;)V
+	public fun activeView-t5-yf_A (Ljava/lang/String;Ljava/util/Set;)Ljava/util/Set;
+	public fun antiEntropyPool-t5-yf_A (Ljava/lang/String;Ljava/util/Set;)Ljava/util/Set;
+}
+

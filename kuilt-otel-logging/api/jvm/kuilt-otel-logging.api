@@ -1,0 +1,150 @@
+public final class us/tractat/kuilt/otel/logging/ActiveTrace {
+	public fun <init> (Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Z)V
+	public final fun component1 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun component2 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun component3 ()Z
+	public final fun copy (Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Z)Lus/tractat/kuilt/otel/logging/ActiveTrace;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/logging/ActiveTrace;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;ZILjava/lang/Object;)Lus/tractat/kuilt/otel/logging/ActiveTrace;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSampled ()Z
+	public final fun getSpanId ()Lkotlinx/io/bytestring/ByteString;
+	public final fun getTraceId ()Lkotlinx/io/bytestring/ByteString;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/logging/CaptureConfig {
+	public fun <init> ()V
+	public fun <init> (Lus/tractat/kuilt/otel/logging/LogLevel;Lus/tractat/kuilt/otel/logging/UntracedPolicy;Lkotlin/jvm/functions/Function1;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/otel/logging/LogLevel;Lus/tractat/kuilt/otel/logging/UntracedPolicy;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/logging/LogLevel;
+	public final fun component2 ()Lus/tractat/kuilt/otel/logging/UntracedPolicy;
+	public final fun component3 ()Lkotlin/jvm/functions/Function1;
+	public final fun copy (Lus/tractat/kuilt/otel/logging/LogLevel;Lus/tractat/kuilt/otel/logging/UntracedPolicy;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/otel/logging/CaptureConfig;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/logging/CaptureConfig;Lus/tractat/kuilt/otel/logging/LogLevel;Lus/tractat/kuilt/otel/logging/UntracedPolicy;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lus/tractat/kuilt/otel/logging/CaptureConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttributeMapper ()Lkotlin/jvm/functions/Function1;
+	public final fun getMinLevel ()Lus/tractat/kuilt/otel/logging/LogLevel;
+	public final fun getUntracedPolicy ()Lus/tractat/kuilt/otel/logging/UntracedPolicy;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/logging/CaptureConfigKt {
+	public static final field EXCEPTION_MESSAGE_ATTRIBUTE Ljava/lang/String;
+	public static final field LOGGER_NAME_ATTRIBUTE Ljava/lang/String;
+	public static final fun defaultAttributeMapper (Lus/tractat/kuilt/otel/logging/NormalizedLogEvent;)Ljava/util/Map;
+}
+
+public final class us/tractat/kuilt/otel/logging/CaptureHealth {
+	public fun <init> ()V
+	public fun <init> (J)V
+	public synthetic fun <init> (JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun copy (J)Lus/tractat/kuilt/otel/logging/CaptureHealth;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/logging/CaptureHealth;JILjava/lang/Object;)Lus/tractat/kuilt/otel/logging/CaptureHealth;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDroppedEvents ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/logging/CaptureHealthKt {
+	public static final field CAPTURE_BATCH_MAX I
+	public static final field CAPTURE_QUEUE_CAPACITY I
+}
+
+public final class us/tractat/kuilt/otel/logging/CoroutineContextTraceProvider : us/tractat/kuilt/otel/logging/TraceContextProvider {
+	public fun <init> ()V
+	public fun current ()Lus/tractat/kuilt/otel/logging/ActiveTrace;
+}
+
+public final class us/tractat/kuilt/otel/logging/InstallLogCaptureKt {
+	public static final fun installLogCapture (Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lus/tractat/kuilt/otel/logging/CaptureConfig;Lkotlin/time/Clock;Lkotlin/random/Random;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/otel/logging/TraceContextProvider;)Lus/tractat/kuilt/otel/logging/LogCaptureInstallation;
+	public static synthetic fun installLogCapture$default (Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lus/tractat/kuilt/otel/logging/CaptureConfig;Lkotlin/time/Clock;Lkotlin/random/Random;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/otel/logging/TraceContextProvider;ILjava/lang/Object;)Lus/tractat/kuilt/otel/logging/LogCaptureInstallation;
+}
+
+public final class us/tractat/kuilt/otel/logging/LogCapture {
+	public fun <init> (Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lus/tractat/kuilt/otel/logging/CaptureConfig;Lkotlin/time/Clock;Lkotlin/random/Random;Lus/tractat/kuilt/otel/logging/TraceContextProvider;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lus/tractat/kuilt/otel/logging/CaptureConfig;Lkotlin/time/Clock;Lkotlin/random/Random;Lus/tractat/kuilt/otel/logging/TraceContextProvider;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun capture (Lus/tractat/kuilt/otel/logging/ResolvedLogEvent;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun captureAll (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun captureNow (Lus/tractat/kuilt/otel/logging/NormalizedLogEvent;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun resolveAtEdge (Lus/tractat/kuilt/otel/logging/NormalizedLogEvent;)Lus/tractat/kuilt/otel/logging/ResolvedLogEvent;
+	public final fun resolveTrace ()Lus/tractat/kuilt/otel/logging/ActiveTrace;
+}
+
+public final class us/tractat/kuilt/otel/logging/LogCaptureInstallation : java/lang/AutoCloseable {
+	public fun close ()V
+	public final fun getCapture ()Lus/tractat/kuilt/otel/logging/LogCapture;
+	public final fun getHealth ()Lkotlinx/coroutines/flow/StateFlow;
+}
+
+public final class us/tractat/kuilt/otel/logging/LogLevel : java/lang/Enum {
+	public static final field DEBUG Lus/tractat/kuilt/otel/logging/LogLevel;
+	public static final field ERROR Lus/tractat/kuilt/otel/logging/LogLevel;
+	public static final field INFO Lus/tractat/kuilt/otel/logging/LogLevel;
+	public static final field TRACE Lus/tractat/kuilt/otel/logging/LogLevel;
+	public static final field WARN Lus/tractat/kuilt/otel/logging/LogLevel;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getSeverityNumber ()I
+	public final fun getSeverityText ()Ljava/lang/String;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/otel/logging/LogLevel;
+	public static fun values ()[Lus/tractat/kuilt/otel/logging/LogLevel;
+}
+
+public final class us/tractat/kuilt/otel/logging/MutableTraceContextHolder : us/tractat/kuilt/otel/logging/TraceContextProvider {
+	public fun <init> ()V
+	public fun <init> (Lus/tractat/kuilt/otel/logging/ActiveTrace;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/otel/logging/ActiveTrace;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun current ()Lus/tractat/kuilt/otel/logging/ActiveTrace;
+	public final fun set (Lus/tractat/kuilt/otel/logging/ActiveTrace;)V
+}
+
+public final class us/tractat/kuilt/otel/logging/NormalizedLogEvent {
+	public fun <init> (Lus/tractat/kuilt/otel/logging/LogLevel;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/Long;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/otel/logging/LogLevel;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/logging/LogLevel;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/util/Map;
+	public final fun component5 ()Ljava/lang/Long;
+	public final fun copy (Lus/tractat/kuilt/otel/logging/LogLevel;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/Long;)Lus/tractat/kuilt/otel/logging/NormalizedLogEvent;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/logging/NormalizedLogEvent;Lus/tractat/kuilt/otel/logging/LogLevel;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/otel/logging/NormalizedLogEvent;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttributes ()Ljava/util/Map;
+	public final fun getEmittedEpochNanos ()Ljava/lang/Long;
+	public final fun getLevel ()Lus/tractat/kuilt/otel/logging/LogLevel;
+	public final fun getLoggerName ()Ljava/lang/String;
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/otel/logging/ResolvedLogEvent {
+}
+
+public abstract interface class us/tractat/kuilt/otel/logging/TraceContextProvider {
+	public abstract fun current ()Lus/tractat/kuilt/otel/logging/ActiveTrace;
+}
+
+public final class us/tractat/kuilt/otel/logging/UntracedPolicy : java/lang/Enum {
+	public static final field CAPTURE Lus/tractat/kuilt/otel/logging/UntracedPolicy;
+	public static final field DROP Lus/tractat/kuilt/otel/logging/UntracedPolicy;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/otel/logging/UntracedPolicy;
+	public static fun values ()[Lus/tractat/kuilt/otel/logging/UntracedPolicy;
+}
+
+public final class us/tractat/kuilt/otel/logging/WithActiveTrace_jvmAndAndroidKt {
+	public static final fun withActiveTrace (Lus/tractat/kuilt/otel/logging/ActiveTrace;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/otel/logging/WithLogContextKt {
+	public static final fun withLogContext ([Lkotlin/Pair;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/otel/logging/WithLogContext_jvmAndAndroidKt {
+	public static final fun withLogContext (Ljava/util/Map;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+

@@ -1,0 +1,129 @@
+public final class us/tractat/kuilt/mdns/MDNSAdvertisement : us/tractat/kuilt/core/Tag {
+	public static final field Companion Lus/tractat/kuilt/mdns/MDNSAdvertisement$Companion;
+	public static final field DEFAULT_WS_PATH Ljava/lang/String;
+	public static final field FABRIC_MC Ljava/lang/String;
+	public static final field FABRIC_NEARBY Ljava/lang/String;
+	public static final field FABRIC_WS Ljava/lang/String;
+	public static final field PROTOCOL_VERSION Ljava/lang/String;
+	public static final field TXT_KEY_FABRICS Ljava/lang/String;
+	public static final field TXT_KEY_HOST_OS Ljava/lang/String;
+	public static final field TXT_KEY_MC_PEER Ljava/lang/String;
+	public static final field TXT_KEY_PEER_ID Ljava/lang/String;
+	public static final field TXT_KEY_PROTOCOL_VERSION Ljava/lang/String;
+	public static final field TXT_KEY_ROOM Ljava/lang/String;
+	public static final field TXT_KEY_WS_PATH Ljava/lang/String;
+	public synthetic fun <init> (Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/lang/String;
+	public final fun component2 ()I
+	public final fun component3-PaHlmAU ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Ljava/lang/String;
+	public final fun component9 ()Ljava/util/Map;
+	public final fun copy-tgeXKBQ (Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;)Lus/tractat/kuilt/mdns/MDNSAdvertisement;
+	public static synthetic fun copy-tgeXKBQ$default (Lus/tractat/kuilt/mdns/MDNSAdvertisement;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/mdns/MDNSAdvertisement;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFabrics ()Ljava/lang/String;
+	public final fun getHost ()Ljava/lang/String;
+	public final fun getHostOs ()Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;
+	public final fun getMcPeer ()Ljava/lang/String;
+	public fun getPeerKey ()Ljava/lang/String;
+	public final fun getPort ()I
+	public fun getRoomKey ()Ljava/lang/String;
+	public final fun getServerPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun getSessionName ()Ljava/lang/String;
+	public final fun getTxtExtensions ()Ljava/util/Map;
+	public final fun getWsPath ()Ljava/lang/String;
+	public final fun getWsUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/mdns/MDNSAdvertisement$Companion {
+}
+
+public final class us/tractat/kuilt/mdns/MDNSAdvertisement$HostOs : java/lang/Enum {
+	public static final field Android Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;
+	public static final field Apple Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;
+	public static final field Companion Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs$Companion;
+	public static final field Jvm Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getTxtValue ()Ljava/lang/String;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;
+	public static fun values ()[Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;
+}
+
+public final class us/tractat/kuilt/mdns/MDNSAdvertisement$HostOs$Companion {
+	public final fun fromTxt (Ljava/lang/String;)Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;
+}
+
+public final class us/tractat/kuilt/mdns/MDNSMultiAcceptHost {
+	public synthetic fun <init> (Ljava/lang/String;Lio/ktor/server/application/Application;Ljavax/jmdns/JmDNS;ILus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlinx/coroutines/CoroutineDispatcher;Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;Ljava/lang/String;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lio/ktor/server/application/Application;Ljavax/jmdns/JmDNS;ILus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlinx/coroutines/CoroutineDispatcher;Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;Ljava/lang/String;Ljava/util/Map;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun advertise (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun close ()V
+	public final fun getSelfPeerId-PaHlmAU ()Ljava/lang/String;
+	public final fun nextSeam (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun seams ()Lkotlinx/coroutines/flow/Flow;
+}
+
+public final class us/tractat/kuilt/mdns/MDNSPeerLinkFactory : us/tractat/kuilt/core/Loom {
+	public synthetic fun <init> (Ljava/lang/String;Lio/ktor/server/application/Application;Ljavax/jmdns/JmDNS;ILjava/lang/String;Lkotlin/jvm/functions/Function0;Ljava/lang/String;Lkotlinx/coroutines/CoroutineDispatcher;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lio/ktor/server/application/Application;Ljavax/jmdns/JmDNS;ILjava/lang/String;Lkotlin/jvm/functions/Function0;Ljava/lang/String;Lkotlinx/coroutines/CoroutineDispatcher;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun advertiser ()Lus/tractat/kuilt/mdns/MDNSServiceAdvertiser;
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public final fun getSelfPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/mdns/MDNSServiceAdvertiser {
+	public synthetic fun <init> (Ljava/lang/String;Ljavax/jmdns/JmDNS;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljavax/jmdns/JmDNS;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/mdns/MDNSAdvertisement$HostOs;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun register ()V
+	public final fun unregister ()V
+}
+
+public final class us/tractat/kuilt/mdns/MDNSServiceDiscoverer : us/tractat/kuilt/core/discovery/PeerDiscoverySource {
+	public synthetic fun <init> (Ljava/lang/String;Ljavax/jmdns/JmDNS;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun departures ()Lkotlinx/coroutines/flow/Flow;
+	public fun discoveries ()Lkotlinx/coroutines/flow/Flow;
+	public fun getKind ()Lus/tractat/kuilt/core/discovery/DiscoveryKind;
+}
+
+public final class us/tractat/kuilt/mdns/MDNSServiceType {
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/mdns/MDNSServiceType;
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public static final fun forJmDns-impl (Ljava/lang/String;)Ljava/lang/String;
+	public static final fun forNsNetServiceBrowser-impl (Ljava/lang/String;)Ljava/lang/String;
+	public static final fun forNsd-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/mdns/MdnsFabricKt {
+	public static final fun mdnsLoom-6DebTnk (Ljava/lang/String;Lio/ktor/server/application/Application;Ljavax/jmdns/JmDNS;ILjava/lang/String;Lkotlinx/coroutines/CoroutineDispatcher;Ljava/lang/String;Lkotlin/jvm/functions/Function0;)Lus/tractat/kuilt/mdns/MDNSPeerLinkFactory;
+	public static synthetic fun mdnsLoom-6DebTnk$default (Ljava/lang/String;Lio/ktor/server/application/Application;Ljavax/jmdns/JmDNS;ILjava/lang/String;Lkotlinx/coroutines/CoroutineDispatcher;Ljava/lang/String;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)Lus/tractat/kuilt/mdns/MDNSPeerLinkFactory;
+}
+
+public final class us/tractat/kuilt/mdns/PeerRoster {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun announce-ngToHgY (Ljava/lang/String;)V
+	public final fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun goodbye-ngToHgY (Ljava/lang/String;)V
+	public final fun merge (Lus/tractat/kuilt/mdns/PeerRoster;)V
+}
+

@@ -1,0 +1,180 @@
+public final class us/tractat/kuilt/nearby/ChunkCodec {
+	public static final field DEFAULT_MAX_PENDING_MESSAGES I
+	public static final field HEADER_SIZE I
+	public static final field INSTANCE Lus/tractat/kuilt/nearby/ChunkCodec;
+	public static final field MAX_CHUNK_PAYLOAD I
+	public final fun decodeChunk ([B)Lus/tractat/kuilt/nearby/DecodedChunk;
+	public final fun encode ([BII)Ljava/util/List;
+	public static synthetic fun encode$default (Lus/tractat/kuilt/nearby/ChunkCodec;[BIIILjava/lang/Object;)Ljava/util/List;
+}
+
+public final class us/tractat/kuilt/nearby/ChunkCodec$Reassembler {
+	public fun <init> ()V
+	public fun <init> (I)V
+	public synthetic fun <init> (IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun feed (Lus/tractat/kuilt/nearby/DecodedChunk;)[B
+	public final fun reset ()V
+}
+
+public final class us/tractat/kuilt/nearby/ConnectionFailedException : java/lang/Exception {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+}
+
+public final class us/tractat/kuilt/nearby/ConnectionInitiated {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/nearby/ConnectionInitiated;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/nearby/ConnectionInitiated;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/nearby/ConnectionInitiated;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDisplayName ()Ljava/lang/String;
+	public final fun getEndpointId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/nearby/ConnectionResult {
+	public fun <init> (Ljava/lang/String;ZLjava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ZLjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Z
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;ZLjava/lang/String;)Lus/tractat/kuilt/nearby/ConnectionResult;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/nearby/ConnectionResult;Ljava/lang/String;ZLjava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/nearby/ConnectionResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEndpointId ()Ljava/lang/String;
+	public final fun getReason ()Ljava/lang/String;
+	public final fun getSuccess ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/nearby/DecodedChunk {
+	public fun <init> (III[B)V
+	public final fun component1 ()I
+	public final fun component2 ()I
+	public final fun component3 ()I
+	public final fun component4 ()[B
+	public final fun copy (III[B)Lus/tractat/kuilt/nearby/DecodedChunk;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/nearby/DecodedChunk;III[BILjava/lang/Object;)Lus/tractat/kuilt/nearby/DecodedChunk;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getChunkCount ()I
+	public final fun getChunkIndex ()I
+	public final fun getChunkPayload ()[B
+	public final fun getMsgId ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/nearby/EndpointDisconnected {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/nearby/EndpointDisconnected;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/nearby/EndpointDisconnected;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/nearby/EndpointDisconnected;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEndpointId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/nearby/EndpointFound {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/nearby/EndpointFound;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/nearby/EndpointFound;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/nearby/EndpointFound;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDisplayName ()Ljava/lang/String;
+	public final fun getEndpointId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/nearby/NearbyApi {
+	public abstract fun acceptConnection (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public abstract fun disconnect (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun getConnectionInitiated ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun getConnectionResult ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun getEndpointDisconnected ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun getEndpointFound ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun getPayloadReceived ()Lkotlinx/coroutines/flow/Flow;
+	public fun getRadioState ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun requestConnection (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun sendBytesPayload (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun startAdvertising (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun startDiscovery (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun stopAdvertising (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun stopDiscovery (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/nearby/NearbyApi$DefaultImpls {
+	public static fun getRadioState (Lus/tractat/kuilt/nearby/NearbyApi;)Lkotlinx/coroutines/flow/StateFlow;
+}
+
+public final class us/tractat/kuilt/nearby/NearbyLoom : us/tractat/kuilt/core/Loom {
+	public static final field Companion Lus/tractat/kuilt/nearby/NearbyLoom$Companion;
+	public static final field DEFAULT_SERVICE_ID Ljava/lang/String;
+	public synthetic fun <init> (Lus/tractat/kuilt/nearby/NearbyApi;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;JIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/nearby/NearbyApi;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/nearby/NearbyLoom$Companion {
+	public final fun getDEFAULT_HANDSHAKE_TIMEOUT-UwyO8pc ()J
+}
+
+public final class us/tractat/kuilt/nearby/NearbyRadioState {
+	public fun <init> (Lus/tractat/kuilt/nearby/NearbyRadioStatus;Lus/tractat/kuilt/nearby/NearbyRadioStatus;)V
+	public final fun component1 ()Lus/tractat/kuilt/nearby/NearbyRadioStatus;
+	public final fun component2 ()Lus/tractat/kuilt/nearby/NearbyRadioStatus;
+	public final fun copy (Lus/tractat/kuilt/nearby/NearbyRadioStatus;Lus/tractat/kuilt/nearby/NearbyRadioStatus;)Lus/tractat/kuilt/nearby/NearbyRadioState;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/nearby/NearbyRadioState;Lus/tractat/kuilt/nearby/NearbyRadioStatus;Lus/tractat/kuilt/nearby/NearbyRadioStatus;ILjava/lang/Object;)Lus/tractat/kuilt/nearby/NearbyRadioState;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBluetooth ()Lus/tractat/kuilt/nearby/NearbyRadioStatus;
+	public final fun getWifi ()Lus/tractat/kuilt/nearby/NearbyRadioStatus;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/nearby/NearbyRadioStatus : java/lang/Enum {
+	public static final field Off Lus/tractat/kuilt/nearby/NearbyRadioStatus;
+	public static final field On Lus/tractat/kuilt/nearby/NearbyRadioStatus;
+	public static final field Unknown Lus/tractat/kuilt/nearby/NearbyRadioStatus;
+	public static final field Unsupported Lus/tractat/kuilt/nearby/NearbyRadioStatus;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/nearby/NearbyRadioStatus;
+	public static fun values ()[Lus/tractat/kuilt/nearby/NearbyRadioStatus;
+}
+
+public final class us/tractat/kuilt/nearby/NearbyTag : us/tractat/kuilt/core/Tag {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/nearby/NearbyTag;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/nearby/NearbyTag;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/nearby/NearbyTag;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getPeerKey ()Ljava/lang/String;
+	public fun getRoomKey ()Ljava/lang/String;
+	public fun getSessionName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/nearby/PayloadReceived {
+	public fun <init> (Ljava/lang/String;[B)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()[B
+	public final fun copy (Ljava/lang/String;[B)Lus/tractat/kuilt/nearby/PayloadReceived;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/nearby/PayloadReceived;Ljava/lang/String;[BILjava/lang/Object;)Lus/tractat/kuilt/nearby/PayloadReceived;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBytes ()[B
+	public final fun getEndpointId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+

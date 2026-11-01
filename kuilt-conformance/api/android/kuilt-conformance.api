@@ -1,0 +1,747 @@
+public final class us/tractat/kuilt/conformance/CanonicalDigestKt {
+	public static final fun canonicalDigest (Lkotlinx/serialization/KSerializer;Ljava/lang/Object;)J
+}
+
+public final class us/tractat/kuilt/conformance/CapabilityGaps {
+	public static final field BLANK_PEER_ID Ljava/lang/String;
+	public static final field DUPLICATE_PEER_ID Ljava/lang/String;
+	public static final field INSTANCE Lus/tractat/kuilt/conformance/CapabilityGaps;
+	public static final field LIVE_CAPABILITY Ljava/lang/String;
+	public static final field MEMBERSHIP_DRAIN Ljava/lang/String;
+	public static final field MESH_DELIVERY Ljava/lang/String;
+	public static final field MID_SESSION_DEATH Ljava/lang/String;
+	public static final field PAYLOAD_BUDGET Ljava/lang/String;
+	public static final field SECURES_TRANSPORT Ljava/lang/String;
+	public static final field SELF_DIAL Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/CapabilityMatrixKt {
+	public static final fun renderMatrix (Ljava/util/List;)Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/conformance/CloseableLifecycleConformanceSuite {
+	public fun <init> ()V
+	public final fun backgroundJobsActiveBeforeClose ()V
+	protected abstract fun backgroundJobsOf (Lus/tractat/kuilt/core/ScopedCloseable;)Ljava/util/List;
+	public final fun closeCancelsTheJobTheInstanceOwnsInTheGivenScope ()V
+	public final fun closeIsIdempotent ()V
+	public final fun closeStopsAllBackgroundJobs ()V
+	protected abstract fun create (Lkotlinx/coroutines/CoroutineScope;)Lus/tractat/kuilt/core/ScopedCloseable;
+	public final fun parentScopeCancellationStopsBackgroundJobs ()V
+}
+
+public final class us/tractat/kuilt/conformance/DelayedWovenLoom : us/tractat/kuilt/core/Loom {
+	public fun <init> ()V
+	public fun <init> (Lus/tractat/kuilt/core/DeliveryPolicy;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/DeliveryPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public final fun getWovenSeams ()Ljava/util/List;
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/conformance/DelayedWovenSeam : us/tractat/kuilt/core/Seam {
+	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getPlies ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun markWoven ()V
+	public fun sendTo-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/DepartureFixture {
+}
+
+public final class us/tractat/kuilt/conformance/DepartureFixture$Emits : us/tractat/kuilt/conformance/DepartureFixture {
+	public fun <init> (Lkotlin/jvm/functions/Function1;)V
+	public final fun getCause ()Lkotlin/jvm/functions/Function1;
+}
+
+public final class us/tractat/kuilt/conformance/DepartureFixture$NoLeaveSignal : us/tractat/kuilt/conformance/DepartureFixture {
+	public static final field INSTANCE Lus/tractat/kuilt/conformance/DepartureFixture$NoLeaveSignal;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/conformance/DiscoverySourceConformanceSuite {
+	public fun <init> ()V
+	public final fun anArrivalIsNeverReportedAsADeparture ()V
+	protected fun awaitQuiescence (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun cancellingTheCollectorScopeCompletesDepartures ()V
+	protected abstract fun causeArrival (Lus/tractat/kuilt/core/discovery/PeerDiscoverySource;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	protected abstract fun departureFixture (Lus/tractat/kuilt/core/discovery/PeerDiscoverySource;)Lus/tractat/kuilt/conformance/DepartureFixture;
+	public final fun departureKeyEqualsThePeerKeyThatWasDiscovered ()V
+	public final fun departuresEmitsWithNoConcurrentDiscoveriesCollector ()V
+	public fun getAwaitBudget-FghU774 ()Lkotlin/time/Duration;
+	protected abstract fun newSource ()Lus/tractat/kuilt/core/discovery/PeerDiscoverySource;
+}
+
+public abstract class us/tractat/kuilt/conformance/DurableStoreConformanceSuite {
+	public fun <init> ()V
+	public final fun aKeyThatLooksLikeAPathIsJustAKey ()V
+	public final fun aLargeValueRoundTripsWhole ()V
+	public final fun aLongKeyIsStillAKey ()V
+	public final fun aSecondWriteReplacesTheFirstWhole ()V
+	public final fun anEmptyValueIsAValueAndNotAnAbsence ()V
+	public final fun deleteMakesTheKeyAbsentAndWritableAgain ()V
+	public final fun deleteOfAnAbsentKeyIsANoOp ()V
+	public final fun distinctKeysAddressDistinctEntries ()V
+	public final fun everyByteValueSurvivesTheRoundTrip ()V
+	protected abstract fun newStore (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun readOfANeverWrittenKeyIsNull ()V
+	protected abstract fun restart (Lus/tractat/kuilt/store/DurableStore;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun theStoreDoesNotAliasTheArrayItHandsBack ()V
+	public final fun theStoreDoesNotAliasTheArrayItWasGiven ()V
+	public final fun twoFreshStoresDoNotShareState ()V
+	public final fun whatWasDeletedBeforeARestartIsStillAbsentAfterIt ()V
+	public final fun whatWasWrittenBeforeARestartIsReadableAfterIt ()V
+	public final fun writtenBytesComeBackExactly ()V
+}
+
+public abstract class us/tractat/kuilt/conformance/DurableStoreFilenameConformanceSuite {
+	public fun <init> ()V
+	public final fun aKeyAlreadyInsideTheSafeSetStillFindsItsOwnFile ()V
+	public final fun aKeyNeverAdoptsAnotherKeysLegacyOrphan ()V
+	public final fun anEntryNeverLandsOnAnotherEntrysTempSidecar ()V
+	public final fun keysDifferingOnlyInANonAsciiLetterAddressDistinctEntries ()V
+	public final fun keysDifferingOnlyInCaseAddressDistinctEntries ()V
+	public final fun keysThatFoldedOntoOneFilenameAddressDistinctEntries ()V
+	protected abstract fun newDirectory ()Ljava/lang/Object;
+	protected abstract fun newStore (Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	protected abstract fun plantRawFile (Ljava/lang/Object;Ljava/lang/String;[B)V
+	public final fun theLegacyOverlapACaseFoldingFilesystemExposesIsExactlyTheDocumentedOne ()V
+}
+
+public final class us/tractat/kuilt/conformance/ExactWidthField {
+	public fun <init> (Ljava/lang/String;ILkotlin/jvm/functions/Function1;)V
+	public final fun getDeclaredWidth ()I
+	public final fun getEncodeAtWidth ()Lkotlin/jvm/functions/Function1;
+	public final fun getName ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/FixedWidthHeader {
+	public fun <init> (Ljava/lang/String;ILkotlin/jvm/functions/Function1;)V
+	public final fun getEncodeFrameOfSize ()Lkotlin/jvm/functions/Function1;
+	public final fun getHeaderBytes ()I
+	public final fun getName ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/JoinerRosterOrigin {
+}
+
+public final class us/tractat/kuilt/conformance/JoinerRosterOrigin$FilledByConstruction : us/tractat/kuilt/conformance/JoinerRosterOrigin {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/JoinerRosterOrigin$FilledByConstruction;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/JoinerRosterOrigin$FilledByConstruction;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/JoinerRosterOrigin$FilledByConstruction;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getWhy ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/JoinerRosterOrigin$TheJoinPath : us/tractat/kuilt/conformance/JoinerRosterOrigin {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/JoinerRosterOrigin$TheJoinPath;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/JoinerRosterOrigin$TheJoinPath;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/JoinerRosterOrigin$TheJoinPath;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHow ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/MatrixEntry {
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/conformance/SeamCapabilities;Ljava/util/Map;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/conformance/SeamCapabilities;Ljava/util/Map;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/conformance/SeamCapabilities;
+	public final fun component3 ()Ljava/util/Map;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Lus/tractat/kuilt/conformance/SeamCapabilities;Ljava/util/Map;Ljava/lang/String;)Lus/tractat/kuilt/conformance/MatrixEntry;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/MatrixEntry;Ljava/lang/String;Lus/tractat/kuilt/conformance/SeamCapabilities;Ljava/util/Map;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/MatrixEntry;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCapabilities ()Lus/tractat/kuilt/conformance/SeamCapabilities;
+	public final fun getFabric ()Ljava/lang/String;
+	public final fun getGaps ()Ljava/util/Map;
+	public final fun getMeshEvidence ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/conformance/MeshConformanceSuite {
+	public fun <init> ()V
+	public final fun broadcastIsDeliveredExactlyOnceToEveryPeer ()V
+	public final fun broadcastReachesAllPeers ()V
+	public final fun eachPeerSeesMeshSize ()V
+	public final fun everyPeerSeesTheWholeRosterInAFourPeerMesh ()V
+	public abstract fun newMeshOfSize (ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun peerLeaveUpdatesSurvivorRosters ()V
+	public final fun sendToRoutesToExactlyOnePeer ()V
+}
+
+public abstract interface class us/tractat/kuilt/conformance/ObligationDeclaration {
+}
+
+public final class us/tractat/kuilt/conformance/ObligationDeclaration$Gap : us/tractat/kuilt/conformance/ObligationDeclaration {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/ObligationDeclaration$Gap;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/ObligationDeclaration$Gap;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/ObligationDeclaration$Gap;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTrackingUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable : us/tractat/kuilt/conformance/ObligationDeclaration {
+	public abstract fun getReason ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable$ContractDiffers : us/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable$ContractDiffers;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable$ContractDiffers;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable$ContractDiffers;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable$NotConstructible : us/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable$NotConstructible;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable$NotConstructible;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/ObligationDeclaration$NotApplicable$NotConstructible;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/ObligationDeclaration$Proven : us/tractat/kuilt/conformance/ObligationDeclaration {
+	public static final field INSTANCE Lus/tractat/kuilt/conformance/ObligationDeclaration$Proven;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/conformance/PrincipalAttestationConformanceSuite {
+	public fun <init> ()V
+	public final fun attestedPrincipalIsReportedForAdmittedPeer ()V
+	public final fun closingTheSeamEmptiesTheRoster ()V
+	public final fun distinctPrincipalsAreKeyedByPeer ()V
+	public final fun droppedPeerLeavesTheRoster ()V
+	public final fun hostVerifiedPrincipalOutranksThePeersClaim ()V
+	public abstract fun newHarness (Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lkotlin/random/Random;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun peerAssertedPrincipalNeverReachesTheRoster ()V
+	public final fun rosterUpdatesPrincipalOnReconnect ()V
+	public final fun unattestedPeerIsAbsentFromRoster ()V
+}
+
+public abstract interface class us/tractat/kuilt/conformance/PrincipalAttestationConformanceSuite$AttestationHarness {
+	public abstract fun admit-20lHY_Q (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun admitClaiming-zo5SLvw (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun drop-t5-yf_A (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun getRoster ()Lus/tractat/kuilt/core/PrincipalRoster;
+	public abstract fun getSeam ()Lus/tractat/kuilt/core/Seam;
+}
+
+public abstract class us/tractat/kuilt/conformance/QuiltedConformanceSuite {
+	public fun <init> ()V
+	public fun getRetirementIsMeaningful ()Z
+	public final fun pieceIsAssociative ()V
+	public final fun pieceIsCommutative ()V
+	public final fun pieceIsIdempotent ()V
+	public final fun pieceIsLeastUpperBound ()V
+	public fun retirementReAssertion ()Lus/tractat/kuilt/conformance/RetirementReAssertion;
+	public abstract fun samples ()Ljava/util/List;
+	public fun samplesMeetTheEvidenceFloor ()V
+	public final fun samplesReAssertAfterRetirement ()V
+}
+
+public final class us/tractat/kuilt/conformance/QuiltedConformanceSuiteKt {
+	public static final field DISTINCT_SAMPLE_FLOOR I
+	public static final fun checkSampleEvidenceFloor (Ljava/util/List;)Lus/tractat/kuilt/conformance/SampleEvidenceReport;
+}
+
+public abstract class us/tractat/kuilt/conformance/RaftStorageConformanceSuite {
+	public fun <init> ()V
+	public final fun anUnwrittenMediumReopensEmpty ()V
+	public final fun appendAfterTruncate_works ()V
+	public final fun appendsAndRetrievesEntries ()V
+	public final fun discardLogPrefix_isIdempotentAndToleratesLowFloor ()V
+	public final fun entriesFromIndex_areContiguousAndAscending ()V
+	public final fun entriesFromIndex_filters ()V
+	public final fun entriesOnEmptyLog_isEmpty ()V
+	public final fun entries_areContiguousAndAscending_acrossSeparateAppends ()V
+	public final fun initialTermIsZero ()V
+	public final fun initialVotedForIsNull ()V
+	public final fun leaderForTermBeforeAnySave_isNull ()V
+	public final fun loadSnapshotBeforeAnySave_isNull ()V
+	public final fun logEntryIndexAndTerm_roundTripAtPlausibilityCeiling ()V
+	public final fun logEntryInternalFields_roundTripPerEntry ()V
+	public final fun logEntryInternalFields_surviveAReopen ()V
+	public final fun logEntryTerm_roundTripsAtZero ()V
+	public abstract fun newStorage (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	protected abstract fun reopen (Lus/tractat/kuilt/raft/RaftStorage;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun saveLeaderForTerm_replacesBothHalvesTogether ()V
+	public final fun saveSnapshot_overwritesThePriorSnapshotWhole ()V
+	public final fun saveTermAndVotedFor_doesNotDisturbTheEstablishedLeader ()V
+	public final fun saveTermAndVotedFor_overwritesPriorVote ()V
+	public final fun saveTermAndVotedFor_persistsBoth ()V
+	public final fun saveTermAndVotedFor_persistsTermAtPlausibilityEdges ()V
+	public final fun saveTermAndVotedFor_withNullVote ()V
+	public final fun saveVotedForNull_clearsVote ()V
+	public final fun savesAndLoadsLeaderForTerm ()V
+	public final fun savesAndLoadsLeaderForTerm_atPlausibilityEdges ()V
+	public final fun savesAndLoadsTerm ()V
+	public final fun savesAndLoadsTerm_atPlausibilityEdges ()V
+	public final fun savesAndLoadsVotedFor ()V
+	public final fun snapshotAtZeroBaseline_roundTrips ()V
+	public final fun snapshotConfig_roundTrips ()V
+	public final fun snapshotMeta_roundTripsAtPlausibilityCeiling ()V
+	public final fun snapshotMeta_roundTripsBelowPlausibilityCeiling ()V
+	public final fun snapshotSavedWithoutDiscard_leavesSuffixReadable ()V
+	public final fun snapshotWithEmptyState_isStillASnapshot ()V
+	public final fun termAndVoteSurviveAReopen ()V
+	public final fun theEstablishedLeaderSurvivesAReopen ()V
+	public final fun theLogSurvivesAReopenWhole ()V
+	public final fun theSnapshotConfigSurvivesAReopen ()V
+	public final fun theSnapshotSurvivesAReopen ()V
+	public final fun truncateFrom_belowAllEntries_clearsLog ()V
+	public final fun truncateFrom_removesTailEntries ()V
+}
+
+public abstract interface class us/tractat/kuilt/conformance/RestartFixture {
+	public abstract fun getStore ()Lus/tractat/kuilt/store/DurableStore;
+}
+
+public final class us/tractat/kuilt/conformance/RestartFixture$Durable : us/tractat/kuilt/conformance/RestartFixture {
+	public fun <init> (Lus/tractat/kuilt/store/DurableStore;)V
+	public fun getStore ()Lus/tractat/kuilt/store/DurableStore;
+}
+
+public final class us/tractat/kuilt/conformance/RestartFixture$KeepsNothing : us/tractat/kuilt/conformance/RestartFixture {
+	public fun <init> (Lus/tractat/kuilt/store/DurableStore;)V
+	public fun getStore ()Lus/tractat/kuilt/store/DurableStore;
+}
+
+public final class us/tractat/kuilt/conformance/RetirementReAssertion {
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/crdt/Quilted;Lus/tractat/kuilt/crdt/Quilted;Lus/tractat/kuilt/crdt/Quilted;Lkotlin/jvm/functions/Function1;)V
+	public final fun getAsserted ()Lus/tractat/kuilt/crdt/Quilted;
+	public final fun getReAsserted ()Lus/tractat/kuilt/crdt/Quilted;
+	public final fun getRetired ()Lus/tractat/kuilt/crdt/Quilted;
+	public final fun getShows ()Lkotlin/jvm/functions/Function1;
+	public final fun getSubject ()Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
+	public fun <init> ()V
+	public final fun aTokenMintedForAnotherRoomIsRefused ()V
+	public final fun broadcastDeliversRoomFrameTaggedWithSender ()V
+	public fun getAwaitBudget-FghU774 ()Lkotlin/time/Duration;
+	public final fun getFastHeartbeatConfig ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
+	public fun getMemberInboxCapacity ()I
+	public final fun hostFactoryAssignsHostRole ()V
+	public final fun hostLostIsTerminalBroadcastIsNoOp ()V
+	public final fun hostRoomKnowsItsRoomIdAtConstruction ()V
+	public final fun incomingFromClaimedAfterAnUnclaimedOverflowFailsNamingTheLoss ()V
+	public final fun incomingFromClaimedOverflowDeliversTheHeldFramesThenFails ()V
+	public final fun incomingFromCollectionCancelledAsAFrameArrivesLeavesItForTheNext ()V
+	public final fun incomingFromCollectionCancelledBetweenTakeAndHandOverLosesNothing ()V
+	public final fun incomingFromCompletesWhenTheMemberLeaves ()V
+	public final fun incomingFromCompletesWhenTheRoomItselfLeaves ()V
+	public final fun incomingFromForAPeerWithNoAdmissionCompletes ()V
+	public final fun incomingFromHoldsAFullInboxUnclaimed ()V
+	public final fun incomingFromHoldsEachMembersFramesApart ()V
+	public final fun incomingFromHoldsFramesAMemberSentBeforeCollection ()V
+	public final fun incomingFromRefusesAConcurrentCollectorAndResumesASequentialOne ()V
+	public final fun joinFactoryAssignsJoinerRole ()V
+	public final fun joinerLearnsHostRoomIdOnAdmission ()V
+	public final fun leaveDoesNotMintACancellationWhenTeardownIsSlow ()V
+	public final fun leaveDoesNotReportFailureAsCancellation ()V
+	public final fun leaveIsIdempotent ()V
+	public final fun leaveIsIdempotentEvenWhenTeardownFails ()V
+	public final fun leaveNormalFiresLeftEventAndShrinksRoster ()V
+	public final fun memberThatLeftNoLongerReceivesFrames ()V
+	public final fun membersAppearUnderTheirOwnMemberName ()V
+	public fun newHarness (Lkotlinx/coroutines/CoroutineScope;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$RoomHarness;
+	public abstract fun newResumeHarness (Lkotlinx/coroutines/test/TestScope;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$ResumeHarness;
+	public final fun partitionedAndRecoveredFireOnLivenessTransitions ()V
+	public final fun rejoinAfterLeaveWorks ()V
+	public final fun resumeAfterLeaveIsLocalWindowClosed ()V
+	public final fun resumeExpiredHasExactCode ()V
+	public final fun resumeInvalidTokenHasExactCode ()V
+	public final fun resumeNotYetOpenHasExactCode ()V
+	public final fun resumeSuccessIsAcknowledged ()V
+	public final fun resumeWithinWindowFiresResumed ()V
+	public final fun rosterIsEmptyBeforeAnyHandshake ()V
+	public final fun theTeardownFaultReallyFires ()V
+}
+
+public abstract interface class us/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection {
+}
+
+public final class us/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection$Supported : us/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection {
+	public fun <init> (Lus/tractat/kuilt/test/FaultyLoom;)V
+	public final fun component1 ()Lus/tractat/kuilt/test/FaultyLoom;
+	public final fun copy (Lus/tractat/kuilt/test/FaultyLoom;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection$Supported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection$Supported;Lus/tractat/kuilt/test/FaultyLoom;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection$Supported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLoom ()Lus/tractat/kuilt/test/FaultyLoom;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection$Unsupported : us/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection$Unsupported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection$Unsupported;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection$Unsupported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTrackingUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/RoomConformanceSuite$ResumeHarness {
+	public fun <init> (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/session/RoomFactory;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;)V
+	public final fun component1 ()Lus/tractat/kuilt/session/RoomFactory;
+	public final fun component2 ()Lus/tractat/kuilt/session/RoomFactory;
+	public final fun component3 ()Lkotlin/jvm/functions/Function3;
+	public final fun component4 ()Lkotlin/jvm/functions/Function0;
+	public final fun component5 ()Lkotlin/jvm/functions/Function0;
+	public final fun copy (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/session/RoomFactory;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$ResumeHarness;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/RoomConformanceSuite$ResumeHarness;Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/session/RoomFactory;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$ResumeHarness;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHostFactory ()Lus/tractat/kuilt/session/RoomFactory;
+	public final fun getHostVerdicts ()Lkotlin/jvm/functions/Function0;
+	public final fun getJoinerFactory ()Lus/tractat/kuilt/session/RoomFactory;
+	public final fun getPrepare ()Lkotlin/jvm/functions/Function3;
+	public final fun getResumeRequests ()Lkotlin/jvm/functions/Function0;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/RoomConformanceSuite$RoomHarness {
+	public fun <init> (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;)V
+	public final fun component1 ()Lus/tractat/kuilt/session/RoomFactory;
+	public final fun component2 ()Lus/tractat/kuilt/session/RoomFactory;
+	public final fun component3 ()Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection;
+	public final fun component4 ()Lkotlin/jvm/functions/Function0;
+	public final fun component5 ()Lkotlin/jvm/functions/Function1;
+	public final fun copy (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$RoomHarness;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/RoomConformanceSuite$RoomHarness;Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/RoomConformanceSuite$RoomHarness;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAdvanceClock ()Lkotlin/jvm/functions/Function1;
+	public final fun getClock ()Lkotlin/jvm/functions/Function0;
+	public final fun getFaults ()Lus/tractat/kuilt/conformance/RoomConformanceSuite$FaultInjection;
+	public final fun getHostFactory ()Lus/tractat/kuilt/session/RoomFactory;
+	public final fun getJoinerFactory ()Lus/tractat/kuilt/session/RoomFactory;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/conformance/RoomFanoutIsolationConformanceSuite {
+	public fun <init> ()V
+	public final fun aDepartedClientLeavesEveryRoomItJoined ()V
+	public final fun aNonMembersFrameNeverEntersTheRoom ()V
+	public final fun broadcastOnRoomReachesOnlyRoomMembers ()V
+	public final fun closingOneRoomDoesNotAffectSibling ()V
+	public fun getAbsenceBudget-UwyO8pc ()J
+	public fun getAwaitBudget-FghU774 ()Lkotlin/time/Duration;
+	public abstract fun newHarness (Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lus/tractat/kuilt/core/RoomAuthorizer;Lkotlin/random/Random;)Lus/tractat/kuilt/conformance/RoomFanoutIsolationConformanceSuite$FanoutHarness;
+	public final fun perRoomPeersReflectsOnlyRoomMembers ()V
+	public final fun rejectedConnectionIsStructurallyExcluded ()V
+}
+
+public final class us/tractat/kuilt/conformance/RoomFanoutIsolationConformanceSuite$FanoutHarness {
+	public fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlin/jvm/functions/Function3;)V
+	public final fun connectClient-PW_baCY (Ljava/lang/String;Lkotlin/random/Random;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getServerLoom ()Lus/tractat/kuilt/core/Loom;
+}
+
+public final class us/tractat/kuilt/conformance/SampleEvidenceReport {
+	public fun <init> (II)V
+	public final fun getDistinctSamples ()I
+	public final fun getSamples ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/SeamCapabilities {
+	public static final field Companion Lus/tractat/kuilt/conformance/SeamCapabilities$Companion;
+	public fun <init> (ZZZZZZZZZ)V
+	public final fun component1 ()Z
+	public final fun component2 ()Z
+	public final fun component3 ()Z
+	public final fun component4 ()Z
+	public final fun component5 ()Z
+	public final fun component6 ()Z
+	public final fun component7 ()Z
+	public final fun component8 ()Z
+	public final fun component9 ()Z
+	public final fun copy (ZZZZZZZZZ)Lus/tractat/kuilt/conformance/SeamCapabilities;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/SeamCapabilities;ZZZZZZZZZILjava/lang/Object;)Lus/tractat/kuilt/conformance/SeamCapabilities;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun falseFlags ()Ljava/util/Set;
+	public final fun getCollapsesPeersOnTear ()Z
+	public final fun getMeshDelivery ()Z
+	public final fun getReportsLiveCapability ()Z
+	public final fun getReportsPeerLoss ()Z
+	public final fun getSecuresTransport ()Z
+	public final fun getStaysTornAfterClose ()Z
+	public final fun getSupportsSendTo ()Z
+	public final fun getTerminatesIncomingOnClose ()Z
+	public final fun getThrowsOnSendToTorn ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/SeamCapabilities$Companion {
+	public final fun getFULL ()Lus/tractat/kuilt/conformance/SeamCapabilities;
+}
+
+public abstract class us/tractat/kuilt/conformance/SeamConformanceSuite {
+	public fun <init> ()V
+	public fun blankPeerIdDeclaration ()Lus/tractat/kuilt/conformance/ObligationDeclaration;
+	public final fun blankPeerIdDeclarationIsHonest ()V
+	public final fun blankRemoteIdIsRejected ()V
+	public final fun broadcastFromHostDeliversToJoinedPeer ()V
+	public abstract fun capabilities ()Lus/tractat/kuilt/conformance/SeamCapabilities;
+	public abstract fun capabilityGaps ()Ljava/util/Map;
+	public final fun closeDoesNotReportFailureAsCancellation ()V
+	public final fun closeDrivesStateTornNormal ()V
+	public final fun closeIsIdempotent ()V
+	protected final fun connectedPair (Lkotlinx/coroutines/test/TestScope;Lkotlin/jvm/functions/Function4;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	protected fun departCounterpart (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/Seam;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun duplicatePeerIdDeclaration ()Lus/tractat/kuilt/conformance/ObligationDeclaration;
+	public final fun duplicatePeerIdDeclarationIsHonest ()V
+	public final fun duplicateRemoteIdDoesNotEvictTheIncumbent ()V
+	public final fun everyFalseCapabilityDeclaresAGap ()V
+	public final fun hostStateIsWovenEvenAlone ()V
+	public final fun hostYieldsUsableSeamWithNonEmptySelfId ()V
+	public final fun incomingCompletesOnInjectedMidSessionDeath ()V
+	public final fun incomingCompletesWhenSeamCloses ()V
+	public final fun incomingPreservesSendOrderToSingleCollector ()V
+	public fun injectBlankPeerId (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/Seam;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun injectDuplicatePeerId (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/Seam;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun injectMembershipDrain (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/Seam;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun injectMidSessionDeath (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/Seam;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun injectSelfDial (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/Seam;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun joinHandshakeFramesAtHost ()I
+	public fun joinTag ()Lus/tractat/kuilt/core/Tag;
+	public abstract fun joinerRosterOrigin ()Lus/tractat/kuilt/conformance/JoinerRosterOrigin;
+	public final fun joinerRosterOriginIsDeclaredAndHonest ()V
+	public fun membershipDrainDeclaration ()Lus/tractat/kuilt/conformance/ObligationDeclaration;
+	public final fun membershipDrainDeclarationIsHonest ()V
+	public fun midSessionDeathDeclaration ()Lus/tractat/kuilt/conformance/ObligationDeclaration;
+	public final fun midSessionDeathDeclarationIsHonest ()V
+	public abstract fun newLoomPair ()Lkotlin/Pair;
+	public fun newLoomPair (Lkotlinx/coroutines/test/TestScope;)Lkotlin/Pair;
+	public final fun overBudgetAddressedSendIsRefusedNotLeaked ()V
+	public fun payloadBudgetGap ()Ljava/lang/String;
+	public final fun payloadBudgetObligationIsTrackedWhenUnpublished ()V
+	public final fun payloadOfExactlyTheBudgetIsCarried ()V
+	public final fun peersCollapseToSelfIdWhenTorn ()V
+	public final fun peersDrainWithoutTearOnInjectedMembershipDrain ()V
+	public final fun peersReportsSelfIdAndAtLeastTwoAfterJoin ()V
+	public fun selfDialDeclaration ()Lus/tractat/kuilt/conformance/ObligationDeclaration;
+	public final fun selfDialDeclarationIsHonest ()V
+	public final fun selfDialIsRejected ()V
+	public final fun sendOnTornSeamThrows ()V
+	public final fun sendToAbsentPeerThrowsPeerNotConnected ()V
+	public final fun sendToDeliversToNamedPeer ()V
+	public final fun sendToSelfIsRefused ()V
+	public final fun sendWhileWeavingDoesNotThrow ()V
+	public final fun stateIsWovenAfterConnect ()V
+	public final fun stateStaysTornAfterClose ()V
+	public final fun survivorStopsAdvertisingADepartedPeer ()V
+	public final fun wovenSeamCapabilityIsHonest ()V
+}
+
+public abstract class us/tractat/kuilt/conformance/WireCodecConformanceSuite {
+	public fun <init> ()V
+	protected abstract fun decode ([B)Ljava/lang/Object;
+	public final fun everyExactWidthFieldIsAcceptedAtItsDeclaredWidth ()V
+	public final fun everyExactWidthFieldIsRejectedAtZeroWidth ()V
+	public final fun everyExactWidthFieldIsRejectedOneByteLong ()V
+	public final fun everyExactWidthFieldIsRejectedOneByteShort ()V
+	public final fun everyExactWidthFieldsRigVariesTheWidthAndNothingElse ()V
+	public final fun everyFixedWidthHeaderAcceptsAFrameAtOrOneByteOverTheHeader ()V
+	public final fun everyFixedWidthHeaderRejectsAFrameShorterThanTheHeader ()V
+	public final fun everyFixedWidthHeadersRigReturnsTheSizeItWasAskedFor ()V
+	protected abstract fun exactWidthDeclaration ()Lus/tractat/kuilt/conformance/ObligationDeclaration;
+	public final fun exactWidthDeclarationIsHonest ()V
+	protected abstract fun exactWidthFields ()Ljava/util/List;
+	protected abstract fun fixedWidthHeaderDeclaration ()Lus/tractat/kuilt/conformance/ObligationDeclaration;
+	public final fun fixedWidthHeaderDeclarationIsHonest ()V
+	protected abstract fun fixedWidthHeaders ()Ljava/util/List;
+	protected abstract fun rejectionMode ()Lus/tractat/kuilt/conformance/WireRejectionMode;
+	public final fun theHarnessProvesAtLeastOneObligation ()V
+}
+
+public final class us/tractat/kuilt/conformance/WireRejectionMode : java/lang/Enum {
+	public static final field ReturningNull Lus/tractat/kuilt/conformance/WireRejectionMode;
+	public static final field Throwing Lus/tractat/kuilt/conformance/WireRejectionMode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/conformance/WireRejectionMode;
+	public static fun values ()[Lus/tractat/kuilt/conformance/WireRejectionMode;
+}
+
+public final class us/tractat/kuilt/conformance/lattice/CodecReport {
+	public fun <init> (IJJJJJ)V
+	public final fun getAbsorbingJoinPairs ()J
+	public final fun getDistinctEncodings ()J
+	public final fun getDistinctStates ()J
+	public final fun getJoinPairs ()J
+	public final fun getSeeds ()I
+	public final fun getStates ()J
+	public final fun plus (Lus/tractat/kuilt/conformance/lattice/CodecReport;)Lus/tractat/kuilt/conformance/lattice/CodecReport;
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/conformance/lattice/CompactableLatticeLawSuite : us/tractat/kuilt/conformance/lattice/LatticeLawSuite {
+	public fun <init> ()V
+	public final fun compactionIsReachedAndBigEnoughToDiscriminate ()V
+	public abstract fun getCompactionFloors ()Lus/tractat/kuilt/conformance/lattice/CompactionFloors;
+}
+
+public final class us/tractat/kuilt/conformance/lattice/CompactionCoverage {
+	public fun <init> ()V
+	public fun <init> (IIII)V
+	public synthetic fun <init> (IIIIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getPostMergeMaxDroppedInOneStep ()I
+	public final fun getPostMergeRunsWithCompaction ()I
+	public final fun getPreMergeRunsWithTwoOrMoreCompacting ()I
+	public final fun getRuns ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/lattice/CompactionFloors {
+	public fun <init> (III)V
+	public final fun getPostMergeMaxDroppedInOneStep ()I
+	public final fun getPostMergeRunsWithCompaction ()I
+	public final fun getPreMergeRunsWithTwoOrMoreCompacting ()I
+}
+
+public final class us/tractat/kuilt/conformance/lattice/CompactionStep {
+	public fun <init> (Ljava/lang/Object;I)V
+	public final fun getDroppedCount ()I
+	public final fun getState ()Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/lattice/CrdtCompactor {
+	public abstract fun compactOnce (Ljava/lang/Object;Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;)Lus/tractat/kuilt/conformance/lattice/CompactionStep;
+}
+
+public final class us/tractat/kuilt/conformance/lattice/LatticeLawHarness {
+	public fun <init> (Lus/tractat/kuilt/crdt/Quilted;Ljava/util/List;Lkotlinx/serialization/KSerializer;Ljava/util/List;Lus/tractat/kuilt/conformance/lattice/VacuityFloors;IILus/tractat/kuilt/conformance/lattice/CrdtCompactor;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/crdt/Quilted;Ljava/util/List;Lkotlinx/serialization/KSerializer;Ljava/util/List;Lus/tractat/kuilt/conformance/lattice/VacuityFloors;IILus/tractat/kuilt/conformance/lattice/CrdtCompactor;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lus/tractat/kuilt/crdt/Quilted;Lus/tractat/kuilt/conformance/lattice/OperationGenerator;Lkotlinx/serialization/KSerializer;II)V
+	public synthetic fun <init> (Lus/tractat/kuilt/crdt/Quilted;Lus/tractat/kuilt/conformance/lattice/OperationGenerator;Lkotlinx/serialization/KSerializer;IIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun checkVacuityFloors (Lkotlin/ranges/LongRange;)Lus/tractat/kuilt/conformance/lattice/VacuityReport;
+	public final fun getAlphabet ()Ljava/util/List;
+	public final fun getCompactionCoverage ()Lus/tractat/kuilt/conformance/lattice/CompactionCoverage;
+	public final fun getCompactor ()Lus/tractat/kuilt/conformance/lattice/CrdtCompactor;
+	public final fun getCriticalShapes ()Ljava/util/List;
+	public final fun getFloors ()Lus/tractat/kuilt/conformance/lattice/VacuityFloors;
+	public final fun getGen ()Lus/tractat/kuilt/conformance/lattice/OperationGenerator;
+	public final fun getInitial ()Lus/tractat/kuilt/crdt/Quilted;
+	public final fun getOpsPerReplica ()I
+	public final fun getReplicaCount ()I
+	public final fun getSerializer ()Lkotlinx/serialization/KSerializer;
+	public final fun measureVacuity (Lkotlin/ranges/LongRange;)Lus/tractat/kuilt/conformance/lattice/VacuityReport;
+	public final fun run (J)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun runAssociativeLaws (J)V
+	public final fun runAssociativeLawsSeeds (Lkotlin/ranges/LongRange;)V
+	public final fun runCodecLaws (J)Lus/tractat/kuilt/conformance/lattice/CodecReport;
+	public final fun runCodecLawsSeeds (Lkotlin/ranges/LongRange;)Lus/tractat/kuilt/conformance/lattice/CodecReport;
+	public final fun runExhaustiveSmall ()I
+	public final fun runOtherJoinLaws (J)V
+	public final fun runOtherJoinLawsSeeds (Lkotlin/ranges/LongRange;)V
+	public final fun runSeeds (Lkotlin/ranges/LongRange;)Ljava/util/List;
+}
+
+public abstract class us/tractat/kuilt/conformance/lattice/LatticeLawSuite {
+	public fun <init> ()V
+	public final fun associativeJoinLawsHoldOverEveryShortWord ()V
+	public final fun associativeJoinLawsHoldOverLowerSeeds ()V
+	public final fun associativeJoinLawsHoldOverUpperSeeds ()V
+	public final fun convergesAcrossSeeds ()V
+	public final fun convergesAtSeedZero ()V
+	public final fun decodedStateJoinsIdenticallyToTheOriginal ()V
+	public final fun generatorIsNotVacuous ()V
+	public final fun joinCommutesAbsorbsAndIsIdempotent ()V
+	public abstract fun newHarness ()Lus/tractat/kuilt/conformance/lattice/LatticeLawHarness;
+}
+
+public final class us/tractat/kuilt/conformance/lattice/LatticeOp {
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/conformance/lattice/OpKind;Lkotlin/jvm/functions/Function3;)V
+	public final fun getApply ()Lkotlin/jvm/functions/Function3;
+	public final fun getKind ()Lus/tractat/kuilt/conformance/lattice/OpKind;
+	public final fun getName ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/lattice/LatticeOpKt {
+	public static final fun defaultCriticalShapes (Ljava/util/List;)Ljava/util/List;
+}
+
+public final class us/tractat/kuilt/conformance/lattice/OpKind : java/lang/Enum {
+	public static final field ASSERT Lus/tractat/kuilt/conformance/lattice/OpKind;
+	public static final field RETIRE Lus/tractat/kuilt/conformance/lattice/OpKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/conformance/lattice/OpKind;
+	public static fun values ()[Lus/tractat/kuilt/conformance/lattice/OpKind;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/lattice/OperationGenerator {
+	public abstract fun applyRandomOp (Ljava/lang/Object;ILkotlin/random/Random;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/conformance/lattice/VacuityFloors {
+	public static final field Companion Lus/tractat/kuilt/conformance/lattice/VacuityFloors$Companion;
+	public fun <init> ()V
+	public fun <init> (DDDDZ)V
+	public synthetic fun <init> (DDDDZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getConcurrentPairs ()D
+	public final fun getEffectiveRetireSteps ()D
+	public final fun getMaxNoOpSteps ()D
+	public final fun getStrictAncestorPairs ()D
+	public final fun getTotalOrder ()Z
+}
+
+public final class us/tractat/kuilt/conformance/lattice/VacuityFloors$Companion {
+	public final fun getDEFAULT ()Lus/tractat/kuilt/conformance/lattice/VacuityFloors;
+	public final fun getNOTHING_TO_RETIRE ()Lus/tractat/kuilt/conformance/lattice/VacuityFloors;
+}
+
+public final class us/tractat/kuilt/conformance/lattice/VacuityReport {
+	public fun <init> (JJJIIILus/tractat/kuilt/conformance/lattice/VacuityFloors;)V
+	public final fun getConcurrentPairs ()J
+	public final fun getConcurrentRate ()D
+	public final fun getEffectiveRetireRate ()D
+	public final fun getEffectiveRetireSteps ()I
+	public final fun getFloors ()Lus/tractat/kuilt/conformance/lattice/VacuityFloors;
+	public final fun getNoOpRate ()D
+	public final fun getNoOpSteps ()I
+	public final fun getPairs ()J
+	public final fun getSteps ()I
+	public final fun getStrictAncestorPairs ()J
+	public final fun getStrictAncestorRate ()D
+	public fun toString ()Ljava/lang/String;
+}
+

@@ -1,0 +1,294 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Alias: apple => [iosArm64, iosSimulatorArm64, macosArm64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-otel-tap>
+sealed interface us.tractat.kuilt.otel.tap.admit/TapAdmitMessage { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage|null[0]
+    final class Challenge : us.tractat.kuilt.otel.tap.admit/TapAdmitMessage { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge|null[0]
+        constructor <init>(kotlinx.io.bytestring/ByteString) // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.<init>|<init>(kotlinx.io.bytestring.ByteString){}[0]
+
+        final val nonce // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.nonce|{}nonce[0]
+            final fun <get-nonce>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.nonce.<get-nonce>|<get-nonce>(){}[0]
+
+        final fun component1(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.component1|component1(){}[0]
+        final fun copy(kotlinx.io.bytestring/ByteString = ...): us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.copy|copy(kotlinx.io.bytestring.ByteString){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge> { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge) // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.otel.tap.admit.TapAdmitMessage.Challenge){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.Companion|null[0]
+            final const val NONCE_BYTES // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.Companion.NONCE_BYTES|{}NONCE_BYTES[0]
+                final fun <get-NONCE_BYTES>(): kotlin/Int // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.Companion.NONCE_BYTES.<get-NONCE_BYTES>|<get-NONCE_BYTES>(){}[0]
+
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge> // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Challenge.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Proof : us.tractat.kuilt.otel.tap.admit/TapAdmitMessage { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof|null[0]
+        constructor <init>(kotlinx.io.bytestring/ByteString) // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.<init>|<init>(kotlinx.io.bytestring.ByteString){}[0]
+
+        final val tag // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.tag|{}tag[0]
+            final fun <get-tag>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.tag.<get-tag>|<get-tag>(){}[0]
+
+        final fun component1(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.component1|component1(){}[0]
+        final fun copy(kotlinx.io.bytestring/ByteString = ...): us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.copy|copy(kotlinx.io.bytestring.ByteString){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof> { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof) // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.otel.tap.admit.TapAdmitMessage.Proof){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof> // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Reject : us.tractat.kuilt.otel.tap.admit/TapAdmitMessage { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject> { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject) // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.otel.tap.admit.TapAdmitMessage.Reject){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject> // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Reject.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Companion|null[0]
+        final const val PREFIX_BYTE // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Companion.PREFIX_BYTE|{}PREFIX_BYTE[0]
+            final fun <get-PREFIX_BYTE>(): kotlin/Byte // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Companion.PREFIX_BYTE.<get-PREFIX_BYTE>|<get-PREFIX_BYTE>(){}[0]
+
+        final fun decode(kotlin/ByteArray): us.tractat.kuilt.otel.tap.admit/TapAdmitMessage? // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Companion.decode|decode(kotlin.ByteArray){}[0]
+        final fun encode(us.tractat.kuilt.otel.tap.admit/TapAdmitMessage): kotlin/ByteArray // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Companion.encode|encode(us.tractat.kuilt.otel.tap.admit.TapAdmitMessage){}[0]
+        final fun isAdmitFrame(kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Companion.isAdmitFrame|isAdmitFrame(kotlin.ByteArray){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel.tap.admit/TapAdmitMessage> // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.otel.tap/LogTapAdmission { // us.tractat.kuilt.otel.tap/LogTapAdmission|null[0]
+    final class Present : us.tractat.kuilt.otel.tap/LogTapAdmission { // us.tractat.kuilt.otel.tap/LogTapAdmission.Present|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.otel.tap/LogTapAdmission.Present.<init>|<init>(kotlin.String){}[0]
+
+        final val code // us.tractat.kuilt.otel.tap/LogTapAdmission.Present.code|{}code[0]
+            final fun <get-code>(): kotlin/String // us.tractat.kuilt.otel.tap/LogTapAdmission.Present.code.<get-code>|<get-code>(){}[0]
+    }
+
+    final class Verify : us.tractat.kuilt.otel.tap/LogTapAdmission { // us.tractat.kuilt.otel.tap/LogTapAdmission.Verify|null[0]
+        constructor <init>(us.tractat.kuilt.otel.tap.admit/LogTapJoinToken, kotlin.time/Clock, kotlin.random/Random) // us.tractat.kuilt.otel.tap/LogTapAdmission.Verify.<init>|<init>(us.tractat.kuilt.otel.tap.admit.LogTapJoinToken;kotlin.time.Clock;kotlin.random.Random){}[0]
+
+        final val clock // us.tractat.kuilt.otel.tap/LogTapAdmission.Verify.clock|{}clock[0]
+            final fun <get-clock>(): kotlin.time/Clock // us.tractat.kuilt.otel.tap/LogTapAdmission.Verify.clock.<get-clock>|<get-clock>(){}[0]
+        final val random // us.tractat.kuilt.otel.tap/LogTapAdmission.Verify.random|{}random[0]
+            final fun <get-random>(): kotlin.random/Random // us.tractat.kuilt.otel.tap/LogTapAdmission.Verify.random.<get-random>|<get-random>(){}[0]
+        final val token // us.tractat.kuilt.otel.tap/LogTapAdmission.Verify.token|{}token[0]
+            final fun <get-token>(): us.tractat.kuilt.otel.tap.admit/LogTapJoinToken // us.tractat.kuilt.otel.tap/LogTapAdmission.Verify.token.<get-token>|<get-token>(){}[0]
+    }
+
+    final object Open : us.tractat.kuilt.otel.tap/LogTapAdmission { // us.tractat.kuilt.otel.tap/LogTapAdmission.Open|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.tap/LogTapAdmission.Open.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.tap/LogTapAdmission.Open.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel.tap/LogTapAdmission.Open.toString|toString(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.otel.tap.admit/LogTapJoinToken { // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken|null[0]
+    constructor <init>(kotlin/String, kotlin.time/Instant, kotlin.time/Duration) // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.<init>|<init>(kotlin.String;kotlin.time.Instant;kotlin.time.Duration){}[0]
+
+    final val code // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.code|{}code[0]
+        final fun <get-code>(): kotlin/String // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.code.<get-code>|<get-code>(){}[0]
+    final val issuedAt // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.issuedAt|{}issuedAt[0]
+        final fun <get-issuedAt>(): kotlin.time/Instant // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.issuedAt.<get-issuedAt>|<get-issuedAt>(){}[0]
+    final val ttl // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.ttl|{}ttl[0]
+        final fun <get-ttl>(): kotlin.time/Duration // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.ttl.<get-ttl>|<get-ttl>(){}[0]
+
+    final fun isValid(kotlin.time/Instant): kotlin/Boolean // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.isValid|isValid(kotlin.time.Instant){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.Companion|null[0]
+        final val DEFAULT_TTL // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.Companion.DEFAULT_TTL|{}DEFAULT_TTL[0]
+            final fun <get-DEFAULT_TTL>(): kotlin.time/Duration // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.Companion.DEFAULT_TTL.<get-DEFAULT_TTL>|<get-DEFAULT_TTL>(){}[0]
+
+        final fun issue(kotlin.random/Random, kotlin.time/Clock, kotlin.time/Duration = ...): us.tractat.kuilt.otel.tap.admit/LogTapJoinToken // us.tractat.kuilt.otel.tap.admit/LogTapJoinToken.Companion.issue|issue(kotlin.random.Random;kotlin.time.Clock;kotlin.time.Duration){}[0]
+    }
+}
+
+final class us.tractat.kuilt.otel.tap/LogTapClient : us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.otel.tap/LogTapClient|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.otel.tap/LogTapConfig = ..., us.tractat.kuilt.otel.tap/LogTapAdmission = ...) // us.tractat.kuilt.otel.tap/LogTapClient.<init>|<init>(us.tractat.kuilt.core.Seam;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.otel.tap.LogTapConfig;us.tractat.kuilt.otel.tap.LogTapAdmission){}[0]
+
+    final fun tail(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.otel/LogRecord> // us.tractat.kuilt.otel.tap/LogTapClient.tail|tail(){}[0]
+    final fun tailStamped(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.otel.tap/StampedLogRecord> // us.tractat.kuilt.otel.tap/LogTapClient.tailStamped|tailStamped(){}[0]
+    final suspend fun pull(): kotlin.collections/List<us.tractat.kuilt.otel/LogRecord> // us.tractat.kuilt.otel.tap/LogTapClient.pull|pull(){}[0]
+    final suspend fun pullStamped(): kotlin.collections/List<us.tractat.kuilt.otel.tap/StampedLogRecord> // us.tractat.kuilt.otel.tap/LogTapClient.pullStamped|pullStamped(){}[0]
+}
+
+final class us.tractat.kuilt.otel.tap/LogTapConfig { // us.tractat.kuilt.otel.tap/LogTapConfig|null[0]
+    constructor <init>(us.tractat.kuilt.core/Pattern = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., us.tractat.kuilt.quilter/QuilterConfig = ...) // us.tractat.kuilt.otel.tap/LogTapConfig.<init>|<init>(us.tractat.kuilt.core.Pattern;kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;us.tractat.kuilt.quilter.QuilterConfig){}[0]
+
+    final val pattern // us.tractat.kuilt.otel.tap/LogTapConfig.pattern|{}pattern[0]
+        final fun <get-pattern>(): us.tractat.kuilt.core/Pattern // us.tractat.kuilt.otel.tap/LogTapConfig.pattern.<get-pattern>|<get-pattern>(){}[0]
+    final val pullSettleStep // us.tractat.kuilt.otel.tap/LogTapConfig.pullSettleStep|{}pullSettleStep[0]
+        final fun <get-pullSettleStep>(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/LogTapConfig.pullSettleStep.<get-pullSettleStep>|<get-pullSettleStep>(){}[0]
+    final val pullTimeout // us.tractat.kuilt.otel.tap/LogTapConfig.pullTimeout|{}pullTimeout[0]
+        final fun <get-pullTimeout>(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/LogTapConfig.pullTimeout.<get-pullTimeout>|<get-pullTimeout>(){}[0]
+    final val quilterConfig // us.tractat.kuilt.otel.tap/LogTapConfig.quilterConfig|{}quilterConfig[0]
+        final fun <get-quilterConfig>(): us.tractat.kuilt.quilter/QuilterConfig // us.tractat.kuilt.otel.tap/LogTapConfig.quilterConfig.<get-quilterConfig>|<get-quilterConfig>(){}[0]
+    final val syncInterval // us.tractat.kuilt.otel.tap/LogTapConfig.syncInterval|{}syncInterval[0]
+        final fun <get-syncInterval>(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/LogTapConfig.syncInterval.<get-syncInterval>|<get-syncInterval>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.core/Pattern // us.tractat.kuilt.otel.tap/LogTapConfig.component1|component1(){}[0]
+    final fun component2(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/LogTapConfig.component2|component2(){}[0]
+    final fun component3(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/LogTapConfig.component3|component3(){}[0]
+    final fun component4(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/LogTapConfig.component4|component4(){}[0]
+    final fun component5(): us.tractat.kuilt.quilter/QuilterConfig // us.tractat.kuilt.otel.tap/LogTapConfig.component5|component5(){}[0]
+    final fun copy(us.tractat.kuilt.core/Pattern = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., us.tractat.kuilt.quilter/QuilterConfig = ...): us.tractat.kuilt.otel.tap/LogTapConfig // us.tractat.kuilt.otel.tap/LogTapConfig.copy|copy(us.tractat.kuilt.core.Pattern;kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;us.tractat.kuilt.quilter.QuilterConfig){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.tap/LogTapConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.tap/LogTapConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel.tap/LogTapConfig.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel.tap/LogTapHost : us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.otel.tap/LogTapHost|null[0]
+    final val selfId // us.tractat.kuilt.otel.tap/LogTapHost.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.otel.tap/LogTapHost.selfId.<get-selfId>|<get-selfId>(){}[0]
+
+    final fun sync() // us.tractat.kuilt.otel.tap/LogTapHost.sync|sync(){}[0]
+}
+
+final class us.tractat.kuilt.otel.tap/MetricSnapshot { // us.tractat.kuilt.otel.tap/MetricSnapshot|null[0]
+    constructor <init>(kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long>, kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Double>, kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Double>, kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long>) // us.tractat.kuilt.otel.tap/MetricSnapshot.<init>|<init>(kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,kotlin.Long>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,kotlin.Double>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,kotlin.Double>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,kotlin.Long>){}[0]
+
+    final val cardinalities // us.tractat.kuilt.otel.tap/MetricSnapshot.cardinalities|{}cardinalities[0]
+        final fun <get-cardinalities>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long> // us.tractat.kuilt.otel.tap/MetricSnapshot.cardinalities.<get-cardinalities>|<get-cardinalities>(){}[0]
+    final val doubleSums // us.tractat.kuilt.otel.tap/MetricSnapshot.doubleSums|{}doubleSums[0]
+        final fun <get-doubleSums>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Double> // us.tractat.kuilt.otel.tap/MetricSnapshot.doubleSums.<get-doubleSums>|<get-doubleSums>(){}[0]
+    final val gauges // us.tractat.kuilt.otel.tap/MetricSnapshot.gauges|{}gauges[0]
+        final fun <get-gauges>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Double> // us.tractat.kuilt.otel.tap/MetricSnapshot.gauges.<get-gauges>|<get-gauges>(){}[0]
+    final val sums // us.tractat.kuilt.otel.tap/MetricSnapshot.sums|{}sums[0]
+        final fun <get-sums>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long> // us.tractat.kuilt.otel.tap/MetricSnapshot.sums.<get-sums>|<get-sums>(){}[0]
+
+    final fun component1(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long> // us.tractat.kuilt.otel.tap/MetricSnapshot.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Double> // us.tractat.kuilt.otel.tap/MetricSnapshot.component2|component2(){}[0]
+    final fun component3(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Double> // us.tractat.kuilt.otel.tap/MetricSnapshot.component3|component3(){}[0]
+    final fun component4(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long> // us.tractat.kuilt.otel.tap/MetricSnapshot.component4|component4(){}[0]
+    final fun copy(kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Double> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Double> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long> = ...): us.tractat.kuilt.otel.tap/MetricSnapshot // us.tractat.kuilt.otel.tap/MetricSnapshot.copy|copy(kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,kotlin.Long>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,kotlin.Double>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,kotlin.Double>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,kotlin.Long>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.tap/MetricSnapshot.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.tap/MetricSnapshot.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel.tap/MetricSnapshot.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel.tap/MetricTapClient : us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.otel.tap/MetricTapClient|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.otel.tap/MetricTapConfig = ..., us.tractat.kuilt.otel.tap/LogTapAdmission = ...) // us.tractat.kuilt.otel.tap/MetricTapClient.<init>|<init>(us.tractat.kuilt.core.Seam;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.otel.tap.MetricTapConfig;us.tractat.kuilt.otel.tap.LogTapAdmission){}[0]
+
+    final fun tail(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.otel.tap/MetricSnapshot> // us.tractat.kuilt.otel.tap/MetricTapClient.tail|tail(){}[0]
+    final suspend fun pull(): us.tractat.kuilt.otel.tap/MetricSnapshot // us.tractat.kuilt.otel.tap/MetricTapClient.pull|pull(){}[0]
+}
+
+final class us.tractat.kuilt.otel.tap/MetricTapConfig { // us.tractat.kuilt.otel.tap/MetricTapConfig|null[0]
+    constructor <init>(us.tractat.kuilt.core/Pattern = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., us.tractat.kuilt.quilter/QuilterConfig = ...) // us.tractat.kuilt.otel.tap/MetricTapConfig.<init>|<init>(us.tractat.kuilt.core.Pattern;kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;us.tractat.kuilt.quilter.QuilterConfig){}[0]
+
+    final val pattern // us.tractat.kuilt.otel.tap/MetricTapConfig.pattern|{}pattern[0]
+        final fun <get-pattern>(): us.tractat.kuilt.core/Pattern // us.tractat.kuilt.otel.tap/MetricTapConfig.pattern.<get-pattern>|<get-pattern>(){}[0]
+    final val pullSettleStep // us.tractat.kuilt.otel.tap/MetricTapConfig.pullSettleStep|{}pullSettleStep[0]
+        final fun <get-pullSettleStep>(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/MetricTapConfig.pullSettleStep.<get-pullSettleStep>|<get-pullSettleStep>(){}[0]
+    final val pullTimeout // us.tractat.kuilt.otel.tap/MetricTapConfig.pullTimeout|{}pullTimeout[0]
+        final fun <get-pullTimeout>(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/MetricTapConfig.pullTimeout.<get-pullTimeout>|<get-pullTimeout>(){}[0]
+    final val quilterConfig // us.tractat.kuilt.otel.tap/MetricTapConfig.quilterConfig|{}quilterConfig[0]
+        final fun <get-quilterConfig>(): us.tractat.kuilt.quilter/QuilterConfig // us.tractat.kuilt.otel.tap/MetricTapConfig.quilterConfig.<get-quilterConfig>|<get-quilterConfig>(){}[0]
+    final val syncInterval // us.tractat.kuilt.otel.tap/MetricTapConfig.syncInterval|{}syncInterval[0]
+        final fun <get-syncInterval>(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/MetricTapConfig.syncInterval.<get-syncInterval>|<get-syncInterval>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.core/Pattern // us.tractat.kuilt.otel.tap/MetricTapConfig.component1|component1(){}[0]
+    final fun component2(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/MetricTapConfig.component2|component2(){}[0]
+    final fun component3(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/MetricTapConfig.component3|component3(){}[0]
+    final fun component4(): kotlin.time/Duration // us.tractat.kuilt.otel.tap/MetricTapConfig.component4|component4(){}[0]
+    final fun component5(): us.tractat.kuilt.quilter/QuilterConfig // us.tractat.kuilt.otel.tap/MetricTapConfig.component5|component5(){}[0]
+    final fun copy(us.tractat.kuilt.core/Pattern = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., us.tractat.kuilt.quilter/QuilterConfig = ...): us.tractat.kuilt.otel.tap/MetricTapConfig // us.tractat.kuilt.otel.tap/MetricTapConfig.copy|copy(us.tractat.kuilt.core.Pattern;kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;us.tractat.kuilt.quilter.QuilterConfig){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.tap/MetricTapConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.tap/MetricTapConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel.tap/MetricTapConfig.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel.tap/MetricTapHost : us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.otel.tap/MetricTapHost|null[0]
+    final val selfId // us.tractat.kuilt.otel.tap/MetricTapHost.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.otel.tap/MetricTapHost.selfId.<get-selfId>|<get-selfId>(){}[0]
+
+    final fun sync() // us.tractat.kuilt.otel.tap/MetricTapHost.sync|sync(){}[0]
+}
+
+final class us.tractat.kuilt.otel.tap/StampedLogRecord { // us.tractat.kuilt.otel.tap/StampedLogRecord|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/RgaId, us.tractat.kuilt.otel/LogRecord) // us.tractat.kuilt.otel.tap/StampedLogRecord.<init>|<init>(us.tractat.kuilt.crdt.RgaId;us.tractat.kuilt.otel.LogRecord){}[0]
+
+    final val dot // us.tractat.kuilt.otel.tap/StampedLogRecord.dot|{}dot[0]
+        final fun <get-dot>(): us.tractat.kuilt.crdt/Dot // us.tractat.kuilt.otel.tap/StampedLogRecord.dot.<get-dot>|<get-dot>(){}[0]
+    final val record // us.tractat.kuilt.otel.tap/StampedLogRecord.record|{}record[0]
+        final fun <get-record>(): us.tractat.kuilt.otel/LogRecord // us.tractat.kuilt.otel.tap/StampedLogRecord.record.<get-record>|<get-record>(){}[0]
+    final val rgaId // us.tractat.kuilt.otel.tap/StampedLogRecord.rgaId|{}rgaId[0]
+        final fun <get-rgaId>(): us.tractat.kuilt.crdt/RgaId // us.tractat.kuilt.otel.tap/StampedLogRecord.rgaId.<get-rgaId>|<get-rgaId>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.crdt/RgaId // us.tractat.kuilt.otel.tap/StampedLogRecord.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.otel/LogRecord // us.tractat.kuilt.otel.tap/StampedLogRecord.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.crdt/RgaId = ..., us.tractat.kuilt.otel/LogRecord = ...): us.tractat.kuilt.otel.tap/StampedLogRecord // us.tractat.kuilt.otel.tap/StampedLogRecord.copy|copy(us.tractat.kuilt.crdt.RgaId;us.tractat.kuilt.otel.LogRecord){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.tap/StampedLogRecord.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.tap/StampedLogRecord.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel.tap/StampedLogRecord.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.otel.tap/StampedLogRecord> { // us.tractat.kuilt.otel.tap/StampedLogRecord.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.otel.tap/StampedLogRecord.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.otel.tap/StampedLogRecord.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.otel.tap/StampedLogRecord.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.otel.tap/StampedLogRecord // us.tractat.kuilt.otel.tap/StampedLogRecord.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.otel.tap/StampedLogRecord) // us.tractat.kuilt.otel.tap/StampedLogRecord.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.otel.tap.StampedLogRecord){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.otel.tap/StampedLogRecord.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel.tap/StampedLogRecord> // us.tractat.kuilt.otel.tap/StampedLogRecord.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final fun us.tractat.kuilt.otel.tap.admit/cryptoRandom(): kotlin.random/Random // us.tractat.kuilt.otel.tap.admit/cryptoRandom|cryptoRandom(){}[0]
+final suspend fun us.tractat.kuilt.otel.tap/installLogTap(us.tractat.kuilt.core/Loom, us.tractat.kuilt.otel/WarpLogRecordExporter, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.otel.tap/LogTapConfig = ..., us.tractat.kuilt.otel.tap/LogTapAdmission = ...): us.tractat.kuilt.otel.tap/LogTapHost // us.tractat.kuilt.otel.tap/installLogTap|installLogTap(us.tractat.kuilt.core.Loom;us.tractat.kuilt.otel.WarpLogRecordExporter;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.otel.tap.LogTapConfig;us.tractat.kuilt.otel.tap.LogTapAdmission){}[0]
+final suspend fun us.tractat.kuilt.otel.tap/installLogTapJoining(us.tractat.kuilt.core/Loom, us.tractat.kuilt.otel/WarpLogRecordExporter, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.core/Tag, us.tractat.kuilt.otel.tap/LogTapConfig = ..., us.tractat.kuilt.otel.tap/LogTapAdmission = ...): us.tractat.kuilt.otel.tap/LogTapHost // us.tractat.kuilt.otel.tap/installLogTapJoining|installLogTapJoining(us.tractat.kuilt.core.Loom;us.tractat.kuilt.otel.WarpLogRecordExporter;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.core.Tag;us.tractat.kuilt.otel.tap.LogTapConfig;us.tractat.kuilt.otel.tap.LogTapAdmission){}[0]
+final suspend fun us.tractat.kuilt.otel.tap/installMetricTap(us.tractat.kuilt.core/Loom, us.tractat.kuilt.otel/WarpMetricExporter, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.otel.tap/MetricTapConfig = ..., us.tractat.kuilt.otel.tap/LogTapAdmission = ...): us.tractat.kuilt.otel.tap/MetricTapHost // us.tractat.kuilt.otel.tap/installMetricTap|installMetricTap(us.tractat.kuilt.core.Loom;us.tractat.kuilt.otel.WarpMetricExporter;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.otel.tap.MetricTapConfig;us.tractat.kuilt.otel.tap.LogTapAdmission){}[0]
+final suspend fun us.tractat.kuilt.otel.tap/installMetricTapJoining(us.tractat.kuilt.core/Loom, us.tractat.kuilt.otel/WarpMetricExporter, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.core/Tag, us.tractat.kuilt.otel.tap/MetricTapConfig = ..., us.tractat.kuilt.otel.tap/LogTapAdmission = ...): us.tractat.kuilt.otel.tap/MetricTapHost // us.tractat.kuilt.otel.tap/installMetricTapJoining|installMetricTapJoining(us.tractat.kuilt.core.Loom;us.tractat.kuilt.otel.WarpMetricExporter;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.core.Tag;us.tractat.kuilt.otel.tap.MetricTapConfig;us.tractat.kuilt.otel.tap.LogTapAdmission){}[0]
+
+// Targets: [apple]
+final suspend fun us.tractat.kuilt.otel.tap/installMultipeerLogTap(us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory, us.tractat.kuilt.otel/WarpLogRecordExporter, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.otel.tap/LogTapConfig = ..., us.tractat.kuilt.otel.tap/LogTapAdmission = ...): us.tractat.kuilt.otel.tap/LogTapHost // us.tractat.kuilt.otel.tap/installMultipeerLogTap|installMultipeerLogTap(us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory;us.tractat.kuilt.otel.WarpLogRecordExporter;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.otel.tap.LogTapConfig;us.tractat.kuilt.otel.tap.LogTapAdmission){}[0]
+
+// Targets: [apple]
+final suspend fun us.tractat.kuilt.otel.tap/installMultipeerMetricTap(us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory, us.tractat.kuilt.otel/WarpMetricExporter, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.otel.tap/MetricTapConfig = ..., us.tractat.kuilt.otel.tap/LogTapAdmission = ...): us.tractat.kuilt.otel.tap/MetricTapHost // us.tractat.kuilt.otel.tap/installMultipeerMetricTap|installMultipeerMetricTap(us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory;us.tractat.kuilt.otel.WarpMetricExporter;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.otel.tap.MetricTapConfig;us.tractat.kuilt.otel.tap.LogTapAdmission){}[0]

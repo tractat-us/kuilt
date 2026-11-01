@@ -1,0 +1,242 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Alias: apple => [iosArm64, iosSimulatorArm64, macosArm64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-warp-test>
+abstract class us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite { // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite|null[0]
+    constructor <init>() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.<init>|<init>(){}[0]
+
+    abstract fun newRuntime(us.tractat.kuilt.warp/WasmSandboxConfig): us.tractat.kuilt.warp/WasmRuntime // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.newRuntime|newRuntime(us.tractat.kuilt.warp.WasmSandboxConfig){}[0]
+    final fun loadRejectsMalformedBytes() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.loadRejectsMalformedBytes|loadRejectsMalformedBytes(){}[0]
+    final fun loadRejectsModuleDeclaringMemoryWithNoMax() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.loadRejectsModuleDeclaringMemoryWithNoMax|loadRejectsModuleDeclaringMemoryWithNoMax(){}[0]
+    final fun loadRejectsModuleMissingAbiExports() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.loadRejectsModuleMissingAbiExports|loadRejectsModuleMissingAbiExports(){}[0]
+    final fun loadRejectsModuleMissingMemory() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.loadRejectsModuleMissingMemory|loadRejectsModuleMissingMemory(){}[0]
+    final fun loadRejectsModuleWithImports() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.loadRejectsModuleWithImports|loadRejectsModuleWithImports(){}[0]
+    final fun loadRejectsModuleWithNoMaxAndOversizeInitialMemory() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.loadRejectsModuleWithNoMaxAndOversizeInitialMemory|loadRejectsModuleWithNoMaxAndOversizeInitialMemory(){}[0]
+    final fun loadRejectsModuleWithOversizeDeclaredMax() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.loadRejectsModuleWithOversizeDeclaredMax|loadRejectsModuleWithOversizeDeclaredMax(){}[0]
+    final fun loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap|loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap(){}[0]
+
+    // Targets: [apple]
+    final fun allocPointerWithHighBitSetIsBounded() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.allocPointerWithHighBitSetIsBounded|allocPointerWithHighBitSetIsBounded(){}[0]
+
+    // Targets: [apple]
+    final fun cpuBombIsBoundedByExecutionTimeout() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.cpuBombIsBoundedByExecutionTimeout|cpuBombIsBoundedByExecutionTimeout(){}[0]
+
+    // Targets: [apple]
+    final fun emptyInputReturnsEmpty() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.emptyInputReturnsEmpty|emptyInputReturnsEmpty(){}[0]
+
+    // Targets: [apple]
+    final fun growPastDeclaredMaxTraps() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.growPastDeclaredMaxTraps|growPastDeclaredMaxTraps(){}[0]
+
+    // Targets: [apple]
+    final fun loadAcceptsInitialMemoryExactlyAtTheCap() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.loadAcceptsInitialMemoryExactlyAtTheCap|loadAcceptsInitialMemoryExactlyAtTheCap(){}[0]
+
+    // Targets: [apple]
+    final fun repeatInvokeReusesTheInstance() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.repeatInvokeReusesTheInstance|repeatInvokeReusesTheInstance(){}[0]
+
+    // Targets: [apple]
+    final fun resultLengthWithHighBitSetIsBounded() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.resultLengthWithHighBitSetIsBounded|resultLengthWithHighBitSetIsBounded(){}[0]
+
+    // Targets: [apple]
+    final fun resultPointerWithHighBitSetIsBounded() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.resultPointerWithHighBitSetIsBounded|resultPointerWithHighBitSetIsBounded(){}[0]
+
+    // Targets: [apple]
+    final fun resultWindowPastMemoryEndIsBounded() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.resultWindowPastMemoryEndIsBounded|resultWindowPastMemoryEndIsBounded(){}[0]
+
+    // Targets: [apple]
+    final fun resultWrittenIntoNewlyGrownMemoryIsReadBack() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.resultWrittenIntoNewlyGrownMemoryIsReadBack|resultWrittenIntoNewlyGrownMemoryIsReadBack(){}[0]
+
+    // Targets: [apple]
+    final fun startSectionCpuBombIsBoundedNotHung() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.startSectionCpuBombIsBoundedNotHung|startSectionCpuBombIsBoundedNotHung(){}[0]
+
+    // Targets: [apple]
+    final fun timeoutDoesNotPoisonSubsequentInvokes() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.timeoutDoesNotPoisonSubsequentInvokes|timeoutDoesNotPoisonSubsequentInvokes(){}[0]
+
+    // Targets: [apple]
+    final fun trapSurfacesAsExecutionException() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.trapSurfacesAsExecutionException|trapSurfacesAsExecutionException(){}[0]
+
+    // Targets: [apple]
+    final fun wellBehavedKernelRoundTrips() // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.wellBehavedKernelRoundTrips|wellBehavedKernelRoundTrips(){}[0]
+
+    // Targets: [wasmJs]
+    final fun allocPointerWithHighBitSetIsBounded(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.allocPointerWithHighBitSetIsBounded|allocPointerWithHighBitSetIsBounded(){}[0]
+
+    // Targets: [wasmJs]
+    final fun cpuBombIsBoundedByExecutionTimeout(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.cpuBombIsBoundedByExecutionTimeout|cpuBombIsBoundedByExecutionTimeout(){}[0]
+
+    // Targets: [wasmJs]
+    final fun emptyInputReturnsEmpty(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.emptyInputReturnsEmpty|emptyInputReturnsEmpty(){}[0]
+
+    // Targets: [wasmJs]
+    final fun growPastDeclaredMaxTraps(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.growPastDeclaredMaxTraps|growPastDeclaredMaxTraps(){}[0]
+
+    // Targets: [wasmJs]
+    final fun loadAcceptsInitialMemoryExactlyAtTheCap(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.loadAcceptsInitialMemoryExactlyAtTheCap|loadAcceptsInitialMemoryExactlyAtTheCap(){}[0]
+
+    // Targets: [wasmJs]
+    final fun repeatInvokeReusesTheInstance(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.repeatInvokeReusesTheInstance|repeatInvokeReusesTheInstance(){}[0]
+
+    // Targets: [wasmJs]
+    final fun resultLengthWithHighBitSetIsBounded(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.resultLengthWithHighBitSetIsBounded|resultLengthWithHighBitSetIsBounded(){}[0]
+
+    // Targets: [wasmJs]
+    final fun resultPointerWithHighBitSetIsBounded(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.resultPointerWithHighBitSetIsBounded|resultPointerWithHighBitSetIsBounded(){}[0]
+
+    // Targets: [wasmJs]
+    final fun resultWindowPastMemoryEndIsBounded(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.resultWindowPastMemoryEndIsBounded|resultWindowPastMemoryEndIsBounded(){}[0]
+
+    // Targets: [wasmJs]
+    final fun resultWrittenIntoNewlyGrownMemoryIsReadBack(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.resultWrittenIntoNewlyGrownMemoryIsReadBack|resultWrittenIntoNewlyGrownMemoryIsReadBack(){}[0]
+
+    // Targets: [wasmJs]
+    final fun startSectionCpuBombIsBoundedNotHung(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.startSectionCpuBombIsBoundedNotHung|startSectionCpuBombIsBoundedNotHung(){}[0]
+
+    // Targets: [wasmJs]
+    final fun timeoutDoesNotPoisonSubsequentInvokes(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.timeoutDoesNotPoisonSubsequentInvokes|timeoutDoesNotPoisonSubsequentInvokes(){}[0]
+
+    // Targets: [wasmJs]
+    final fun trapSurfacesAsExecutionException(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.trapSurfacesAsExecutionException|trapSurfacesAsExecutionException(){}[0]
+
+    // Targets: [wasmJs]
+    final fun wellBehavedKernelRoundTrips(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/WasmRuntimeConformanceSuite.wellBehavedKernelRoundTrips|wellBehavedKernelRoundTrips(){}[0]
+}
+
+final class us.tractat.kuilt.warp.test/DeclaredLimitsVector { // us.tractat.kuilt.warp.test/DeclaredLimitsVector|null[0]
+    final val bytes // us.tractat.kuilt.warp.test/DeclaredLimitsVector.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/DeclaredLimitsVector.bytes.<get-bytes>|<get-bytes>(){}[0]
+    final val initialPages // us.tractat.kuilt.warp.test/DeclaredLimitsVector.initialPages|{}initialPages[0]
+        final fun <get-initialPages>(): kotlin/Int // us.tractat.kuilt.warp.test/DeclaredLimitsVector.initialPages.<get-initialPages>|<get-initialPages>(){}[0]
+    final val maxPages // us.tractat.kuilt.warp.test/DeclaredLimitsVector.maxPages|{}maxPages[0]
+        final fun <get-maxPages>(): kotlin/Int // us.tractat.kuilt.warp.test/DeclaredLimitsVector.maxPages.<get-maxPages>|<get-maxPages>(){}[0]
+}
+
+final class us.tractat.kuilt.warp.test/GrowThenWriteVector { // us.tractat.kuilt.warp.test/GrowThenWriteVector|null[0]
+    final val bytes // us.tractat.kuilt.warp.test/GrowThenWriteVector.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/GrowThenWriteVector.bytes.<get-bytes>|<get-bytes>(){}[0]
+    final val marker // us.tractat.kuilt.warp.test/GrowThenWriteVector.marker|{}marker[0]
+        final fun <get-marker>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/GrowThenWriteVector.marker.<get-marker>|<get-marker>(){}[0]
+    final val memoryEndAfterGrow // us.tractat.kuilt.warp.test/GrowThenWriteVector.memoryEndAfterGrow|{}memoryEndAfterGrow[0]
+        final fun <get-memoryEndAfterGrow>(): kotlin/Long // us.tractat.kuilt.warp.test/GrowThenWriteVector.memoryEndAfterGrow.<get-memoryEndAfterGrow>|<get-memoryEndAfterGrow>(){}[0]
+    final val memoryEndBeforeGrow // us.tractat.kuilt.warp.test/GrowThenWriteVector.memoryEndBeforeGrow|{}memoryEndBeforeGrow[0]
+        final fun <get-memoryEndBeforeGrow>(): kotlin/Long // us.tractat.kuilt.warp.test/GrowThenWriteVector.memoryEndBeforeGrow.<get-memoryEndBeforeGrow>|<get-memoryEndBeforeGrow>(){}[0]
+    final val resultSize // us.tractat.kuilt.warp.test/GrowThenWriteVector.resultSize|{}resultSize[0]
+        final fun <get-resultSize>(): kotlin/Int // us.tractat.kuilt.warp.test/GrowThenWriteVector.resultSize.<get-resultSize>|<get-resultSize>(){}[0]
+
+    final fun markerOf(kotlin/ByteArray): kotlin/ByteArray // us.tractat.kuilt.warp.test/GrowThenWriteVector.markerOf|markerOf(kotlin.ByteArray){}[0]
+    final fun reportedPointer(kotlin/ByteArray): kotlin/Long // us.tractat.kuilt.warp.test/GrowThenWriteVector.reportedPointer|reportedPointer(kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.warp.test/InRangePastEndVector { // us.tractat.kuilt.warp.test/InRangePastEndVector|null[0]
+    final val bytes // us.tractat.kuilt.warp.test/InRangePastEndVector.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/InRangePastEndVector.bytes.<get-bytes>|<get-bytes>(){}[0]
+    final val memoryBytes // us.tractat.kuilt.warp.test/InRangePastEndVector.memoryBytes|{}memoryBytes[0]
+        final fun <get-memoryBytes>(): kotlin/Long // us.tractat.kuilt.warp.test/InRangePastEndVector.memoryBytes.<get-memoryBytes>|<get-memoryBytes>(){}[0]
+    final val resultLength // us.tractat.kuilt.warp.test/InRangePastEndVector.resultLength|{}resultLength[0]
+        final fun <get-resultLength>(): kotlin/Long // us.tractat.kuilt.warp.test/InRangePastEndVector.resultLength.<get-resultLength>|<get-resultLength>(){}[0]
+    final val resultPointer // us.tractat.kuilt.warp.test/InRangePastEndVector.resultPointer|{}resultPointer[0]
+        final fun <get-resultPointer>(): kotlin/Long // us.tractat.kuilt.warp.test/InRangePastEndVector.resultPointer.<get-resultPointer>|<get-resultPointer>(){}[0]
+}
+
+final class us.tractat.kuilt.warp.test/MultiNodeWarpSim { // us.tractat.kuilt.warp.test/MultiNodeWarpSim|null[0]
+    final val loom // us.tractat.kuilt.warp.test/MultiNodeWarpSim.loom|{}loom[0]
+        final fun <get-loom>(): us.tractat.kuilt.core/InMemoryLoom // us.tractat.kuilt.warp.test/MultiNodeWarpSim.loom.<get-loom>|<get-loom>(){}[0]
+    final val nodes // us.tractat.kuilt.warp.test/MultiNodeWarpSim.nodes|{}nodes[0]
+        final fun <get-nodes>(): kotlin.collections/MutableMap<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.warp/WarpNode> // us.tractat.kuilt.warp.test/MultiNodeWarpSim.nodes.<get-nodes>|<get-nodes>(){}[0]
+    final val peerIds // us.tractat.kuilt.warp.test/MultiNodeWarpSim.peerIds|{}peerIds[0]
+        final fun <get-peerIds>(): kotlin.collections/List<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.warp.test/MultiNodeWarpSim.peerIds.<get-peerIds>|<get-peerIds>(){}[0]
+    final val quilterConfig // us.tractat.kuilt.warp.test/MultiNodeWarpSim.quilterConfig|{}quilterConfig[0]
+        final fun <get-quilterConfig>(): us.tractat.kuilt.quilter/QuilterConfig // us.tractat.kuilt.warp.test/MultiNodeWarpSim.quilterConfig.<get-quilterConfig>|<get-quilterConfig>(){}[0]
+    final val seams // us.tractat.kuilt.warp.test/MultiNodeWarpSim.seams|{}seams[0]
+        final fun <get-seams>(): kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam> // us.tractat.kuilt.warp.test/MultiNodeWarpSim.seams.<get-seams>|<get-seams>(){}[0]
+    final val virtualClock // us.tractat.kuilt.warp.test/MultiNodeWarpSim.virtualClock|{}virtualClock[0]
+        final fun <get-virtualClock>(): kotlin/Function0<kotlin.time/Instant> // us.tractat.kuilt.warp.test/MultiNodeWarpSim.virtualClock.<get-virtualClock>|<get-virtualClock>(){}[0]
+
+    final fun closeAll() // us.tractat.kuilt.warp.test/MultiNodeWarpSim.closeAll|closeAll(){}[0]
+    final fun dumpState(kotlin/String): kotlin/String // us.tractat.kuilt.warp.test/MultiNodeWarpSim.dumpState|dumpState(kotlin.String){}[0]
+    final fun echoDescriptor(us.tractat.kuilt.warp/TaskId): us.tractat.kuilt.warp/TaskDescriptor // us.tractat.kuilt.warp.test/MultiNodeWarpSim.echoDescriptor|echoDescriptor(us.tractat.kuilt.warp.TaskId){}[0]
+    final fun enqueueEcho(us.tractat.kuilt.warp/TaskId, us.tractat.kuilt.core/PeerId = ...) // us.tractat.kuilt.warp.test/MultiNodeWarpSim.enqueueEcho|enqueueEcho(us.tractat.kuilt.warp.TaskId;us.tractat.kuilt.core.PeerId){}[0]
+    final fun executedBy(us.tractat.kuilt.warp/TaskId): kotlin.collections/List<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.warp.test/MultiNodeWarpSim.executedBy|executedBy(us.tractat.kuilt.warp.TaskId){}[0]
+    final fun executedTaskIds(): kotlin.collections/Set<us.tractat.kuilt.warp/TaskId> // us.tractat.kuilt.warp.test/MultiNodeWarpSim.executedTaskIds|executedTaskIds(){}[0]
+    final fun node(kotlin/Int): us.tractat.kuilt.warp/WarpNode // us.tractat.kuilt.warp.test/MultiNodeWarpSim.node|node(kotlin.Int){}[0]
+    final fun peer(kotlin/Int): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.warp.test/MultiNodeWarpSim.peer|peer(kotlin.Int){}[0]
+    final fun recordExecution(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.warp/TaskId) // us.tractat.kuilt.warp.test/MultiNodeWarpSim.recordExecution|recordExecution(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.warp.TaskId){}[0]
+    final fun taskOwnedBy(us.tractat.kuilt.core/PeerId, kotlin/String = ...): us.tractat.kuilt.warp/TaskId // us.tractat.kuilt.warp.test/MultiNodeWarpSim.taskOwnedBy|taskOwnedBy(us.tractat.kuilt.core.PeerId;kotlin.String){}[0]
+    final fun trackedEchoRegistry(us.tractat.kuilt.core/PeerId): us.tractat.kuilt.warp/OpRegistry // us.tractat.kuilt.warp.test/MultiNodeWarpSim.trackedEchoRegistry|trackedEchoRegistry(us.tractat.kuilt.core.PeerId){}[0]
+    final suspend fun awaitResults(kotlin.collections/Collection<us.tractat.kuilt.warp/TaskId>, kotlin.collections/Collection<us.tractat.kuilt.core/PeerId> = ..., kotlin.time/Duration = ...) // us.tractat.kuilt.warp.test/MultiNodeWarpSim.awaitResults|awaitResults(kotlin.collections.Collection<us.tractat.kuilt.warp.TaskId>;kotlin.collections.Collection<us.tractat.kuilt.core.PeerId>;kotlin.time.Duration){}[0]
+    final suspend fun awaitTrue(kotlin/String, kotlin.time/Duration = ..., kotlin/Function0<kotlin/Boolean>) // us.tractat.kuilt.warp.test/MultiNodeWarpSim.awaitTrue|awaitTrue(kotlin.String;kotlin.time.Duration;kotlin.Function0<kotlin.Boolean>){}[0]
+    final suspend fun disconnect(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.warp.test/MultiNodeWarpSim.disconnect|disconnect(us.tractat.kuilt.core.PeerId){}[0]
+    final suspend fun settle(kotlin/Int = ...) // us.tractat.kuilt.warp.test/MultiNodeWarpSim.settle|settle(kotlin.Int){}[0]
+}
+
+final object us.tractat.kuilt.warp.test/WarpOps : us.tractat.kuilt.warp/OpRegistrar { // us.tractat.kuilt.warp.test/WarpOps|null[0]
+    final val opIds // us.tractat.kuilt.warp.test/WarpOps.opIds|{}opIds[0]
+        final fun <get-opIds>(): kotlin.collections/Set<us.tractat.kuilt.warp/OpId> // us.tractat.kuilt.warp.test/WarpOps.opIds.<get-opIds>|<get-opIds>(){}[0]
+
+    final fun registerInto(us.tractat.kuilt.warp/OpRegistry) // us.tractat.kuilt.warp.test/WarpOps.registerInto|registerInto(us.tractat.kuilt.warp.OpRegistry){}[0]
+}
+
+final object us.tractat.kuilt.warp.test/WasmKernelFixtures { // us.tractat.kuilt.warp.test/WasmKernelFixtures|null[0]
+    final val CPU_BOMB // us.tractat.kuilt.warp.test/WasmKernelFixtures.CPU_BOMB|{}CPU_BOMB[0]
+        final fun <get-CPU_BOMB>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.CPU_BOMB.<get-CPU_BOMB>|<get-CPU_BOMB>(){}[0]
+    final val GROW_PAST_DECLARED_MAX // us.tractat.kuilt.warp.test/WasmKernelFixtures.GROW_PAST_DECLARED_MAX|{}GROW_PAST_DECLARED_MAX[0]
+        final fun <get-GROW_PAST_DECLARED_MAX>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.GROW_PAST_DECLARED_MAX.<get-GROW_PAST_DECLARED_MAX>|<get-GROW_PAST_DECLARED_MAX>(){}[0]
+    final val GROW_THEN_WRITE // us.tractat.kuilt.warp.test/WasmKernelFixtures.GROW_THEN_WRITE|{}GROW_THEN_WRITE[0]
+        final fun <get-GROW_THEN_WRITE>(): us.tractat.kuilt.warp.test/GrowThenWriteVector // us.tractat.kuilt.warp.test/WasmKernelFixtures.GROW_THEN_WRITE.<get-GROW_THEN_WRITE>|<get-GROW_THEN_WRITE>(){}[0]
+    final val HIGH_BIT_ALLOC_POINTER // us.tractat.kuilt.warp.test/WasmKernelFixtures.HIGH_BIT_ALLOC_POINTER|{}HIGH_BIT_ALLOC_POINTER[0]
+        final fun <get-HIGH_BIT_ALLOC_POINTER>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.HIGH_BIT_ALLOC_POINTER.<get-HIGH_BIT_ALLOC_POINTER>|<get-HIGH_BIT_ALLOC_POINTER>(){}[0]
+    final val HIGH_BIT_RESULT_LENGTH // us.tractat.kuilt.warp.test/WasmKernelFixtures.HIGH_BIT_RESULT_LENGTH|{}HIGH_BIT_RESULT_LENGTH[0]
+        final fun <get-HIGH_BIT_RESULT_LENGTH>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.HIGH_BIT_RESULT_LENGTH.<get-HIGH_BIT_RESULT_LENGTH>|<get-HIGH_BIT_RESULT_LENGTH>(){}[0]
+    final val HIGH_BIT_RESULT_POINTER // us.tractat.kuilt.warp.test/WasmKernelFixtures.HIGH_BIT_RESULT_POINTER|{}HIGH_BIT_RESULT_POINTER[0]
+        final fun <get-HIGH_BIT_RESULT_POINTER>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.HIGH_BIT_RESULT_POINTER.<get-HIGH_BIT_RESULT_POINTER>|<get-HIGH_BIT_RESULT_POINTER>(){}[0]
+    final val IMPORTS // us.tractat.kuilt.warp.test/WasmKernelFixtures.IMPORTS|{}IMPORTS[0]
+        final fun <get-IMPORTS>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.IMPORTS.<get-IMPORTS>|<get-IMPORTS>(){}[0]
+    final val INITIAL_ABOVE_DECLARED_MAX // us.tractat.kuilt.warp.test/WasmKernelFixtures.INITIAL_ABOVE_DECLARED_MAX|{}INITIAL_ABOVE_DECLARED_MAX[0]
+        final fun <get-INITIAL_ABOVE_DECLARED_MAX>(): us.tractat.kuilt.warp.test/DeclaredLimitsVector // us.tractat.kuilt.warp.test/WasmKernelFixtures.INITIAL_ABOVE_DECLARED_MAX.<get-INITIAL_ABOVE_DECLARED_MAX>|<get-INITIAL_ABOVE_DECLARED_MAX>(){}[0]
+    final val INITIAL_AT_CAP // us.tractat.kuilt.warp.test/WasmKernelFixtures.INITIAL_AT_CAP|{}INITIAL_AT_CAP[0]
+        final fun <get-INITIAL_AT_CAP>(): us.tractat.kuilt.warp.test/DeclaredLimitsVector // us.tractat.kuilt.warp.test/WasmKernelFixtures.INITIAL_AT_CAP.<get-INITIAL_AT_CAP>|<get-INITIAL_AT_CAP>(){}[0]
+    final val MISSING_ABI_EXPORTS // us.tractat.kuilt.warp.test/WasmKernelFixtures.MISSING_ABI_EXPORTS|{}MISSING_ABI_EXPORTS[0]
+        final fun <get-MISSING_ABI_EXPORTS>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.MISSING_ABI_EXPORTS.<get-MISSING_ABI_EXPORTS>|<get-MISSING_ABI_EXPORTS>(){}[0]
+    final val MISSING_MEMORY // us.tractat.kuilt.warp.test/WasmKernelFixtures.MISSING_MEMORY|{}MISSING_MEMORY[0]
+        final fun <get-MISSING_MEMORY>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.MISSING_MEMORY.<get-MISSING_MEMORY>|<get-MISSING_MEMORY>(){}[0]
+    final val NO_MAX_MEMORY // us.tractat.kuilt.warp.test/WasmKernelFixtures.NO_MAX_MEMORY|{}NO_MAX_MEMORY[0]
+        final fun <get-NO_MAX_MEMORY>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.NO_MAX_MEMORY.<get-NO_MAX_MEMORY>|<get-NO_MAX_MEMORY>(){}[0]
+    final val OOB_IN_RANGE_RESULT // us.tractat.kuilt.warp.test/WasmKernelFixtures.OOB_IN_RANGE_RESULT|{}OOB_IN_RANGE_RESULT[0]
+        final fun <get-OOB_IN_RANGE_RESULT>(): us.tractat.kuilt.warp.test/InRangePastEndVector // us.tractat.kuilt.warp.test/WasmKernelFixtures.OOB_IN_RANGE_RESULT.<get-OOB_IN_RANGE_RESULT>|<get-OOB_IN_RANGE_RESULT>(){}[0]
+    final val OVERSIZE_INITIAL_MEMORY // us.tractat.kuilt.warp.test/WasmKernelFixtures.OVERSIZE_INITIAL_MEMORY|{}OVERSIZE_INITIAL_MEMORY[0]
+        final fun <get-OVERSIZE_INITIAL_MEMORY>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.OVERSIZE_INITIAL_MEMORY.<get-OVERSIZE_INITIAL_MEMORY>|<get-OVERSIZE_INITIAL_MEMORY>(){}[0]
+    final val OVERSIZE_MAX_MEMORY // us.tractat.kuilt.warp.test/WasmKernelFixtures.OVERSIZE_MAX_MEMORY|{}OVERSIZE_MAX_MEMORY[0]
+        final fun <get-OVERSIZE_MAX_MEMORY>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.OVERSIZE_MAX_MEMORY.<get-OVERSIZE_MAX_MEMORY>|<get-OVERSIZE_MAX_MEMORY>(){}[0]
+    final val REVERSE // us.tractat.kuilt.warp.test/WasmKernelFixtures.REVERSE|{}REVERSE[0]
+        final fun <get-REVERSE>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.REVERSE.<get-REVERSE>|<get-REVERSE>(){}[0]
+    final val START_CPU_BOMB // us.tractat.kuilt.warp.test/WasmKernelFixtures.START_CPU_BOMB|{}START_CPU_BOMB[0]
+        final fun <get-START_CPU_BOMB>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.START_CPU_BOMB.<get-START_CPU_BOMB>|<get-START_CPU_BOMB>(){}[0]
+    final val TRAP // us.tractat.kuilt.warp.test/WasmKernelFixtures.TRAP|{}TRAP[0]
+        final fun <get-TRAP>(): kotlin/ByteArray // us.tractat.kuilt.warp.test/WasmKernelFixtures.TRAP.<get-TRAP>|<get-TRAP>(){}[0]
+}
+
+final const val us.tractat.kuilt.warp.test/ABI_WORD_SIGN_BIT // us.tractat.kuilt.warp.test/ABI_WORD_SIGN_BIT|{}ABI_WORD_SIGN_BIT[0]
+    final fun <get-ABI_WORD_SIGN_BIT>(): kotlin/Long // us.tractat.kuilt.warp.test/ABI_WORD_SIGN_BIT.<get-ABI_WORD_SIGN_BIT>|<get-ABI_WORD_SIGN_BIT>(){}[0]
+final const val us.tractat.kuilt.warp.test/WASM_PAGE_BYTES // us.tractat.kuilt.warp.test/WASM_PAGE_BYTES|{}WASM_PAGE_BYTES[0]
+    final fun <get-WASM_PAGE_BYTES>(): kotlin/Long // us.tractat.kuilt.warp.test/WASM_PAGE_BYTES.<get-WASM_PAGE_BYTES>|<get-WASM_PAGE_BYTES>(){}[0]
+
+final val us.tractat.kuilt.warp.test/MULTI_NODE_WARP_SIM_QUILTER_CONFIG // us.tractat.kuilt.warp.test/MULTI_NODE_WARP_SIM_QUILTER_CONFIG|{}MULTI_NODE_WARP_SIM_QUILTER_CONFIG[0]
+    final fun <get-MULTI_NODE_WARP_SIM_QUILTER_CONFIG>(): us.tractat.kuilt.quilter/QuilterConfig // us.tractat.kuilt.warp.test/MULTI_NODE_WARP_SIM_QUILTER_CONFIG.<get-MULTI_NODE_WARP_SIM_QUILTER_CONFIG>|<get-MULTI_NODE_WARP_SIM_QUILTER_CONFIG>(){}[0]
+final val us.tractat.kuilt.warp.test/WARP_SIM_ECHO_OP // us.tractat.kuilt.warp.test/WARP_SIM_ECHO_OP|{}WARP_SIM_ECHO_OP[0]
+    final fun <get-WARP_SIM_ECHO_OP>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp.test/WARP_SIM_ECHO_OP.<get-WARP_SIM_ECHO_OP>|<get-WARP_SIM_ECHO_OP>(){}[0]
+final val us.tractat.kuilt.warp.test/WARP_SIM_WEDGE_BACKSTOP // us.tractat.kuilt.warp.test/WARP_SIM_WEDGE_BACKSTOP|{}WARP_SIM_WEDGE_BACKSTOP[0]
+    final fun <get-WARP_SIM_WEDGE_BACKSTOP>(): kotlin.time/Duration // us.tractat.kuilt.warp.test/WARP_SIM_WEDGE_BACKSTOP.<get-WARP_SIM_WEDGE_BACKSTOP>|<get-WARP_SIM_WEDGE_BACKSTOP>(){}[0]
+final val us.tractat.kuilt.warp.test/echo // us.tractat.kuilt.warp.test/echo|{}echo[0]
+    final fun <get-echo>(): us.tractat.kuilt.warp/Op // us.tractat.kuilt.warp.test/echo.<get-echo>|<get-echo>(){}[0]
+
+final suspend fun <#A: kotlin/Any?> us.tractat.kuilt.warp.test/retryingOnlyBudgetOverruns(kotlin/String, kotlin.time/Duration, kotlin/Int = ..., kotlin/Function1<kotlin/String, kotlin/Unit> = ..., kotlin.time/TimeSource = ..., kotlin.coroutines/SuspendFunction0<kotlin.coroutines/SuspendFunction0<kotlin/Unit>>, kotlin.coroutines/SuspendFunction0<#A>): #A // us.tractat.kuilt.warp.test/retryingOnlyBudgetOverruns|retryingOnlyBudgetOverruns(kotlin.String;kotlin.time.Duration;kotlin.Int;kotlin.Function1<kotlin.String,kotlin.Unit>;kotlin.time.TimeSource;kotlin.coroutines.SuspendFunction0<kotlin.coroutines.SuspendFunction0<kotlin.Unit>>;kotlin.coroutines.SuspendFunction0<0:0>){0§<kotlin.Any?>}[0]
+final suspend fun us.tractat.kuilt.warp.test/multiNodeWarpSim(kotlin/Int, kotlinx.coroutines/CoroutineScope, kotlinx.coroutines.test/TestCoroutineScheduler, us.tractat.kuilt.quilter/QuilterConfig = ..., us.tractat.kuilt.liveness/HeartbeatConfig = ..., us.tractat.kuilt.warp/ClaimStrategy = ..., kotlin/Function2<us.tractat.kuilt.warp.test/MultiNodeWarpSim, us.tractat.kuilt.core/PeerId, us.tractat.kuilt.warp/OpRegistry> = ..., kotlin/Function4<us.tractat.kuilt.warp.test/MultiNodeWarpSim, us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.warp/WarpNode>? = ...): us.tractat.kuilt.warp.test/MultiNodeWarpSim // us.tractat.kuilt.warp.test/multiNodeWarpSim|multiNodeWarpSim(kotlin.Int;kotlinx.coroutines.CoroutineScope;kotlinx.coroutines.test.TestCoroutineScheduler;us.tractat.kuilt.quilter.QuilterConfig;us.tractat.kuilt.liveness.HeartbeatConfig;us.tractat.kuilt.warp.ClaimStrategy;kotlin.Function2<us.tractat.kuilt.warp.test.MultiNodeWarpSim,us.tractat.kuilt.core.PeerId,us.tractat.kuilt.warp.OpRegistry>;kotlin.Function4<us.tractat.kuilt.warp.test.MultiNodeWarpSim,us.tractat.kuilt.core.PeerId,us.tractat.kuilt.core.Seam,kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.warp.WarpNode>?){}[0]
+
+// Targets: [apple]
+final fun us.tractat.kuilt.warp.test/warpSimTest(kotlin/Int = ..., us.tractat.kuilt.quilter/QuilterConfig = ..., us.tractat.kuilt.liveness/HeartbeatConfig = ..., us.tractat.kuilt.warp/ClaimStrategy = ..., kotlin/Function2<us.tractat.kuilt.warp.test/MultiNodeWarpSim, us.tractat.kuilt.core/PeerId, us.tractat.kuilt.warp/OpRegistry> = ..., kotlin/Function4<us.tractat.kuilt.warp.test/MultiNodeWarpSim, us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.warp/WarpNode>? = ..., kotlin.time/Duration = ..., kotlin.coroutines/SuspendFunction2<kotlinx.coroutines.test/TestScope, us.tractat.kuilt.warp.test/MultiNodeWarpSim, kotlin/Unit>) // us.tractat.kuilt.warp.test/warpSimTest|warpSimTest(kotlin.Int;us.tractat.kuilt.quilter.QuilterConfig;us.tractat.kuilt.liveness.HeartbeatConfig;us.tractat.kuilt.warp.ClaimStrategy;kotlin.Function2<us.tractat.kuilt.warp.test.MultiNodeWarpSim,us.tractat.kuilt.core.PeerId,us.tractat.kuilt.warp.OpRegistry>;kotlin.Function4<us.tractat.kuilt.warp.test.MultiNodeWarpSim,us.tractat.kuilt.core.PeerId,us.tractat.kuilt.core.Seam,kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.warp.WarpNode>?;kotlin.time.Duration;kotlin.coroutines.SuspendFunction2<kotlinx.coroutines.test.TestScope,us.tractat.kuilt.warp.test.MultiNodeWarpSim,kotlin.Unit>){}[0]
+
+// Targets: [wasmJs]
+final fun us.tractat.kuilt.warp.test/warpSimTest(kotlin/Int = ..., us.tractat.kuilt.quilter/QuilterConfig = ..., us.tractat.kuilt.liveness/HeartbeatConfig = ..., us.tractat.kuilt.warp/ClaimStrategy = ..., kotlin/Function2<us.tractat.kuilt.warp.test/MultiNodeWarpSim, us.tractat.kuilt.core/PeerId, us.tractat.kuilt.warp/OpRegistry> = ..., kotlin/Function4<us.tractat.kuilt.warp.test/MultiNodeWarpSim, us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.warp/WarpNode>? = ..., kotlin.time/Duration = ..., kotlin.coroutines/SuspendFunction2<kotlinx.coroutines.test/TestScope, us.tractat.kuilt.warp.test/MultiNodeWarpSim, kotlin/Unit>): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.warp.test/warpSimTest|warpSimTest(kotlin.Int;us.tractat.kuilt.quilter.QuilterConfig;us.tractat.kuilt.liveness.HeartbeatConfig;us.tractat.kuilt.warp.ClaimStrategy;kotlin.Function2<us.tractat.kuilt.warp.test.MultiNodeWarpSim,us.tractat.kuilt.core.PeerId,us.tractat.kuilt.warp.OpRegistry>;kotlin.Function4<us.tractat.kuilt.warp.test.MultiNodeWarpSim,us.tractat.kuilt.core.PeerId,us.tractat.kuilt.core.Seam,kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.warp.WarpNode>?;kotlin.time.Duration;kotlin.coroutines.SuspendFunction2<kotlinx.coroutines.test.TestScope,us.tractat.kuilt.warp.test.MultiNodeWarpSim,kotlin.Unit>){}[0]

@@ -1,0 +1,41 @@
+public final class us/tractat/kuilt/tcp/TcpAddress : us/tractat/kuilt/core/Tag {
+	public fun <init> (Ljava/lang/String;ILjava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()I
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;ILjava/lang/String;)Lus/tractat/kuilt/tcp/TcpAddress;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/tcp/TcpAddress;Ljava/lang/String;ILjava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/tcp/TcpAddress;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHost ()Ljava/lang/String;
+	public fun getPeerKey ()Ljava/lang/String;
+	public final fun getPort ()I
+	public fun getRoomKey ()Ljava/lang/String;
+	public fun getSessionName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/tcp/TcpFabricKt {
+	public static final fun tcpLoomHost-pUV9IK0 (Lio/ktor/network/sockets/ServerSocket;Lio/ktor/network/selector/SelectorManager;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineDispatcher;)Lus/tractat/kuilt/tcp/TcpLoom;
+	public static synthetic fun tcpLoomHost-pUV9IK0$default (Lio/ktor/network/sockets/ServerSocket;Lio/ktor/network/selector/SelectorManager;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineDispatcher;ILjava/lang/Object;)Lus/tractat/kuilt/tcp/TcpLoom;
+	public static final fun tcpLoomJoin-wcfUuww (Lio/ktor/network/selector/SelectorManager;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineDispatcher;)Lus/tractat/kuilt/tcp/TcpLoom;
+	public static synthetic fun tcpLoomJoin-wcfUuww$default (Lio/ktor/network/selector/SelectorManager;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineDispatcher;ILjava/lang/Object;)Lus/tractat/kuilt/tcp/TcpLoom;
+}
+
+public final class us/tractat/kuilt/tcp/TcpLoom : us/tractat/kuilt/core/Loom {
+	public static final field Companion Lus/tractat/kuilt/tcp/TcpLoom$Companion;
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/tcp/TcpLoom$Companion {
+	public final fun host-nzI33HM (Lio/ktor/network/sockets/ServerSocket;Ljava/lang/String;Lio/ktor/network/selector/SelectorManager;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineDispatcher;Lus/tractat/kuilt/core/DeliveryPolicy;)Lus/tractat/kuilt/tcp/TcpLoom;
+	public static synthetic fun host-nzI33HM$default (Lus/tractat/kuilt/tcp/TcpLoom$Companion;Lio/ktor/network/sockets/ServerSocket;Ljava/lang/String;Lio/ktor/network/selector/SelectorManager;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineDispatcher;Lus/tractat/kuilt/core/DeliveryPolicy;ILjava/lang/Object;)Lus/tractat/kuilt/tcp/TcpLoom;
+	public final fun join-IclkiQY (Ljava/lang/String;Lio/ktor/network/selector/SelectorManager;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineDispatcher;Lus/tractat/kuilt/core/DeliveryPolicy;)Lus/tractat/kuilt/tcp/TcpLoom;
+	public static synthetic fun join-IclkiQY$default (Lus/tractat/kuilt/tcp/TcpLoom$Companion;Ljava/lang/String;Lio/ktor/network/selector/SelectorManager;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineDispatcher;Lus/tractat/kuilt/core/DeliveryPolicy;ILjava/lang/Object;)Lus/tractat/kuilt/tcp/TcpLoom;
+}
+

@@ -1,0 +1,74 @@
+public final class us/tractat/kuilt/session/test/FakeRoom : us/tractat/kuilt/session/Room {
+	public fun <init> ()V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/SessionRole;Ljava/util/Set;Lus/tractat/kuilt/session/partition/ResumeToken;Lus/tractat/kuilt/core/DeliveryPolicy;Ljava/lang/String;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/SessionRole;Ljava/util/Set;Lus/tractat/kuilt/session/partition/ResumeToken;Lus/tractat/kuilt/core/DeliveryPolicy;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun addMember (Lus/tractat/kuilt/session/Member;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun channel (Ljava/lang/String;)Lus/tractat/kuilt/core/Seam;
+	public final fun channelOrNull (Ljava/lang/String;)Lus/tractat/kuilt/session/test/FakeRoom$FakeChannelSeam;
+	public final fun deliver-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun emit (Lus/tractat/kuilt/session/MembershipEvent;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun emitResumed-t5-yf_A (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getAttestedPrincipals ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getBroadcasts ()Ljava/util/List;
+	public final fun getChannelPolicy ()Lus/tractat/kuilt/core/DeliveryPolicy;
+	public final fun getDirected ()Ljava/util/List;
+	public fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getLocalFabric ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public final fun getResumeResult ()Lus/tractat/kuilt/session/partition/ResumeResult$JoinerOutcome;
+	public fun getResumeToken ()Lus/tractat/kuilt/session/partition/ResumeToken;
+	public fun getRole ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getRoomId ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getRoster ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public final fun hostLost (Lkotlin/time/Instant;Lus/tractat/kuilt/session/FailureReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun hostLost$default (Lus/tractat/kuilt/session/test/FakeRoom;Lkotlin/time/Instant;Lus/tractat/kuilt/session/FailureReason;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun incomingFrom-ngToHgY (Ljava/lang/String;)Lkotlinx/coroutines/flow/Flow;
+	public fun leave (Lus/tractat/kuilt/session/LeaveReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun openWindow-PW_baCY (Ljava/lang/String;Lkotlin/time/Instant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun partition-IclkiQY (Ljava/lang/String;Lkotlin/time/Instant;Lus/tractat/kuilt/session/ReconnectReason;Lkotlin/time/Instant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun partition-IclkiQY$default (Lus/tractat/kuilt/session/test/FakeRoom;Ljava/lang/String;Lkotlin/time/Instant;Lus/tractat/kuilt/session/ReconnectReason;Lkotlin/time/Instant;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun recover-PW_baCY (Ljava/lang/String;Lkotlin/time/Instant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun removeMember-PW_baCY (Ljava/lang/String;Lus/tractat/kuilt/session/LeaveReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun removeMember-PW_baCY$default (Lus/tractat/kuilt/session/test/FakeRoom;Ljava/lang/String;Lus/tractat/kuilt/session/LeaveReason;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun resume (Lus/tractat/kuilt/session/partition/ResumeToken;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun sendTo-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setAttestedPrincipals (Ljava/util/Map;)V
+	public final fun setLocalFabric (Lus/tractat/kuilt/core/FabricAvailability;Lkotlin/time/Instant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setResumeResult (Lus/tractat/kuilt/session/partition/ResumeResult$JoinerOutcome;)V
+	public final fun setResumeToken (Lus/tractat/kuilt/session/partition/ResumeToken;)V
+	public final fun setRole (Lus/tractat/kuilt/session/SessionRole;)V
+	public final fun setRoomId-f9H1OIo (Ljava/lang/String;)V
+	public final fun tearSeam (Lus/tractat/kuilt/core/CloseReason;)V
+	public static synthetic fun tearSeam$default (Lus/tractat/kuilt/session/test/FakeRoom;Lus/tractat/kuilt/core/CloseReason;ILjava/lang/Object;)V
+}
+
+public final class us/tractat/kuilt/session/test/FakeRoom$FakeChannelSeam : us/tractat/kuilt/core/Seam {
+	public fun <init> (Lus/tractat/kuilt/session/test/FakeRoom;Ljava/lang/String;)V
+	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun deliver-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getId ()Ljava/lang/String;
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getPlies ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun sendTo-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/test/FakeRoomFactory : us/tractat/kuilt/session/RoomFactory {
+	public fun <init> ()V
+	public fun host-_oCq2W8 (Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/test/FakeRoomFactoryKt {
+	public static final fun fakeRoomPair-CEGE6v4 (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun fakeRoomPair-CEGE6v4$default (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+

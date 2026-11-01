@@ -1,0 +1,19 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-otel-tap-test>
+final fun (us.tractat.kuilt.otel/LogRecord).us.tractat.kuilt.otel.tap.test/describe(): kotlin/String // us.tractat.kuilt.otel.tap.test/describe|describe@us.tractat.kuilt.otel.LogRecord(){}[0]
+final fun us.tractat.kuilt.otel.tap.test/logArtifactLines(kotlin.collections/List<us.tractat.kuilt.otel/LogRecord>): kotlin.sequences/Sequence<kotlin/String> // us.tractat.kuilt.otel.tap.test/logArtifactLines|logArtifactLines(kotlin.collections.List<us.tractat.kuilt.otel.LogRecord>){}[0]
+final fun us.tractat.kuilt.otel.tap.test/parseStampedLogArtifactLines(kotlin.sequences/Sequence<kotlin/String>): kotlin.collections/List<us.tractat.kuilt.otel.tap/StampedLogRecord> // us.tractat.kuilt.otel.tap.test/parseStampedLogArtifactLines|parseStampedLogArtifactLines(kotlin.sequences.Sequence<kotlin.String>){}[0]
+final fun us.tractat.kuilt.otel.tap.test/readStampedLogArtifact(kotlinx.io/Source): kotlin.collections/List<us.tractat.kuilt.otel.tap/StampedLogRecord> // us.tractat.kuilt.otel.tap.test/readStampedLogArtifact|readStampedLogArtifact(kotlinx.io.Source){}[0]
+final fun us.tractat.kuilt.otel.tap.test/stampedLogArtifactLines(kotlin.collections/List<us.tractat.kuilt.otel.tap/StampedLogRecord>): kotlin.sequences/Sequence<kotlin/String> // us.tractat.kuilt.otel.tap.test/stampedLogArtifactLines|stampedLogArtifactLines(kotlin.collections.List<us.tractat.kuilt.otel.tap.StampedLogRecord>){}[0]
+final fun us.tractat.kuilt.otel.tap.test/writeLogArtifact(kotlin.collections/List<us.tractat.kuilt.otel/LogRecord>, kotlinx.io/Sink) // us.tractat.kuilt.otel.tap.test/writeLogArtifact|writeLogArtifact(kotlin.collections.List<us.tractat.kuilt.otel.LogRecord>;kotlinx.io.Sink){}[0]
+final fun us.tractat.kuilt.otel.tap.test/writeStampedLogArtifact(kotlin.collections/List<us.tractat.kuilt.otel.tap/StampedLogRecord>, kotlinx.io/Sink) // us.tractat.kuilt.otel.tap.test/writeStampedLogArtifact|writeStampedLogArtifact(kotlin.collections.List<us.tractat.kuilt.otel.tap.StampedLogRecord>;kotlinx.io.Sink){}[0]
+final suspend fun (us.tractat.kuilt.otel.tap/LogTapClient).us.tractat.kuilt.otel.tap.test/awaitLog(kotlin.time/Duration, kotlin/Function1<us.tractat.kuilt.otel/LogRecord, kotlin/Boolean>): us.tractat.kuilt.otel/LogRecord // us.tractat.kuilt.otel.tap.test/awaitLog|awaitLog@us.tractat.kuilt.otel.tap.LogTapClient(kotlin.time.Duration;kotlin.Function1<us.tractat.kuilt.otel.LogRecord,kotlin.Boolean>){}[0]
+final suspend fun (us.tractat.kuilt.otel.tap/LogTapClient).us.tractat.kuilt.otel.tap.test/awaitLogBodyContaining(kotlin.time/Duration, kotlin/String): us.tractat.kuilt.otel/LogRecord // us.tractat.kuilt.otel.tap.test/awaitLogBodyContaining|awaitLogBodyContaining@us.tractat.kuilt.otel.tap.LogTapClient(kotlin.time.Duration;kotlin.String){}[0]
+final suspend fun (us.tractat.kuilt.otel.tap/LogTapClient).us.tractat.kuilt.otel.tap.test/dumpLogs(kotlin/Function1<kotlin/String, kotlin/Unit> = ...) // us.tractat.kuilt.otel.tap.test/dumpLogs|dumpLogs@us.tractat.kuilt.otel.tap.LogTapClient(kotlin.Function1<kotlin.String,kotlin.Unit>){}[0]
+final suspend fun <#A: kotlin/Any?> (us.tractat.kuilt.otel.tap/LogTapClient).us.tractat.kuilt.otel.tap.test/dumpingOnFailure(kotlin/Function1<kotlin/String, kotlin/Unit> = ..., kotlin.coroutines/SuspendFunction0<#A>): #A // us.tractat.kuilt.otel.tap.test/dumpingOnFailure|dumpingOnFailure@us.tractat.kuilt.otel.tap.LogTapClient(kotlin.Function1<kotlin.String,kotlin.Unit>;kotlin.coroutines.SuspendFunction0<0:0>){0§<kotlin.Any?>}[0]

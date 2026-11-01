@@ -1,0 +1,239 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-webrtc>
+final enum class us.tractat.kuilt.webrtc/IceTransportPolicy : kotlin/Enum<us.tractat.kuilt.webrtc/IceTransportPolicy> { // us.tractat.kuilt.webrtc/IceTransportPolicy|null[0]
+    enum entry All // us.tractat.kuilt.webrtc/IceTransportPolicy.All|null[0]
+    enum entry Relay // us.tractat.kuilt.webrtc/IceTransportPolicy.Relay|null[0]
+
+    final val entries // us.tractat.kuilt.webrtc/IceTransportPolicy.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.webrtc/IceTransportPolicy> // us.tractat.kuilt.webrtc/IceTransportPolicy.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.webrtc/IceTransportPolicy // us.tractat.kuilt.webrtc/IceTransportPolicy.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.webrtc/IceTransportPolicy> // us.tractat.kuilt.webrtc/IceTransportPolicy.values|values#static(){}[0]
+}
+
+abstract interface us.tractat.kuilt.webrtc/SignalingChannel { // us.tractat.kuilt.webrtc/SignalingChannel|null[0]
+    abstract suspend fun open(kotlin/String): us.tractat.kuilt.webrtc/SignalingSession // us.tractat.kuilt.webrtc/SignalingChannel.open|open(kotlin.String){}[0]
+}
+
+abstract interface us.tractat.kuilt.webrtc/SignalingSession { // us.tractat.kuilt.webrtc/SignalingSession|null[0]
+    abstract val incoming // us.tractat.kuilt.webrtc/SignalingSession.incoming|{}incoming[0]
+        abstract fun <get-incoming>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.webrtc/SignalingMessage> // us.tractat.kuilt.webrtc/SignalingSession.incoming.<get-incoming>|<get-incoming>(){}[0]
+
+    abstract suspend fun close() // us.tractat.kuilt.webrtc/SignalingSession.close|close(){}[0]
+    abstract suspend fun send(us.tractat.kuilt.webrtc/SignalingMessage) // us.tractat.kuilt.webrtc/SignalingSession.send|send(us.tractat.kuilt.webrtc.SignalingMessage){}[0]
+}
+
+sealed interface us.tractat.kuilt.webrtc/IceServer { // us.tractat.kuilt.webrtc/IceServer|null[0]
+    final class Stun : us.tractat.kuilt.webrtc/IceServer { // us.tractat.kuilt.webrtc/IceServer.Stun|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.webrtc/IceServer.Stun.<init>|<init>(kotlin.String){}[0]
+
+        final val url // us.tractat.kuilt.webrtc/IceServer.Stun.url|{}url[0]
+            final fun <get-url>(): kotlin/String // us.tractat.kuilt.webrtc/IceServer.Stun.url.<get-url>|<get-url>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.webrtc/IceServer.Stun.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.webrtc/IceServer.Stun // us.tractat.kuilt.webrtc/IceServer.Stun.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.webrtc/IceServer.Stun.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.webrtc/IceServer.Stun.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.webrtc/IceServer.Stun.toString|toString(){}[0]
+    }
+
+    final class Turn : us.tractat.kuilt.webrtc/IceServer { // us.tractat.kuilt.webrtc/IceServer.Turn|null[0]
+        constructor <init>(kotlin/String, kotlin/String, kotlin/String) // us.tractat.kuilt.webrtc/IceServer.Turn.<init>|<init>(kotlin.String;kotlin.String;kotlin.String){}[0]
+
+        final val credential // us.tractat.kuilt.webrtc/IceServer.Turn.credential|{}credential[0]
+            final fun <get-credential>(): kotlin/String // us.tractat.kuilt.webrtc/IceServer.Turn.credential.<get-credential>|<get-credential>(){}[0]
+        final val url // us.tractat.kuilt.webrtc/IceServer.Turn.url|{}url[0]
+            final fun <get-url>(): kotlin/String // us.tractat.kuilt.webrtc/IceServer.Turn.url.<get-url>|<get-url>(){}[0]
+        final val username // us.tractat.kuilt.webrtc/IceServer.Turn.username|{}username[0]
+            final fun <get-username>(): kotlin/String // us.tractat.kuilt.webrtc/IceServer.Turn.username.<get-username>|<get-username>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.webrtc/IceServer.Turn.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.webrtc/IceServer.Turn.component2|component2(){}[0]
+        final fun component3(): kotlin/String // us.tractat.kuilt.webrtc/IceServer.Turn.component3|component3(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.webrtc/IceServer.Turn // us.tractat.kuilt.webrtc/IceServer.Turn.copy|copy(kotlin.String;kotlin.String;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.webrtc/IceServer.Turn.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.webrtc/IceServer.Turn.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.webrtc/IceServer.Turn.toString|toString(){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.webrtc/IceServer.Companion|null[0]
+        final fun stun(kotlin/String): us.tractat.kuilt.webrtc/IceServer.Stun // us.tractat.kuilt.webrtc/IceServer.Companion.stun|stun(kotlin.String){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.webrtc/SignalingMessage { // us.tractat.kuilt.webrtc/SignalingMessage|null[0]
+    final class Answer : us.tractat.kuilt.webrtc/SignalingMessage { // us.tractat.kuilt.webrtc/SignalingMessage.Answer|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.webrtc/SignalingMessage.Answer.<init>|<init>(kotlin.String){}[0]
+
+        final val sdp // us.tractat.kuilt.webrtc/SignalingMessage.Answer.sdp|{}sdp[0]
+            final fun <get-sdp>(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.Answer.sdp.<get-sdp>|<get-sdp>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.Answer.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.webrtc/SignalingMessage.Answer // us.tractat.kuilt.webrtc/SignalingMessage.Answer.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.webrtc/SignalingMessage.Answer.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.webrtc/SignalingMessage.Answer.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.Answer.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.webrtc/SignalingMessage.Answer> { // us.tractat.kuilt.webrtc/SignalingMessage.Answer.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.webrtc/SignalingMessage.Answer.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.webrtc/SignalingMessage.Answer.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.webrtc/SignalingMessage.Answer.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.webrtc/SignalingMessage.Answer // us.tractat.kuilt.webrtc/SignalingMessage.Answer.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.webrtc/SignalingMessage.Answer) // us.tractat.kuilt.webrtc/SignalingMessage.Answer.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.webrtc.SignalingMessage.Answer){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.webrtc/SignalingMessage.Answer.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.webrtc/SignalingMessage.Answer> // us.tractat.kuilt.webrtc/SignalingMessage.Answer.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class IceCandidate : us.tractat.kuilt.webrtc/SignalingMessage { // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate|null[0]
+        constructor <init>(kotlin/String, kotlin/String? = ..., kotlin/Int? = ...) // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.<init>|<init>(kotlin.String;kotlin.String?;kotlin.Int?){}[0]
+
+        final val candidate // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.candidate|{}candidate[0]
+            final fun <get-candidate>(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.candidate.<get-candidate>|<get-candidate>(){}[0]
+        final val sdpMLineIndex // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.sdpMLineIndex|{}sdpMLineIndex[0]
+            final fun <get-sdpMLineIndex>(): kotlin/Int? // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.sdpMLineIndex.<get-sdpMLineIndex>|<get-sdpMLineIndex>(){}[0]
+        final val sdpMid // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.sdpMid|{}sdpMid[0]
+            final fun <get-sdpMid>(): kotlin/String? // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.sdpMid.<get-sdpMid>|<get-sdpMid>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.component1|component1(){}[0]
+        final fun component2(): kotlin/String? // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.component2|component2(){}[0]
+        final fun component3(): kotlin/Int? // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.component3|component3(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String? = ..., kotlin/Int? = ...): us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.copy|copy(kotlin.String;kotlin.String?;kotlin.Int?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate> { // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate) // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.webrtc.SignalingMessage.IceCandidate){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate> // us.tractat.kuilt.webrtc/SignalingMessage.IceCandidate.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Offer : us.tractat.kuilt.webrtc/SignalingMessage { // us.tractat.kuilt.webrtc/SignalingMessage.Offer|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.webrtc/SignalingMessage.Offer.<init>|<init>(kotlin.String){}[0]
+
+        final val sdp // us.tractat.kuilt.webrtc/SignalingMessage.Offer.sdp|{}sdp[0]
+            final fun <get-sdp>(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.Offer.sdp.<get-sdp>|<get-sdp>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.Offer.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.webrtc/SignalingMessage.Offer // us.tractat.kuilt.webrtc/SignalingMessage.Offer.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.webrtc/SignalingMessage.Offer.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.webrtc/SignalingMessage.Offer.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.Offer.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.webrtc/SignalingMessage.Offer> { // us.tractat.kuilt.webrtc/SignalingMessage.Offer.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.webrtc/SignalingMessage.Offer.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.webrtc/SignalingMessage.Offer.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.webrtc/SignalingMessage.Offer.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.webrtc/SignalingMessage.Offer // us.tractat.kuilt.webrtc/SignalingMessage.Offer.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.webrtc/SignalingMessage.Offer) // us.tractat.kuilt.webrtc/SignalingMessage.Offer.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.webrtc.SignalingMessage.Offer){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.webrtc/SignalingMessage.Offer.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.webrtc/SignalingMessage.Offer> // us.tractat.kuilt.webrtc/SignalingMessage.Offer.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Role : us.tractat.kuilt.webrtc/SignalingMessage { // us.tractat.kuilt.webrtc/SignalingMessage.Role|null[0]
+        constructor <init>(kotlin/Boolean) // us.tractat.kuilt.webrtc/SignalingMessage.Role.<init>|<init>(kotlin.Boolean){}[0]
+
+        final val host // us.tractat.kuilt.webrtc/SignalingMessage.Role.host|{}host[0]
+            final fun <get-host>(): kotlin/Boolean // us.tractat.kuilt.webrtc/SignalingMessage.Role.host.<get-host>|<get-host>(){}[0]
+
+        final fun component1(): kotlin/Boolean // us.tractat.kuilt.webrtc/SignalingMessage.Role.component1|component1(){}[0]
+        final fun copy(kotlin/Boolean = ...): us.tractat.kuilt.webrtc/SignalingMessage.Role // us.tractat.kuilt.webrtc/SignalingMessage.Role.copy|copy(kotlin.Boolean){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.webrtc/SignalingMessage.Role.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.webrtc/SignalingMessage.Role.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.Role.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.webrtc/SignalingMessage.Role> { // us.tractat.kuilt.webrtc/SignalingMessage.Role.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.webrtc/SignalingMessage.Role.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.webrtc/SignalingMessage.Role.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.webrtc/SignalingMessage.Role.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.webrtc/SignalingMessage.Role // us.tractat.kuilt.webrtc/SignalingMessage.Role.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.webrtc/SignalingMessage.Role) // us.tractat.kuilt.webrtc/SignalingMessage.Role.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.webrtc.SignalingMessage.Role){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.webrtc/SignalingMessage.Role.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.webrtc/SignalingMessage.Role> // us.tractat.kuilt.webrtc/SignalingMessage.Role.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object Bye : kotlinx.serialization.internal/SerializerFactory, us.tractat.kuilt.webrtc/SignalingMessage { // us.tractat.kuilt.webrtc/SignalingMessage.Bye|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.webrtc/SignalingMessage.Bye.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.webrtc/SignalingMessage.Bye.hashCode|hashCode(){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.webrtc/SignalingMessage.Bye> // us.tractat.kuilt.webrtc/SignalingMessage.Bye.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.webrtc/SignalingMessage.Bye.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessage.Bye.toString|toString(){}[0]
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.webrtc/SignalingMessage.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.webrtc/SignalingMessage> // us.tractat.kuilt.webrtc/SignalingMessage.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.webrtc/SignalingMessage.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+final class us.tractat.kuilt.webrtc/IceConfig { // us.tractat.kuilt.webrtc/IceConfig|null[0]
+    constructor <init>(kotlin.collections/List<us.tractat.kuilt.webrtc/IceServer>, us.tractat.kuilt.webrtc/IceTransportPolicy = ...) // us.tractat.kuilt.webrtc/IceConfig.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.webrtc.IceServer>;us.tractat.kuilt.webrtc.IceTransportPolicy){}[0]
+
+    final val iceServers // us.tractat.kuilt.webrtc/IceConfig.iceServers|{}iceServers[0]
+        final fun <get-iceServers>(): kotlin.collections/List<us.tractat.kuilt.webrtc/IceServer> // us.tractat.kuilt.webrtc/IceConfig.iceServers.<get-iceServers>|<get-iceServers>(){}[0]
+    final val iceTransportPolicy // us.tractat.kuilt.webrtc/IceConfig.iceTransportPolicy|{}iceTransportPolicy[0]
+        final fun <get-iceTransportPolicy>(): us.tractat.kuilt.webrtc/IceTransportPolicy // us.tractat.kuilt.webrtc/IceConfig.iceTransportPolicy.<get-iceTransportPolicy>|<get-iceTransportPolicy>(){}[0]
+
+    final fun component1(): kotlin.collections/List<us.tractat.kuilt.webrtc/IceServer> // us.tractat.kuilt.webrtc/IceConfig.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.webrtc/IceTransportPolicy // us.tractat.kuilt.webrtc/IceConfig.component2|component2(){}[0]
+    final fun copy(kotlin.collections/List<us.tractat.kuilt.webrtc/IceServer> = ..., us.tractat.kuilt.webrtc/IceTransportPolicy = ...): us.tractat.kuilt.webrtc/IceConfig // us.tractat.kuilt.webrtc/IceConfig.copy|copy(kotlin.collections.List<us.tractat.kuilt.webrtc.IceServer>;us.tractat.kuilt.webrtc.IceTransportPolicy){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.webrtc/IceConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.webrtc/IceConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.webrtc/IceConfig.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.webrtc/IceConfig.Companion|null[0]
+        final val DefaultStun // us.tractat.kuilt.webrtc/IceConfig.Companion.DefaultStun|{}DefaultStun[0]
+            final fun <get-DefaultStun>(): us.tractat.kuilt.webrtc/IceConfig // us.tractat.kuilt.webrtc/IceConfig.Companion.DefaultStun.<get-DefaultStun>|<get-DefaultStun>(){}[0]
+        final val NoServers // us.tractat.kuilt.webrtc/IceConfig.Companion.NoServers|{}NoServers[0]
+            final fun <get-NoServers>(): us.tractat.kuilt.webrtc/IceConfig // us.tractat.kuilt.webrtc/IceConfig.Companion.NoServers.<get-NoServers>|<get-NoServers>(){}[0]
+    }
+}
+
+final object us.tractat.kuilt.webrtc/SignalingMessageCodec { // us.tractat.kuilt.webrtc/SignalingMessageCodec|null[0]
+    final fun decode(kotlin/String): us.tractat.kuilt.webrtc/SignalingMessage // us.tractat.kuilt.webrtc/SignalingMessageCodec.decode|decode(kotlin.String){}[0]
+    final fun encode(us.tractat.kuilt.webrtc/SignalingMessage): kotlin/String // us.tractat.kuilt.webrtc/SignalingMessageCodec.encode|encode(us.tractat.kuilt.webrtc.SignalingMessage){}[0]
+}
+
+// Targets: [wasmJs]
+final class us.tractat.kuilt.webrtc/WebRTCPeerLinkFactory : us.tractat.kuilt.core/Loom { // us.tractat.kuilt.webrtc/WebRTCPeerLinkFactory|null[0]
+    constructor <init>(us.tractat.kuilt.webrtc/SignalingChannel, kotlin/String, us.tractat.kuilt.webrtc/IceConfig = ..., kotlin.random/Random = ..., kotlin.time/Duration = ...) // us.tractat.kuilt.webrtc/WebRTCPeerLinkFactory.<init>|<init>(us.tractat.kuilt.webrtc.SignalingChannel;kotlin.String;us.tractat.kuilt.webrtc.IceConfig;kotlin.random.Random;kotlin.time.Duration){}[0]
+
+    final fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.webrtc/WebRTCPeerLinkFactory.capability|capability(){}[0]
+    final suspend fun openWithServerRole(us.tractat.kuilt.core/Pattern): us.tractat.kuilt.core/Seam // us.tractat.kuilt.webrtc/WebRTCPeerLinkFactory.openWithServerRole|openWithServerRole(us.tractat.kuilt.core.Pattern){}[0]
+    final suspend fun openWithServerRoleResult(us.tractat.kuilt.core/Pattern, kotlin/Long = ...): kotlin/Pair<kotlin/Boolean, us.tractat.kuilt.core/Seam> // us.tractat.kuilt.webrtc/WebRTCPeerLinkFactory.openWithServerRoleResult|openWithServerRoleResult(us.tractat.kuilt.core.Pattern;kotlin.Long){}[0]
+    final suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.webrtc/WebRTCPeerLinkFactory.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+}
+
+// Targets: [wasmJs]
+final class us.tractat.kuilt.webrtc/WebSocketSignalingChannel : us.tractat.kuilt.webrtc/SignalingChannel { // us.tractat.kuilt.webrtc/WebSocketSignalingChannel|null[0]
+    constructor <init>(kotlin/String, kotlin.coroutines/SuspendFunction0<kotlin.collections/Map<kotlin/String, kotlin/String>> = ...) // us.tractat.kuilt.webrtc/WebSocketSignalingChannel.<init>|<init>(kotlin.String;kotlin.coroutines.SuspendFunction0<kotlin.collections.Map<kotlin.String,kotlin.String>>){}[0]
+
+    final suspend fun open(kotlin/String): us.tractat.kuilt.webrtc/SignalingSession // us.tractat.kuilt.webrtc/WebSocketSignalingChannel.open|open(kotlin.String){}[0]
+    final suspend fun openWithRole(kotlin/String): kotlin/Pair<kotlin/Boolean, us.tractat.kuilt.webrtc/SignalingSession> // us.tractat.kuilt.webrtc/WebSocketSignalingChannel.openWithRole|openWithRole(kotlin.String){}[0]
+}

@@ -1,0 +1,104 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-gossip>
+abstract interface us.tractat.kuilt.gossip/TopologyPolicy { // us.tractat.kuilt.gossip/TopologyPolicy|null[0]
+    abstract fun activeView(us.tractat.kuilt.core/PeerId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/TopologyPolicy.activeView|activeView(us.tractat.kuilt.core.PeerId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+    abstract fun antiEntropyPool(us.tractat.kuilt.core/PeerId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/TopologyPolicy.antiEntropyPool|antiEntropyPool(us.tractat.kuilt.core.PeerId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+}
+
+final class us.tractat.kuilt.gossip/GossipSeam : us.tractat.kuilt.core/PrincipalRoster, us.tractat.kuilt.core/Seam { // us.tractat.kuilt.gossip/GossipSeam|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, kotlin.random/Random, kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.liveness/HeartbeatConfig = ..., kotlin/Int = ..., kotlin.ranges/ClosedRange<kotlin.time/Duration> = ..., kotlin/Int = ..., us.tractat.kuilt.gossip/TopologyPolicy = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., kotlin.time/Duration = ...) // us.tractat.kuilt.gossip/GossipSeam.<init>|<init>(us.tractat.kuilt.core.Seam;kotlin.random.Random;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.Int;kotlin.ranges.ClosedRange<kotlin.time.Duration>;kotlin.Int;us.tractat.kuilt.gossip.TopologyPolicy;us.tractat.kuilt.core.DeliveryPolicy;kotlin.time.Duration){}[0]
+
+    final val activePeers // us.tractat.kuilt.gossip/GossipSeam.activePeers|{}activePeers[0]
+        final fun <get-activePeers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.gossip/GossipSeam.activePeers.<get-activePeers>|<get-activePeers>(){}[0]
+    final val attestedPrincipals // us.tractat.kuilt.gossip/GossipSeam.attestedPrincipals|{}attestedPrincipals[0]
+        final fun <get-attestedPrincipals>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Principal>> // us.tractat.kuilt.gossip/GossipSeam.attestedPrincipals.<get-attestedPrincipals>|<get-attestedPrincipals>(){}[0]
+    final val incoming // us.tractat.kuilt.gossip/GossipSeam.incoming|{}incoming[0]
+        final fun <get-incoming>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.core/Swatch> // us.tractat.kuilt.gossip/GossipSeam.incoming.<get-incoming>|<get-incoming>(){}[0]
+    final val maxPayloadBytes // us.tractat.kuilt.gossip/GossipSeam.maxPayloadBytes|{}maxPayloadBytes[0]
+        final fun <get-maxPayloadBytes>(): kotlin/Int? // us.tractat.kuilt.gossip/GossipSeam.maxPayloadBytes.<get-maxPayloadBytes>|<get-maxPayloadBytes>(){}[0]
+    final val peers // us.tractat.kuilt.gossip/GossipSeam.peers|{}peers[0]
+        final fun <get-peers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.gossip/GossipSeam.peers.<get-peers>|<get-peers>(){}[0]
+    final val selfId // us.tractat.kuilt.gossip/GossipSeam.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.gossip/GossipSeam.selfId.<get-selfId>|<get-selfId>(){}[0]
+    final val spares // us.tractat.kuilt.gossip/GossipSeam.spares|{}spares[0]
+        final fun <get-spares>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/List<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.gossip/GossipSeam.spares.<get-spares>|<get-spares>(){}[0]
+    final val state // us.tractat.kuilt.gossip/GossipSeam.state|{}state[0]
+        final fun <get-state>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/SeamState> // us.tractat.kuilt.gossip/GossipSeam.state.<get-state>|<get-state>(){}[0]
+
+    final fun start(kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.gossip/GossipSeam.start|start(kotlinx.coroutines.CoroutineScope){}[0]
+    final suspend fun broadcast(kotlin/ByteArray) // us.tractat.kuilt.gossip/GossipSeam.broadcast|broadcast(kotlin.ByteArray){}[0]
+    final suspend fun close(us.tractat.kuilt.core/CloseReason) // us.tractat.kuilt.gossip/GossipSeam.close|close(us.tractat.kuilt.core.CloseReason){}[0]
+    final suspend fun sendTo(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.gossip/GossipSeam.sendTo|sendTo(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+
+    final object Companion { // us.tractat.kuilt.gossip/GossipSeam.Companion|null[0]
+        final val DEFAULT_REORDER_GRACE // us.tractat.kuilt.gossip/GossipSeam.Companion.DEFAULT_REORDER_GRACE|{}DEFAULT_REORDER_GRACE[0]
+            final fun <get-DEFAULT_REORDER_GRACE>(): kotlin.time/Duration // us.tractat.kuilt.gossip/GossipSeam.Companion.DEFAULT_REORDER_GRACE.<get-DEFAULT_REORDER_GRACE>|<get-DEFAULT_REORDER_GRACE>(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.gossip/GossipView { // us.tractat.kuilt.gossip/GossipView|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam, kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>>, kotlinx.coroutines.flow/SharedFlow<us.tractat.kuilt.core/Swatch>, kotlin.random/Random, kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.liveness/HeartbeatConfig = ..., kotlin/Int = ..., kotlin.ranges/ClosedRange<kotlin.time/Duration> = ..., us.tractat.kuilt.gossip/TopologyPolicy = ...) // us.tractat.kuilt.gossip/GossipView.<init>|<init>(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.Seam;kotlinx.coroutines.flow.StateFlow<kotlin.collections.Set<us.tractat.kuilt.core.PeerId>>;kotlinx.coroutines.flow.SharedFlow<us.tractat.kuilt.core.Swatch>;kotlin.random.Random;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.Int;kotlin.ranges.ClosedRange<kotlin.time.Duration>;us.tractat.kuilt.gossip.TopologyPolicy){}[0]
+
+    final val active // us.tractat.kuilt.gossip/GossipView.active|{}active[0]
+        final fun <get-active>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.gossip/GossipView.active.<get-active>|<get-active>(){}[0]
+    final val spares // us.tractat.kuilt.gossip/GossipView.spares|{}spares[0]
+        final fun <get-spares>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/List<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.gossip/GossipView.spares.<get-spares>|<get-spares>(){}[0]
+
+    final fun start(kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.gossip/GossipView.start|start(kotlinx.coroutines.CoroutineScope){}[0]
+
+    final object Companion { // us.tractat.kuilt.gossip/GossipView.Companion|null[0]
+        final const val DEFAULT_SPARE_COUNT // us.tractat.kuilt.gossip/GossipView.Companion.DEFAULT_SPARE_COUNT|{}DEFAULT_SPARE_COUNT[0]
+            final fun <get-DEFAULT_SPARE_COUNT>(): kotlin/Int // us.tractat.kuilt.gossip/GossipView.Companion.DEFAULT_SPARE_COUNT.<get-DEFAULT_SPARE_COUNT>|<get-DEFAULT_SPARE_COUNT>(){}[0]
+
+        final val DEFAULT_JITTER // us.tractat.kuilt.gossip/GossipView.Companion.DEFAULT_JITTER|{}DEFAULT_JITTER[0]
+            final fun <get-DEFAULT_JITTER>(): kotlin.ranges/ClosedRange<kotlin.time/Duration> // us.tractat.kuilt.gossip/GossipView.Companion.DEFAULT_JITTER.<get-DEFAULT_JITTER>|<get-DEFAULT_JITTER>(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.gossip/PartialView { // us.tractat.kuilt.gossip/PartialView|null[0]
+    constructor <init>(kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin.collections/List<us.tractat.kuilt.core/PeerId>) // us.tractat.kuilt.gossip/PartialView.<init>|<init>(kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.collections.List<us.tractat.kuilt.core.PeerId>){}[0]
+
+    final val active // us.tractat.kuilt.gossip/PartialView.active|{}active[0]
+        final fun <get-active>(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/PartialView.active.<get-active>|<get-active>(){}[0]
+    final val spares // us.tractat.kuilt.gossip/PartialView.spares|{}spares[0]
+        final fun <get-spares>(): kotlin.collections/List<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/PartialView.spares.<get-spares>|<get-spares>(){}[0]
+
+    final fun component1(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/PartialView.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/List<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/PartialView.component2|component2(){}[0]
+    final fun copy(kotlin.collections/Set<us.tractat.kuilt.core/PeerId> = ..., kotlin.collections/List<us.tractat.kuilt.core/PeerId> = ...): us.tractat.kuilt.gossip/PartialView // us.tractat.kuilt.gossip/PartialView.copy|copy(kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.collections.List<us.tractat.kuilt.core.PeerId>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.gossip/PartialView.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.gossip/PartialView.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.gossip/PartialView.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.gossip/RandomKRegular : us.tractat.kuilt.gossip/TopologyPolicy { // us.tractat.kuilt.gossip/RandomKRegular|null[0]
+    constructor <init>(kotlin.random/Random) // us.tractat.kuilt.gossip/RandomKRegular.<init>|<init>(kotlin.random.Random){}[0]
+
+    final fun activeView(us.tractat.kuilt.core/PeerId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/RandomKRegular.activeView|activeView(us.tractat.kuilt.core.PeerId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+    final fun antiEntropyPool(us.tractat.kuilt.core/PeerId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/RandomKRegular.antiEntropyPool|antiEntropyPool(us.tractat.kuilt.core.PeerId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+}
+
+final class us.tractat.kuilt.gossip/TwoTier : us.tractat.kuilt.gossip/TopologyPolicy { // us.tractat.kuilt.gossip/TwoTier|null[0]
+    constructor <init>(kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin/Function1<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/PeerId?>) // us.tractat.kuilt.gossip/TwoTier.<init>|<init>(kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.Function1<us.tractat.kuilt.core.PeerId,us.tractat.kuilt.core.PeerId?>){}[0]
+
+    final fun activeView(us.tractat.kuilt.core/PeerId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/TwoTier.activeView|activeView(us.tractat.kuilt.core.PeerId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+    final fun antiEntropyPool(us.tractat.kuilt.core/PeerId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/TwoTier.antiEntropyPool|antiEntropyPool(us.tractat.kuilt.core.PeerId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+}
+
+final object us.tractat.kuilt.gossip/FullFanout : us.tractat.kuilt.gossip/TopologyPolicy { // us.tractat.kuilt.gossip/FullFanout|null[0]
+    final fun activeView(us.tractat.kuilt.core/PeerId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/FullFanout.activeView|activeView(us.tractat.kuilt.core.PeerId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+    final fun antiEntropyPool(us.tractat.kuilt.core/PeerId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.gossip/FullFanout.antiEntropyPool|antiEntropyPool(us.tractat.kuilt.core.PeerId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+}
+
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.gossip/policyOverlay(us.tractat.kuilt.core/Seam, us.tractat.kuilt.gossip/TopologyPolicy, kotlin.random/Random = ..., kotlin/Function0<kotlin.time/Instant>): us.tractat.kuilt.core/Seam // us.tractat.kuilt.gossip/policyOverlay|policyOverlay@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Seam;us.tractat.kuilt.gossip.TopologyPolicy;kotlin.random.Random;kotlin.Function0<kotlin.time.Instant>){}[0]
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.gossip/starOverlay(us.tractat.kuilt.core/Seam, kotlin.random/Random = ..., kotlin/Function0<kotlin.time/Instant>): us.tractat.kuilt.core/Seam // us.tractat.kuilt.gossip/starOverlay|starOverlay@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Seam;kotlin.random.Random;kotlin.Function0<kotlin.time.Instant>){}[0]
+final fun us.tractat.kuilt.gossip/partialView(us.tractat.kuilt.core/PeerId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin/Int, kotlin/Int, kotlin.random/Random): us.tractat.kuilt.gossip/PartialView // us.tractat.kuilt.gossip/partialView|partialView(us.tractat.kuilt.core.PeerId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.Int;kotlin.Int;kotlin.random.Random){}[0]
+final fun us.tractat.kuilt.gossip/recommendedActiveViewSize(kotlin/Int): kotlin/Int // us.tractat.kuilt.gossip/recommendedActiveViewSize|recommendedActiveViewSize(kotlin.Int){}[0]
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.gossip/hostedMesh(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core.fabric/ConnectionSource, kotlin.coroutines/CoroutineContext, us.tractat.kuilt.core.fabric/LinkAdmission = ..., kotlin.time/Duration = ...): us.tractat.kuilt.core/Seam // us.tractat.kuilt.gossip/hostedMesh|hostedMesh@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.fabric.ConnectionSource;kotlin.coroutines.CoroutineContext;us.tractat.kuilt.core.fabric.LinkAdmission;kotlin.time.Duration){}[0]
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.gossip/hostedOverlay(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core.fabric/ConnectionSource, kotlin.coroutines/CoroutineContext, kotlin.random/Random = ..., kotlin/Function0<kotlin.time/Instant> = ..., us.tractat.kuilt.core.fabric/LinkAdmission = ..., kotlin.time/Duration = ...): us.tractat.kuilt.core/Seam // us.tractat.kuilt.gossip/hostedOverlay|hostedOverlay@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.fabric.ConnectionSource;kotlin.coroutines.CoroutineContext;kotlin.random.Random;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.core.fabric.LinkAdmission;kotlin.time.Duration){}[0]

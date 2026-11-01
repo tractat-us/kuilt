@@ -1,0 +1,207 @@
+public final class us/tractat/kuilt/webrtc/IceConfig {
+	public static final field Companion Lus/tractat/kuilt/webrtc/IceConfig$Companion;
+	public fun <init> (Ljava/util/List;Lus/tractat/kuilt/webrtc/IceTransportPolicy;)V
+	public synthetic fun <init> (Ljava/util/List;Lus/tractat/kuilt/webrtc/IceTransportPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Lus/tractat/kuilt/webrtc/IceTransportPolicy;
+	public final fun copy (Ljava/util/List;Lus/tractat/kuilt/webrtc/IceTransportPolicy;)Lus/tractat/kuilt/webrtc/IceConfig;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/webrtc/IceConfig;Ljava/util/List;Lus/tractat/kuilt/webrtc/IceTransportPolicy;ILjava/lang/Object;)Lus/tractat/kuilt/webrtc/IceConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIceServers ()Ljava/util/List;
+	public final fun getIceTransportPolicy ()Lus/tractat/kuilt/webrtc/IceTransportPolicy;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/webrtc/IceConfig$Companion {
+	public final fun getDefaultStun ()Lus/tractat/kuilt/webrtc/IceConfig;
+	public final fun getNoServers ()Lus/tractat/kuilt/webrtc/IceConfig;
+}
+
+public abstract interface class us/tractat/kuilt/webrtc/IceServer {
+	public static final field Companion Lus/tractat/kuilt/webrtc/IceServer$Companion;
+}
+
+public final class us/tractat/kuilt/webrtc/IceServer$Companion {
+	public final fun stun (Ljava/lang/String;)Lus/tractat/kuilt/webrtc/IceServer$Stun;
+}
+
+public final class us/tractat/kuilt/webrtc/IceServer$Stun : us/tractat/kuilt/webrtc/IceServer {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/webrtc/IceServer$Stun;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/webrtc/IceServer$Stun;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/webrtc/IceServer$Stun;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/webrtc/IceServer$Turn : us/tractat/kuilt/webrtc/IceServer {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/webrtc/IceServer$Turn;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/webrtc/IceServer$Turn;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/webrtc/IceServer$Turn;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredential ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
+	public final fun getUsername ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/webrtc/IceTransportPolicy : java/lang/Enum {
+	public static final field All Lus/tractat/kuilt/webrtc/IceTransportPolicy;
+	public static final field Relay Lus/tractat/kuilt/webrtc/IceTransportPolicy;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/webrtc/IceTransportPolicy;
+	public static fun values ()[Lus/tractat/kuilt/webrtc/IceTransportPolicy;
+}
+
+public abstract interface class us/tractat/kuilt/webrtc/SignalingChannel {
+	public abstract fun open (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/webrtc/SignalingMessage {
+	public static final field Companion Lus/tractat/kuilt/webrtc/SignalingMessage$Companion;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessage$Answer : us/tractat/kuilt/webrtc/SignalingMessage {
+	public static final field Companion Lus/tractat/kuilt/webrtc/SignalingMessage$Answer$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/webrtc/SignalingMessage$Answer;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/webrtc/SignalingMessage$Answer;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/webrtc/SignalingMessage$Answer;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSdp ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/webrtc/SignalingMessage$Answer$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/webrtc/SignalingMessage$Answer$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/webrtc/SignalingMessage$Answer;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/webrtc/SignalingMessage$Answer;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessage$Answer$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessage$Bye : us/tractat/kuilt/webrtc/SignalingMessage {
+	public static final field INSTANCE Lus/tractat/kuilt/webrtc/SignalingMessage$Bye;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessage$IceCandidate : us/tractat/kuilt/webrtc/SignalingMessage {
+	public static final field Companion Lus/tractat/kuilt/webrtc/SignalingMessage$IceCandidate$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/Integer;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;)Lus/tractat/kuilt/webrtc/SignalingMessage$IceCandidate;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/webrtc/SignalingMessage$IceCandidate;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;ILjava/lang/Object;)Lus/tractat/kuilt/webrtc/SignalingMessage$IceCandidate;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCandidate ()Ljava/lang/String;
+	public final fun getSdpMLineIndex ()Ljava/lang/Integer;
+	public final fun getSdpMid ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/webrtc/SignalingMessage$IceCandidate$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/webrtc/SignalingMessage$IceCandidate$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/webrtc/SignalingMessage$IceCandidate;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/webrtc/SignalingMessage$IceCandidate;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessage$IceCandidate$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessage$Offer : us/tractat/kuilt/webrtc/SignalingMessage {
+	public static final field Companion Lus/tractat/kuilt/webrtc/SignalingMessage$Offer$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/webrtc/SignalingMessage$Offer;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/webrtc/SignalingMessage$Offer;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/webrtc/SignalingMessage$Offer;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSdp ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/webrtc/SignalingMessage$Offer$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/webrtc/SignalingMessage$Offer$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/webrtc/SignalingMessage$Offer;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/webrtc/SignalingMessage$Offer;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessage$Offer$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessage$Role : us/tractat/kuilt/webrtc/SignalingMessage {
+	public static final field Companion Lus/tractat/kuilt/webrtc/SignalingMessage$Role$Companion;
+	public fun <init> (Z)V
+	public final fun component1 ()Z
+	public final fun copy (Z)Lus/tractat/kuilt/webrtc/SignalingMessage$Role;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/webrtc/SignalingMessage$Role;ZILjava/lang/Object;)Lus/tractat/kuilt/webrtc/SignalingMessage$Role;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHost ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/webrtc/SignalingMessage$Role$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/webrtc/SignalingMessage$Role$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/webrtc/SignalingMessage$Role;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/webrtc/SignalingMessage$Role;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessage$Role$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/webrtc/SignalingMessageCodec {
+	public static final field INSTANCE Lus/tractat/kuilt/webrtc/SignalingMessageCodec;
+	public final fun decode (Ljava/lang/String;)Lus/tractat/kuilt/webrtc/SignalingMessage;
+	public final fun encode (Lus/tractat/kuilt/webrtc/SignalingMessage;)Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/webrtc/SignalingSession {
+	public abstract fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun send (Lus/tractat/kuilt/webrtc/SignalingMessage;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+

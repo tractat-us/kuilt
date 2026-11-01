@@ -1,0 +1,11 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-warp-otel>
+final suspend fun (us.tractat.kuilt.otel/WarpMetricExporter).us.tractat.kuilt.warp.otel/recordPlan(us.tractat.kuilt.warp/Draft<*>, us.tractat.kuilt.warp/WarpStats, kotlin.collections/Map<kotlin/String, kotlin/String> = ..., kotlin/Long = ...) // us.tractat.kuilt.warp.otel/recordPlan|recordPlan@us.tractat.kuilt.otel.WarpMetricExporter(us.tractat.kuilt.warp.Draft<*>;us.tractat.kuilt.warp.WarpStats;kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.Long){}[0]
+final suspend fun (us.tractat.kuilt.otel/WarpMetricExporter).us.tractat.kuilt.warp.otel/recordStats(us.tractat.kuilt.warp/WarpStats, kotlin/String = ...) // us.tractat.kuilt.warp.otel/recordStats|recordStats@us.tractat.kuilt.otel.WarpMetricExporter(us.tractat.kuilt.warp.WarpStats;kotlin.String){}[0]
+final suspend fun (us.tractat.kuilt.otel/WarpMetricExporter).us.tractat.kuilt.warp.otel/recordWarp(us.tractat.kuilt.warp/WarpNode, kotlin.collections/Map<kotlin/String, kotlin/String> = ...) // us.tractat.kuilt.warp.otel/recordWarp|recordWarp@us.tractat.kuilt.otel.WarpMetricExporter(us.tractat.kuilt.warp.WarpNode;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]

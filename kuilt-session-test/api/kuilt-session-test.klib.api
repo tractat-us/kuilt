@@ -1,0 +1,92 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-session-test>
+final class us.tractat.kuilt.session.test/FakeRoom : us.tractat.kuilt.session/Room { // us.tractat.kuilt.session.test/FakeRoom|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.session/SessionRole = ..., kotlin.collections/Set<us.tractat.kuilt.session/Member> = ..., us.tractat.kuilt.session.partition/ResumeToken? = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., us.tractat.kuilt.session.partition/RoomId? = ..., kotlin/Int = ...) // us.tractat.kuilt.session.test/FakeRoom.<init>|<init>(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.session.SessionRole;kotlin.collections.Set<us.tractat.kuilt.session.Member>;us.tractat.kuilt.session.partition.ResumeToken?;us.tractat.kuilt.core.DeliveryPolicy;us.tractat.kuilt.session.partition.RoomId?;kotlin.Int){}[0]
+
+    final val attestedPrincipals // us.tractat.kuilt.session.test/FakeRoom.attestedPrincipals|{}attestedPrincipals[0]
+        final fun <get-attestedPrincipals>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Principal>> // us.tractat.kuilt.session.test/FakeRoom.attestedPrincipals.<get-attestedPrincipals>|<get-attestedPrincipals>(){}[0]
+    final val broadcasts // us.tractat.kuilt.session.test/FakeRoom.broadcasts|{}broadcasts[0]
+        final fun <get-broadcasts>(): kotlin.collections/List<kotlin/ByteArray> // us.tractat.kuilt.session.test/FakeRoom.broadcasts.<get-broadcasts>|<get-broadcasts>(){}[0]
+    final val channelPolicy // us.tractat.kuilt.session.test/FakeRoom.channelPolicy|{}channelPolicy[0]
+        final fun <get-channelPolicy>(): us.tractat.kuilt.core/DeliveryPolicy // us.tractat.kuilt.session.test/FakeRoom.channelPolicy.<get-channelPolicy>|<get-channelPolicy>(){}[0]
+    final val directed // us.tractat.kuilt.session.test/FakeRoom.directed|{}directed[0]
+        final fun <get-directed>(): kotlin.collections/List<kotlin/Pair<us.tractat.kuilt.core/PeerId, kotlin/ByteArray>> // us.tractat.kuilt.session.test/FakeRoom.directed.<get-directed>|<get-directed>(){}[0]
+    final val events // us.tractat.kuilt.session.test/FakeRoom.events|{}events[0]
+        final fun <get-events>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.session/MembershipEvent> // us.tractat.kuilt.session.test/FakeRoom.events.<get-events>|<get-events>(){}[0]
+    final val incoming // us.tractat.kuilt.session.test/FakeRoom.incoming|{}incoming[0]
+        final fun <get-incoming>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.session/RoomFrame> // us.tractat.kuilt.session.test/FakeRoom.incoming.<get-incoming>|<get-incoming>(){}[0]
+    final val localFabric // us.tractat.kuilt.session.test/FakeRoom.localFabric|{}localFabric[0]
+        final fun <get-localFabric>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/FabricAvailability> // us.tractat.kuilt.session.test/FakeRoom.localFabric.<get-localFabric>|<get-localFabric>(){}[0]
+    final val resumeToken // us.tractat.kuilt.session.test/FakeRoom.resumeToken|{}resumeToken[0]
+        final fun <get-resumeToken>(): us.tractat.kuilt.session.partition/ResumeToken? // us.tractat.kuilt.session.test/FakeRoom.resumeToken.<get-resumeToken>|<get-resumeToken>(){}[0]
+    final val role // us.tractat.kuilt.session.test/FakeRoom.role|{}role[0]
+        final fun <get-role>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.session/SessionRole> // us.tractat.kuilt.session.test/FakeRoom.role.<get-role>|<get-role>(){}[0]
+    final val roomId // us.tractat.kuilt.session.test/FakeRoom.roomId|{}roomId[0]
+        final fun <get-roomId>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.session.partition/RoomId?> // us.tractat.kuilt.session.test/FakeRoom.roomId.<get-roomId>|<get-roomId>(){}[0]
+    final val roster // us.tractat.kuilt.session.test/FakeRoom.roster|{}roster[0]
+        final fun <get-roster>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.session/Member>> // us.tractat.kuilt.session.test/FakeRoom.roster.<get-roster>|<get-roster>(){}[0]
+    final val selfId // us.tractat.kuilt.session.test/FakeRoom.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.test/FakeRoom.selfId.<get-selfId>|<get-selfId>(){}[0]
+
+    final var resumeResult // us.tractat.kuilt.session.test/FakeRoom.resumeResult|{}resumeResult[0]
+        final fun <get-resumeResult>(): us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome // us.tractat.kuilt.session.test/FakeRoom.resumeResult.<get-resumeResult>|<get-resumeResult>(){}[0]
+        final fun <set-resumeResult>(us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome) // us.tractat.kuilt.session.test/FakeRoom.resumeResult.<set-resumeResult>|<set-resumeResult>(us.tractat.kuilt.session.partition.ResumeResult.JoinerOutcome){}[0]
+
+    final fun channel(kotlin/String): us.tractat.kuilt.core/Seam // us.tractat.kuilt.session.test/FakeRoom.channel|channel(kotlin.String){}[0]
+    final fun channelOrNull(kotlin/String): us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam? // us.tractat.kuilt.session.test/FakeRoom.channelOrNull|channelOrNull(kotlin.String){}[0]
+    final fun incomingFrom(us.tractat.kuilt.core/PeerId): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.session/RoomFrame> // us.tractat.kuilt.session.test/FakeRoom.incomingFrom|incomingFrom(us.tractat.kuilt.core.PeerId){}[0]
+    final fun setAttestedPrincipals(kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Principal>) // us.tractat.kuilt.session.test/FakeRoom.setAttestedPrincipals|setAttestedPrincipals(kotlin.collections.Map<us.tractat.kuilt.core.PeerId,us.tractat.kuilt.core.Principal>){}[0]
+    final fun setResumeToken(us.tractat.kuilt.session.partition/ResumeToken?) // us.tractat.kuilt.session.test/FakeRoom.setResumeToken|setResumeToken(us.tractat.kuilt.session.partition.ResumeToken?){}[0]
+    final fun setRole(us.tractat.kuilt.session/SessionRole) // us.tractat.kuilt.session.test/FakeRoom.setRole|setRole(us.tractat.kuilt.session.SessionRole){}[0]
+    final fun setRoomId(us.tractat.kuilt.session.partition/RoomId?) // us.tractat.kuilt.session.test/FakeRoom.setRoomId|setRoomId(us.tractat.kuilt.session.partition.RoomId?){}[0]
+    final fun tearSeam(us.tractat.kuilt.core/CloseReason = ...) // us.tractat.kuilt.session.test/FakeRoom.tearSeam|tearSeam(us.tractat.kuilt.core.CloseReason){}[0]
+    final suspend fun addMember(us.tractat.kuilt.session/Member) // us.tractat.kuilt.session.test/FakeRoom.addMember|addMember(us.tractat.kuilt.session.Member){}[0]
+    final suspend fun broadcast(kotlin/ByteArray) // us.tractat.kuilt.session.test/FakeRoom.broadcast|broadcast(kotlin.ByteArray){}[0]
+    final suspend fun deliver(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.session.test/FakeRoom.deliver|deliver(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+    final suspend fun emit(us.tractat.kuilt.session/MembershipEvent) // us.tractat.kuilt.session.test/FakeRoom.emit|emit(us.tractat.kuilt.session.MembershipEvent){}[0]
+    final suspend fun emitResumed(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.session.test/FakeRoom.emitResumed|emitResumed(us.tractat.kuilt.core.PeerId){}[0]
+    final suspend fun hostLost(kotlin.time/Instant, us.tractat.kuilt.session/FailureReason = ...) // us.tractat.kuilt.session.test/FakeRoom.hostLost|hostLost(kotlin.time.Instant;us.tractat.kuilt.session.FailureReason){}[0]
+    final suspend fun leave(us.tractat.kuilt.session/LeaveReason) // us.tractat.kuilt.session.test/FakeRoom.leave|leave(us.tractat.kuilt.session.LeaveReason){}[0]
+    final suspend fun openWindow(us.tractat.kuilt.core/PeerId, kotlin.time/Instant) // us.tractat.kuilt.session.test/FakeRoom.openWindow|openWindow(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
+    final suspend fun partition(us.tractat.kuilt.core/PeerId, kotlin.time/Instant, us.tractat.kuilt.session/ReconnectReason = ..., kotlin.time/Instant = ...) // us.tractat.kuilt.session.test/FakeRoom.partition|partition(us.tractat.kuilt.core.PeerId;kotlin.time.Instant;us.tractat.kuilt.session.ReconnectReason;kotlin.time.Instant){}[0]
+    final suspend fun recover(us.tractat.kuilt.core/PeerId, kotlin.time/Instant) // us.tractat.kuilt.session.test/FakeRoom.recover|recover(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
+    final suspend fun removeMember(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.session/LeaveReason = ...) // us.tractat.kuilt.session.test/FakeRoom.removeMember|removeMember(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.session.LeaveReason){}[0]
+    final suspend fun resume(us.tractat.kuilt.session.partition/ResumeToken): us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome // us.tractat.kuilt.session.test/FakeRoom.resume|resume(us.tractat.kuilt.session.partition.ResumeToken){}[0]
+    final suspend fun sendTo(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.session.test/FakeRoom.sendTo|sendTo(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+    final suspend fun setLocalFabric(us.tractat.kuilt.core/FabricAvailability, kotlin.time/Instant) // us.tractat.kuilt.session.test/FakeRoom.setLocalFabric|setLocalFabric(us.tractat.kuilt.core.FabricAvailability;kotlin.time.Instant){}[0]
+
+    final inner class FakeChannelSeam : us.tractat.kuilt.core/Seam { // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.<init>|<init>(kotlin.String){}[0]
+
+        final val id // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.id.<get-id>|<get-id>(){}[0]
+        final val incoming // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.incoming|{}incoming[0]
+            final fun <get-incoming>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.core/Swatch> // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.incoming.<get-incoming>|<get-incoming>(){}[0]
+        final val peers // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.peers|{}peers[0]
+            final fun <get-peers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.peers.<get-peers>|<get-peers>(){}[0]
+        final val selfId // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.selfId|{}selfId[0]
+            final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.selfId.<get-selfId>|<get-selfId>(){}[0]
+        final val state // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.state|{}state[0]
+            final fun <get-state>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/SeamState> // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.state.<get-state>|<get-state>(){}[0]
+
+        final suspend fun broadcast(kotlin/ByteArray) // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.broadcast|broadcast(kotlin.ByteArray){}[0]
+        final suspend fun close(us.tractat.kuilt.core/CloseReason) // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.close|close(us.tractat.kuilt.core.CloseReason){}[0]
+        final suspend fun deliver(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.deliver|deliver(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+        final suspend fun sendTo(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.session.test/FakeRoom.FakeChannelSeam.sendTo|sendTo(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+    }
+}
+
+final class us.tractat.kuilt.session.test/FakeRoomFactory : us.tractat.kuilt.session/RoomFactory { // us.tractat.kuilt.session.test/FakeRoomFactory|null[0]
+    constructor <init>() // us.tractat.kuilt.session.test/FakeRoomFactory.<init>|<init>(){}[0]
+
+    final suspend fun host(us.tractat.kuilt.core/Pattern, kotlin/String?, us.tractat.kuilt.session.partition/RoomId?): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.test/FakeRoomFactory.host|host(us.tractat.kuilt.core.Pattern;kotlin.String?;us.tractat.kuilt.session.partition.RoomId?){}[0]
+    final suspend fun join(us.tractat.kuilt.core/Tag, kotlin/String?): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.test/FakeRoomFactory.join|join(us.tractat.kuilt.core.Tag;kotlin.String?){}[0]
+}
+
+final suspend fun us.tractat.kuilt.session.test/fakeRoomPair(us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.core/PeerId = ...): kotlin/Pair<us.tractat.kuilt.session.test/FakeRoom, us.tractat.kuilt.session.test/FakeRoom> // us.tractat.kuilt.session.test/fakeRoomPair|fakeRoomPair(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.PeerId){}[0]

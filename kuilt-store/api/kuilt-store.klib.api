@@ -1,0 +1,54 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Alias: apple => [iosArm64, iosSimulatorArm64, macosArm64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-store>
+abstract interface us.tractat.kuilt.store/DurableStore { // us.tractat.kuilt.store/DurableStore|null[0]
+    abstract suspend fun delete(us.tractat.kuilt.store/StoreKey) // us.tractat.kuilt.store/DurableStore.delete|delete(us.tractat.kuilt.store.StoreKey){}[0]
+    abstract suspend fun read(us.tractat.kuilt.store/StoreKey): kotlin/ByteArray? // us.tractat.kuilt.store/DurableStore.read|read(us.tractat.kuilt.store.StoreKey){}[0]
+    abstract suspend fun write(us.tractat.kuilt.store/StoreKey, kotlin/ByteArray) // us.tractat.kuilt.store/DurableStore.write|write(us.tractat.kuilt.store.StoreKey;kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.store/InMemoryDurableStore : us.tractat.kuilt.store/DurableStore { // us.tractat.kuilt.store/InMemoryDurableStore|null[0]
+    constructor <init>() // us.tractat.kuilt.store/InMemoryDurableStore.<init>|<init>(){}[0]
+
+    final suspend fun delete(us.tractat.kuilt.store/StoreKey) // us.tractat.kuilt.store/InMemoryDurableStore.delete|delete(us.tractat.kuilt.store.StoreKey){}[0]
+    final suspend fun read(us.tractat.kuilt.store/StoreKey): kotlin/ByteArray? // us.tractat.kuilt.store/InMemoryDurableStore.read|read(us.tractat.kuilt.store.StoreKey){}[0]
+    final suspend fun write(us.tractat.kuilt.store/StoreKey, kotlin/ByteArray) // us.tractat.kuilt.store/InMemoryDurableStore.write|write(us.tractat.kuilt.store.StoreKey;kotlin.ByteArray){}[0]
+}
+
+final value class us.tractat.kuilt.store/StoreKey { // us.tractat.kuilt.store/StoreKey|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.store/StoreKey.<init>|<init>(kotlin.String){}[0]
+
+    final val name // us.tractat.kuilt.store/StoreKey.name|{}name[0]
+        final fun <get-name>(): kotlin/String // us.tractat.kuilt.store/StoreKey.name.<get-name>|<get-name>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.store/StoreKey.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.store/StoreKey.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.store/StoreKey.toString|toString(){}[0]
+}
+
+// Targets: [apple]
+final class us.tractat.kuilt.store/NSFileManagerDurableStore : us.tractat.kuilt.store/DurableStore { // us.tractat.kuilt.store/NSFileManagerDurableStore|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.store/NSFileManagerDurableStore.<init>|<init>(kotlin.String){}[0]
+
+    final suspend fun delete(us.tractat.kuilt.store/StoreKey) // us.tractat.kuilt.store/NSFileManagerDurableStore.delete|delete(us.tractat.kuilt.store.StoreKey){}[0]
+    final suspend fun read(us.tractat.kuilt.store/StoreKey): kotlin/ByteArray? // us.tractat.kuilt.store/NSFileManagerDurableStore.read|read(us.tractat.kuilt.store.StoreKey){}[0]
+    final suspend fun write(us.tractat.kuilt.store/StoreKey, kotlin/ByteArray) // us.tractat.kuilt.store/NSFileManagerDurableStore.write|write(us.tractat.kuilt.store.StoreKey;kotlin.ByteArray){}[0]
+}
+
+// Targets: [wasmJs]
+final class us.tractat.kuilt.store/IndexedDbDurableStore : us.tractat.kuilt.store/DurableStore { // us.tractat.kuilt.store/IndexedDbDurableStore|null[0]
+    final fun close() // us.tractat.kuilt.store/IndexedDbDurableStore.close|close(){}[0]
+    final suspend fun delete(us.tractat.kuilt.store/StoreKey) // us.tractat.kuilt.store/IndexedDbDurableStore.delete|delete(us.tractat.kuilt.store.StoreKey){}[0]
+    final suspend fun read(us.tractat.kuilt.store/StoreKey): kotlin/ByteArray? // us.tractat.kuilt.store/IndexedDbDurableStore.read|read(us.tractat.kuilt.store.StoreKey){}[0]
+    final suspend fun write(us.tractat.kuilt.store/StoreKey, kotlin/ByteArray) // us.tractat.kuilt.store/IndexedDbDurableStore.write|write(us.tractat.kuilt.store.StoreKey;kotlin.ByteArray){}[0]
+
+    final object Companion { // us.tractat.kuilt.store/IndexedDbDurableStore.Companion|null[0]
+        final suspend fun open(kotlin/String): us.tractat.kuilt.store/IndexedDbDurableStore // us.tractat.kuilt.store/IndexedDbDurableStore.Companion.open|open(kotlin.String){}[0]
+    }
+}

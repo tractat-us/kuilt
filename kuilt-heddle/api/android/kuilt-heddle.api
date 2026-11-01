@@ -1,0 +1,1001 @@
+public final class us/tractat/kuilt/heddle/AttachmentId : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/heddle/AttachmentId$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/heddle/AttachmentId;
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo-dq4I9ps (Ljava/lang/String;)I
+	public static fun compareTo-dq4I9ps (Ljava/lang/String;Ljava/lang/String;)I
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/AttachmentId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/AttachmentId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-smY7rdE (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-4WscdsM (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/AttachmentId$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/AttachmentRecord {
+	public static final field Companion Lus/tractat/kuilt/heddle/AttachmentRecord$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun component2-urUY4Jo ()Ljava/lang/String;
+	public final fun component3-urUY4Jo ()Ljava/lang/String;
+	public final fun component4 ()Lus/tractat/kuilt/heddle/Weight;
+	public final fun copy-jadR_Mo (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;)Lus/tractat/kuilt/heddle/AttachmentRecord;
+	public static synthetic fun copy-jadR_Mo$default (Lus/tractat/kuilt/heddle/AttachmentRecord;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/AttachmentRecord;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getChild-urUY4Jo ()Ljava/lang/String;
+	public final fun getId-i0YUZAc ()Ljava/lang/String;
+	public final fun getParent-urUY4Jo ()Ljava/lang/String;
+	public final fun getWeight ()Lus/tractat/kuilt/heddle/Weight;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/AttachmentRecord$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/AttachmentRecord$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/AttachmentRecord;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/AttachmentRecord;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/AttachmentRecord$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/BoundMetrics {
+	public static final field Companion Lus/tractat/kuilt/heddle/BoundMetrics$Companion;
+	public synthetic fun <init> (Ljava/lang/String;JJJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy-mLLTQY0 (Ljava/lang/String;JJJ)Lus/tractat/kuilt/heddle/BoundMetrics;
+	public static synthetic fun copy-mLLTQY0$default (Lus/tractat/kuilt/heddle/BoundMetrics;Ljava/lang/String;JJJILjava/lang/Object;)Lus/tractat/kuilt/heddle/BoundMetrics;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getConfiguredWorstCase ()J
+	public final fun getCurrentBound ()J
+	public final fun getObservedDeviation ()J
+	public final fun getParent-urUY4Jo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun isConsistent ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/BoundMetrics$Companion {
+	public final fun at-U6Mix1E (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;Lus/tractat/kuilt/heddle/HeddleConfig;)Lus/tractat/kuilt/heddle/BoundMetrics;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/ControlConflict {
+}
+
+public final class us/tractat/kuilt/heddle/ControlConflict$DualInbound : us/tractat/kuilt/heddle/ControlConflict {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2-i0YUZAc ()Ljava/lang/String;
+	public final fun component3-i0YUZAc ()Ljava/lang/String;
+	public final fun copy-5Vsa5b8 (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/heddle/ControlConflict$DualInbound;
+	public static synthetic fun copy-5Vsa5b8$default (Lus/tractat/kuilt/heddle/ControlConflict$DualInbound;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ControlConflict$DualInbound;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getChild-urUY4Jo ()Ljava/lang/String;
+	public final fun getIncumbent-i0YUZAc ()Ljava/lang/String;
+	public final fun getRejected-i0YUZAc ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ControlConflict$Refused : us/tractat/kuilt/heddle/ControlConflict {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/heddle/ControlConflict$Refused;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ControlConflict$Refused;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ControlConflict$Refused;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/ControlOutcome {
+	public static final field Companion Lus/tractat/kuilt/heddle/ControlOutcome$Companion;
+	public static final field NOT_COMMITTED J
+	public abstract fun getIndex ()J
+}
+
+public final class us/tractat/kuilt/heddle/ControlOutcome$Applied : us/tractat/kuilt/heddle/ControlOutcome {
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lus/tractat/kuilt/heddle/ControlOutcome$Applied;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ControlOutcome$Applied;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/ControlOutcome$Applied;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getIndex ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ControlOutcome$Companion {
+	public static final field NOT_COMMITTED J
+}
+
+public final class us/tractat/kuilt/heddle/ControlOutcome$Conflict : us/tractat/kuilt/heddle/ControlOutcome {
+	public fun <init> (JLus/tractat/kuilt/heddle/ControlConflict;)V
+	public final fun component1 ()J
+	public final fun component2 ()Lus/tractat/kuilt/heddle/ControlConflict;
+	public final fun copy (JLus/tractat/kuilt/heddle/ControlConflict;)Lus/tractat/kuilt/heddle/ControlOutcome$Conflict;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ControlOutcome$Conflict;JLus/tractat/kuilt/heddle/ControlConflict;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ControlOutcome$Conflict;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getConflict ()Lus/tractat/kuilt/heddle/ControlConflict;
+	public fun getIndex ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/Demand {
+	public static final field Companion Lus/tractat/kuilt/heddle/Demand$Companion;
+	public fun <init> (JJ)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun copy (JJ)Lus/tractat/kuilt/heddle/Demand;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Demand;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/Demand;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMaximumUsefulGrant ()J
+	public final fun getTargetOutstanding ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/Demand$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/Demand$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/Demand;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/Demand;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/Demand$Companion {
+	public final fun getNONE ()Lus/tractat/kuilt/heddle/Demand;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/DemandBoard {
+	public static final field Companion Lus/tractat/kuilt/heddle/DemandBoard$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/Map;
+	public final fun copy (Ljava/util/Map;)Lus/tractat/kuilt/heddle/DemandBoard;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/DemandBoard;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/DemandBoard;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPerEdge ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/DemandBoard$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/DemandBoard$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/DemandBoard;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/DemandBoard;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/DemandBoard$Companion {
+	public final fun getEMPTY ()Lus/tractat/kuilt/heddle/DemandBoard;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/EdgeSummary {
+	public static final field Companion Lus/tractat/kuilt/heddle/EdgeSummary$Companion;
+	public synthetic fun <init> (Ljava/lang/String;JJJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy-hWgxYSA (Ljava/lang/String;JJJ)Lus/tractat/kuilt/heddle/EdgeSummary;
+	public static synthetic fun copy-hWgxYSA$default (Lus/tractat/kuilt/heddle/EdgeSummary;Ljava/lang/String;JJJILjava/lang/Object;)Lus/tractat/kuilt/heddle/EdgeSummary;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttachment-i0YUZAc ()Ljava/lang/String;
+	public final fun getCommittedService ()J
+	public final fun getIssued ()J
+	public final fun getOutstanding ()J
+	public final fun getReturned ()J
+	public final fun getSpent ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/EdgeSummary$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/EdgeSummary$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/EdgeSummary;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/EdgeSummary;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/EdgeSummary$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/EntitlementLedger : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/heddle/EntitlementLedger$Companion;
+	public final fun activate-opnvhLk (Ljava/lang/String;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun activeChildren-9eHOidQ (Ljava/lang/String;)Ljava/util/List;
+	public final fun baseIssuance-dq4I9ps (Ljava/lang/String;)J
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun close-opnvhLk (Ljava/lang/String;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun delegate-G0W7bnU (Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun edge-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/EdgeSummary;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun gauge-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Gauge;
+	public final fun grossVirtualService-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
+	public fun hashCode ()I
+	public final fun holdings-uxjWRQo (Ljava/lang/String;Ljava/lang/String;)J
+	public final fun isLeaf-9eHOidQ (Ljava/lang/String;)Z
+	public final fun lifecycle-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Lifecycle;
+	public final fun lineageOf-9eHOidQ (Ljava/lang/String;)Ljava/util/List;
+	public final fun mint-fTvDpCI (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/heddle/EntitlementLedger;)Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public final fun prepare-Vqsn8GQ (Lus/tractat/kuilt/heddle/AttachmentRecord;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun record-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/AttachmentRecord;
+	public final fun release-G0W7bnU (Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun retire-opnvhLk (Ljava/lang/String;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun seat-3yQkkuw (Ljava/lang/String;Lus/tractat/kuilt/heddle/Rational;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun spend-TBVd7Xg (Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun spendCaptured-zS3D_YY (Ljava/lang/String;Ljava/util/List;J)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+	public final fun transfer-IACMvik (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun validate ()Ljava/util/List;
+	public final fun virtualService-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/EntitlementLedger$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/EntitlementLedger$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/EntitlementLedger;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/EntitlementLedger$Companion {
+	public final fun bootstrap-lUmtw0Q (Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;)Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public final fun getZERO ()Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/FairShareExecution {
+	public abstract fun cancel-7Ob-qd8 (Ljava/lang/String;)V
+	public abstract fun complete-Ct696E8 (Ljava/lang/String;J)V
+	public abstract fun earmarked-9eHOidQ (Ljava/lang/String;)J
+	public abstract fun reserve-jc7CSWg (Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ReserveOutcome;
+}
+
+public final class us/tractat/kuilt/heddle/GateClosed : us/tractat/kuilt/heddle/ReserveOutcome, us/tractat/kuilt/heddle/ScheduleOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/GateClosed$Reason;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-ffK6qZA ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/heddle/GateClosed$Reason;
+	public final fun copy-8mRuq1Y (Ljava/lang/String;Lus/tractat/kuilt/heddle/GateClosed$Reason;)Lus/tractat/kuilt/heddle/GateClosed;
+	public static synthetic fun copy-8mRuq1Y$default (Lus/tractat/kuilt/heddle/GateClosed;Ljava/lang/String;Lus/tractat/kuilt/heddle/GateClosed$Reason;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/GateClosed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Lus/tractat/kuilt/heddle/GateClosed$Reason;
+	public final fun getReplica-ffK6qZA ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/GateClosed$Reason {
+}
+
+public final class us/tractat/kuilt/heddle/GateClosed$Reason$AwaitingEnrollment : us/tractat/kuilt/heddle/GateClosed$Reason {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/GateClosed$Reason$AwaitingEnrollment;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/GateClosed$Reason$Departed : us/tractat/kuilt/heddle/GateClosed$Reason {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/GateClosed$Reason$Departed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/Gauge {
+	public static final field Companion Lus/tractat/kuilt/heddle/Gauge$Companion;
+	public fun <init> (Lus/tractat/kuilt/heddle/Rational;J)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun component2 ()J
+	public final fun copy (Lus/tractat/kuilt/heddle/Rational;J)Lus/tractat/kuilt/heddle/Gauge;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Gauge;Lus/tractat/kuilt/heddle/Rational;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/Gauge;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFloor ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun getFolded ()J
+	public fun hashCode ()I
+	public final fun join (Lus/tractat/kuilt/heddle/Gauge;)Lus/tractat/kuilt/heddle/Gauge;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/Gauge$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/Gauge$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/Gauge;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/Gauge;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/Gauge$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/GovernedHeddleNode : us/tractat/kuilt/heddle/FairShareExecution {
+	public final fun activate-4YliICg (Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun activate-4YliICg$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun advertise-ZbVo38U (Ljava/lang/String;Lus/tractat/kuilt/heddle/Demand;)V
+	public final fun boundMetrics-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/BoundMetrics;
+	public fun cancel-7Ob-qd8 (Ljava/lang/String;)V
+	public final fun close-4YliICg (Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun close-4YliICg$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun complete-Ct696E8 (Ljava/lang/String;J)V
+	public final fun depart-dnQKTGw (Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun depart-dnQKTGw$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun earmarked-9eHOidQ (Ljava/lang/String;)J
+	public final fun enroll-eW9Hipw (Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun enroll-eW9Hipw$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun enrolledReplicas ()Ljava/util/Set;
+	public final fun getLedger ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getPartitionEvents ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getRevocation ()Lus/tractat/kuilt/heddle/RevocationSeam;
+	public final fun getSelf-ffK6qZA ()Ljava/lang/String;
+	public final fun getUnreachable ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun isWritable ()Z
+	public final fun mint-BPmJkpc (Ljava/lang/String;JLkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun mint-BPmJkpc$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Ljava/lang/String;JLkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun parentVirtualTime-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun pendingAcks-dq4I9ps (Ljava/lang/String;)Ljava/util/Set;
+	public final fun prepare-Kx4hsE0 (Lus/tractat/kuilt/heddle/AttachmentRecord;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun prepare-Kx4hsE0$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Lus/tractat/kuilt/heddle/AttachmentRecord;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun quiesce-4YliICg (Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun quiesce-4YliICg$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun reconcile-2cH59Jc (Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun reconcile-2cH59Jc$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun reserve-jc7CSWg (Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ReserveOutcome;
+	public final fun retire-4YliICg (Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun retire-4YliICg$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Ljava/lang/String;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun schedule-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/ScheduleOutcome;
+}
+
+public final class us/tractat/kuilt/heddle/Grant {
+	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy-ZbVo38U (Ljava/lang/String;J)Lus/tractat/kuilt/heddle/Grant;
+	public static synthetic fun copy-ZbVo38U$default (Lus/tractat/kuilt/heddle/Grant;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/Grant;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAmount ()J
+	public final fun getAttachment-i0YUZAc ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/GroupId : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/heddle/GroupId$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/heddle/GroupId;
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo-9eHOidQ (Ljava/lang/String;)I
+	public static fun compareTo-9eHOidQ (Ljava/lang/String;Ljava/lang/String;)I
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/GroupId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/GroupId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-fhK6Lgg (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-yPrmHm4 (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/GroupId$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/HeddleBootstrapKt {
+	public static final fun heddleStatic-qWjQ89U (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/List;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/heddle/HeddleConfig;J)Lus/tractat/kuilt/heddle/HeddleNode;
+	public static synthetic fun heddleStatic-qWjQ89U$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/List;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/heddle/HeddleConfig;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/HeddleNode;
+}
+
+public final class us/tractat/kuilt/heddle/HeddleConfig {
+	public synthetic fun <init> (Lus/tractat/kuilt/heddle/PolicyConfig;JJLus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/random/Random;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/heddle/PolicyConfig;JJLus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/random/Random;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/PolicyConfig;
+	public final fun component2 ()J
+	public final fun component3-UwyO8pc ()J
+	public final fun component4 ()Lus/tractat/kuilt/quilter/QuilterConfig;
+	public final fun component5 ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
+	public final fun component6 ()Lkotlin/random/Random;
+	public final fun copy-WPi__2c (Lus/tractat/kuilt/heddle/PolicyConfig;JJLus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/random/Random;)Lus/tractat/kuilt/heddle/HeddleConfig;
+	public static synthetic fun copy-WPi__2c$default (Lus/tractat/kuilt/heddle/HeddleConfig;Lus/tractat/kuilt/heddle/PolicyConfig;JJLus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/random/Random;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/HeddleConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDemandTtl-UwyO8pc ()J
+	public final fun getHeartbeat ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
+	public final fun getMaxHoldingsPerPeer ()J
+	public final fun getPolicy ()Lus/tractat/kuilt/heddle/PolicyConfig;
+	public final fun getQuilter ()Lus/tractat/kuilt/quilter/QuilterConfig;
+	public final fun getRandom ()Lkotlin/random/Random;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/HeddleGovernedKt {
+	public static final fun heddleGoverned-sg10HVI (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Ljava/lang/String;Lus/tractat/kuilt/raft/RaftNode;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/heddle/HeddleConfig;Ljava/lang/String;J)Lus/tractat/kuilt/heddle/GovernedHeddleNode;
+}
+
+public final class us/tractat/kuilt/heddle/HeddleNode : us/tractat/kuilt/heddle/FairShareExecution {
+	public static final field Companion Lus/tractat/kuilt/heddle/HeddleNode$Companion;
+	public final fun activate-dq4I9ps (Ljava/lang/String;)Z
+	public final fun advertise-ZbVo38U (Ljava/lang/String;Lus/tractat/kuilt/heddle/Demand;)V
+	public final fun boundMetrics-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/BoundMetrics;
+	public fun cancel-7Ob-qd8 (Ljava/lang/String;)V
+	public final fun close-dq4I9ps (Ljava/lang/String;)Z
+	public fun complete-Ct696E8 (Ljava/lang/String;J)V
+	public fun earmarked-9eHOidQ (Ljava/lang/String;)J
+	public final fun getLedger ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getPartitionEvents ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getSelf-ffK6qZA ()Ljava/lang/String;
+	public final fun getUnreachable ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun parentVirtualTime-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun prepare (Lus/tractat/kuilt/heddle/AttachmentRecord;)Z
+	public fun reserve-jc7CSWg (Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ReserveOutcome;
+	public final fun retire-dq4I9ps (Ljava/lang/String;)Z
+	public final fun schedule-9eHOidQ (Ljava/lang/String;)I
+}
+
+public final class us/tractat/kuilt/heddle/HeddleNode$Companion {
+}
+
+public final class us/tractat/kuilt/heddle/HeddlePolicy {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/HeddlePolicy;
+	public final fun front (Ljava/util/List;Ljava/util/Set;)Lus/tractat/kuilt/heddle/Rational;
+	public static synthetic fun front$default (Lus/tractat/kuilt/heddle/HeddlePolicy;Ljava/util/List;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun isDemanding (Lus/tractat/kuilt/heddle/PolicyEdge;)Z
+	public final fun pick (Ljava/util/List;Lus/tractat/kuilt/heddle/PolicyConfig;J)Lus/tractat/kuilt/heddle/Grant;
+	public final fun virtualService (Lus/tractat/kuilt/heddle/PolicyEdge;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun wakeOffset (Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Weight;J)Lus/tractat/kuilt/heddle/Rational;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/LedgerConflict : java/lang/Comparable {
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public abstract fun getOrder ()I
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$ClosureViolation : us/tractat/kuilt/heddle/LedgerConflict {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun copy-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/LedgerConflict$ClosureViolation;
+	public static synthetic fun copy-dq4I9ps$default (Lus/tractat/kuilt/heddle/LedgerConflict$ClosureViolation;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$ClosureViolation;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public fun getOrder ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$ConservationViolation : us/tractat/kuilt/heddle/LedgerConflict {
+	public fun <init> (JJ)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun copy (JJ)Lus/tractat/kuilt/heddle/LedgerConflict$ConservationViolation;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/LedgerConflict$ConservationViolation;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$ConservationViolation;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLeafSpentTotal ()J
+	public final fun getMintedTotal ()J
+	public fun getOrder ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$DefaultImpls {
+	public static fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;Lus/tractat/kuilt/heddle/LedgerConflict;)I
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$DualActiveInbound : us/tractat/kuilt/heddle/LedgerConflict {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/LedgerConflict$DualActiveInbound;
+	public static synthetic fun copy-9eHOidQ$default (Lus/tractat/kuilt/heddle/LedgerConflict$DualActiveInbound;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$DualActiveInbound;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGroup-urUY4Jo ()Ljava/lang/String;
+	public fun getOrder ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$FrozenCarriedHandoff : us/tractat/kuilt/heddle/LedgerConflict {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1-Z1rp2Uo ()Ljava/lang/String;
+	public final fun component2-ffK6qZA ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun copy-PUaJfL4 (Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/heddle/LedgerConflict$FrozenCarriedHandoff;
+	public static synthetic fun copy-PUaJfL4$default (Lus/tractat/kuilt/heddle/LedgerConflict$FrozenCarriedHandoff;Ljava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$FrozenCarriedHandoff;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCarried ()J
+	public final fun getDonor-ffK6qZA ()Ljava/lang/String;
+	public fun getOrder ()I
+	public final fun getPath-Z1rp2Uo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$LineageCycle : us/tractat/kuilt/heddle/LedgerConflict {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/LedgerConflict$LineageCycle;
+	public static synthetic fun copy-9eHOidQ$default (Lus/tractat/kuilt/heddle/LedgerConflict$LineageCycle;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$LineageCycle;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGroup-urUY4Jo ()Ljava/lang/String;
+	public fun getOrder ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$MultipleRoots : us/tractat/kuilt/heddle/LedgerConflict {
+	public fun <init> (Ljava/util/List;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/heddle/LedgerConflict$MultipleRoots;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/LedgerConflict$MultipleRoots;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$MultipleRoots;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getOrder ()I
+	public final fun getRoots ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$NegativeEffectiveSpend : us/tractat/kuilt/heddle/LedgerConflict {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun copy-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/LedgerConflict$NegativeEffectiveSpend;
+	public static synthetic fun copy-dq4I9ps$default (Lus/tractat/kuilt/heddle/LedgerConflict$NegativeEffectiveSpend;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$NegativeEffectiveSpend;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public fun getOrder ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$OrphanedTransferPath : us/tractat/kuilt/heddle/LedgerConflict {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1-Z1rp2Uo ()Ljava/lang/String;
+	public final fun copy-gD9ucxk (Ljava/lang/String;)Lus/tractat/kuilt/heddle/LedgerConflict$OrphanedTransferPath;
+	public static synthetic fun copy-gD9ucxk$default (Lus/tractat/kuilt/heddle/LedgerConflict$OrphanedTransferPath;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$OrphanedTransferPath;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getOrder ()I
+	public final fun getPath-Z1rp2Uo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$PerEdgeSafety : us/tractat/kuilt/heddle/LedgerConflict {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun copy-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/LedgerConflict$PerEdgeSafety;
+	public static synthetic fun copy-dq4I9ps$default (Lus/tractat/kuilt/heddle/LedgerConflict$PerEdgeSafety;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$PerEdgeSafety;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public fun getOrder ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$PersistentNegativeHoldings : us/tractat/kuilt/heddle/LedgerConflict {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2-ffK6qZA ()Ljava/lang/String;
+	public final fun copy-uxjWRQo (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/heddle/LedgerConflict$PersistentNegativeHoldings;
+	public static synthetic fun copy-uxjWRQo$default (Lus/tractat/kuilt/heddle/LedgerConflict$PersistentNegativeHoldings;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$PersistentNegativeHoldings;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGroup-urUY4Jo ()Ljava/lang/String;
+	public fun getOrder ()I
+	public final fun getReplica-ffK6qZA ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$RecordDivergence : us/tractat/kuilt/heddle/LedgerConflict {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun copy-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/LedgerConflict$RecordDivergence;
+	public static synthetic fun copy-dq4I9ps$default (Lus/tractat/kuilt/heddle/LedgerConflict$RecordDivergence;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$RecordDivergence;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId-i0YUZAc ()Ljava/lang/String;
+	public fun getOrder ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/Lifecycle : java/lang/Enum {
+	public static final field ACTIVE Lus/tractat/kuilt/heddle/Lifecycle;
+	public static final field CLOSING Lus/tractat/kuilt/heddle/Lifecycle;
+	public static final field Companion Lus/tractat/kuilt/heddle/Lifecycle$Companion;
+	public static final field PREPARED Lus/tractat/kuilt/heddle/Lifecycle;
+	public static final field RETIRED Lus/tractat/kuilt/heddle/Lifecycle;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Lifecycle;
+	public static fun values ()[Lus/tractat/kuilt/heddle/Lifecycle;
+}
+
+public final class us/tractat/kuilt/heddle/Lifecycle$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/MintId : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/heddle/MintId$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/heddle/MintId;
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo-xbBTgeE (Ljava/lang/String;)I
+	public static fun compareTo-xbBTgeE (Ljava/lang/String;Ljava/lang/String;)I
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/MintId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/MintId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-mrQBUL4 (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-6GbLLbY (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/MintId$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/MintRecord : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/heddle/MintRecord$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/MintRecord;)I
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2-ffK6qZA ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun copy-i6F_4uI (Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/heddle/MintRecord;
+	public static synthetic fun copy-i6F_4uI$default (Lus/tractat/kuilt/heddle/MintRecord;Ljava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/MintRecord;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAmount ()J
+	public final fun getHolder-ffK6qZA ()Ljava/lang/String;
+	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/MintRecord$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/MintRecord$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/MintRecord;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/MintRecord;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/MintRecord$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/PathKey : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/heddle/PathKey$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/heddle/PathKey;
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo-gD9ucxk (Ljava/lang/String;)I
+	public static fun compareTo-gD9ucxk (Ljava/lang/String;Ljava/lang/String;)I
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/PathKey$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/PathKey$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-2umZfmc (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-4WRxw_M (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/PathKey$Companion {
+	public final fun getROOT-Z1rp2Uo ()Ljava/lang/String;
+	public final fun of-V3EPWsg (Ljava/lang/String;)Ljava/lang/String;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/PolicyConfig {
+	public fun <init> (JJJ)V
+	public synthetic fun <init> (JJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun copy (JJJ)Lus/tractat/kuilt/heddle/PolicyConfig;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/PolicyConfig;JJJILjava/lang/Object;)Lus/tractat/kuilt/heddle/PolicyConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPerChildOutstandingCap ()J
+	public final fun getQuantum ()J
+	public final fun getSleeperCredit ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/PolicyEdge {
+	public fun <init> (Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/heddle/Rational;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/heddle/Rational;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/AttachmentRecord;
+	public final fun component2 ()Lus/tractat/kuilt/heddle/EdgeSummary;
+	public final fun component3 ()Lus/tractat/kuilt/heddle/Demand;
+	public final fun component4 ()Lus/tractat/kuilt/heddle/Gauge;
+	public final fun component5 ()J
+	public final fun component6 ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun copy (Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/heddle/Rational;)Lus/tractat/kuilt/heddle/PolicyEdge;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/PolicyEdge;Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/heddle/Rational;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/PolicyEdge;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBaseIssued ()J
+	public final fun getDemand ()Lus/tractat/kuilt/heddle/Demand;
+	public final fun getGauge ()Lus/tractat/kuilt/heddle/Gauge;
+	public final fun getRecord ()Lus/tractat/kuilt/heddle/AttachmentRecord;
+	public final fun getSummary ()Lus/tractat/kuilt/heddle/EdgeSummary;
+	public final fun getVirtualOffset ()Lus/tractat/kuilt/heddle/Rational;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/Rational : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/heddle/Rational$Companion;
+	public final fun ceil ()J
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/Rational;)I
+	public final fun div (Lus/tractat/kuilt/heddle/Rational;)Lus/tractat/kuilt/heddle/Rational;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDenominator ()J
+	public final fun getNumerator ()J
+	public fun hashCode ()I
+	public final fun minus (Lus/tractat/kuilt/heddle/Rational;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun plus (Lus/tractat/kuilt/heddle/Rational;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun times (Lus/tractat/kuilt/heddle/Rational;)Lus/tractat/kuilt/heddle/Rational;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/Rational$Companion {
+	public final fun getONE ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun getZERO ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun max (Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun of (J)Lus/tractat/kuilt/heddle/Rational;
+	public final fun of (JJ)Lus/tractat/kuilt/heddle/Rational;
+}
+
+public final class us/tractat/kuilt/heddle/RationalSerializer : kotlinx/serialization/KSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/RationalSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/Rational;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/Rational;)V
+}
+
+public final class us/tractat/kuilt/heddle/ReservationId {
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/heddle/ReservationId;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/ReserveOutcome {
+}
+
+public final class us/tractat/kuilt/heddle/ReserveOutcome$NoHoldings : us/tractat/kuilt/heddle/ReserveOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/ReserveOutcome$NoHoldings;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ReserveOutcome$Reserved : us/tractat/kuilt/heddle/ReserveOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-V0wRuXk ()Ljava/lang/String;
+	public final fun copy-7Ob-qd8 (Ljava/lang/String;)Lus/tractat/kuilt/heddle/ReserveOutcome$Reserved;
+	public static synthetic fun copy-7Ob-qd8$default (Lus/tractat/kuilt/heddle/ReserveOutcome$Reserved;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ReserveOutcome$Reserved;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId-V0wRuXk ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/RevocationOutcome {
+}
+
+public final class us/tractat/kuilt/heddle/RevocationOutcome$NotShipped : us/tractat/kuilt/heddle/RevocationOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/RevocationOutcome$NotShipped;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/RevocationSeam {
+	public abstract fun revoke-zugydNs (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/ScheduleOutcome {
+}
+
+public final class us/tractat/kuilt/heddle/ScheduleOutcome$Delegated : us/tractat/kuilt/heddle/ScheduleOutcome {
+	public fun <init> (I)V
+	public final fun component1 ()I
+	public final fun copy (I)Lus/tractat/kuilt/heddle/ScheduleOutcome$Delegated;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ScheduleOutcome$Delegated;IILjava/lang/Object;)Lus/tractat/kuilt/heddle/ScheduleOutcome$Delegated;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGrants ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ScheduleOutcome$NothingToDelegate : us/tractat/kuilt/heddle/ScheduleOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/ScheduleOutcome$NothingToDelegate;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ServiceUnits : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/heddle/ServiceUnits$Companion;
+	public static final synthetic fun box-impl (J)Lus/tractat/kuilt/heddle/ServiceUnits;
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo-YhgBL1Q (J)I
+	public static fun compareTo-YhgBL1Q (JJ)I
+	public static fun constructor-impl (J)J
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (JLjava/lang/Object;)Z
+	public static final fun equals-impl0 (JJ)Z
+	public final fun getValue ()J
+	public fun hashCode ()I
+	public static fun hashCode-impl (J)I
+	public static final fun plus-rG-k_Kw (JJ)J
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (J)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()J
+}
+
+public final synthetic class us/tractat/kuilt/heddle/ServiceUnits$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/ServiceUnits$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-XtA3dNg (Lkotlinx/serialization/encoding/Decoder;)J
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-bKvZNvs (Lkotlinx/serialization/encoding/Encoder;J)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/ServiceUnits$Companion {
+	public final fun getZERO-5aPDI64 ()J
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/Weight : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/heddle/Weight$Companion;
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/Weight;)I
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDenominator ()J
+	public final fun getNumerator ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/Weight$Companion {
+	public final fun getONE ()Lus/tractat/kuilt/heddle/Weight;
+	public final fun of (J)Lus/tractat/kuilt/heddle/Weight;
+	public final fun of (JJ)Lus/tractat/kuilt/heddle/Weight;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/WeightSerializer : kotlinx/serialization/KSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/WeightSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/Weight;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/Weight;)V
+}
+

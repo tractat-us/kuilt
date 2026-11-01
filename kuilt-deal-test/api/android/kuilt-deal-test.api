@@ -1,0 +1,52 @@
+public abstract class us/tractat/kuilt/deal/test/CommutativeSchemeConformanceSuite {
+	public fun <init> ()V
+	public final fun distinctKeysProduceDistinctCiphertexts ()V
+	public final fun encryptHidesThePlaintextAndStripRecoversIt ()V
+	public final fun encryptionIsCommutative ()V
+	public final fun encryptionIsCommutativeAcrossPeerInstances ()V
+	public final fun generatedKeyPairsAreUsable ()V
+	public final fun multiLayerDealAcrossPeerInstancesRecoversPlaintextRegardlessOfStripOrder ()V
+	public final fun multiLayerDealRecoversPlaintextRegardlessOfStripOrder ()V
+	public abstract fun newPeerScheme ()Lus/tractat/kuilt/deal/CommutativeScheme;
+	public abstract fun newScheme ()Lus/tractat/kuilt/deal/CommutativeScheme;
+	public abstract fun proofStrength ()Lus/tractat/kuilt/deal/test/ProofStrength;
+	public fun validPlaintexts ()Ljava/util/List;
+	public final fun verifyAcceptsHonestTransitions ()V
+	public final fun verifyAnswersForgedTransitionsAsDeclared ()V
+}
+
+public final class us/tractat/kuilt/deal/test/DealTestUtilsKt {
+	public static final fun fakeDealSessionGroup (Ljava/util/List;Lkotlin/jvm/functions/Function0;Lkotlinx/coroutines/CoroutineScope;)Ljava/util/List;
+	public static synthetic fun fakeDealSessionGroup$default (Ljava/util/List;Lkotlin/jvm/functions/Function0;Lkotlinx/coroutines/CoroutineScope;ILjava/lang/Object;)Ljava/util/List;
+	public static final fun fakeDealSessionPair-7DI4naA (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lkotlinx/coroutines/CoroutineScope;)Lkotlin/Pair;
+	public static synthetic fun fakeDealSessionPair-7DI4naA$default (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lkotlinx/coroutines/CoroutineScope;ILjava/lang/Object;)Lkotlin/Pair;
+}
+
+public abstract interface class us/tractat/kuilt/deal/test/ProofStrength {
+}
+
+public final class us/tractat/kuilt/deal/test/ProofStrength$AcceptsEverything : us/tractat/kuilt/deal/test/ProofStrength {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/test/ProofStrength$AcceptsEverything;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/deal/test/ProofStrength$RejectsForgeries : us/tractat/kuilt/deal/test/ProofStrength {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/test/ProofStrength$RejectsForgeries;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/deal/test/XorKeystreamScheme : us/tractat/kuilt/deal/CommutativeScheme {
+	public fun <init> ()V
+	public fun <init> (Lkotlin/random/Random;)V
+	public synthetic fun <init> (Lkotlin/random/Random;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun encrypt ([BLus/tractat/kuilt/deal/SchemeKey;)Lkotlin/Pair;
+	public fun generateKey ()Lus/tractat/kuilt/deal/SchemeKeyPair;
+	public fun strip ([BLus/tractat/kuilt/deal/SchemeKey;)Lkotlin/Pair;
+	public fun verifyEncrypt ([B[BLus/tractat/kuilt/deal/EncryptProof;Lus/tractat/kuilt/deal/SchemeKey;)Z
+	public fun verifyStrip ([B[BLus/tractat/kuilt/deal/StripProof;Lus/tractat/kuilt/deal/SchemeKey;)Z
+}
+

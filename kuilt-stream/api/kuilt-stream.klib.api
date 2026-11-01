@@ -1,0 +1,16 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-stream>
+final class us.tractat.kuilt.stream/FrameTooLargeException : kotlin/Exception { // us.tractat.kuilt.stream/FrameTooLargeException|null[0]
+    constructor <init>(kotlin/Int, kotlin/Int) // us.tractat.kuilt.stream/FrameTooLargeException.<init>|<init>(kotlin.Int;kotlin.Int){}[0]
+}
+
+final const val us.tractat.kuilt.stream/DEFAULT_MAX_FRAME_SIZE // us.tractat.kuilt.stream/DEFAULT_MAX_FRAME_SIZE|{}DEFAULT_MAX_FRAME_SIZE[0]
+    final fun <get-DEFAULT_MAX_FRAME_SIZE>(): kotlin/Int // us.tractat.kuilt.stream/DEFAULT_MAX_FRAME_SIZE.<get-DEFAULT_MAX_FRAME_SIZE>|<get-DEFAULT_MAX_FRAME_SIZE>(){}[0]
+
+final fun us.tractat.kuilt.stream/framed(kotlinx.io/Source, kotlinx.io/Sink, kotlin/Int = ...): us.tractat.kuilt.core.fabric/Connection // us.tractat.kuilt.stream/framed|framed(kotlinx.io.Source;kotlinx.io.Sink;kotlin.Int){}[0]

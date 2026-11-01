@@ -1,0 +1,1202 @@
+public final class us/tractat/kuilt/raft/ClientId {
+	public static final field Companion Lus/tractat/kuilt/raft/ClientId$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/raft/ClientId;
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/raft/ClientId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/ClientId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-EbG3NGc (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-LCR-cbk (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/ClientId$Companion {
+	public final fun auto-rhj453Q (Ljava/lang/String;Lkotlin/random/Random;)Ljava/lang/String;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/ClientIdCollisionException : java/lang/IllegalStateException {
+	public fun <init> (Ljava/lang/String;)V
+}
+
+public abstract interface class us/tractat/kuilt/raft/ClientIdentity {
+}
+
+public final class us/tractat/kuilt/raft/ClientIdentity$Auto : us/tractat/kuilt/raft/ClientIdentity {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/ClientIdentity$Auto;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/ClientIdentity$Durable : us/tractat/kuilt/raft/ClientIdentity {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1--8sRXKM ()Ljava/lang/String;
+	public final fun copy-neJCpmw (Ljava/lang/String;)Lus/tractat/kuilt/raft/ClientIdentity$Durable;
+	public static synthetic fun copy-neJCpmw$default (Lus/tractat/kuilt/raft/ClientIdentity$Durable;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/raft/ClientIdentity$Durable;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClientId--8sRXKM ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/ClientSessionTable {
+	public static final field Companion Lus/tractat/kuilt/raft/ClientSessionTable$Companion;
+	public fun <init> ()V
+	public final fun closeSession-neJCpmw (Ljava/lang/String;)V
+	public final fun shouldApply (Lus/tractat/kuilt/raft/DedupKey;)Z
+	public final fun toBytes ()[B
+}
+
+public final class us/tractat/kuilt/raft/ClientSessionTable$Companion {
+	public final fun fromBytes ([B)Lus/tractat/kuilt/raft/ClientSessionTable;
+}
+
+public final class us/tractat/kuilt/raft/ClusterConfig {
+	public static final field Companion Lus/tractat/kuilt/raft/ClusterConfig$Companion;
+	public fun <init> (Ljava/util/Set;Ljava/util/Set;)V
+	public synthetic fun <init> (Ljava/util/Set;Ljava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/Set;
+	public final fun component2 ()Ljava/util/Set;
+	public final fun copy (Ljava/util/Set;Ljava/util/Set;)Lus/tractat/kuilt/raft/ClusterConfig;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/ClusterConfig;Ljava/util/Set;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/raft/ClusterConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllMembers ()Ljava/util/Set;
+	public final fun getLearners ()Ljava/util/Set;
+	public final fun getQuorumSize ()I
+	public final fun getVoters ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/raft/ClusterConfig$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/ClusterConfig$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/raft/ClusterConfig;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/raft/ClusterConfig;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/ClusterConfig$Companion {
+	public final fun ofVoters (Ljava/util/Collection;)Lus/tractat/kuilt/raft/ClusterConfig;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public final fun withLearner-i1cw-hM (Ljava/lang/Iterable;Ljava/lang/String;)Lus/tractat/kuilt/raft/ClusterConfig;
+}
+
+public abstract interface class us/tractat/kuilt/raft/Committed {
+}
+
+public final class us/tractat/kuilt/raft/Committed$Entry : us/tractat/kuilt/raft/Committed {
+	public fun <init> (Lus/tractat/kuilt/raft/LogEntry;)V
+	public final fun component1 ()Lus/tractat/kuilt/raft/LogEntry;
+	public final fun copy (Lus/tractat/kuilt/raft/LogEntry;)Lus/tractat/kuilt/raft/Committed$Entry;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/Committed$Entry;Lus/tractat/kuilt/raft/LogEntry;ILjava/lang/Object;)Lus/tractat/kuilt/raft/Committed$Entry;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEntry ()Lus/tractat/kuilt/raft/LogEntry;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/Committed$Install : us/tractat/kuilt/raft/Committed {
+	public fun <init> (Lus/tractat/kuilt/raft/Snapshot;)V
+	public final fun component1 ()Lus/tractat/kuilt/raft/Snapshot;
+	public final fun copy (Lus/tractat/kuilt/raft/Snapshot;)Lus/tractat/kuilt/raft/Committed$Install;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/Committed$Install;Lus/tractat/kuilt/raft/Snapshot;ILjava/lang/Object;)Lus/tractat/kuilt/raft/Committed$Install;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSnapshot ()Lus/tractat/kuilt/raft/Snapshot;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/Committed$Internal : us/tractat/kuilt/raft/Committed {
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lus/tractat/kuilt/raft/Committed$Internal;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/Committed$Internal;JILjava/lang/Object;)Lus/tractat/kuilt/raft/Committed$Internal;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIndex ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/CommittedKt {
+	public static final fun asCommitted (Lus/tractat/kuilt/raft/LogEntry;)Lus/tractat/kuilt/raft/Committed;
+}
+
+public final class us/tractat/kuilt/raft/ConfigPayload {
+	public static final field Companion Lus/tractat/kuilt/raft/ConfigPayload$Companion;
+	public fun <init> (Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/ClusterConfig;)V
+	public final fun component1 ()Lus/tractat/kuilt/raft/ClusterConfig;
+	public final fun component2 ()Lus/tractat/kuilt/raft/ClusterConfig;
+	public final fun copy (Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/ClusterConfig;)Lus/tractat/kuilt/raft/ConfigPayload;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/ConfigPayload;Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/ClusterConfig;ILjava/lang/Object;)Lus/tractat/kuilt/raft/ConfigPayload;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getNew ()Lus/tractat/kuilt/raft/ClusterConfig;
+	public final fun getOld ()Lus/tractat/kuilt/raft/ClusterConfig;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/raft/ConfigPayload$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/ConfigPayload$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/raft/ConfigPayload;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/raft/ConfigPayload;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/ConfigPayload$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/CorruptDurableStateException : java/lang/IllegalStateException {
+	public fun <init> (Ljava/lang/String;)V
+}
+
+public final class us/tractat/kuilt/raft/DedupKey {
+	public static final field Companion Lus/tractat/kuilt/raft/DedupKey$Companion;
+	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1--8sRXKM ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy-MEp4kK8 (Ljava/lang/String;J)Lus/tractat/kuilt/raft/DedupKey;
+	public static synthetic fun copy-MEp4kK8$default (Lus/tractat/kuilt/raft/DedupKey;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/raft/DedupKey;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClientId--8sRXKM ()Ljava/lang/String;
+	public final fun getRequestId ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/raft/DedupKey$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/DedupKey$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/raft/DedupKey;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/raft/DedupKey;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/DedupKey$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/DenyReason : java/lang/Enum {
+	public static final field AlreadyVoted Lus/tractat/kuilt/raft/DenyReason;
+	public static final field LeaderAlive Lus/tractat/kuilt/raft/DenyReason;
+	public static final field LogNotUpToDate Lus/tractat/kuilt/raft/DenyReason;
+	public static final field StaleTerm Lus/tractat/kuilt/raft/DenyReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/raft/DenyReason;
+	public static fun values ()[Lus/tractat/kuilt/raft/DenyReason;
+}
+
+public final class us/tractat/kuilt/raft/DurableStoreRaftStorage : us/tractat/kuilt/raft/RaftStorage {
+	public static final field Companion Lus/tractat/kuilt/raft/DurableStoreRaftStorage$Companion;
+	public fun appendEntries (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun discardLogPrefix (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun entries (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun leaderForTerm (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun loadSnapshot (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveLeaderForTerm-wsABrkQ (JLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveSnapshot (Lus/tractat/kuilt/raft/SnapshotMeta;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveTerm (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveTermAndVotedFor-ZBIPEA8 (JLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveVotedFor-Y8Q84Ps (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun term (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun truncateFrom (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun votedFor-RElB-0w (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/raft/DurableStoreRaftStorage$Companion {
+	public final fun getLOG_KEY-V7ECK2g ()Ljava/lang/String;
+	public final fun getMETA_KEY-V7ECK2g ()Ljava/lang/String;
+	public final fun getSNAPSHOT_KEY-V7ECK2g ()Ljava/lang/String;
+	public final fun open (Lus/tractat/kuilt/store/DurableStore;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/raft/ForwardedProposalFailedException : java/lang/Exception {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/raft/InMemoryRaftStorage : us/tractat/kuilt/raft/RaftStorage {
+	public fun <init> ()V
+	public fun appendEntries (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun discardLogPrefix (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun entries (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun leaderForTerm (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun loadSnapshot (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveLeaderForTerm-wsABrkQ (JLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveSnapshot (Lus/tractat/kuilt/raft/SnapshotMeta;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveTerm (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveTermAndVotedFor-ZBIPEA8 (JLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveVotedFor-Y8Q84Ps (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun term (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun truncateFrom (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun votedFor-RElB-0w (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/raft/LeaderForTerm {
+	public synthetic fun <init> (JLjava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun copy-i1cw-hM (JLjava/lang/String;)Lus/tractat/kuilt/raft/LeaderForTerm;
+	public static synthetic fun copy-i1cw-hM$default (Lus/tractat/kuilt/raft/LeaderForTerm;JLjava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/raft/LeaderForTerm;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLeaderId-Kplb3d8 ()Ljava/lang/String;
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/LeadershipLostException : java/lang/Exception {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/raft/LeadershipTransferAbandonReason : java/lang/Enum {
+	public static final field Cancelled Lus/tractat/kuilt/raft/LeadershipTransferAbandonReason;
+	public static final field Timeout Lus/tractat/kuilt/raft/LeadershipTransferAbandonReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/raft/LeadershipTransferAbandonReason;
+	public static fun values ()[Lus/tractat/kuilt/raft/LeadershipTransferAbandonReason;
+}
+
+public final class us/tractat/kuilt/raft/LeadershipTransferException : java/lang/Exception {
+	public fun <init> (Ljava/lang/String;)V
+}
+
+public final class us/tractat/kuilt/raft/LogEntry {
+	public static final field Companion Lus/tractat/kuilt/raft/LogEntry$Companion;
+	public fun <init> (JJ[BZLus/tractat/kuilt/raft/ConfigPayload;Lus/tractat/kuilt/raft/DedupKey;)V
+	public synthetic fun <init> (JJ[BZLus/tractat/kuilt/raft/ConfigPayload;Lus/tractat/kuilt/raft/DedupKey;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()[B
+	public final fun component4 ()Z
+	public final fun component5 ()Lus/tractat/kuilt/raft/ConfigPayload;
+	public final fun component6 ()Lus/tractat/kuilt/raft/DedupKey;
+	public final fun copy (JJ[BZLus/tractat/kuilt/raft/ConfigPayload;Lus/tractat/kuilt/raft/DedupKey;)Lus/tractat/kuilt/raft/LogEntry;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/LogEntry;JJ[BZLus/tractat/kuilt/raft/ConfigPayload;Lus/tractat/kuilt/raft/DedupKey;ILjava/lang/Object;)Lus/tractat/kuilt/raft/LogEntry;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCommand ()[B
+	public final fun getConfig ()Lus/tractat/kuilt/raft/ConfigPayload;
+	public final fun getDedupKey ()Lus/tractat/kuilt/raft/DedupKey;
+	public final fun getIndex ()J
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public final fun isNoOp ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/raft/LogEntry$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/LogEntry$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/raft/LogEntry;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/raft/LogEntry;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/LogEntry$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/MembershipChangeInProgressException : java/lang/Exception {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/raft/MembershipRefusal;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/raft/MembershipRefusal;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lus/tractat/kuilt/raft/MembershipRefusal;)V
+	public final fun getReason ()Lus/tractat/kuilt/raft/MembershipRefusal;
+}
+
+public final class us/tractat/kuilt/raft/MembershipRefusal : java/lang/Enum {
+	public static final field PendingLocalChange Lus/tractat/kuilt/raft/MembershipRefusal;
+	public static final field UncommittedConfigEntry Lus/tractat/kuilt/raft/MembershipRefusal;
+	public static final field UnsettledJointConfig Lus/tractat/kuilt/raft/MembershipRefusal;
+	public final fun getDetail ()Ljava/lang/String;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/raft/MembershipRefusal;
+	public static fun values ()[Lus/tractat/kuilt/raft/MembershipRefusal;
+}
+
+public final class us/tractat/kuilt/raft/MembershipRetryKt {
+	public static final fun changeMembershipWithRetry-zkXUZaI (Lus/tractat/kuilt/raft/RaftNode;Lus/tractat/kuilt/raft/ClusterConfig;IJLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun changeMembershipWithRetry-zkXUZaI$default (Lus/tractat/kuilt/raft/RaftNode;Lus/tractat/kuilt/raft/ClusterConfig;IJLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/raft/NodeId {
+	public static final field Companion Lus/tractat/kuilt/raft/NodeId$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/raft/NodeId;
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/raft/NodeId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/NodeId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-1TaRgUc (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-i1cw-hM (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/NodeId$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/raft/NotLeaderException : java/lang/Exception {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/raft/RaftConfig {
+	public fun <init> ()V
+	public synthetic fun <init> (JJJZZJIIJLkotlin/random/Random;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JJJZZJIIJLkotlin/random/Random;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-UwyO8pc ()J
+	public final fun component10 ()Lkotlin/random/Random;
+	public final fun component2-UwyO8pc ()J
+	public final fun component3-UwyO8pc ()J
+	public final fun component4 ()Z
+	public final fun component5 ()Z
+	public final fun component6-UwyO8pc ()J
+	public final fun component7 ()I
+	public final fun component8 ()I
+	public final fun component9 ()J
+	public final fun copy-fDBLuyM (JJJZZJIIJLkotlin/random/Random;)Lus/tractat/kuilt/raft/RaftConfig;
+	public static synthetic fun copy-fDBLuyM$default (Lus/tractat/kuilt/raft/RaftConfig;JJJZZJIIJLkotlin/random/Random;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getElectionTimeoutMax-UwyO8pc ()J
+	public final fun getElectionTimeoutMin-UwyO8pc ()J
+	public final fun getExpectVirtualTime ()Z
+	public final fun getHeartbeatInterval-UwyO8pc ()J
+	public final fun getMaxTermJump ()J
+	public final fun getRandom ()Lkotlin/random/Random;
+	public final fun getSlowProposeThreshold-UwyO8pc ()J
+	public final fun getSnapshotChunkCeiling ()I
+	public final fun getSnapshotTotalCeiling ()I
+	public final fun getStrictTestGuard ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftEnvelope {
+	public synthetic fun <init> (Ljava/lang/String;[BLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-Kplb3d8 ()Ljava/lang/String;
+	public final fun component2 ()[B
+	public final fun copy-HfnLOkc (Ljava/lang/String;[B)Lus/tractat/kuilt/raft/RaftEnvelope;
+	public static synthetic fun copy-HfnLOkc$default (Lus/tractat/kuilt/raft/RaftEnvelope;Ljava/lang/String;[BILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftEnvelope;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBytes ()[B
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMessageType : java/lang/Enum {
+	public static final field AppendEntries Lus/tractat/kuilt/raft/RaftMessageType;
+	public static final field AppendEntriesResponse Lus/tractat/kuilt/raft/RaftMessageType;
+	public static final field Forward Lus/tractat/kuilt/raft/RaftMessageType;
+	public static final field ForwardResponse Lus/tractat/kuilt/raft/RaftMessageType;
+	public static final field InstallSnapshot Lus/tractat/kuilt/raft/RaftMessageType;
+	public static final field InstallSnapshotResponse Lus/tractat/kuilt/raft/RaftMessageType;
+	public static final field PreVote Lus/tractat/kuilt/raft/RaftMessageType;
+	public static final field PreVoteResponse Lus/tractat/kuilt/raft/RaftMessageType;
+	public static final field RequestVote Lus/tractat/kuilt/raft/RaftMessageType;
+	public static final field RequestVoteResponse Lus/tractat/kuilt/raft/RaftMessageType;
+	public static final field TimeoutNow Lus/tractat/kuilt/raft/RaftMessageType;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/raft/RaftMessageType;
+	public static fun values ()[Lus/tractat/kuilt/raft/RaftMessageType;
+}
+
+public abstract interface class us/tractat/kuilt/raft/RaftMetric {
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$ElectionStarted : us/tractat/kuilt/raft/RaftMetric {
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lus/tractat/kuilt/raft/RaftMetric$ElectionStarted;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/RaftMetric$ElectionStarted;JILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$ElectionStarted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$ElectionSuppressedTermCeiling : us/tractat/kuilt/raft/RaftMetric {
+	public fun <init> (JJ)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun copy (JJ)Lus/tractat/kuilt/raft/RaftMetric$ElectionSuppressedTermCeiling;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/RaftMetric$ElectionSuppressedTermCeiling;JJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$ElectionSuppressedTermCeiling;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCeiling ()J
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$ElectionTimedOut : us/tractat/kuilt/raft/RaftMetric {
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lus/tractat/kuilt/raft/RaftMetric$ElectionTimedOut;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/RaftMetric$ElectionTimedOut;JILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$ElectionTimedOut;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$ElectionWon : us/tractat/kuilt/raft/RaftMetric {
+	public synthetic fun <init> (JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-UwyO8pc ()J
+	public final fun copy-HG0u8IE (JJ)Lus/tractat/kuilt/raft/RaftMetric$ElectionWon;
+	public static synthetic fun copy-HG0u8IE$default (Lus/tractat/kuilt/raft/RaftMetric$ElectionWon;JJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$ElectionWon;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getElapsed-UwyO8pc ()J
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$LeaderPinDenial : us/tractat/kuilt/raft/RaftMetric {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-Kplb3d8 ()Ljava/lang/String;
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun component4 ()I
+	public final fun copy-809nguo (Ljava/lang/String;Ljava/lang/String;JI)Lus/tractat/kuilt/raft/RaftMetric$LeaderPinDenial;
+	public static synthetic fun copy-809nguo$default (Lus/tractat/kuilt/raft/RaftMetric$LeaderPinDenial;Ljava/lang/String;Ljava/lang/String;JIILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$LeaderPinDenial;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPinnedLeader-Kplb3d8 ()Ljava/lang/String;
+	public final fun getRefusedSender-Kplb3d8 ()Ljava/lang/String;
+	public final fun getRun ()I
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$ProposeAccepted : us/tractat/kuilt/raft/RaftMetric {
+	public fun <init> (JJ)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun copy (JJ)Lus/tractat/kuilt/raft/RaftMetric$ProposeAccepted;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/RaftMetric$ProposeAccepted;JJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$ProposeAccepted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLogIndex ()J
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$ProposeApplied : us/tractat/kuilt/raft/RaftMetric {
+	public synthetic fun <init> (JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-UwyO8pc ()J
+	public final fun copy-HG0u8IE (JJ)Lus/tractat/kuilt/raft/RaftMetric$ProposeApplied;
+	public static synthetic fun copy-HG0u8IE$default (Lus/tractat/kuilt/raft/RaftMetric$ProposeApplied;JJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$ProposeApplied;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getElapsed-UwyO8pc ()J
+	public final fun getLogIndex ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$ProposeCommitted : us/tractat/kuilt/raft/RaftMetric {
+	public synthetic fun <init> (JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-UwyO8pc ()J
+	public final fun copy-HG0u8IE (JJ)Lus/tractat/kuilt/raft/RaftMetric$ProposeCommitted;
+	public static synthetic fun copy-HG0u8IE$default (Lus/tractat/kuilt/raft/RaftMetric$ProposeCommitted;JJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$ProposeCommitted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getElapsed-UwyO8pc ()J
+	public final fun getLogIndex ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$SnapshotChunkEnvelopeOverBudget : us/tractat/kuilt/raft/RaftMetric {
+	public synthetic fun <init> (Ljava/lang/String;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-Kplb3d8 ()Ljava/lang/String;
+	public final fun component2 ()I
+	public final fun component3 ()I
+	public final fun copy-0If1x5M (Ljava/lang/String;II)Lus/tractat/kuilt/raft/RaftMetric$SnapshotChunkEnvelopeOverBudget;
+	public static synthetic fun copy-0If1x5M$default (Lus/tractat/kuilt/raft/RaftMetric$SnapshotChunkEnvelopeOverBudget;Ljava/lang/String;IIILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$SnapshotChunkEnvelopeOverBudget;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBudgetBytes ()I
+	public final fun getPeer-Kplb3d8 ()Ljava/lang/String;
+	public final fun getReservedBytes ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$SnapshotRejectedSizeCeiling : us/tractat/kuilt/raft/RaftMetric {
+	public fun <init> (JI)V
+	public final fun component1 ()J
+	public final fun component2 ()I
+	public final fun copy (JI)Lus/tractat/kuilt/raft/RaftMetric$SnapshotRejectedSizeCeiling;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/RaftMetric$SnapshotRejectedSizeCeiling;JIILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$SnapshotRejectedSizeCeiling;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttemptedTotal ()J
+	public final fun getCeiling ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$WedgeSuspected : us/tractat/kuilt/raft/RaftMetric {
+	public synthetic fun <init> (Ljava/lang/String;JJLjava/util/Set;Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-Kplb3d8 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()Ljava/util/Set;
+	public final fun component5 ()Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate;
+	public final fun copy-8vTzZEk (Ljava/lang/String;JJLjava/util/Set;Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate;)Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected;
+	public static synthetic fun copy-8vTzZEk$default (Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected;Ljava/lang/String;JJLjava/util/Set;Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGate ()Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate;
+	public final fun getOurTerm ()J
+	public final fun getOurVoters ()Ljava/util/Set;
+	public final fun getSender-Kplb3d8 ()Ljava/lang/String;
+	public final fun getSenderTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate : java/lang/Enum {
+	public static final field LeaderAuthority Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate;
+	public static final field TermJump Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate;
+	public static fun values ()[Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate;
+}
+
+public abstract interface class us/tractat/kuilt/raft/RaftNode {
+	public fun awaitLeadership (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun cancelTransfer ()V
+	public fun changeMembership (Lus/tractat/kuilt/raft/ClusterConfig;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun committedFrom (J)Lkotlinx/coroutines/flow/Flow;
+	public abstract fun getCommitIndex ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getCommitted ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun getCompactionFloor ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getLeader ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getMembership ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getRole ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getSnapshots ()Lkotlinx/coroutines/flow/MutableStateFlow;
+	public abstract fun getTrace ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun propose ([BJLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun propose ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun readIndex (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun transferLeadership-HfnLOkc (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/raft/RaftNode$DefaultImpls {
+	public static fun awaitLeadership (Lus/tractat/kuilt/raft/RaftNode;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun cancelTransfer (Lus/tractat/kuilt/raft/RaftNode;)V
+	public static fun changeMembership (Lus/tractat/kuilt/raft/RaftNode;Lus/tractat/kuilt/raft/ClusterConfig;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun readIndex (Lus/tractat/kuilt/raft/RaftNode;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun transferLeadership-HfnLOkc (Lus/tractat/kuilt/raft/RaftNode;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/raft/RaftNodeKt {
+	public static final fun awaitRead (Lus/tractat/kuilt/raft/RaftNode;Lkotlinx/coroutines/flow/StateFlow;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static final fun raftNode (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/RaftTransport;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/raft/RaftNode;
+	public static synthetic fun raftNode$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/RaftTransport;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftNode;
+}
+
+public abstract interface class us/tractat/kuilt/raft/RaftRole {
+}
+
+public final class us/tractat/kuilt/raft/RaftRole$Candidate : us/tractat/kuilt/raft/RaftRole {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/RaftRole$Candidate;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftRole$Follower : us/tractat/kuilt/raft/RaftRole {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/RaftRole$Follower;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftRole$Leader : us/tractat/kuilt/raft/RaftRole {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/RaftRole$Leader;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftRole$Learner : us/tractat/kuilt/raft/RaftRole {
+	public static final field INSTANCE Lus/tractat/kuilt/raft/RaftRole$Learner;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/raft/RaftStorage {
+	public abstract fun appendEntries (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun discardLogPrefix (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun entries (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun entries$default (Lus/tractat/kuilt/raft/RaftStorage;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun leaderForTerm (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun loadSnapshot (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun saveLeaderForTerm-wsABrkQ (JLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun saveSnapshot (Lus/tractat/kuilt/raft/SnapshotMeta;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun saveTerm (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun saveTermAndVotedFor-ZBIPEA8 (JLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun saveVotedFor-Y8Q84Ps (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun term (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun truncateFrom (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun votedFor-RElB-0w (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/raft/RaftStorage$DefaultImpls {
+	public static synthetic fun entries$default (Lus/tractat/kuilt/raft/RaftStorage;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/raft/RaftTraceEvent {
+	public abstract fun getClock ()J
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$AdvanceCommitIndex : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy-bYNPQHU (JLjava/lang/String;JJ)Lus/tractat/kuilt/raft/RaftTraceEvent$AdvanceCommitIndex;
+	public static synthetic fun copy-bYNPQHU$default (Lus/tractat/kuilt/raft/RaftTraceEvent$AdvanceCommitIndex;JLjava/lang/String;JJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$AdvanceCommitIndex;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getNewCommitIndex ()J
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public final fun getOldCommitIndex ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$AppendEntries : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;JJJIJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()J
+	public final fun component7 ()I
+	public final fun component8 ()J
+	public final fun copy--8IDjcM (JLjava/lang/String;Ljava/lang/String;JJJIJ)Lus/tractat/kuilt/raft/RaftTraceEvent$AppendEntries;
+	public static synthetic fun copy--8IDjcM$default (Lus/tractat/kuilt/raft/RaftTraceEvent$AppendEntries;JLjava/lang/String;Ljava/lang/String;JJJIJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$AppendEntries;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getEntryCount ()I
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public final fun getLeaderCommit ()J
+	public final fun getPrevLogIndex ()J
+	public final fun getPrevLogTerm ()J
+	public final fun getTerm ()J
+	public final fun getTo-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$AppendEntriesAccepted : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun copy-5R8u8nw (JLjava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/raft/RaftTraceEvent$AppendEntriesAccepted;
+	public static synthetic fun copy-5R8u8nw$default (Lus/tractat/kuilt/raft/RaftTraceEvent$AppendEntriesAccepted;JLjava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$AppendEntriesAccepted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public final fun getMatchIndex ()J
+	public final fun getTo-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$AppendEntriesRejected : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;Ljava/lang/Long;Ljava/lang/Long;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/Long;
+	public final fun component5 ()Ljava/lang/Long;
+	public final fun copy-MLmLpkE (JLjava/lang/String;Ljava/lang/String;Ljava/lang/Long;Ljava/lang/Long;)Lus/tractat/kuilt/raft/RaftTraceEvent$AppendEntriesRejected;
+	public static synthetic fun copy-MLmLpkE$default (Lus/tractat/kuilt/raft/RaftTraceEvent$AppendEntriesRejected;JLjava/lang/String;Ljava/lang/String;Ljava/lang/Long;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$AppendEntriesRejected;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getConflictIndex ()Ljava/lang/Long;
+	public final fun getConflictTerm ()Ljava/lang/Long;
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public final fun getTo-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$BecomeFollower : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;JLus/tractat/kuilt/raft/StepDownReason;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun component4 ()Lus/tractat/kuilt/raft/StepDownReason;
+	public final fun copy-bYNPQHU (JLjava/lang/String;JLus/tractat/kuilt/raft/StepDownReason;)Lus/tractat/kuilt/raft/RaftTraceEvent$BecomeFollower;
+	public static synthetic fun copy-bYNPQHU$default (Lus/tractat/kuilt/raft/RaftTraceEvent$BecomeFollower;JLjava/lang/String;JLus/tractat/kuilt/raft/StepDownReason;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$BecomeFollower;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public final fun getReason ()Lus/tractat/kuilt/raft/StepDownReason;
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$BecomeLeader : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun copy-wsABrkQ (JLjava/lang/String;J)Lus/tractat/kuilt/raft/RaftTraceEvent$BecomeLeader;
+	public static synthetic fun copy-wsABrkQ$default (Lus/tractat/kuilt/raft/RaftTraceEvent$BecomeLeader;JLjava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$BecomeLeader;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$ClientRequest : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy-bYNPQHU (JLjava/lang/String;JJ)Lus/tractat/kuilt/raft/RaftTraceEvent$ClientRequest;
+	public static synthetic fun copy-bYNPQHU$default (Lus/tractat/kuilt/raft/RaftTraceEvent$ClientRequest;JLjava/lang/String;JJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$ClientRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getIndex ()J
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$Compacted : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy-bYNPQHU (JLjava/lang/String;JJ)Lus/tractat/kuilt/raft/RaftTraceEvent$Compacted;
+	public static synthetic fun copy-bYNPQHU$default (Lus/tractat/kuilt/raft/RaftTraceEvent$Compacted;JLjava/lang/String;JJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$Compacted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public final fun getThroughIndex ()J
+	public final fun getThroughTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$ConfigChange : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;JLus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/ClusterConfig;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun component4 ()Lus/tractat/kuilt/raft/ClusterConfig;
+	public final fun component5 ()Lus/tractat/kuilt/raft/ClusterConfig;
+	public final fun copy-2rJNxVA (JLjava/lang/String;JLus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/ClusterConfig;)Lus/tractat/kuilt/raft/RaftTraceEvent$ConfigChange;
+	public static synthetic fun copy-2rJNxVA$default (Lus/tractat/kuilt/raft/RaftTraceEvent$ConfigChange;JLjava/lang/String;JLus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/ClusterConfig;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$ConfigChange;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getIndex ()J
+	public final fun getNew ()Lus/tractat/kuilt/raft/ClusterConfig;
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public final fun getOld ()Lus/tractat/kuilt/raft/ClusterConfig;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$FrameRefused : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/raft/RaftMessageType;Lus/tractat/kuilt/raft/RefusalGate;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()Lus/tractat/kuilt/raft/RaftMessageType;
+	public final fun component5 ()Lus/tractat/kuilt/raft/RefusalGate;
+	public final fun copy-MLmLpkE (JLjava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/raft/RaftMessageType;Lus/tractat/kuilt/raft/RefusalGate;)Lus/tractat/kuilt/raft/RaftTraceEvent$FrameRefused;
+	public static synthetic fun copy-MLmLpkE$default (Lus/tractat/kuilt/raft/RaftTraceEvent$FrameRefused;JLjava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/raft/RaftMessageType;Lus/tractat/kuilt/raft/RefusalGate;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$FrameRefused;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public final fun getGate ()Lus/tractat/kuilt/raft/RefusalGate;
+	public final fun getMessageType ()Lus/tractat/kuilt/raft/RaftMessageType;
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$FrameUndecodable : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()I
+	public final fun copy-5R8u8nw (JLjava/lang/String;Ljava/lang/String;I)Lus/tractat/kuilt/raft/RaftTraceEvent$FrameUndecodable;
+	public static synthetic fun copy-5R8u8nw$default (Lus/tractat/kuilt/raft/RaftTraceEvent$FrameUndecodable;JLjava/lang/String;Ljava/lang/String;IILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$FrameUndecodable;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getByteCount ()I
+	public fun getClock ()J
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$InstallSnapshot : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;JJZLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()Z
+	public final fun copy-qhULNig (JLjava/lang/String;Ljava/lang/String;JJZ)Lus/tractat/kuilt/raft/RaftTraceEvent$InstallSnapshot;
+	public static synthetic fun copy-qhULNig$default (Lus/tractat/kuilt/raft/RaftTraceEvent$InstallSnapshot;JLjava/lang/String;Ljava/lang/String;JJZILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$InstallSnapshot;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getDone ()Z
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public final fun getLastIncludedIndex ()J
+	public final fun getOffset ()J
+	public final fun getTo-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$InstallSnapshotAccepted : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun copy-5R8u8nw (JLjava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/raft/RaftTraceEvent$InstallSnapshotAccepted;
+	public static synthetic fun copy-5R8u8nw$default (Lus/tractat/kuilt/raft/RaftTraceEvent$InstallSnapshotAccepted;JLjava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$InstallSnapshotAccepted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public final fun getLastIncludedIndex ()J
+	public final fun getTo-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$LeadershipTransferAbandoned : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/raft/LeadershipTransferAbandonReason;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()Lus/tractat/kuilt/raft/LeadershipTransferAbandonReason;
+	public final fun copy-5R8u8nw (JLjava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/raft/LeadershipTransferAbandonReason;)Lus/tractat/kuilt/raft/RaftTraceEvent$LeadershipTransferAbandoned;
+	public static synthetic fun copy-5R8u8nw$default (Lus/tractat/kuilt/raft/RaftTraceEvent$LeadershipTransferAbandoned;JLjava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/raft/LeadershipTransferAbandonReason;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$LeadershipTransferAbandoned;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getLeader-Kplb3d8 ()Ljava/lang/String;
+	public final fun getReason ()Lus/tractat/kuilt/raft/LeadershipTransferAbandonReason;
+	public final fun getTarget-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$LeadershipTransferStarted : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun copy-Z3Mu6v4 (JLjava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/raft/RaftTraceEvent$LeadershipTransferStarted;
+	public static synthetic fun copy-Z3Mu6v4$default (Lus/tractat/kuilt/raft/RaftTraceEvent$LeadershipTransferStarted;JLjava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$LeadershipTransferStarted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getLeader-Kplb3d8 ()Ljava/lang/String;
+	public final fun getTarget-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$PreVoteDenied : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;JLjava/util/Set;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun component5 ()Ljava/util/Set;
+	public final fun copy-MLmLpkE (JLjava/lang/String;Ljava/lang/String;JLjava/util/Set;)Lus/tractat/kuilt/raft/RaftTraceEvent$PreVoteDenied;
+	public static synthetic fun copy-MLmLpkE$default (Lus/tractat/kuilt/raft/RaftTraceEvent$PreVoteDenied;JLjava/lang/String;Ljava/lang/String;JLjava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$PreVoteDenied;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public final fun getProposedTerm ()J
+	public final fun getReason ()Lus/tractat/kuilt/raft/DenyReason;
+	public final fun getReasons ()Ljava/util/Set;
+	public final fun getTo-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$PreVoteGranted : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun copy-5R8u8nw (JLjava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/raft/RaftTraceEvent$PreVoteGranted;
+	public static synthetic fun copy-5R8u8nw$default (Lus/tractat/kuilt/raft/RaftTraceEvent$PreVoteGranted;JLjava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$PreVoteGranted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public final fun getProposedTerm ()J
+	public final fun getTo-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$PreVoteStarted : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun copy-wsABrkQ (JLjava/lang/String;J)Lus/tractat/kuilt/raft/RaftTraceEvent$PreVoteStarted;
+	public static synthetic fun copy-wsABrkQ$default (Lus/tractat/kuilt/raft/RaftTraceEvent$PreVoteStarted;JLjava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$PreVoteStarted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public final fun getProposedTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$ReadIndexConfirmed : us/tractat/kuilt/raft/RaftTraceEvent {
+	public fun <init> (JJJ)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun copy (JJJ)Lus/tractat/kuilt/raft/RaftTraceEvent$ReadIndexConfirmed;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/RaftTraceEvent$ReadIndexConfirmed;JJJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$ReadIndexConfirmed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getReadIndex ()J
+	public final fun getTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$RequestVote : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;JJJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()J
+	public final fun copy-qhULNig (JLjava/lang/String;Ljava/lang/String;JJJ)Lus/tractat/kuilt/raft/RaftTraceEvent$RequestVote;
+	public static synthetic fun copy-qhULNig$default (Lus/tractat/kuilt/raft/RaftTraceEvent$RequestVote;JLjava/lang/String;Ljava/lang/String;JJJILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$RequestVote;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public final fun getLastLogIndex ()J
+	public final fun getLastLogTerm ()J
+	public final fun getTerm ()J
+	public final fun getTo-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$Timeout : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun copy-wsABrkQ (JLjava/lang/String;J)Lus/tractat/kuilt/raft/RaftTraceEvent$Timeout;
+	public static synthetic fun copy-wsABrkQ$default (Lus/tractat/kuilt/raft/RaftTraceEvent$Timeout;JLjava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$Timeout;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getNewTerm ()J
+	public final fun getNode-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$VoteDenied : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;JLjava/util/Set;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun component5 ()Ljava/util/Set;
+	public final fun copy-MLmLpkE (JLjava/lang/String;Ljava/lang/String;JLjava/util/Set;)Lus/tractat/kuilt/raft/RaftTraceEvent$VoteDenied;
+	public static synthetic fun copy-MLmLpkE$default (Lus/tractat/kuilt/raft/RaftTraceEvent$VoteDenied;JLjava/lang/String;Ljava/lang/String;JLjava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$VoteDenied;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public final fun getReason ()Lus/tractat/kuilt/raft/DenyReason;
+	public final fun getReasons ()Ljava/util/Set;
+	public final fun getTerm ()J
+	public final fun getTo-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/RaftTraceEvent$VoteGranted : us/tractat/kuilt/raft/RaftTraceEvent {
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-Kplb3d8 ()Ljava/lang/String;
+	public final fun component3-Kplb3d8 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun copy-5R8u8nw (JLjava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/raft/RaftTraceEvent$VoteGranted;
+	public static synthetic fun copy-5R8u8nw$default (Lus/tractat/kuilt/raft/RaftTraceEvent$VoteGranted;JLjava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/raft/RaftTraceEvent$VoteGranted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()J
+	public final fun getFrom-Kplb3d8 ()Ljava/lang/String;
+	public final fun getTerm ()J
+	public final fun getTo-Kplb3d8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/raft/RaftTransport {
+	public abstract fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public abstract fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getSelfId-Kplb3d8 ()Ljava/lang/String;
+	public abstract fun sendTo-0If1x5M (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/raft/RaftTransport$DefaultImpls {
+	public static fun getMaxPayloadBytes (Lus/tractat/kuilt/raft/RaftTransport;)Ljava/lang/Integer;
+}
+
+public final class us/tractat/kuilt/raft/RefusalGate : java/lang/Enum {
+	public static final field AppendEntriesEntryTermOutOfRange Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field AppendEntriesNonContiguousBatch Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field AppendEntriesPrevLogIndexOutOfRange Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field ConfigPayloadEmptyVoterSet Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field ForgedLeaderForTerm Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field ImplausibleNegativeTerm Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field ImplausibleTermJump Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field InstallSnapshotBelowCommittedTermFloor Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field InstallSnapshotIndexOutOfRange Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field InstallSnapshotTermOutOfRange Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field LeaderAuthority Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field TimeoutNowFutureTerm Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field TimeoutNowSelfLeaderOrCandidate Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field TimeoutNowSelfLearner Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field TimeoutNowSenderNotEstablishedLeader Lus/tractat/kuilt/raft/RefusalGate;
+	public static final field TimeoutNowStaleTerm Lus/tractat/kuilt/raft/RefusalGate;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getWedgeGate ()Lus/tractat/kuilt/raft/RaftMetric$WedgeSuspected$Gate;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/raft/RefusalGate;
+	public static fun values ()[Lus/tractat/kuilt/raft/RefusalGate;
+}
+
+public final class us/tractat/kuilt/raft/RequestIdConflictException : java/lang/IllegalArgumentException {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/raft/SeamRaftTransport : us/tractat/kuilt/raft/RaftTransport {
+	public fun <init> (Lus/tractat/kuilt/core/Seam;)V
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getSelfId-Kplb3d8 ()Ljava/lang/String;
+	public fun sendTo-0If1x5M (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/raft/Snapshot {
+	public fun <init> (J[B)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getState ()[B
+	public final fun getThroughIndex ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/SnapshotMeta {
+	public fun <init> (JJLus/tractat/kuilt/raft/ConfigPayload;)V
+	public synthetic fun <init> (JJLus/tractat/kuilt/raft/ConfigPayload;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()Lus/tractat/kuilt/raft/ConfigPayload;
+	public final fun copy (JJLus/tractat/kuilt/raft/ConfigPayload;)Lus/tractat/kuilt/raft/SnapshotMeta;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/raft/SnapshotMeta;JJLus/tractat/kuilt/raft/ConfigPayload;ILjava/lang/Object;)Lus/tractat/kuilt/raft/SnapshotMeta;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getConfig ()Lus/tractat/kuilt/raft/ConfigPayload;
+	public final fun getLastIncludedIndex ()J
+	public final fun getLastIncludedTerm ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/raft/StepDownReason : java/lang/Enum {
+	public static final field AppendEntriesFromLeader Lus/tractat/kuilt/raft/StepDownReason;
+	public static final field HigherTermObserved Lus/tractat/kuilt/raft/StepDownReason;
+	public static final field LostQuorum Lus/tractat/kuilt/raft/StepDownReason;
+	public static final field RemovedFromConfig Lus/tractat/kuilt/raft/StepDownReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/raft/StepDownReason;
+	public static fun values ()[Lus/tractat/kuilt/raft/StepDownReason;
+}
+
+public final class us/tractat/kuilt/raft/StoredSnapshot {
+	public fun <init> (Lus/tractat/kuilt/raft/SnapshotMeta;[B)V
+	public final fun getMeta ()Lus/tractat/kuilt/raft/SnapshotMeta;
+	public final fun getState ()[B
+}
+

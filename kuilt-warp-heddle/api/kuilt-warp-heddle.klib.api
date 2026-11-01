@@ -1,0 +1,20 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-warp-heddle>
+final class us.tractat.kuilt.warp.heddle/HeddleAdmissionControl : us.tractat.kuilt.warp/AdmissionControl { // us.tractat.kuilt.warp.heddle/HeddleAdmissionControl|null[0]
+    constructor <init>(us.tractat.kuilt.heddle/FairShareExecution, kotlin/Long = ..., kotlin/Function1<us.tractat.kuilt.warp/TaskDescriptor, kotlin/Long> = ..., kotlin/Function1<us.tractat.kuilt.warp/Lane, us.tractat.kuilt.heddle/GroupId?> = ...) // us.tractat.kuilt.warp.heddle/HeddleAdmissionControl.<init>|<init>(us.tractat.kuilt.heddle.FairShareExecution;kotlin.Long;kotlin.Function1<us.tractat.kuilt.warp.TaskDescriptor,kotlin.Long>;kotlin.Function1<us.tractat.kuilt.warp.Lane,us.tractat.kuilt.heddle.GroupId?>){}[0]
+
+    final fun admit(us.tractat.kuilt.warp/TaskDescriptor): us.tractat.kuilt.warp/AdmissionTicket? // us.tractat.kuilt.warp.heddle/HeddleAdmissionControl.admit|admit(us.tractat.kuilt.warp.TaskDescriptor){}[0]
+
+    final object Companion { // us.tractat.kuilt.warp.heddle/HeddleAdmissionControl.Companion|null[0]
+        final fun defaultLeafOf(us.tractat.kuilt.warp/Lane): us.tractat.kuilt.heddle/GroupId? // us.tractat.kuilt.warp.heddle/HeddleAdmissionControl.Companion.defaultLeafOf|defaultLeafOf(us.tractat.kuilt.warp.Lane){}[0]
+    }
+}
+
+final fun (us.tractat.kuilt.warp/TaskDescriptor).us.tractat.kuilt.warp.heddle/inLane(kotlin/String): us.tractat.kuilt.warp/TaskDescriptor // us.tractat.kuilt.warp.heddle/inLane|inLane@us.tractat.kuilt.warp.TaskDescriptor(kotlin.String){}[0]
+final fun (us.tractat.kuilt.warp/TaskDescriptor).us.tractat.kuilt.warp.heddle/inLane(us.tractat.kuilt.warp/Lane): us.tractat.kuilt.warp/TaskDescriptor // us.tractat.kuilt.warp.heddle/inLane|inLane@us.tractat.kuilt.warp.TaskDescriptor(us.tractat.kuilt.warp.Lane){}[0]
