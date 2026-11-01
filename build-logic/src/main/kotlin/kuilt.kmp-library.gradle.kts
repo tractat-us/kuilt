@@ -2,6 +2,7 @@ import org.gradle.accessors.dm.LibrariesForLibs
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation
 import org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest
 import org.jetbrains.kotlin.gradle.targets.js.testing.karma.KotlinKarma
 
@@ -17,6 +18,21 @@ val libs = the<LibrariesForLibs>()
 
 kotlin {
     explicitApi()
+
+    // ABI gate (#2684). Every module that applies this plugin is published, so every one gets a
+    // reference dump under `api/`: `<module>.api` per JVM-kind target and one `<module>.klib.api`
+    // for the native + wasm targets. `check` depends on `checkKotlinAbi` (KGP wires it once
+    // validation is on), so `build` in ci.yml's build-jvm gates every PR. Refresh after a
+    // deliberate API change with `./gradlew updateKotlinAbi` and commit the diff.
+    //
+    // keepLocallyUnsupportedTargets stays at its default, true. On a Linux host, a native target
+    // that cannot be compiled there (KGP: no host support and klib cross-compilation is blocked by
+    // a cinterop, i.e. the Apple targets of :kuilt-nw, :kuilt-otel-logging, :kuilt-warp-runtime)
+    // has its declarations copied from the reference dump instead of checked. Every other module's
+    // Apple klibs cross-compile on Linux and ARE checked there. apple-nightly.yml's `abi` job runs
+    // the same check on macOS, where nothing is copied.
+    @OptIn(ExperimentalAbiValidation::class)
+    abiValidation()
 
     androidTarget {
         publishLibraryVariants("release")
