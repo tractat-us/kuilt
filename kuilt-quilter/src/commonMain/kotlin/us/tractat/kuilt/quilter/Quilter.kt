@@ -517,6 +517,11 @@ public class Quilter<S : Quilted<S>>(
         true
     }
 
+    /** Stub for the failing-test commit: behaves as the lossy [close] does. */
+    public suspend fun drainAndClose() {
+        close()
+    }
+
     // ---- private helpers ----
 
     /**
