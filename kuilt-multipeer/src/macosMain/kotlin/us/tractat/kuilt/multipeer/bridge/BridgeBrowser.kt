@@ -9,15 +9,17 @@
  *  - mc_browser_set_peer_lost_callback registers a second JVM callback that
  *    receives one NUL-terminated UTF-8 handle string for every `peerLost`
  *    event the apple `BrowserDelegate` sees.
- *  - mc_browser_stop cancels the K/N coroutines pumping both flows and
- *    disposes the StableRef.
+ *  - mc_browser_stop cancels the K/N coroutines pumping both flows, waits for
+ *    them to finish, and disposes the StableRef.
  *
  * Threading: JNA callback trampolines auto-attach the calling thread to
- * the JVM, so emitting from K/N's `Dispatchers.Default` is safe. Each call
- * is fire-and-forget — we don't await the JVM's processing.
+ * the JVM, so emitting from K/N's `Dispatchers.Default` is safe. A collector
+ * is inside the JVM for as long as its callback runs, which cancellation
+ * cannot interrupt; that is why mc_browser_stop has to wait.
  */
 package us.tractat.kuilt.multipeer.bridge
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CFunction
 import kotlinx.cinterop.COpaquePointer
@@ -32,14 +34,19 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.job
+import kotlinx.coroutines.runBlocking
+import us.tractat.kuilt.core.PumpFailure
+import us.tractat.kuilt.core.PumpVerdict
+import us.tractat.kuilt.core.pumpIn
 import us.tractat.kuilt.multipeer.MultipeerAdvertisement
 import us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory
 import us.tractat.kuilt.multipeer.MultipeerServiceBrowser
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.CName
+
+private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.bridge.BridgeBrowser")
 
 /**
  * `(handle: char*, displayName: char*) -> void` — the C signature of the
@@ -74,7 +81,28 @@ internal class BrowserState(
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     val scope: CoroutineScope = CoroutineScope(dispatcher + SupervisorJob())
+
+    /**
+     * Cancels every collector in [scope] and blocks the calling thread until each has finished: out of
+     * any JVM callback it was inside, and through the `finally` that releases the factory's browser.
+     *
+     * Unbounded on purpose. A bound would return with a callback possibly still running, and the
+     * caller may then release that callback's JNA trampoline. A callback that never returns therefore
+     * hangs this call rather than risking a jump through freed memory.
+     */
+    fun cancelAndAwaitCollectors() = runBlocking { scope.coroutineContext.job.cancelAndJoin() }
 }
+
+/**
+ * `onFailure` for a bridge pump. [PumpFailure.UPSTREAM] is the one that matters: `startBrowsing` refusing
+ * a second owner of the runtime ends that owner's collector. There is no way to tell the JVM (`mc_browser_start`
+ * has already returned), so the log line is the only record that this session will hear nothing.
+ */
+private fun reportPumpFailure(pump: String): (PumpFailure, Throwable) -> PumpVerdict =
+    { phase, failure ->
+        log.error(failure) { "mc.browse.pump.failed pump=$pump phase=$phase" }
+        PumpVerdict.CONTINUE
+    }
 
 /**
  * Starts an MC browse session for the given runtime and forwards every
@@ -95,12 +123,10 @@ public fun mc_browser_start(
     val browser = MultipeerServiceBrowser(factory)
 
     val state = BrowserState(factory)
-    state.scope.launch {
-        browser.discoveries().collect { ad ->
-            if (ad is MultipeerAdvertisement) {
-                memScoped {
-                    peerFoundCb.invoke(ad.handle.cstr.ptr, ad.sessionName.cstr.ptr)
-                }
+    browser.discoveries().pumpIn(state.scope, reportPumpFailure("found"), "mc-browser-found") { ad ->
+        if (ad is MultipeerAdvertisement) {
+            memScoped {
+                peerFoundCb.invoke(ad.handle.cstr.ptr, ad.sessionName.cstr.ptr)
             }
         }
     }
@@ -127,18 +153,20 @@ public fun mc_browser_set_peer_lost_callback(
 ) {
     if (browserHandle == null || peerLostCb == null) return
     val state = browserHandle.asStableRef<BrowserState>().get()
-    state.scope.launch {
-        state.factory.lostPeerHandles.collect { handle ->
-            memScoped {
-                peerLostCb.invoke(handle.cstr.ptr)
-            }
+    state.factory.lostPeerHandles.pumpIn(state.scope, reportPumpFailure("lost"), "mc-browser-lost") { handle ->
+        memScoped {
+            peerLostCb.invoke(handle.cstr.ptr)
         }
     }
 }
 
 /**
- * Stops the browse session, cancels the K/N coroutines, and disposes the
- * handle. Use-after-free if called twice with the same pointer.
+ * Stops the browse session and disposes the handle, returning only once the session's collectors have
+ * finished. On return no callback of this session is running or will run, so the JVM may release both,
+ * and the factory's browser has been released, so a new session can start at once.
+ *
+ * It blocks the caller for as long as a callback in flight takes, so calling it from inside one of this
+ * session's callbacks deadlocks. Use-after-free if called twice with the same pointer.
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
 @CName("mc_browser_stop")
@@ -146,6 +174,6 @@ public fun mc_browser_set_peer_lost_callback(
 public fun mc_browser_stop(browserHandle: COpaquePointer?) {
     if (browserHandle == null) return
     val ref = browserHandle.asStableRef<BrowserState>()
-    ref.get().scope.cancel()
+    ref.get().cancelAndAwaitCollectors()
     ref.dispose()
 }
