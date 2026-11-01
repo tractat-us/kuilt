@@ -1052,6 +1052,70 @@ public abstract class RoomConformanceSuite {
             hostRoom.leave()
         }
 
+    // ── (4l) a terminal room has no members, and says so before its readers complete (#2822) ──
+
+    /**
+     * "This member's reader completed while it is still listed" means a newer admission, and nothing
+     * else: eviction updates the roster before it closes the inbox. A room's own [Room.leave] has to
+     * keep that sentence true, or a consumer holding one reader per member reads the end of the room
+     * as a re-admission, claims again, completes at once, and spins.
+     */
+    @Test
+    public fun leaveEmptiesAHostsRosterBeforeItCompletesAMembersReader(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            val joinerId = hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }.single().id
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            assertLeaveEndsTheRosterFirst(hostRoom, member = joinerId)
+
+            joinerRoom.leave()
+        }
+
+    /** The same contract from a joiner's seat, whose one member is its host. */
+    @Test
+    public fun leaveEmptiesAJoinersRosterBeforeItCompletesTheHostsReader(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
+            val hostId = joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }.single().id
+
+            assertLeaveEndsTheRosterFirst(joinerRoom, member = hostId)
+
+            hostRoom.leave()
+        }
+
+    private suspend fun TestScope.assertLeaveEndsTheRosterFirst(room: Room, member: PeerId) {
+        val channelView = room.channel("terminal-room")
+        val leftEvents = mutableListOf<MembershipEvent.Left>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            room.events.collect { if (it is MembershipEvent.Left) leftEvents += it }
+        }
+        var rosterAtCompletion: Set<PeerId>? = null
+        // Unconfined, so the reader resumes in place the instant the room ends the inbox and reads the
+        // roster exactly as the room had published it then. See (4f) for what the ordinary scheduler hides.
+        val reader = async(UnconfinedTestDispatcher(testScheduler)) {
+            room.awaitEnd(room.incomingFrom(member), mutableListOf(), "the reader of a member when the room itself left")
+                .also { rosterAtCompletion = room.roster.value.mapTo(mutableSetOf()) { it.id } }
+        }
+        assertEquals(setOf(member), room.roster.value.mapTo(mutableSetOf()) { it.id }, "rig: the member is listed before the leave")
+
+        room.leave()
+
+        val failure = reader.await()
+        assertAll(
+            { assertEquals(null, failure, "rig: the reader completed, which is what makes the next line a claim about completion") },
+            { assertEquals(emptySet(), rosterAtCompletion, "when a member's flow completes because the room left, the published roster is already empty") },
+            { assertEquals(emptySet(), room.roster.value, "a terminal room has no members") },
+            { assertEquals(setOf(room.selfId), channelView.peers.value, "a channel of a terminal room can address nobody else") },
+            { assertEquals(emptyList(), leftEvents, "nobody left: this room stopped, so it must not report a member's departure") },
+        )
+    }
+
     // ── (5) leave(Normal) → Left event; roster shrinks ──────────────────────
 
     @Test
