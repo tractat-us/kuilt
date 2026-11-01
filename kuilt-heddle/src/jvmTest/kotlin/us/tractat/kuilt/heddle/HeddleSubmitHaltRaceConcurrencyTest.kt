@@ -144,10 +144,11 @@ class HeddleSubmitHaltRaceConcurrencyTest {
 
     private companion object {
         /**
-         * Headroom, not the mechanism: with the check and the registration split, the first measured
-         * run hung at `iter=20`. Each iteration logs one halt at `error`, so more only costs XML.
+         * With the check and the registration split, two measured runs hung at `iter=20` and `iter=673`,
+         * so the hit rate varies widely with the box and this count is what gives it room. A green is
+         * evidence, not proof. Each iteration logs one halt at `error`, so more costs only XML.
          */
-        const val ITERATIONS = 1000
+        const val ITERATIONS = 5000
         const val SUBMITTERS = 4
         const val STAGGER = 64
     }
