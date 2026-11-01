@@ -1,6 +1,5 @@
 package us.tractat.kuilt.heddle
 
-import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -79,7 +78,8 @@ import kotlin.time.Instant
  *   safety rests on it: reusing a value across restarts would regenerate colliding keys and a new act
  *   could silently vanish behind the dedup table. It is a required injected dependency precisely because
  *   the node cannot self-generate restart-uniqueness without durable storage or true entropy — never
- *   pass a value derived from a test-seedable `Random`.
+ *   pass a value derived from a test-seedable `Random`. Nothing detects a reused value. The write gate
+ *   is safe under one (its own acts carry a per-run nonce); other acts can still vanish as described.
  * @param epoch the **numeric** sibling of [incarnation]: same required per-boot discipline, but it must
  *   be a strictly-increasing `Long` (a persisted monotonic boot counter) because it seeds the *ordering*
  *   of the demand-board clock rather than the *uniqueness* of a dedup key. A restarted peer's demand
@@ -142,24 +142,6 @@ public class GovernedHeddleNode internal constructor(
     private val root: GroupId,
 ) : FairShareExecution {
 
-    /**
-     * The §6.5.3 boot gate, ordered by applied index rather than caller continuation order.
-     * Only this incarnation's own applied [enroll]/[depart] calls advance it; replay alone cannot
-     * open it. A restart starts a fresh incarnation closed.
-     */
-    private val writeGate = atomic(WriteGate(ControlOutcome.NOT_COMMITTED, GateClosed.Reason.AwaitingEnrollment))
-
-    private data class WriteGate(val appliedIndex: Long, val reason: GateClosed.Reason?)
-
-    private fun advanceWriteGate(appliedIndex: Long, reason: GateClosed.Reason?) {
-        val next = WriteGate(appliedIndex, reason)
-        while (true) {
-            val current = writeGate.value
-            if (appliedIndex <= current.appliedIndex) return
-            if (writeGate.compareAndSet(current, next)) return
-        }
-    }
-
     // ── data plane (design §4/§6/§7 — coordination-free, never touches the log) ──────
 
     /** This peer's replica identity. */
@@ -169,8 +151,10 @@ public class GovernedHeddleNode internal constructor(
      * Whether this peer may author entitlement yet — the **boot gate** of
      * `docs/heddle-ledger-relocation-design.md` §6.5 residual 3 and §13.2. It opens when this peer's
      * own [enroll]`(self)` has committed *and been applied here*, and it closes again on restart.
-     * Concurrent [enroll]/[depart] calls update the gate in applied-index order: an older call
-     * resuming late cannot undo a newer call's gate state.
+     * The apply loop moves it, in log order, when it applies this run's own [enroll]`(self)` or
+     * [depart]. Replaying an older run's entries moves nothing, and neither does a caller's fate: an
+     * [enroll] or [depart] that was cancelled or timed out still moves the gate when its entry applies,
+     * so never re-issue one just to repair the gate (#2921).
      *
      * ## Two holes, one gate
      *
@@ -205,7 +189,7 @@ public class GovernedHeddleNode internal constructor(
      * overstated "it is transitively gated" would invite a reader to assume enforcement that this
      * class does not perform.
      */
-    public val isWritable: Boolean get() = writeGate.value.reason == null
+    public val isWritable: Boolean get() = control.writeGateClosedBecause == null
 
     /** The replicated entitlement ledger as converged on this peer (the gossip-merged data-plane view). */
     public val ledger: StateFlow<EntitlementLedger> get() = node.ledger
@@ -223,7 +207,7 @@ public class GovernedHeddleNode internal constructor(
      * open and the leaf cannot cover the request.
      */
     override fun reserve(leaf: GroupId, maximumCost: Long): ReserveOutcome =
-        when (val reason = writeGate.value.reason) {
+        when (val reason = control.writeGateClosedBecause) {
             null -> node.reserve(leaf, maximumCost)
             else -> GateClosed(self, reason)
         }
@@ -247,7 +231,7 @@ public class GovernedHeddleNode internal constructor(
      * [isWritable] boot gate is closed.
      */
     public fun schedule(parent: GroupId): ScheduleOutcome =
-        when (val reason = writeGate.value.reason) {
+        when (val reason = control.writeGateClosedBecause) {
             null -> scheduleOutcomeOf(node.schedule(parent))
             else -> GateClosed(self, reason)
         }
@@ -476,14 +460,14 @@ public class GovernedHeddleNode internal constructor(
      * the replica is already enrolled: the fold is then idempotent, but the act still commits, still
      * applies, and opens the gate unless a later departure has already closed it (and it is also
      * what re-attaches a lost peer's detector, #1652).
+     *
+     * The gate opens on this run's own applied enroll and nothing else: a third party enrolling this
+     * replica proves nothing about what this run has applied, and neither does an enroll an earlier
+     * run left in the log. A [timeout] does not stop it opening: the entry may apply after this call
+     * has thrown, and the gate opens then.
      */
-    public suspend fun enroll(replica: ReplicaId, timeout: Duration? = null): ControlOutcome {
-        val outcome = control.submit(ControlCommand.Enroll(replica), timeout)
-        // The gate opens on OUR OWN applied enroll and nothing else: a third party enrolling this
-        // replica proves nothing about what this incarnation has applied.
-        if (replica == self && outcome is ControlOutcome.Applied) advanceWriteGate(outcome.index, null)
-        return outcome
-    }
+    public suspend fun enroll(replica: ReplicaId, timeout: Duration? = null): ControlOutcome =
+        control.submit(ControlCommand.Enroll(replica), timeout)
 
     /**
      * Remove **this peer** from the log-known roster, serialized through the log. Idempotent.
@@ -501,15 +485,15 @@ public class GovernedHeddleNode internal constructor(
      * needs the fenced [revocation] seam, which v1 does not ship.
      *
      * Departing also closes this node's [isWritable] boot gate, unless a later self-[enroll] has
-     * already reopened it: the gate follows applied index, not return order. The promise a departure
+     * already reopened it: the gate follows log order, not return order. The promise a departure
      * makes is "I will never author another slot", and a node that kept writing after making it
      * would break the very quantifier the fence rests on. Re-[enroll] to become writable again.
+     *
+     * A [timeout] or a cancellation does not undo any of this. The act may already have applied, or
+     * apply later, and the gate closes when it does, whether or not this call returned.
      */
-    public suspend fun depart(timeout: Duration? = null): ControlOutcome {
-        val outcome = control.submit(ControlCommand.Depart(self), timeout)
-        if (outcome is ControlOutcome.Applied) advanceWriteGate(outcome.index, GateClosed.Reason.Departed)
-        return outcome
-    }
+    public suspend fun depart(timeout: Duration? = null): ControlOutcome =
+        control.submit(ControlCommand.Depart(self), timeout)
 
     /**
      * The replicas enrolled as of the control log this peer has applied — the log-order membership
