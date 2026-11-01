@@ -5,6 +5,7 @@ package us.tractat.kuilt.otel.tap
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.core.InMemoryLoom
@@ -24,6 +25,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -145,27 +147,32 @@ class GatedTapEndToEndTest {
     /**
      * A known limit, pinned so the claim about it is a measurement. The gate guards the device and not
      * the puller: a puller's gate is transparent, so on a fabric where joiners reach each other, its
-     * replicator hands what it has pulled to any peer on the mesh, code or no code. The device never
-     * admitted this stranger, and the stranger reads the logs anyway. See "the one honest limitation"
-     * in `module.md`. If this reds because the puller stopped leaking, delete it and fix that section.
+     * replicator hands what it has pulled to any peer that turns up, code or no code. The device never
+     * admitted this stranger, and the stranger reads the logs anyway. See "The honest limitations" in
+     * `module.md`. If this reds because the puller stopped leaking, delete it and fix that section.
      */
     @Test
-    fun aStrangerOnTheMeshReadsWhatTheAdmittedPullerReplicates() = runTest(UnconfinedTestDispatcher()) {
+    fun aStrangerJoiningAfterThePullReadsWhatThePullerHolds() = runTest(UnconfinedTestDispatcher()) {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
+        host = installLogTap(loom, exporterWith(1), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
+        val pullerSeam = loom.join(InMemoryTag("puller"))
+        val puller = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
+            .also { client = it }
+        assertEquals(listOf("log 1"), puller.pull().map { it.body }, "rig: the honest puller must have pulled")
+
         val stranger = loom.join(InMemoryTag("stranger"))
         val replicated = mutableListOf<String>()
         backgroundScope.launch {
             stranger.incoming.collect { swatch ->
                 val frame = swatch.toByteArray()
-                if (!TapAdmitMessage.isAdmitFrame(frame)) replicated += frame.decodeToString()
+                if (swatch.sender == pullerSeam.selfId && !TapAdmitMessage.isAdmitFrame(frame)) {
+                    replicated += frame.decodeToString()
+                }
             }
         }
-        host = installLogTap(loom, exporterWith(1), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
-        val puller = LogTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
-            .also { client = it }
+        delay(1.seconds) // suspends for real, so the collector above gets to run
 
-        assertEquals(listOf("log 1"), puller.pull().map { it.body }, "rig: the honest puller must have pulled")
         assertTrue(replicated.any { "log 1" in it }, "the stranger must be reading the log body off the puller")
     }
 

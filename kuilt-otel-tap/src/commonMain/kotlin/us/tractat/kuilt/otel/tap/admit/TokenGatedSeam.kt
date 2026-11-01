@@ -47,7 +47,9 @@ internal sealed interface GateRole {
  * nor leak log state to a peer that has not proven the join code. Admission frames the
  * gate itself sends use the inner seam directly, bypassing that filter. On the
  * **prover** (pulling) side the gate is transparent apart from answering challenges and
- * stripping admit frames from what the replicator sees.
+ * stripping admit frames from what the replicator sees. It authenticates nobody, so on a fabric
+ * where joiners reach each other, the puller's replicator exchanges state with any peer that turns
+ * up, including what it has already pulled from the device.
  *
  * ## The prover answers everyone
  *
@@ -71,17 +73,18 @@ internal sealed interface GateRole {
  * No fabric here authenticates a peer id against anything, so the ids are worth what the fabric makes
  * them hard to claim:
  * - **`InMemoryLoom`:** the loom mints every id. A relay on one mesh is simply closed.
- * - **Multipeer:** the id is a suffix of the display name a peer chose, and any Mac on the LAN is
- *   accepted. A relayer has to wear the puller's id to the device and the device's id to the puller,
- *   which takes more than one identity and takes knowing both ids.
- * - **Network.framework:** the id is claimed in a hello, behind TLS keyed from the room key, so a
- *   relayer must first hold the room key.
- * - **WebSocket, TCP, Nearby, WebRTC:** the id is claimed in the dial or a hello. A two-peer seam never
- *   puts the relayer between two honest peers on one session, so the relay needs two sessions: answer
- *   a device dialling a spoofed advertisement under the puller's id, and dial the puller under the
- *   device's. Then the ids match and this binding does nothing.
+ * - **Multipeer, Nearby:** the id is claimed by the peer, as a suffix of its display name or in a
+ *   connection hello, and Multipeer accepts any Mac on the LAN. A relayer has to be the puller's id to
+ *   the device and the device's id to the puller, which takes more than one identity and takes knowing
+ *   both ids.
+ * - **Network.framework:** the same claim, behind TLS keyed from the room key, so a relayer must first
+ *   hold the room key.
+ * - **WebSocket, TCP, WebRTC:** the id is claimed in the dial or a hello. A one-to-one seam never puts
+ *   a relayer between two honest peers on one session, so the relay needs two: answer a device dialling
+ *   a spoofed advertisement under the puller's id, and dial the puller under the device's. Then the ids
+ *   match and this binding does nothing. A room relayed through a hub is the Multipeer case instead.
  *
- * So the binding closes the relay on one session and leaves the two-session, both-ids relay open,
+ * So the binding closes the relay within one session and leaves the two-session, both-ids relay open,
  * which `aRelayWearingBothIdsAcrossTwoSessionsIsStillAdmitted` pins. Closing that takes a key exchange
  * the code authenticates, which is a different protocol.
  *
