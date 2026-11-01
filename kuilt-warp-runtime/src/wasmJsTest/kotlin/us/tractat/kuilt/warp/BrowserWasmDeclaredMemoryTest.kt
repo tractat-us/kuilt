@@ -20,7 +20,7 @@ class BrowserWasmDeclaredMemoryTest {
      */
     @Test
     fun lebDecodesPastThe32BitRange() {
-        fun decode(vararg bytes: Int) = WasmByteReader(ByteArray(bytes.size) { bytes[it].toByte() }, 0).leb().toLong()
+        fun decode(vararg bytes: Int) = WasmByteReader(ByteArray(bytes.size) { bytes[it].toByte() }, 0).leb()
         assertAll(
             { assertEquals(1L shl 32, decode(0x80, 0x80, 0x80, 0x80, 0x10), "2^32 must not overflow to 0") },
             { assertEquals(1L shl 31, decode(0x80, 0x80, 0x80, 0x80, 0x08), "2^31 must not go negative") },

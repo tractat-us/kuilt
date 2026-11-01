@@ -28,8 +28,9 @@ import kotlin.js.Promise
  *   imports object would also fail, but rejecting up front gives a deterministic error.)
  * - *Memory ceiling* — the binary's memory section is parsed and checked against
  *   [WasmSandboxConfig.maxMemoryPages]; a module is rejected with [WasmLoadException] if its declared
- *   initial exceeds the cap, its explicit max exceeds the cap, **or it declares no explicit max at
- *   all**. The JS API exposes no declared memory limits and cannot re-impose a max after compile,
+ *   initial exceeds the cap, its explicit max exceeds the cap, **it declares no explicit max at
+ *   all**, it declares more than one memory (V8 runs a second one, and the cap reads one), or its
+ *   limits use memory64. The JS API exposes no declared memory limits and cannot re-impose a max after compile,
  *   so a no-max module could otherwise `memory.grow` unbounded to ~4 GiB — a memory-exhaustion
  *   DoS. Requiring kernels to declare a bounded max ≤ cap closes that hole (and is the uniform
  *   contract every [WasmRuntime] impl enforces — see [WasmRuntime]'s memory-ceiling KDoc): the
@@ -164,7 +165,10 @@ private const val LEB_CONTINUATION_BIT = 0x80
 private const val LEB_SHIFT = 7
 private const val LIMITS_HAS_MAX_FLAG = 0x01
 
-internal class DeclaredMemoryLimits(val initialPages: Int, val maxPages: Int?)
+/** Has-max and shared. Any other bit changes what the limits mean: memory64, or a custom page size. */
+private const val LIMITS_READABLE_FLAGS = 0x03
+
+internal class DeclaredMemoryLimits(val initialPages: Long, val maxPages: Long?)
 
 /**
  * Bytes `WebAssembly.Module` has accepted, with the module it compiled from them. The constructor
@@ -198,14 +202,12 @@ private class CompiledModule private constructor(val module: JsAny, val bytes: B
 }
 
 /**
- * Walks the section list for the memory section, returning its first memory's declared limits.
+ * Walks the section list for the memory section, returning its one memory's declared limits.
  *
- * Takes a [CompiledModule] rather than raw bytes because termination depends on it. Each
+ * Takes a [CompiledModule] rather than raw bytes because the decode depends on it. Each
  * [WasmByteReader.leb] read ends, at the latest, when [WasmByteReader.u8] runs off the end of the
- * bytes. The walk relies on the engine's validation: a section size of 2^31 or more decodes to a
- * negative `Int`, and `skip` would move the cursor backwards, so a header such as
- * `00 FA FF FF FF 0F` would re-read itself forever. A validated module cannot contain one, because
- * every section size must fit in the bytes that follow it (#2816).
+ * bytes, and the engine's validation keeps a LEB128 here to five bytes, so its value fits a `Long`
+ * and `skip` only ever moves the cursor forwards (#2816).
  */
 private fun declaredMemoryLimits(compiled: CompiledModule): DeclaredMemoryLimits? {
     val bytes = compiled.bytes
@@ -214,37 +216,49 @@ private fun declaredMemoryLimits(compiled: CompiledModule): DeclaredMemoryLimits
     while (reader.hasMore()) {
         val sectionId = reader.u8()
         val sectionSize = reader.leb()
-        if (sectionId == WASM_MEMORY_SECTION_ID) return reader.readFirstMemoryLimits()
+        if (sectionId == WASM_MEMORY_SECTION_ID) return reader.readOnlyMemoryLimits()
         reader.skip(sectionSize)
     }
     return null
 }
 
 /** Cursor over the WASM binary with minimal unsigned-LEB128 + section helpers. */
-internal class WasmByteReader(private val bytes: ByteArray, private var pos: Int) {
+internal class WasmByteReader(private val bytes: ByteArray, start: Int) {
+    private var pos: Long = start.toLong()
+
     fun hasMore(): Boolean = pos < bytes.size
 
-    fun u8(): Int = bytes[pos++].toInt() and 0xFF
+    fun u8(): Int = bytes[(pos++).toInt()].toInt() and 0xFF
 
-    fun skip(count: Int) {
+    fun skip(count: Long) {
         pos += count
     }
 
-    fun leb(): Int {
-        var result = 0
+    fun leb(): Long {
+        var result = 0L
         var shift = 0
         while (true) {
             val byte = u8()
-            result = result or ((byte and LEB_PAYLOAD_MASK) shl shift)
+            result = result or ((byte and LEB_PAYLOAD_MASK).toLong() shl shift)
             if (byte and LEB_CONTINUATION_BIT == 0) return result
             shift += LEB_SHIFT
         }
     }
 
-    /** Reads the first memory entry's limits (`[count][flags][min][max?]`), or null if empty. */
-    fun readFirstMemoryLimits(): DeclaredMemoryLimits? {
-        if (leb() == 0) return null
+    /**
+     * Reads the one memory entry's limits (`[count][flags][min][max?]`), or null if the section is
+     * empty. Refuses what the cap cannot speak for rather than checking only the part it can read.
+     */
+    fun readOnlyMemoryLimits(): DeclaredMemoryLimits? {
+        val count = leb()
+        if (count == 0L) return null
+        if (count > 1L) {
+            throw WasmLoadException("module declares $count memories; the sandbox cap covers one")
+        }
         val flags = u8()
+        if (flags and LIMITS_READABLE_FLAGS.inv() != 0) {
+            throw WasmLoadException("module memory limits flags $flags not supported (memory64 or a custom page size)")
+        }
         val initial = leb()
         val max = if (flags and LIMITS_HAS_MAX_FLAG != 0) leb() else null
         return DeclaredMemoryLimits(initial, max)

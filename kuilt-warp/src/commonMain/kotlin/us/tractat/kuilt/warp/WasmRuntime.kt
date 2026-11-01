@@ -17,8 +17,9 @@ package us.tractat.kuilt.warp
  *
  * **Memory ceiling — a bounded declared max is REQUIRED.** A conforming implementation MUST
  * reject at load any module whose declared linear memory has an initial size or explicit max
- * exceeding [WasmSandboxConfig.maxMemoryPages], declares memory with **no explicit max**, or
- * declares no linear memory at all (the warp ABI marshals args/results through memory). The
+ * exceeding [WasmSandboxConfig.maxMemoryPages], declares memory with **no explicit max**,
+ * declares more than one memory (the cap covers one), or declares no linear memory at all
+ * (the warp ABI marshals args/results through memory). The
  * no-max rule is uniform across targets because it is the only one enforceable identically
  * everywhere — the browser cannot re-impose a max on a compiled module, so clamping is not an
  * option there, and a no-max module could otherwise `memory.grow` to ~4 GiB (a memory-bomb
@@ -50,7 +51,7 @@ public interface WasmRuntime {
      * whose invocations are bounded by the configured execution timeout.
      *
      * @throws WasmLoadException if the module declares an import, violates the memory ceiling
-     *   (over-cap initial or max, no explicit max, or no memory at all), is malformed, lacks
+     *   (over-cap initial or max, no explicit max, a second memory, or no memory at all), is malformed, lacks
      *   the `warp_alloc`/`warp_run` ABI exports, or — on implementations that instantiate
      *   eagerly — its `(start)` function traps or exceeds the execution budget (see the
      *   load-phase execution bound above).
@@ -72,8 +73,8 @@ public sealed class WasmException(message: String, cause: Throwable?) : Exceptio
  * Thrown by [WasmRuntime.load] when a WASM module cannot be loaded into the sandbox.
  *
  * Covers every load-time guard: the module declares an import (capability violation), it
- * violates the memory ceiling (over-cap initial or max, no explicit max, or no linear memory
- * at all), the bytes are malformed / not valid WASM, or a required warp ABI export
+ * violates the memory ceiling (over-cap initial or max, no explicit max, a second memory, or
+ * no linear memory at all), the bytes are malformed / not valid WASM, or a required warp ABI export
  * (`warp_alloc`/`warp_run`) is missing. On implementations that instantiate eagerly at load,
  * also covers a `(start)` function that traps or exceeds the execution budget.
  */

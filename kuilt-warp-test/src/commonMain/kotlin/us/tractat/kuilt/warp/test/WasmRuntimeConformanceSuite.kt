@@ -44,6 +44,8 @@ import kotlin.time.Duration.Companion.seconds
  *   rule, and only the max arm is reachable by a spec-valid module (see
  *   [loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap] for the algebra and for the vector
  *   that reaches the other one);
+ * - a second linear memory, which the cap does not cover (see
+ *   [loadRejectsModuleDeclaringASecondMemory]);
  * - malformed bytes; missing `warp_alloc`/`warp_run` ABI exports; no linear memory at all.
  *
  * **Run-time guards** — each fault is a [WasmExecutionException], never a hang or a raw error:
