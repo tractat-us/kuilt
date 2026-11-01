@@ -5,32 +5,41 @@ import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock as withMutex
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
+import us.tractat.kuilt.core.PumpFailure
+import us.tractat.kuilt.core.PumpVerdict
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
+import us.tractat.kuilt.core.pumpIn
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.stream.DEFAULT_MAX_FRAME_SIZE
 import kotlin.random.Random
@@ -175,9 +184,9 @@ private val seamMonotonicMillis: () -> Long = kotlin.time.TimeSource.Monotonic.m
  * [SeamState.Weaving] and resets [peers] to `{selfId}`, keeping [incoming] open and waiting for a peer
  * to (re)connect (`NwLoom` redials — #1513). `SeamState` blesses `Woven → Weaving` as the recoverable
  * "re-forming" transition; a later peer add flips it back to [SeamState.Woven] via [addRemotePeer].
- * [SeamState.Torn] now latches on ONLY two paths — an explicit consumer [close] and the initial
- * `NwLoom.weave` timeout (which routes through [close] as [CloseReason.Unreachable]); it is never a
- * consequence of peer loss.
+ * [SeamState.Torn] latches on ONLY three paths — an explicit consumer [close], the initial
+ * `NwLoom.weave` timeout (which routes through [close] as [CloseReason.Unreachable]), and the byte stream
+ * itself failing (`onBytesPumpFailure`, [CloseReason.Error]); it is never a consequence of peer loss.
  *
  * ## The wedge watchdog — diagnostics for a formation that fails SILENTLY (#2420)
  * This fabric's characteristic failure is silence: a seam that has resolved a peer and cannot move a byte
@@ -471,7 +480,7 @@ internal class NwSeam(
     override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     // Weaving until the first remote peer resolves, then Woven; re-forms Woven→Weaving on last-remote
-    // loss (recoverable, #1513); latches Torn ONLY on close()/weave-timeout, never on peer loss.
+    // loss (recoverable, #1513); latches Torn ONLY through close(), never on peer loss.
     // ALLOW-bareSeamState: all three writers take this seam's own [lock] — `latchTorn`'s terminal
     // `Torn`, `addRemotePeer`'s `Weaving → Woven` and `evictPeerLocked`'s `Woven → Weaving`. The
     // check and the write are one critical section, which is the property the gate exists to add.
@@ -544,6 +553,19 @@ internal class NwSeam(
     // Single latch flag, read/written across every path (receive/close/send).
     private val closed = atomic(false)
 
+    private val _tornDown = CompletableDeferred<Unit>()
+
+    /**
+     * Completes when this seam is done with its [NwApi]: [close] has made its last call on the binding and
+     * every collector has unwound, so [NwApi.bytesReceived] is free to collect and no late `stopListening`
+     * can land on whoever uses the binding next.
+     *
+     * Stronger than `state` reading `Torn`, which is published first, while all of that is still to come.
+     * It is what makes a seam on one binding safely followed by another (#3031). Never completes on a seam
+     * nobody closes.
+     */
+    internal val tornDown: Deferred<Unit> get() = _tornDown
+
     // Stamped onto every delivered Swatch; incremented from the single bytes loop but atomic for safety.
     private val seq = atomic(0L)
 
@@ -585,37 +607,106 @@ internal class NwSeam(
 
     // ── loop 2: bytesReceived — demux + inline handshake ────────────────────────
 
-    private suspend fun bytesReceivedLoop() {
-        api.bytesReceived.collect { event ->
-            if (closed.value) return@collect
-            val connId = event.connectionId
-            // Snapshot (get-or-create, minting its nonce once) the ConnState under the lock; decode OUTSIDE it.
-            // A frame for a TOMBSTONED (recently-removed) connId is DROPPED — not resurrected (#1528).
-            val (cs, created) = getOrCreateConnForBytes(connId) ?: run {
-                log.debug { "nw.seam.bytes.dropped-tombstoned connId=${connId.value} self=${selfId.value} (removed conn)" }
-                return@collect
+    /**
+     * Launched through [pumpIn], `UNDISPATCHED` so it holds the byte stream before this constructor returns.
+     *
+     * A pump because a throw out of a bare `launch { collect }` reaches the seam scope's handler, of which
+     * there is usually none, and Kotlin/Native then aborts the process. That is what a second collector on
+     * `RealNwApi` did (#3031): [NwLoom] no longer builds one, but two looms over one [NwApi] still can.
+     */
+    private fun bytesReceivedLoop(): Job = api.bytesReceived.pumpIn(
+        scope = scope,
+        onFailure = ::onBytesPumpFailure,
+        name = "nw-seam-bytes[${selfId.value}]",
+        start = CoroutineStart.UNDISPATCHED,
+    ) { event -> receiveChunk(event) }
+
+    /**
+     * What a failure of [bytesReceivedLoop] costs: the seam, either way.
+     *
+     * The stream's own failure costs it its hearing for good. An item's failure means [receiveChunk] could not
+     * even evict the link it failed on, so that link may be live with its framer out of step, and carrying on
+     * would read the next chunk's bytes as a length prefix. A seam that is deaf or misparsing and not `Torn` is
+     * the one state nothing above it can see, so it tears, carrying the cause. That is the third and last way
+     * this seam reaches [SeamState.Torn], and like the other two it goes through [close].
+     *
+     * The tear sits in a `finally` because [pumpIn] reads a throw from here as `CONTINUE`: a logger that throws
+     * must not be what keeps a broken pump running.
+     */
+    private fun onBytesPumpFailure(failure: PumpFailure, cause: Throwable): PumpVerdict {
+        try {
+            when (failure) {
+                PumpFailure.ITEM ->
+                    log.error(cause) { "nw.seam.bytes.item-failed self=${selfId.value} peers=${_peers.value.map { it.value }} → tearing" }
+                PumpFailure.UPSTREAM ->
+                    log.error(cause) { "nw.seam.bytes.stream-failed self=${selfId.value} peers=${_peers.value.map { it.value }} → tearing" }
             }
-            // Same #1509/#1522 lost-wakeup guard as connectionOpenedLoop: if bytes are the first thing that
-            // puts this connId into `conns`, re-reconcile the latest connectionStates so a pending path loss
-            // is not stranded and a conn that closed before we tracked it is torn on registration. The read
-            // happens under the lock inside reconcileStates (#1566), not on this caller's thread.
-            if (created) reconcileStates()
-            // The framer is single-reader (only this loop touches it), so decoding outside the lock is safe.
-            // #1528 finding 1: NwFramer.decode throws FrameTooLargeException on a bad 4-byte length prefix
-            // (negative or > maxFrameSize). Guard it so a corrupt/hostile chunk on ANY live conn routes through
-            // the SAME corrupt-inbound backstop instead of escaping the collector and killing the receive loop.
-            // A real structured-concurrency cancel is always re-thrown, never swallowed.
-            val frames = try {
-                cs.framer.decode(event.bytes)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                evictCorruptConn(connId, "framer decode failed: ${e.message}")
-                return@collect
+        } finally {
+            // `close` cancels `scope`, which is what this coroutine runs on, and has work to do after that.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                withContext(NonCancellable) {
+                    try {
+                        close(CloseReason.Error(cause))
+                    } catch (closeFailure: Throwable) {
+                        log.debug { "nw.seam.bytes.tear-failed self=${selfId.value}: $closeFailure" }
+                    }
+                }
             }
-            for (frame in frames) {
-                processFrame(connId, cs, frame)
-            }
+        }
+        return PumpVerdict.STOP
+    }
+
+    /**
+     * One chunk off the shared byte stream, and the rule that a chunk that fails costs its link.
+     *
+     * The stream is ordered and framed, so there is no skipping a chunk: one that never reached the framer
+     * leaves the next one's bytes to be read as a length prefix, and a throw between two frames of a chunk
+     * leaves a hole nobody downstream can see. So anything thrown past `connId` evicts through the #1528
+     * backstop and the redial heals it. `ensureActive`, not a rethrow by type: a binding is consumer-authored,
+     * and a cancellation it minted is this chunk's failure rather than this seam being closed.
+     *
+     * An [Error] is not caught: [pumpIn] lets one end the process, and evicting a link would only delay that.
+     * What the eviction itself throws goes on to [onBytesPumpFailure].
+     */
+    private suspend fun receiveChunk(event: NwBytesReceived) {
+        if (closed.value) return
+        val connId = event.connectionId
+        try {
+            demuxChunk(connId, event.bytes)
+        } catch (failure: Exception) {
+            currentCoroutineContext().ensureActive()
+            log.error(failure) { "nw.seam.bytes.chunk-failed connId=${connId.value} self=${selfId.value} → the link goes, its redial heals it" }
+            evictCorruptConn(connId, "chunk failed: $failure")
+        }
+    }
+
+    private suspend fun demuxChunk(connId: NwConnectionId, bytes: ByteArray) {
+        // Snapshot (get-or-create, minting its nonce once) the ConnState under the lock; decode OUTSIDE it.
+        // A frame for a TOMBSTONED (recently-removed) connId is DROPPED — not resurrected (#1528).
+        val (cs, created) = getOrCreateConnForBytes(connId) ?: run {
+            log.debug { "nw.seam.bytes.dropped-tombstoned connId=${connId.value} self=${selfId.value} (removed conn)" }
+            return
+        }
+        // Same #1509/#1522 lost-wakeup guard as connectionOpenedLoop: if bytes are the first thing that
+        // puts this connId into `conns`, re-reconcile the latest connectionStates so a pending path loss
+        // is not stranded and a conn that closed before we tracked it is torn on registration. The read
+        // happens under the lock inside reconcileStates (#1566), not on this caller's thread.
+        if (created) reconcileStates()
+        // The framer is single-reader (only this loop touches it), so decoding outside the lock is safe.
+        // #1528 finding 1: NwFramer.decode throws FrameTooLargeException on a bad 4-byte length prefix
+        // (negative or > maxFrameSize). Guard it so a corrupt/hostile chunk on ANY live conn routes through
+        // the SAME corrupt-inbound backstop instead of escaping the collector and killing the receive loop.
+        // A real structured-concurrency cancel is always re-thrown, never swallowed.
+        val frames = try {
+            cs.framer.decode(bytes)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            evictCorruptConn(connId, "framer decode failed: ${e.message}")
+            return
+        }
+        for (frame in frames) {
+            processFrame(connId, cs, frame)
         }
     }
 
@@ -2222,6 +2313,16 @@ internal class NwSeam(
         log.debug { "nw.seam.close.requested self=${selfId.value} reason=$reason state=${_state.value}" }
         // Single-shot: if a self-driven Torn (last-peer drop) already fired, this no-ops.
         if (!latchTorn(reason)) return
+        try {
+            releaseTransport()
+        } finally {
+            // `finally`: a closer cancelled halfway has still finished touching the binding.
+            scope.coroutineContext.job.invokeOnCompletion { _tornDown.complete(Unit) }
+        }
+    }
+
+    /** What [close] owes the binding once [latchTorn] has run. Called once, by the closer that won the latch. */
+    private suspend fun releaseTransport() {
         val targets = lock.withLock {
             // Draining losers are torn down too — they are live sockets this seam owns, and `registry` (the
             // winners) does not name them. Their bound jobs die with [scope] in [latchTorn]; their ordering
@@ -2264,9 +2365,9 @@ internal class NwSeam(
     /**
      * Terminal teardown, latched exactly once via [closed]. Publishes [SeamState.Torn], completes
      * [incoming] by closing the [spool], and cancels [scope] (stopping all collectors). Returns `false`
-     * if teardown already ran. Since #1513 its ONLY caller is [close] — an explicit consumer close or the
-     * `NwLoom.weave` timeout (which routes through [close] as [CloseReason.Unreachable]). Peer loss no
-     * longer tears (it re-forms to [SeamState.Weaving] via [evictPeerLocked]).
+     * if teardown already ran. Since #1513 its ONLY caller is [close] — an explicit consumer close, the
+     * `NwLoom.weave` timeout (which routes through [close] as [CloseReason.Unreachable]), or a failed byte
+     * stream. Peer loss no longer tears (it re-forms to [SeamState.Weaving] via [evictPeerLocked]).
      *
      * The terminal `_state = Torn` write is taken UNDER [lock] so it serializes against the locked
      * state-machine writers ([evictPeerLocked]'s `Woven → Weaving`, [addRemotePeer]'s `Weaving → Woven`).
@@ -2344,7 +2445,7 @@ internal class NwSeam(
             "maxFrameBytes=$maxFrameBytes leaves no room for the ${NwWire.TYPE_BYTES}-byte frame type"
         }
         scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionOpenedLoop() }
-        scope.launch(start = CoroutineStart.UNDISPATCHED) { bytesReceivedLoop() }
+        bytesReceivedLoop()
         scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionClosedLoop() }
         scope.launch(start = CoroutineStart.UNDISPATCHED) { connectionStatesLoop() }
         // The single dedicated reader draining [deliveryStage] into the [spool] (#1415). Cancelled with
