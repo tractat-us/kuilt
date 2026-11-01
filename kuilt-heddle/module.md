@@ -211,6 +211,12 @@ and nothing else does:
   lands, `reserve` and `schedule` answer `GateClosed` — never the same "nothing here" answer an
   idle peer gives — so forgetting to enroll shows up as a refusal with a reason rather than as a
   scheduler that quietly does nothing.
+- **A peer that cannot read the agreed record stops, and it says so.** The agreed record is the
+  truth about who holds what. A peer that meets an entry it cannot read, say one written by a newer
+  version, no longer knows that truth, so it refuses to spend rather than guess. `reserve` and
+  `schedule` answer `GateClosed` naming the entry, and this one does not clear by itself: it takes a
+  version that can read the entry, or a deliberate migration of the record. So upgrade a group
+  together, and give the agreement step its own log.
 
 `heddleGoverned` returns a `GovernedHeddleNode`: the same data-plane calls as `HeddleNode` plus
 `mint`/`prepare`/`activate`/`close`/`retire` and `enroll`/`depart`, each of which returns a

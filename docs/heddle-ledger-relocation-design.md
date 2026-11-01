@@ -1005,7 +1005,8 @@ section documented as safe turns out to be a real conservation break in one shap
    results, so a caller must branch on the closed gate and cannot mistake it for an idle tree.
    Throwing was rejected because the gate is legitimately closed for a window during every normal
    boot, so "closed" is not always a caller error; a flag such as `isWritable` was rejected because
-   a consumer who forgets to enroll will equally forget to read it. Later causes of a closed gate —
-   #1738's fail-closed on an undecodable control-log act is the expected one — arrive as a new
-   `GateClosed.Reason`, not a new arm in either result. Shipped as a breaking change in place,
+   a consumer who forgets to enroll will equally forget to read it. Later causes of a closed gate
+   arrive as a new `GateClosed.Reason`, not a new arm in either result; #1738's
+   `UnreadableControlEntry` is the first, latching the log index and format version of a control
+   act the peer cannot read. Shipped as a breaking change in place,
    with no deprecation shim, because heddle had no consumers yet.

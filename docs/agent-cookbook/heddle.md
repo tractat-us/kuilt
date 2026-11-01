@@ -94,8 +94,11 @@ quantifies over (`enrolledReplicas()` reads it back); only a peer may depart its
 **`enroll(self)` is what opens a node's write gate** — until it applies, `reserve` and
 `schedule` answer `GateClosed` (with the replica and a `Reason`), which is a separate arm from
 `ReserveOutcome.NoHoldings` and `ScheduleOutcome.NothingToDelegate`, so a node that never
-enrolled can no longer pass for an idle one. The spend path
-(`schedule`/`reserve`/`complete`) never touches the log.
+enrolled can no longer pass for an idle one. **A peer that cannot read a control act stops there**:
+`GateClosed.Reason.UnreadableControlEntry` names the log index and format version, `enroll` is
+refused, and a restart stops at the same entry, so it takes a build that can read the entry or an
+offline migration of the log. Give the control plane its own Raft node and upgrade a cluster
+together. The spend path (`schedule`/`reserve`/`complete`) never touches the log.
 
 <!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleHeddleGoverned -->
 ```kotlin
