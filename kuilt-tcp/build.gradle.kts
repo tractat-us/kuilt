@@ -35,6 +35,7 @@ kotlin {
 
         jvmTest.dependencies {
             implementation(project(":kuilt-conformance"))
+            implementation(project(":kuilt-raft"))
             implementation(libs.kotlin.testJunit)
             implementation(libs.kotlinx.coroutines.test)
         }
