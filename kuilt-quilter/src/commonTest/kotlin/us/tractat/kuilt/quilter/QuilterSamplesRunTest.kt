@@ -31,6 +31,9 @@ class QuilterSamplesRunTest {
     fun quilterMutateOrSkipHolds(): TestResult = sampleQuilterMutateOrSkip()
 
     @Test
+    fun quilterDrainAndCloseHolds(): TestResult = sampleQuilterDrainAndClose()
+
+    @Test
     fun quilterSetupHolds(): TestResult = sampleQuilterSetup()
 
     @Test
