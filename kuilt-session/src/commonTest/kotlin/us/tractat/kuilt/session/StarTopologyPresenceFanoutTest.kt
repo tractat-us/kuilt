@@ -338,8 +338,8 @@ class StarTopologyPresenceFanoutTest {
                 { assertEquals(0, seen.host.count { it is MembershipEvent.Recovered }, "rig: no pong has come back") },
             )
 
-            // Long enough for the detector's own PeerRecovered, and past the host's window, so a
-            // second Unpaused or a window left armed would both show up here.
+            // Long enough for the detector's own PeerRecovered, so a second Unpaused would show up here.
+            // A window left armed would not: handleWindowExpired refuses to expire a Connected member.
             testScheduler.advanceTimeBy(expiryBudget)
             testScheduler.runCurrent()
 
@@ -473,7 +473,7 @@ class StarTopologyPresenceFanoutTest {
             assertEquals(
                 Liveness.Connected,
                 host.roster.value.first { it.id == droppedId }.liveness,
-                "the host's roster must read Connected, and its window must not have evicted the member",
+                "the host's roster must read Connected",
             )
         },
     )

@@ -1296,7 +1296,9 @@ internal class SeamRoom(
      * Announces the release to the other members only when this call is what ended the pause (#2908).
      * The `Resume` frame and the detector's [PartitionEvent.PeerRecovered] race: whichever arrives
      * first restores [Liveness.Connected], and the loser finds nothing to do. [markRecovered] gates
-     * its own [propagateUnpaused] on the same transition, so exactly one of the two sends it.
+     * its own [propagateUnpaused] on the same transition, so exactly one of those two sends it. Those
+     * two are all this covers: a same-`PeerId` `Hello` re-admits as [Liveness.Connected] through
+     * [addToRoster] with no transition, and then neither of them announces anything (#3026).
      *
      * State mutation under lock; suspend send outside lock.
      */
@@ -2407,7 +2409,10 @@ internal class SeamRoom(
      * member it does not currently hold as [Liveness.Partitioned], so an `Unpaused` that overtook its
      * own `Paused` would be discarded and the late `Paused` would then pin a **recovered** member
      * `Partitioned` in that remote roster forever, with nothing to correct it. Enqueue order is wire
-     * order, so that inversion cannot happen (#1781).
+     * order (#1781), but nothing orders the enqueues themselves: [handleReconnectResumed] sends this
+     * from the reconnect event loop while [markPartitioned] enqueues `Paused` from the detector
+     * collector, outside the lock. A `Resume` landing between that state commit and that enqueue puts
+     * `Unpaused` first, which is that inversion. Read from the code, not reproduced; see #3026.
      */
     private fun propagateUnpaused(peerId: PeerId) {
         fanOutToOtherMembers(peerId, AdmitMessage.Unpaused(peerId.value))
