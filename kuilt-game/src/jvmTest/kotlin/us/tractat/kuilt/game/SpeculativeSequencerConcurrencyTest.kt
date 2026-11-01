@@ -18,11 +18,16 @@ import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import java.lang.management.ManagementFactory
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /**
  * Pause a real proposal between reading and publishing its optimistic state, then drive a
@@ -79,7 +84,7 @@ class SpeculativeSequencerConcurrencyTest {
                 ))
             }
         }
-        val proposer = thread(name = "speculative-proposer") {
+        val proposer = thread(name = "speculative-proposer", isDaemon = true) {
             try {
                 runBlocking {
                     if (explicitRequestId) seq.propose(10, requestId = 1L) else seq.propose(10)
@@ -90,8 +95,8 @@ class SpeculativeSequencerConcurrencyTest {
         }
         var collector: Thread? = null
         try {
-            enteredApply.await()
-            collector = thread(name = "speculative-collector") {
+            assertTrue(enteredApply.await(WEDGE_SECONDS, TimeUnit.SECONDS), "the proposer never entered apply")
+            collector = thread(name = "speculative-collector", isDaemon = true) {
                 try {
                     scheduler.runCurrent()
                 } catch (error: Throwable) {
@@ -100,15 +105,18 @@ class SpeculativeSequencerConcurrencyTest {
             }
             // Wait for an actual ordering witness, not an elapsed-time guess. A fixed collector
             // waits on the proposer's lock; an unguarded collector completes the event. Sleeping
-            // yields the CPU to both workers. No timeout result is used as a test assertion.
+            // yields the CPU to both workers. Reaching the deadline is a wedge, and only that: the
+            // ordering verdict below does not read the clock.
             val threads = ManagementFactory.getThreadMXBean()
+            val deadline = TimeSource.Monotonic.markNow() + WEDGE_SECONDS.seconds
             while (collector.isAlive && threads.getThreadInfo(collector.threadId())?.lockOwnerId != proposer.threadId()) {
+                assertTrue(deadline.hasNotPassedNow(), "the collector neither finished nor parked on the proposer's lock")
                 Thread.sleep(1)
             }
         } finally {
             releaseApply.countDown()
-            proposer.join()
-            collector?.join()
+            joinOrFail(proposer)
+            collector?.let(::joinOrFail)
             scope.cancel()
             scheduler.runCurrent()
         }
@@ -118,5 +126,20 @@ class SpeculativeSequencerConcurrencyTest {
             Triple(seq.confirmedCount.value, seq.pendingCount, seq.speculativeState.value),
             "committed event must survive the overlapping optimistic state publication",
         )
+    }
+
+    private fun joinOrFail(worker: Thread) {
+        worker.join(WEDGE_SECONDS.seconds.inWholeMilliseconds)
+        assertFalse(worker.isAlive, "${worker.name} is wedged")
+    }
+
+    private companion object {
+        /**
+         * How long a wait may run before it is called a wedge. Far longer than any of them needs, even
+         * on a saturated box. These waits are real threads rather than virtual time, so without a bound
+         * a regression would run into the CI job's timeout and leave no results XML to read. The
+         * threads are daemons so that a wedged one cannot then hold the test JVM open.
+         */
+        const val WEDGE_SECONDS = 60L
     }
 }
