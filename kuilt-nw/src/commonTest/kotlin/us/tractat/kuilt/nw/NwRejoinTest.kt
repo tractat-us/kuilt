@@ -6,6 +6,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -63,6 +64,7 @@ class NwRejoinTest {
     private val tag = InMemoryTag("session", peerKey = "joiner")
 
     private class Formed(
+        val radio: FakeNwRadio,
         val api: FakeNwApi,
         val loom: NwLoom,
         val seam: Seam,
@@ -89,7 +91,7 @@ class NwRejoinTest {
             a.await() to b.await()
         }
         testScheduler.runCurrent()
-        val rig = Formed(api, loom, seam, peerSeam)
+        val rig = Formed(radio, api, loom, seam, peerSeam)
         try {
             block(rig)
         } finally {
@@ -248,7 +250,128 @@ class NwRejoinTest {
 
                 assertFailsWith<NwUnreachableException> { rig.loom.join(tag) }
 
-                assertEquals(1, rig.api.startListeningCalls, "no listener was started over a close still in flight")
+                val dump = rig.loom.dumpFormationState()
+                assertAll(
+                    { assertEquals(1, rig.api.startListeningCalls, "no listener was started over a close still in flight") },
+                    { assertTrue("state=Torn" in dump, "a closing session still holds the binding, and says so: $dump") },
+                )
+            }
+        }
+
+    /**
+     * A repeat that loses a race to a close, which is what `SeamRoom.markHostLost` sets up: it emits `HostLost`
+     * before its `leave` closes the seam, so a consumer reacting with a join gets here with the seam still live.
+     * The race is forced by parking the repeat first. Rather than failing at once with "no peer after" a wait
+     * that never ran out, the repeat waits the close out and builds fresh, which a later peer then answers.
+     */
+    @Test
+    fun aRepeatWhoseSeamClosesUnderItBuildsFreshRatherThanFailing() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            withFormed { rig ->
+                rig.peerSeam.close()
+                rig.seam.state.first { it is SeamState.Weaving }
+                val repeat = async { rig.loom.join(tag) }
+                testScheduler.runCurrent()
+                val parkedOnTheLiveSeam = repeat.isActive
+                val listensWhileParked = rig.api.startListeningCalls
+
+                rig.seam.close()
+                val laterLoom = NwLoom(FakeNwApi(rig.radio, "later", "later"), SERVICE_TYPE, random = Random(4))
+                val later = async { laterLoom.join(InMemoryTag("session", peerKey = "later")) }
+
+                val fresh = repeat.await()
+                rig.others += fresh
+                rig.others += later.await()
+                assertAll(
+                    { assertTrue(parkedOnTheLiveSeam, "rig: the repeat must have been waiting when the close landed") },
+                    { assertEquals(1, listensWhileParked, "rig: on the first session, not a second") },
+                    { assertNotSame(rig.seam, fresh) },
+                    { assertIs<SeamState.Woven>(fresh.state.value) },
+                    { assertEquals(2, rig.api.startListeningCalls, "a fresh session listened") },
+                    { assertEquals(1, rig.api.bytesReceivedSubscriberCountForTest(), "one collector, the new one") },
+                )
+            }
+        }
+
+    /**
+     * "Wait for a friend": the caller backs out of a weave and comes back, over a loom it keeps. The back-out is
+     * forced inside `startListening`, the first thing a weave suspends in on a real binding, and which
+     * [FakeNwApi] alone cannot suspend in.
+     */
+    @Test
+    fun aCallerCancelledWhileListeningLeavesTheNextWeaveAFreshSeam() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val radio = FakeNwRadio()
+            val api = FakeNwApi(radio, deviceId = "joiner", serviceName = "joiner")
+            val binding = ListenHeldApi(api)
+            val loom = NwLoom(binding, SERVICE_TYPE, random = Random(1))
+            val backedOut = launch { loom.join(tag) }
+            testScheduler.runCurrent()
+            val parkedInListen = binding.listensEntered
+            val listensWhileParked = api.startListeningCalls
+
+            backedOut.cancelAndJoin()
+            testScheduler.runCurrent()
+            val slotAfterBackOut = loom.dumpFormationState()
+            binding.gate.complete(Unit)
+
+            val peerLoom = NwLoom(FakeNwApi(radio, "peer", "peer"), SERVICE_TYPE, random = Random(2))
+            val (fresh, peerSeam) = coroutineScope {
+                val a = async { loom.join(tag) }
+                val b = async { peerLoom.join(InMemoryTag("session", peerKey = "peer")) }
+                a.await() to b.await()
+            }
+            testScheduler.runCurrent()
+            try {
+                assertAll(
+                    { assertEquals(1, parkedInListen, "rig: the weave was inside startListening") },
+                    { assertEquals(0, listensWhileParked, "rig: and had not got past it") },
+                    { assertTrue("formations=none" in slotAfterBackOut, "the slot is free: $slotAfterBackOut") },
+                    { assertEquals(1, api.stopListeningCalls, "the abandoned session was closed") },
+                    { assertIs<SeamState.Woven>(fresh.state.value) },
+                    { assertEquals(1, api.startListeningCalls, "the fresh session reached the binding") },
+                    { assertEquals(1, api.bytesReceivedSubscriberCountForTest(), "one collector, the new one") },
+                )
+            } finally {
+                withContext(NonCancellable) {
+                    fresh.close()
+                    peerSeam.close()
+                }
+            }
+        }
+
+    @Test
+    fun aWeaveThatTimedOutLeavesTheNextWeaveAFreshSeam() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val radio = FakeNwRadio()
+            val api = FakeNwApi(radio, deviceId = "joiner", serviceName = "joiner")
+            val loom = NwLoom(api, SERVICE_TYPE, random = Random(1), weaveTimeout = 1.seconds)
+
+            val timedOut = assertFailsWith<NwUnreachableException> { loom.join(tag) }
+            testScheduler.runCurrent()
+            val listensAfterTimeout = api.startListeningCalls
+
+            val peerLoom = NwLoom(FakeNwApi(radio, "peer", "peer"), SERVICE_TYPE, random = Random(2))
+            val (fresh, peerSeam) = coroutineScope {
+                val a = async { loom.join(tag) }
+                val b = async { peerLoom.join(InMemoryTag("session", peerKey = "peer")) }
+                a.await() to b.await()
+            }
+            testScheduler.runCurrent()
+            try {
+                assertAll(
+                    { assertTrue("timed out" in timedOut.message.orEmpty(), "rig: the deadline fired: ${timedOut.message}") },
+                    { assertEquals(1, listensAfterTimeout, "rig: the first session did listen") },
+                    { assertEquals(1, api.stopListeningCalls, "and was closed") },
+                    { assertIs<SeamState.Woven>(fresh.state.value) },
+                    { assertEquals(2, api.startListeningCalls, "a fresh session listened again") },
+                    { assertEquals(1, api.bytesReceivedSubscriberCountForTest(), "one collector, the new one") },
+                )
+            } finally {
+                withContext(NonCancellable) {
+                    fresh.close()
+                    peerSeam.close()
+                }
             }
         }
 
@@ -300,6 +423,18 @@ class NwRejoinTest {
         override suspend fun stopListening() {
             gate.await()
             api.stopListening()
+        }
+    }
+
+    /** [api], with a [startListening] that waits on [gate] before reaching it, so a weave can be held there. */
+    private class ListenHeldApi(private val api: FakeNwApi) : NwApi by api {
+        val gate = CompletableDeferred<Unit>()
+        var listensEntered = 0
+
+        override suspend fun startListening(serviceName: String, serviceType: String) {
+            listensEntered += 1
+            gate.await()
+            api.startListening(serviceName, serviceType)
         }
     }
 

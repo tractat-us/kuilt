@@ -136,7 +136,7 @@ public class NwUnreachableException(message: String) : Exception(message)
  * same seam. Two looms over one [NwApi] cannot be seen from here at all: the second seam's collection fails, and
  * that seam tears itself ([CloseReason.Error]) and fails its [weave]. Its close then stops the listener and the
  * browser on that binding, which are the first seam's. Only a consumer-authored [NwApi] can reach this, since
- * `nwHost` and `nwJoin` build a binding per loom.
+ * this module's own factories build one binding per loom.
  *
  * ## Scope
  * Background collectors (the seam's three loops + this loom's discovery/dial loop) run on

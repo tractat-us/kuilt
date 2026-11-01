@@ -5,12 +5,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback proof — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -74,41 +74,49 @@ class NwFactoryJoinHostDropLoopbackTest {
                     val j = async { joinerFactory.join(InMemoryTag("host", peerKey = "nw-loopback-joiner")) }
                     h.await() to j.await()
                 }
-                withTimeout(ceiling) { host.roster.first { it.size == 1 } }
-                withTimeout(ceiling) { joiner.roster.first { it.size == 1 } }
+                try {
+                    withTimeout(ceiling) { host.roster.first { it.size == 1 } }
+                    withTimeout(ceiling) { joiner.roster.first { it.size == 1 } }
 
-                val events = mutableListOf<MembershipEvent>()
-                val resumed = CompletableDeferred<MembershipEvent.Resumed>()
-                val hostLost = CompletableDeferred<MembershipEvent.HostLost>()
-                val recorder = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                    joiner.events.collect { event ->
-                        events += event
-                        if (event is MembershipEvent.Resumed) resumed.complete(event)
-                        if (event is MembershipEvent.HostLost) hostLost.complete(event)
+                    val events = mutableListOf<MembershipEvent>()
+                    val resumed = CompletableDeferred<MembershipEvent.Resumed>()
+                    val hostLost = CompletableDeferred<MembershipEvent.HostLost>()
+                    // `events` and `incoming` are `asSharedFlow()`, which subscribes before it first suspends,
+                    // so `UNDISPATCHED` has the collector in place by the time each of these returns.
+                    val recorder = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        joiner.events.collect { event ->
+                            events += event
+                            if (event is MembershipEvent.Resumed) resumed.complete(event)
+                            if (event is MembershipEvent.HostLost) hostLost.complete(event)
+                        }
+                    }
+
+                    val links = hostApi.connectionStates.value.filterValues { it !is NwConnState.Closed }.keys
+                    assertTrue(links.isNotEmpty(), "the rig must have a live link to drop")
+                    links.forEach { hostApi.disconnect(it) }
+
+                    withTimeout(ceiling) { resumed.await() }
+
+                    // A frame across the healed link: `Resumed` says the host answered, this says bytes move.
+                    val payload = byteArrayOf(1, 2, 3)
+                    val frame = async(start = CoroutineStart.UNDISPATCHED) { joiner.incoming.first() }
+                    host.broadcast(payload)
+                    val received = withTimeout(ceiling) { frame.await() }
+
+                    recorder.cancel()
+                    assertAll(
+                        { assertContentEquals(payload, received.payload, "events: $events") },
+                        { assertTrue(!hostLost.isCompleted, "the seat survived the drop: $events") },
+                        { assertTrue(events.any { it is MembershipEvent.WindowOpened }, "the drop was seen: $events") },
+                    )
+                } finally {
+                    // `scope.cancel()` below does not reach a seam: a loom's seam scope is a parentless
+                    // `SupervisorJob`, so a room left open would outlive this test.
+                    withContext(NonCancellable) {
+                        joiner.leave()
+                        host.leave()
                     }
                 }
-                // The events flow does not replay: the recorder has to be subscribed before the drop lands.
-                delay(50)
-
-                val links = hostApi.connectionStates.value.filterValues { it !is NwConnState.Closed }.keys
-                assertTrue(links.isNotEmpty(), "the rig must have a live link to drop")
-                links.forEach { hostApi.disconnect(it) }
-
-                withTimeout(ceiling) { resumed.await() }
-
-                // A frame across the healed link: `Resumed` says the host answered, this says bytes move.
-                val payload = byteArrayOf(1, 2, 3)
-                val frame = async(start = CoroutineStart.UNDISPATCHED) { joiner.incoming.first() }
-                delay(50)
-                host.broadcast(payload)
-                val received = withTimeout(ceiling) { frame.await() }
-
-                recorder.cancel()
-                assertAll(
-                    { assertContentEquals(payload, received.payload, "events: $events") },
-                    { assertTrue(!hostLost.isCompleted, "the seat survived the drop: $events") },
-                    { assertTrue(events.any { it is MembershipEvent.WindowOpened }, "the drop was seen: $events") },
-                )
             } finally {
                 listOf(hostApi, joinerApi).forEach { api ->
                     api.stopListening()
