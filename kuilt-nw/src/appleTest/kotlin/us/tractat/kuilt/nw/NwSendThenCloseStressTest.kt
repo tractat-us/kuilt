@@ -45,6 +45,10 @@ class NwSendThenCloseStressTest {
         const val TRIALS_PER_ROW = 20
         val FAREWELL = "farewell".encodeToByteArray()
         val ARRIVAL_CEILING: Duration = 1.seconds
+        const val ROOM_TRIALS = 40
+
+        /** Long past a healthy arrival, short of the 2-minute window: a miss reads as `no-terminal`. */
+        val ROOM_CEILING: Duration = 5.seconds
     }
 
     /** One measured condition: [cargoBytes] handed to the seam ahead of the small frame, then [wait], then close. */
@@ -55,7 +59,9 @@ class NwSendThenCloseStressTest {
         withContext(Dispatchers.Default) {
             val rows = listOf(
                 0 to 0.milliseconds,
+                0 to 5.milliseconds,
                 0 to 25.milliseconds,
+                0 to 100.milliseconds,
                 64 * 1024 to 0.milliseconds,
                 1024 * 1024 to 0.milliseconds,
                 8 * 1024 * 1024 to 0.milliseconds, // the control: a rig that cannot lose a frame reds nothing
@@ -65,6 +71,20 @@ class NwSendThenCloseStressTest {
                 println("nw.send-then-close cargo=${it.cargoBytes} wait=${it.wait} arrived=${it.arrived}/${it.trials}")
             }
             assertEquals(List(rows.size) { TRIALS_PER_ROW }, rows.map { it.trials }, "every trial ran")
+        }
+    }
+
+    /** The whole of it, room to room: how often a host's `leave` reaches the joiner as `HostLeft`. */
+    @Test
+    fun aHostsLeaveOverTheRealRadio() = runBlocking {
+        withContext(Dispatchers.Default) {
+            var ran = 0
+            val reasons = List(ROOM_TRIALS) { trial ->
+                ran += 1
+                departOverTheRealRadio(seed = trial, ceiling = ROOM_CEILING).reason
+            }
+            println("nw.host-departure ${reasons.groupingBy { it?.toString() ?: "no-terminal" }.eachCount()} of $ran")
+            assertEquals(ROOM_TRIALS, ran, "every trial ran")
         }
     }
 
