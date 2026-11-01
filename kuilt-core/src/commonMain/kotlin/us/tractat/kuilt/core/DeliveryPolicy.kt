@@ -1,5 +1,7 @@
 package us.tractat.kuilt.core
 
+import kotlinx.coroutines.channels.Channel
+
 /** Overflow behaviour when a bounded delivery buffer is full. Mirrors Reactor's `onBackpressure*`. */
 public enum class Overflow { SUSPEND, DROP_OLDEST, DROP_LATEST, FAIL }
 
@@ -7,12 +9,22 @@ public enum class Overflow { SUSPEND, DROP_OLDEST, DROP_LATEST, FAIL }
  * How an in-process fabric buffers frames for one receiver: a bounded [capacity] and an
  * [overflow] strategy. There is deliberately no UNLIMITED option — unbounded delivery is the
  * defect this type exists to make unrepresentable (#701).
+ *
+ * @param capacity frames buffered per receiver, from 1 up to `Int.MAX_VALUE - 1`. `Int.MAX_VALUE`
+ *   is refused because it is `Channel.UNLIMITED`: a channel built with it has no bound and ignores
+ *   [overflow], so asking for a very large buffer would quietly ask for an unbounded one.
+ * @throws IllegalArgumentException if [capacity] is outside that range.
  */
 public data class DeliveryPolicy(
     val capacity: Int = DEFAULT_CAPACITY,
     val overflow: Overflow = Overflow.SUSPEND,
 ) {
-    init { require(capacity >= 1) { "capacity must be >= 1, was $capacity" } }
+    init {
+        require(capacity >= 1) { "capacity must be >= 1, was $capacity" }
+        require(capacity != Channel.UNLIMITED) {
+            "capacity must be below Channel.UNLIMITED, which builds an unbounded channel, was $capacity"
+        }
+    }
 
     public companion object {
         /** Generous default; revisit if a conformance test throttles on it. */
