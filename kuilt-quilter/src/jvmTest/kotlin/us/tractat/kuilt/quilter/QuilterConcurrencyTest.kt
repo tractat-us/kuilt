@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
@@ -31,12 +34,19 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.PNCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.fakeSeamPair
+import java.lang.management.ManagementFactory
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /**
  * The wall-clock ceiling every probe in this file uses — a **wedge backstop**, not a budget.
@@ -55,6 +65,87 @@ import kotlin.time.Duration.Companion.seconds
  * contributor copying a neighbour copies the constant.
  */
 private val CONCURRENCY_PROBE_WEDGE_BACKSTOP = 120.seconds
+
+/**
+ * How long [WriterArrivingDuringClose] waits for its writer, once while the closer watches it and
+ * once to join it. Both ends are reached in milliseconds, so this only keeps a broken rig from
+ * holding the lock forever, and two of them fit inside [CONCURRENCY_PROBE_WEDGE_BACKSTOP].
+ */
+private val WRITER_BOUND = 30.seconds
+
+/**
+ * A [Seam] whose [sendTo] stays suspended until it is cancelled, then calls [onCancelled] from the
+ * cancellation handler, which runs synchronously on the thread doing the cancelling. That thread is
+ * inside [Quilter.close], so this is a hook in the one place nothing else can reach.
+ *
+ * It is [sendTo] and not `broadcast` because only a local write's `broadcast` holds a drain open. A
+ * first-contact `FullState` is launched into the replica's own scope, so it is still parked at the
+ * close without having delayed it.
+ */
+private class ParkingSendSeam(delegate: Seam, private val onCancelled: () -> Unit) : Seam by delegate {
+    var parked = 0
+        private set
+
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        parked++
+        suspendCancellableCoroutine<Unit> { send -> send.invokeOnCancellation { onCancelled() } }
+    }
+}
+
+/**
+ * From inside a running [Quilter.close], starts a real thread that attempts [write] and reports
+ * what that thread was doing while the close was still running.
+ *
+ * The witness is the JVM's own record of who owns the lock the writer is parked on, not merely
+ * [Thread.state]. A state of `BLOCKED` or `WAITING` can come from class loading or any other lock
+ * on the writer's way to [write], and would read as a pass. A lock owned by the very thread running
+ * the close cannot, so a transient wait just keeps the poll going until the writer finishes.
+ */
+private class WriterArrivingDuringClose(private val write: () -> Unit) {
+    data class Sighting(val state: Thread.State, val lockOwnerId: Long, val lockName: String?, val closerId: Long) {
+        val parkedOnTheCloser: Boolean get() = lockOwnerId == closerId
+    }
+
+    var firings = 0
+        private set
+    var sighting: Sighting? = null
+        private set
+    private var writer: Thread? = null
+    private val writeOutcome = AtomicReference("no outcome")
+
+    val outcome: String get() = writeOutcome.get()
+    val writerStillAlive: Boolean get() = writer?.isAlive == true
+
+    /** Only the first cancelled send acts: a replica parks more than one on first contact. */
+    fun fire() {
+        if (firings++ > 0) return
+        val closerId = Thread.currentThread().threadId()
+        val started = thread(name = "drain-lock-probe-writer", isDaemon = true) {
+            try {
+                write()
+                writeOutcome.set("accepted")
+            } catch (_: IllegalStateException) { // ALLOW-ise: a raw Thread, and apply is not suspend, so no cancellation can reach this
+                writeOutcome.set("refused")
+            }
+        }
+        writer = started
+        val threads = ManagementFactory.getThreadMXBean()
+        val deadline = TimeSource.Monotonic.markNow() + WRITER_BOUND
+        while (true) {
+            val info = threads.getThreadInfo(started.threadId())
+            val seen = Sighting(info?.threadState ?: started.state, info?.lockOwnerId ?: -1L, info?.lockName, closerId)
+            if (seen.state == Thread.State.TERMINATED || seen.parkedOnTheCloser || deadline.hasPassedNow()) {
+                sighting = seen
+                return
+            }
+            Thread.sleep(1)
+        }
+    }
+
+    fun joinWriter() {
+        writer?.join(WRITER_BOUND.inWholeMilliseconds)
+    }
+}
 
 /**
  * Thread-safety probes for [Quilter] (#288).
@@ -468,5 +559,87 @@ class QuilterConcurrencyTest {
             "rig never fired: in no round did a writer get a write accepted and a writer then meet the " +
                 "closed replica, so no drain overlapped a write",
         )
+    }
+
+    /**
+     * [Quilter.drainAndClose]'s "nothing in flight, so close" is one atomic step against a racing
+     * write only if the close runs **while holding the lock a write must take** (#2616). The race itself
+     * cannot be forced, since nothing in the gap can be hooked, but the lock being held can be observed
+     * without it: cancelling the replica's job runs [ParkingSendSeam]'s handler on the closing thread,
+     * inside [Quilter.close], and a writer started from there either parks on a lock that thread owns,
+     * or finishes.
+     *
+     * It runs on the test dispatcher so that the test thread is the closer and no replica coroutine
+     * can be holding the lock on another thread. The only real thread is the writer.
+     *
+     * **What this does not catch: `lock { snapshot }; lock { close() }`.** That shape holds the lock
+     * during the close and lets a write in between the two blocks, so it is not atomic, and this test
+     * stays green on it. Only [aWriteThatReturnedIsNeverLostToARacingDrain] can see that shape, and
+     * then only by chance. So this pins that the close is under the lock, not that it is the same hold
+     * as the check.
+     */
+    @Test
+    fun drainClosesWhileHoldingTheLockAWriteMustTake() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
+        val probe = closeWithAWriterArriving { drainAndClose() }
+
+        assertAll(
+            { assertEquals(1, probe.firings, "rig: exactly one cancelled send should have started the writer") },
+            {
+                assertTrue(
+                    probe.sighting?.parkedOnTheCloser == true,
+                    "while the drain was closing, a writer should wait on a lock the closing thread " +
+                        "holds, saw ${probe.sighting}",
+                )
+            },
+            { assertEquals("refused", probe.outcome, "once released, the writer should meet the closed replica") },
+            { assertFalse(probe.writerStillAlive, "the writer should finish once the drain returns") },
+        )
+    }
+
+    /**
+     * The positive control for [drainClosesWhileHoldingTheLockAWriteMustTake]: the same rig, with the
+     * close run by plain [Quilter.close], which holds no lock while it cancels. If the writer did not
+     * finish here, the probe could not tell a held lock from a free one and that test would prove
+     * nothing. It is also what the mutation "close outside the lock" looks like to the probe.
+     */
+    @Test
+    fun plainCloseHoldsNoLockSoTheSameWriterFinishes() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
+        val probe = closeWithAWriterArriving { close() }
+
+        assertAll(
+            { assertEquals(1, probe.firings, "rig: exactly one cancelled send should have started the writer") },
+            {
+                assertEquals(
+                    Thread.State.TERMINATED,
+                    probe.sighting?.state,
+                    "with no lock held during the close, the writer should run to its end, saw ${probe.sighting}",
+                )
+            },
+            { assertEquals("refused", probe.outcome, "the writer should meet the closed replica") },
+        )
+    }
+
+    private suspend fun TestScope.closeWithAWriterArriving(
+        teardown: suspend Quilter<PNCounter>.() -> Unit,
+    ): WriterArrivingDuringClose {
+        lateinit var rep: Quilter<PNCounter>
+        val probe = WriterArrivingDuringClose { rep.apply(rep.state.value.increment(rep.replica)) }
+        val (fake, _) = fakeSeamPair(PeerId("self"), PeerId("other"))
+        val seam = ParkingSendSeam(fake, probe::fire)
+        rep = Quilter(
+            replica = ReplicaId(seam.selfId.value),
+            seam = seam,
+            initial = PNCounter.ZERO,
+            messageSerializer = QuiltMessage.serializer(PNCounter.serializer()),
+            scope = backgroundScope,
+            config = QuilterConfig(expectVirtualTime = true),
+        )
+        runCurrent()
+        assertTrue(seam.parked > 0, "precondition: first contact with the peer should have parked a send")
+        assertEquals(emptyList(), rep.writeSendsForTest, "precondition: nothing should be holding the drain open")
+
+        rep.teardown()
+        probe.joinWriter()
+        return probe
     }
 }
