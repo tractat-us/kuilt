@@ -377,20 +377,23 @@ class QuilterConcurrencyTest {
 
     /**
      * [Quilter.drainAndClose] against writers on other threads (#2616): **a write that returned
-     * normally was never lost**, across many races between `apply` and the close.
+     * normally has been handed to the seam by the time the drain returns**, with `apply` and the drain
+     * genuinely overlapping, which the virtual-time `QuilterDrainAndCloseTest` cannot arrange.
      *
-     * The single-threaded `QuilterDrainAndCloseTest` pins the waiting and the ordering, but it cannot
-     * see this property, because it needs a real thread inside the gap. If the check that nothing is
-     * in flight were not atomic with the close, a writer could land between the two, have its write
-     * accepted, and have its send cancelled.
+     * The rig asserts it fired. `refusedWrites` counts writers that met the closed replica: with that
+     * at zero every drain merely outlasted its writers, and the equality below would hold for a drain
+     * that waited for nothing.
      *
-     * The rig asserts it fired. [refusedWrites] counts writers that met the closed replica, which is
-     * the boundary under test: with that at zero every drain merely outlasted its writers, and the
-     * equality below would hold for an unsafe drain too.
+     * **What this does not reliably pin: that the "nothing in flight" check is atomic with the close.**
+     * Moving the close outside the lock opens a gap of a few nanoseconds that a writer must land in, and
+     * nothing in that gap can be hooked to force it. Measured with that mutation: red once at round 297
+     * of 300, then green in 4 runs of 1 000 rounds. So that property rests on the code's shape and its
+     * comment, not on this test. The mutations it does catch reliably, a drain that stops looking after
+     * one snapshot and a write send the drain cannot see, red it within the first 100 rounds.
      */
     @Test
     fun aWriteThatReturnedIsNeverLostToARacingDrain() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
-        val rounds = 1000
+        val rounds = 300
         val writers = 4
         val perWriter = 300
         val refusedWrites = AtomicInteger()

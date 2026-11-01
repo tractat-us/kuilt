@@ -54,6 +54,15 @@ grows, while Quilter's anti-entropy reconcile still converges every peer. See
 
 `Quilter` implements `AutoCloseable`. Call `close()` to cancel the background collection and release resources. In a `use {}` block or a scope that is cancelled, the replicator shuts down cleanly.
 
+`close()` drops any write that has not left yet. `apply` and `mutate` return before their frame goes out, so a goodbye written just before `close()` never reaches anyone, and the peer looks present until something times it out. When the last write matters, leave with `drainAndClose()` instead:
+
+```kotlin
+quilter.mutate { it.set(quilter.replica, now, "alice", "left") }
+withTimeout(5.seconds) { quilter.drainAndClose() }
+```
+
+It waits until every write has been handed to the connection, then closes. Keep the timeout: a slow connection can hold a send for a long time, and the replicator closes even if the timeout fires. "Handed to the connection" is the whole promise. It does not mean the peer received the frame.
+
 ## Wire protocol
 
 `Quilter` serialises messages with CBOR by default (via `Cbor` from `kotlinx-serialization`). Messages are `QuiltMessage<S>`:

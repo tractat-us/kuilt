@@ -223,6 +223,18 @@ late-joiner full-state sync, and [Scaling to many peers](#scaling-to-many-peers)
 
 Use plain `mutate { … }` when the transform always writes.
 
+**Intent:** publish a last write and then leave — a departure notice, a final score — without the teardown cancelling it. You are about to put a `yield()` or a `delay` between the write and `close()`.
+**Primitive:** `Quilter.drainAndClose()`. `apply` and `mutate` return with the frame still queued on the replica's own scope, and `close()` cancels that scope, so `apply` then `close` loses the frame and the peer lingers as present. A `yield()` only moves the loss: the send gets as far as its first suspension inside the seam and is cancelled there. Wrap the drain in your own timeout, since a seam can hold a send as long as it likes; the replica ends up closed even when the timeout fires.
+
+<!-- verbatim from kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt#sampleQuilterDrainAndClose -->
+```kotlin
+    // Publish the goodbye, then wait for it to reach the seam before closing.
+    alice.mutate { it.set(alice.replica, 1L, "alice", "left") }
+    kotlinx.coroutines.withTimeout(5.seconds) { alice.drainAndClose() }
+```
+
+It promises the frame was **handed to the seam**, not delivered. A send that failed, or that was cancelled because the seam tore or someone else closed the replica, also counts as finished, and a seam's own close may still drop what it accepted.
+
 **Intent:** two guests in the same room never see each other's updates — a `Quilter` between two joiners never converges, one peer's messages reach the host and stop, or a co-member is in the roster but every send to it fails. Typically on Multipeer, Nearby, a WebSocket hub, or any "everybody connects to the host" wiring.
 **Primitive:** `Room.channel(id)` — and then nothing. The room relays through the host for you (#1994); don't build a forwarding protocol, and don't reach past the room to the raw fabric `Seam`.
 
