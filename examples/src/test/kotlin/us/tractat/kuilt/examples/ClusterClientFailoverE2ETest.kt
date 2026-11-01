@@ -160,7 +160,8 @@ class ClusterClientFailoverE2ETest {
 
     /**
      * Forces leg 1's first proposal into a reconnect gap, which the scenario above reaches only
-     * when its first admit fails. Without the retry this reds at [leg1Backstop] every time.
+     * when its first admit fails. With a bare `propose` at leg 1 this reds at [leg1Backstop], 4 of 4
+     * measured.
      *
      * Killing the relay stands in for the failed admit. It reproduces the lost forward and not the
      * leader step-down that caused it in CI, so it says nothing about the step-down itself.
