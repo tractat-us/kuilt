@@ -11,12 +11,17 @@ package us.tractat.kuilt.cluster
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.SeamState
@@ -34,6 +39,7 @@ import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftTransport
 import us.tractat.kuilt.raft.raftNode
+import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.partition.EndpointSelector
 import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
@@ -75,6 +81,11 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ClusterClient")
  */
 public class ClusterClient internal constructor(
     private val raftNode: RaftNode,
+    /**
+     * Everything this client started besides [raftNode], and which it must end. An already-completed
+     * job when the caller manages the transport itself ([clusterClientWithNode]).
+     */
+    private val connection: Job,
 ) {
     /**
      * The committed log stream — collect this to apply state-machine entries.
@@ -115,12 +126,30 @@ public class ClusterClient internal constructor(
         raftNode.propose(command, requestId)
 
     /**
-     * Close this client and cancel its background work.
+     * Close this client and end its connection: no further dials reach the fabric, and the room it
+     * joined has been left, including when a join was still in flight. Idempotent.
      *
-     * After this call [committed] terminates and further [propose] calls throw.
+     * After this call [committed] terminates and further [propose] calls throw. As [RaftNode.close]
+     * says, collectors tied directly to the owning scope stay parked until that scope ends; none of
+     * them dials.
+     *
+     * Runs to the end even if the caller is already cancelled, since a host usually closes its clients
+     * from a teardown path. Called from inside the reconnect loop itself, through a [Loom] that closes
+     * the client, it returns without waiting for that loop, which ends at its next suspension.
      */
     public suspend fun close() {
-        raftNode.close()
+        // Read before the shield: inside it, the current job's parent is NonCancellable, not the caller.
+        val caller = currentCoroutineContext()[Job]
+        withContext(NonCancellable) {
+            // Stop dialling first, and wait last, so a seam slow to close cannot hold up the node.
+            connection.cancel()
+            try {
+                raftNode.close()
+            } catch (failure: Throwable) {
+                log.warn(failure) { "cluster-client: node close failed" }
+            }
+            if (caller?.isOrDescendsFrom(connection) != true) connection.join()
+        }
     }
 }
 
@@ -136,7 +165,8 @@ public class ClusterClient internal constructor(
  * The S3b [CoroutineScope.clusterClient] extension will be the production relay-room entry
  * point once the Seam-reconnect transport adapter is available.
  */
-public fun clusterClientWithNode(raftNode: RaftNode): ClusterClient = ClusterClient(raftNode)
+public fun clusterClientWithNode(raftNode: RaftNode): ClusterClient =
+    ClusterClient(raftNode, connection = Job().apply { complete() })
 
 /**
  * Configuration for a [ClusterClient]'s endpoint rotation on transport tear.
@@ -258,9 +288,10 @@ public fun CoroutineScope.clusterClient(
  * Each connect uses [SeamRoomFactory] so the client participates in the admit handshake
  * expected by [us.tractat.kuilt.websocket.KtorRoomHost] / [us.tractat.kuilt.cluster.ServerCluster].
  * The Raft transport rides on [Room.channel] `"raft"`, which provides admit-gated message
- * delivery. On transport tear [SeamState.Torn] propagates from the underlying seam through
- * to the channel seam, triggering the reconnect loop, which swaps the [ManagedSeam] — the
- * [RoutedRaftTransport] and [RaftNode] live untouched across failover.
+ * delivery, isolated from session-layer frames. On transport tear [SeamState.Torn] propagates from
+ * the underlying seam through to the channel seam, triggering the reconnect loop, which leaves that
+ * room and swaps the [ManagedSeam] — the [RoutedRaftTransport] and [RaftNode] live untouched across
+ * failover.
  *
  * Cross-server resume is always a terminal [us.tractat.kuilt.session.partition.ResumeResult.Refused]
  * per #532 so fresh-join (no resume attempt) is used on every reconnect.
@@ -297,28 +328,58 @@ internal fun buildClusterClient(
     )
     raftNodeRef = raftNode
 
-    // Reconnect loop: join (Room) → swap channel → await tear → rotate → re-join → swap → repeat.
-    scope.launch {
+    // Reconnect loop: join (Room) → swap channel → await tear → leave → rotate → re-join → repeat.
+    // It is the only owner of the room it joined, so every way it can end leaves that room.
+    val reconnectLoop = scope.launch {
         val factory = SeamRoomFactory(loom = loom, scope = scope, clock = clock)
-        var currentSeam = roomChannel(factory, reconnect)
-        managedSeam.swap(currentSeam)
+        var room: Room? = null
+        try {
+            while (true) {
+                val joined = factory.join(reconnect.currentEndpoint())
+                room = joined
+                val channel = joined.channel("raft")
+                managedSeam.swap(channel)
 
-        while (true) {
-            // Wait for the current channel seam to tear (propagated from the underlying WS seam).
-            currentSeam.state.first { it is SeamState.Torn }
+                // Wait for the current channel seam to tear (propagated from the underlying WS seam).
+                channel.state.first { it is SeamState.Torn }
 
-            // Rotate to the next endpoint. Cross-server resume is always terminally refused
-            // per #532 so we skip the resume attempt and always do a fresh join.
-            reconnect.onTransportTear()
-
-            val newSeam = roomChannel(factory, reconnect)
-            managedSeam.swap(newSeam)
-            currentSeam = newSeam
+                // A torn room left alone keeps re-dialling its own endpoint to resume, and if that
+                // worked this client would hold two rooms. Cross-server resume is always terminally
+                // refused per #532, so leave it, rotate to the next endpoint and join fresh.
+                room = null
+                leaveShielded(joined)
+                reconnect.onTransportTear()
+            }
+        } finally {
+            withContext(NonCancellable) {
+                try {
+                    managedSeam.close()
+                } catch (failure: Throwable) {
+                    log.debug { "cluster-client: relay close failed: $failure" }
+                }
+            }
+            room?.let { leaveShielded(it) }
         }
     }
 
-    return ClusterClient(raftNode)
+    return ClusterClient(raftNode, connection = reconnectLoop)
 }
+
+/** Best-effort, and shielded so a cancelled reconnect loop still gets it done. */
+private suspend fun leaveShielded(room: Room) {
+    withContext(NonCancellable) {
+        try {
+            room.leave()
+        } catch (failure: Throwable) {
+            log.debug { "cluster-client: room leave failed: $failure" }
+        }
+    }
+}
+
+/** Whether a coroutine running as this job would wait on itself by joining [ancestor]. */
+@OptIn(ExperimentalCoroutinesApi::class)
+private fun Job.isOrDescendsFrom(ancestor: Job): Boolean =
+    generateSequence(this) { it.parent }.any { it === ancestor }
 
 /**
  * A [RaftTransport] with no peers of its own: [RoutedRaftTransport] wraps it so every
@@ -336,14 +397,3 @@ private class NoPeerRaftTransport(override val selfId: NodeId) : RaftTransport {
         log.debug { "cluster-client: no-peer inner drop to $peer (all sends go via the relay)" }
     }
 }
-
-/**
- * Join the current [reconnect] endpoint via [factory] and return the `"raft"` channel seam.
- *
- * [SeamRoomFactory.join] performs the admit handshake required by [us.tractat.kuilt.websocket.KtorRoomHost].
- * Raft messages ride on the `"raft"` sub-channel, keeping them isolated from session-layer frames.
- */
-private suspend fun roomChannel(
-    factory: SeamRoomFactory,
-    reconnect: ServerClusterReconnect,
-) = factory.join(reconnect.currentEndpoint()).channel("raft")
