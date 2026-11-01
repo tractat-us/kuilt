@@ -97,6 +97,16 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbyLoom")
  * Accepting a second is a different feature with a different capability answer. A joiner arriving
  * mid-handshake is not queued: it is ignored, and fails on its own clock.
  *
+ * ## A weave stops only what it started
+ * [NearbyApi.stopAdvertising] and [NearbyApi.stopDiscovery] take no argument because the radio has one
+ * of each, and it turns down a second start (`STATUS_ALREADY_ADVERTISING`,
+ * `STATUS_ALREADY_DISCOVERING`). So a weave whose start was refused stops nothing: there is nothing of
+ * its own to stop, and a stop would land on the weave that holds the radio. A start that was cancelled
+ * rather than refused gets a stop, by [radioCallMayStillBeRunning], and that is the one case this cannot
+ * tell apart: cancelling a start that the radio would have refused still stops the weave holding it.
+ * A cancelled start also keeps running, so a stop can land before it does; only a binding that cancelled
+ * its radio call could close that.
+ *
  * ## A `join` waits for this loom's host only while that host is mid-handshake
  * One loom can play both ends of a session, and then `join` returning means the host's roster is
  * populated as well. So `join` waits for any handshake this loom's host has actually started
@@ -179,6 +189,9 @@ public class NearbyLoom(
         // Derive from caller so background work runs on the test dispatcher.
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
         val advertiserRetired = Job()
+        // Whether this seam has anything on the radio to stop. Every exit from the start below completes
+        // it, and only those: the advertiser waits on it, and `close` waits on the advertiser.
+        val startedAdvertising = CompletableDeferred<Boolean>()
 
         val seam = NearbySeam(
             selfId = peerId,
@@ -197,14 +210,17 @@ public class NearbyLoom(
         // UNDISPATCHED so the host's handshake collectors subscribe synchronously during open(),
         // before advertising starts and before any joiner's requestConnection emits events.
         seamScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            val lost = advertiseUntilLinked(peerId, registry, seam, advertiserRetired)
+            val lost = advertiseUntilLinked(peerId, registry, seam, startedAdvertising, advertiserRetired)
             // Outside the above, because close() waits for the advertiser that has only now retired.
             if (lost != null) seam.close(CloseReason.Error(lost))
         }
 
         try {
             api.startAdvertising(config.sessionName, serviceId)
+            startedAdvertising.complete(true)
         } catch (failure: Throwable) {
+            // Before the discard, whose close waits on the advertiser, which waits on this.
+            startedAdvertising.complete(failure.radioCallMayStillBeRunning())
             discardUnreturnedSeam(seam)
             throw failure
         }
@@ -212,13 +228,19 @@ public class NearbyLoom(
     }
 
     /**
-     * The lifetime of one host's advertising: accept until linked, then stop, on every exit. Returns
-     * the failure if the radio's event stream is what ended it.
+     * The lifetime of one host's advertising: accept until linked, then stop what this host started, on
+     * every exit. Returns the failure if the radio's event stream is what ended it.
+     *
+     * The stop waits for [startedAdvertising], for its answer and for its order. This coroutine runs
+     * ahead of the start, so a stream that fails at once reaches here first, and a stop made then would
+     * land before the start: a torn seam advertising with nothing left to stop it, since its `close` is
+     * already a no-op.
      */
     private suspend fun CoroutineScope.advertiseUntilLinked(
         peerId: PeerId,
         registry: PeerIdentityRegistry<String>,
         seam: NearbySeam,
+        startedAdvertising: CompletableDeferred<Boolean>,
         advertiserRetired: CompletableJob,
     ): NearbyEventStreamLostException? =
         try {
@@ -229,10 +251,12 @@ public class NearbyLoom(
             lost
         } finally {
             withContext(NonCancellable) {
-                try {
-                    api.stopAdvertising()
-                } catch (failure: Throwable) {
-                    log.debug { "nearby.host.stop-advertising-failed self=${peerId.value} failure=$failure" }
+                if (startedAdvertising.await()) {
+                    try {
+                        api.stopAdvertising()
+                    } catch (failure: Throwable) {
+                        log.debug { "nearby.host.stop-advertising-failed self=${peerId.value} failure=$failure" }
+                    }
                 }
             }
             advertiserRetired.complete()
@@ -288,7 +312,7 @@ public class NearbyLoom(
             try {
                 api.disconnect(link.endpointId)
             } catch (failure: Throwable) {
-                log.debug { "nearby.host.late-link-release-failed endpoint=${link.endpointId} failure=$failure" }
+                log.debug { "nearby.loom.late-link-release-failed endpoint=${link.endpointId} failure=$failure" }
             }
         }
     }
@@ -310,6 +334,7 @@ public class NearbyLoom(
         // This weave's roster — see openSession.
         val weavePeers = MutableStateFlow(setOf(joinerPeerId))
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
+        var ownsDiscovery = false
 
         val seam = NearbySeam(
             selfId = joinerPeerId,
@@ -328,7 +353,13 @@ public class NearbyLoom(
             // Subscribe BEFORE starting discovery to avoid the emit-before-subscribe race.
             // (The fake emits EndpointFound synchronously from startDiscovery on shared flow.)
             val hostEndpointId = awaitFirstEndpointFoundThen(seamScope) {
-                api.startDiscovery(serviceId)
+                try {
+                    api.startDiscovery(serviceId)
+                    ownsDiscovery = true
+                } catch (failure: Throwable) {
+                    ownsDiscovery = failure.radioCallMayStillBeRunning()
+                    throw failure
+                }
             }
 
             val machine = ConnectStateMachine(
@@ -346,7 +377,7 @@ public class NearbyLoom(
                     api.requestConnection(advertisement.sessionName, hostEndpointId)
                 }
             }
-            seam.admitEndpoint(joinLink)
+            admitOrRelease(seam, joinLink)
 
             // If this loom's own host has a handshake in flight, it may be the other end of this one.
             handshakes.awaitIncomingSettled()
@@ -355,7 +386,7 @@ public class NearbyLoom(
             discardUnreturnedSeam(seam)
             throw failure
         } finally {
-            stopDiscoveryBestEffort()
+            if (ownsDiscovery) stopDiscoveryBestEffort()
         }
     }
 
