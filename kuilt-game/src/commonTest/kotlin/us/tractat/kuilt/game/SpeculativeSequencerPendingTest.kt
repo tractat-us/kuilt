@@ -450,8 +450,11 @@ class SpeculativeSequencerPendingTest {
                 "seed=$seed: ${rig.seq.pendingCount} pending with ${inFlight.size} in flight " +
                     "and ${lateFromSuccess.size} commits owed",
             )
+            if (rig.seq.pendingCount == 0) {
+                assertEquals(expected, rig.seq.speculativeState.value, "seed=$seed: with nothing pending, the state is the fold")
+            }
         }
-        while (inFlight.isNotEmpty()) resolve(inFlight.first(), random.nextInt(5))
+        while (inFlight.isNotEmpty()) resolve(inFlight[random.nextInt(inFlight.size)], random.nextInt(5))
         while (lateFromSuccess.isNotEmpty()) deliverLate(lateFromSuccess)
         while (lateFromFailure.isNotEmpty()) deliverLate(lateFromFailure)
 

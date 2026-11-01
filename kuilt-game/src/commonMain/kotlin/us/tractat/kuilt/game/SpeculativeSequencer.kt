@@ -63,6 +63,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.game.SpeculativeSequ
  * [speculativeState] for good, and on Kotlin/Native would abort the process. An [Error] is not a
  * rejection and still escapes. [SpeculativeGame.fromSnapshot] failing also still escapes, deliberately:
  * folding later commits over a snapshot that was never installed would corrupt the state silently.
+ * What those two should do instead of ending the collector is tracked by #3066.
  *
  * ## What "equal" has to mean for [A]
  *
@@ -72,7 +73,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.game.SpeculativeSequ
  * - **[A] needs value equality that survives the codec.** A commit arrives as a copy decoded from the
  *   log, never the instance that was proposed. With identity `equals`, or a `ByteArray` property in a
  *   data class, a local action never matches its own commit: it is applied once as a foreign action
- *   and again as a pending one, and stays pending. Use a data class of values.
+ *   and again as a pending one, and stays pending. Use a data class of values. Lifting this
+ *   requirement is tracked by #3065.
  * - **Equal actions are interchangeable.** A foreign action equal to a pending local one retires it.
  *   The state still converges, because the local action's own commit then applies as foreign, but
  *   between those two commits the prediction omits it. Likewise a failed propose whose entry a commit
@@ -210,6 +212,10 @@ public class SpeculativeSequencer<S, A>(
      * caller owns — do not pass a log index or a random value. A retry must resend the **same**
      * [action], which must encode to the same bytes; a [requestId] names one action. If
      * [SpeculativeGame.apply] rejects [action], its exception is rethrown here and nothing is proposed.
+     *
+     * A retry of an attempt that did commit can be answered from the leader's cache with no new
+     * commit, and nothing then retires its pending entry, so the prediction keeps the extra apply.
+     * That is tracked by #3064.
      *
      * @throws [us.tractat.kuilt.raft.LeadershipLostException] if the leader steps down while
      *   awaiting commit. The speculative apply is rolled back. The caller may retry with the
