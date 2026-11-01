@@ -45,6 +45,13 @@ public interface SpeculativeGame<S, A> {
      * Must be **pure and deterministic**: no side effects, no mutable shared state,
      * no I/O. Both optimistic apply and replay call this method — identical inputs
      * must always yield identical outputs.
+     *
+     * **To refuse an illegal action, throw an [Exception], without having changed [state].** Thrown
+     * at [SpeculativeSequencer.propose], it reaches the caller and nothing is proposed. Thrown
+     * anywhere later, it means the action has no effect on [state]: a replay skips it, and a committed
+     * action leaves the authoritative state where it was. A move that was legal when proposed can
+     * legitimately be refused on a later base, so this is ordinary, not a fault. The refusal has to be
+     * as deterministic as the result, because every replica must refuse the same committed action.
      */
     public fun apply(state: S, action: A): S
 

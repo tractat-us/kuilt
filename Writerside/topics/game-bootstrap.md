@@ -134,7 +134,10 @@ committed order differs:
 `speculativeState` is a `StateFlow<S>` that is always current — the UI can observe
 it directly. `SpeculativeGame<S, A>` is your state machine: implement `apply`,
 `snapshot`, and `restore`. `apply` must be **pure and deterministic** — replay
-correctness depends on it.
+correctness depends on it. To refuse an illegal move, throw from `apply`: the caller
+of `propose` sees the exception, and if the move only becomes illegal later, it simply
+has no effect. Use a data class of values for the action, because a commit is matched
+to a pending action with `==` on a decoded copy.
 
 ### Teardown
 

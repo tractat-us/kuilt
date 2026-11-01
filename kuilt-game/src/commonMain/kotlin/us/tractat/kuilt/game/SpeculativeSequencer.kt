@@ -23,23 +23,61 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.game.SpeculativeSequ
  * ## Mechanism
  *
  * On [propose]:
- * 1. The action is applied immediately to [speculativeState] (optimistic apply).
- * 2. The action is appended to a **pending-input buffer**.
+ * 1. The action is applied to [speculativeState]. If [SpeculativeGame.apply] rejects it, the
+ *    exception reaches the caller and nothing else happens: no pending entry, no proposal.
+ * 2. Only then is the action appended to a **pending-input buffer**.
  * 3. The underlying [TurnSequencer.propose] is called and suspends until a quorum commits.
- * 4. If propose throws (e.g. [us.tractat.kuilt.raft.LeadershipLostException]), the
- *    speculative apply is rolled back — the action is removed from the pending buffer
- *    and [speculativeState] is restored to the authoritative snapshot + remaining pending.
+ * 4. If propose throws (e.g. [us.tractat.kuilt.raft.LeadershipLostException], or this call's own
+ *    cancellation), that call withdraws its entry and [speculativeState] is rebuilt from the
+ *    authoritative snapshot plus whatever is still pending.
  *
  * On each [TurnEvent.Committed] emission received by the background collector:
- * - **Duplicate key** (same [DedupKey] as a previously applied entry): the entry is skipped
- *   entirely — the [ClientSessionTable] gate prevents double-apply to the authoritative
- *   snapshot. The confirmed count still advances.
- * - **Match** (committed action equals oldest pending, first-apply): the pending entry is
- *   confirmed and discarded. The authoritative snapshot advances to include the confirmed action.
- *   No rollback is needed.
- * - **Mismatch** (foreign peer's action, or reorder, first-apply): the authoritative snapshot
- *   advances to include the committed action. All remaining pending inputs are replayed on top
- *   to produce the new [speculativeState].
+ * - **Duplicate key** (same [DedupKey] as a previously applied entry): the authoritative snapshot
+ *   does not move, since the [ClientSessionTable] gate prevents a double-apply. A pending entry of
+ *   equal value is discarded as its stale twin. The confirmed count still advances.
+ * - **Match** (the committed action equals a pending one, first-apply): the oldest such entry is
+ *   discarded and the authoritative snapshot advances. If that entry was the oldest of all, the
+ *   prediction was right and no replay is needed; otherwise the order differed, and the remaining
+ *   pending inputs are replayed on top.
+ * - **No match** (a foreign peer's action, or one whose proposer already gave up on it, first-apply):
+ *   the authoritative snapshot advances and all pending inputs are replayed on top.
+ *
+ * The authoritative snapshot is always the fold of the committed log, whatever the buffer holds. The
+ * buffer only decides what is predicted on top of it, and [speculativeState] always equals that fold
+ * with the buffer applied after it. So a mistake in matching can cost a moment's prediction, but never
+ * the state the session settles on.
+ *
+ * ## A rejected action leaves the state unchanged
+ *
+ * A move can be legal when proposed and illegal by the time it is replayed, because another player's
+ * move landed first. So when [SpeculativeGame.apply] throws an [Exception] anywhere but step 1 above,
+ * the action is treated as having no effect on that state:
+ * - **In a replay**, it is skipped for that replay and **stays pending**. Its own commit or failure
+ *   still retires it, and a later base may make it legal again.
+ * - **On a committed action**, the authoritative snapshot does not move and a warning is logged. Every
+ *   replica folds the same log with the same pure `apply`, so every replica refuses the same action
+ *   at the same position and they stay identical. [propose] still returns normally for such an
+ *   action: it did commit.
+ *
+ * Rejecting this way is what keeps the collector alive: an exception escaping it would freeze
+ * [speculativeState] for good, and on Kotlin/Native would abort the process. An [Error] is not a
+ * rejection and still escapes. [SpeculativeGame.fromSnapshot] failing also still escapes, deliberately:
+ * folding later commits over a snapshot that was never installed would corrupt the state silently.
+ *
+ * ## What "equal" has to mean for [A]
+ *
+ * A commit carries no token this sequencer could recognise as its own: the [DedupKey] is minted inside
+ * the node during [TurnSequencer.propose], after the entry exists. So a commit is matched by value, with
+ * `==`, and two consequences follow.
+ * - **[A] needs value equality that survives the codec.** A commit arrives as a copy decoded from the
+ *   log, never the instance that was proposed. With identity `equals`, or a `ByteArray` property in a
+ *   data class, a local action never matches its own commit: it is applied once as a foreign action
+ *   and again as a pending one, and stays pending. Use a data class of values.
+ * - **Equal actions are interchangeable.** A foreign action equal to a pending local one retires it.
+ *   The state still converges, because the local action's own commit then applies as foreign, but
+ *   between those two commits the prediction omits it. Likewise a failed propose whose entry a commit
+ *   already claimed retires an equal entry instead, since that commit may really have been the other
+ *   proposal's. Without that, the other entry would stay pending forever.
  *
  * ## Constraints
  *
@@ -144,7 +182,8 @@ public class SpeculativeSequencer<S, A>(
      * Applies [action] optimistically to [speculativeState] **before** suspending, so the
      * UI reflects the move immediately. If the underlying [TurnSequencer.propose] fails,
      * the speculative apply is rolled back — [speculativeState] reverts to the authoritative
-     * snapshot plus any remaining pending inputs.
+     * snapshot plus any remaining pending inputs. If [SpeculativeGame.apply] rejects [action], its
+     * exception is rethrown here and nothing is proposed.
      *
      * @throws [us.tractat.kuilt.raft.LeadershipLostException] if the leader steps down while
      *   awaiting commit. The action is removed from the pending buffer and speculative state
@@ -169,7 +208,8 @@ public class SpeculativeSequencer<S, A>(
      * post-crash retry and the consumer's [ClientSessionTable] (and this sequencer's internal
      * table) will skip the duplicate. [requestId] must be a per-client monotonic serial the
      * caller owns — do not pass a log index or a random value. A retry must resend the **same**
-     * [action], which must encode to the same bytes; a [requestId] names one action.
+     * [action], which must encode to the same bytes; a [requestId] names one action. If
+     * [SpeculativeGame.apply] rejects [action], its exception is rethrown here and nothing is proposed.
      *
      * @throws [us.tractat.kuilt.raft.LeadershipLostException] if the leader steps down while
      *   awaiting commit. The speculative apply is rolled back. The caller may retry with the
@@ -198,8 +238,16 @@ public class SpeculativeSequencer<S, A>(
         }
     }
 
+    /**
+     * Takes back the entry of a propose that failed. If a commit has already claimed it, that commit may
+     * really have been an equal proposal's, so an equal entry goes instead. Each proposal therefore
+     * retires one entry of its value when it resolves, which is what bounds the buffer by the proposals
+     * still unresolved; a removal by identity alone would leave the other proposal's entry stuck.
+     */
     private fun withdraw(entry: PendingEntry<A>): Unit = stateLock.withLock {
-        pendingBuffer.remove(entry)
+        val own = pendingBuffer.indexOf(entry)
+        val slot = if (own >= 0) own else pendingBuffer.indexOfFirst { it.action == entry.action }
+        if (slot >= 0) pendingBuffer.removeAt(slot)
         _speculativeState.value = replayPendingOnSnapshot()
     }
 
@@ -244,12 +292,17 @@ public class SpeculativeSequencer<S, A>(
      * later forwarded/reconnect duplicate of that same key — which arrives with no matching pending
      * entry and so takes the foreign path — would slip through and **double-apply** to the
      * authoritative snapshot. A `false` result means the key was already applied: drop it. If a
-     * duplicate also sits at the head of the pending buffer (a retry under the same key of a
-     * still-pending local proposal), pop that stale twin so the buffer doesn't leak and the
+     * duplicate also has an equal entry in the pending buffer (a retry under the same key of a
+     * still-pending local proposal), discard that stale twin so the buffer doesn't leak and the
      * speculative state stays consistent.
      *
      * Distinct legitimate actions never collide here: the auto-serial [propose] draws a fresh serial
      * per call, so only an explicit same-`requestId` retry shares a key — exactly what dedup drops.
+     *
+     * The speculative state needs no replay in exactly two cases, because it already equals the fold:
+     * a fresh commit that retired the oldest entry, and a duplicate that retired nothing. The rejection
+     * is logged after the lock is released: a first stack trace can stall for seconds on Apple targets,
+     * and every caller of [propose] would wait behind it.
      */
     private fun onCommit(indexed: IndexedAction<A>) {
         val rejection = stateLock.withLock {
@@ -283,7 +336,7 @@ public class SpeculativeSequencer<S, A>(
 
     /**
      * Returns the state produced by replaying all pending inputs on top of the
-     * current authoritative snapshot.
+     * current authoritative snapshot, skipping any that [SpeculativeGame.apply] rejects on this base.
      * Caller holds [stateLock].
      */
     private fun replayPendingOnSnapshot(): S =
