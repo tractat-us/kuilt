@@ -127,7 +127,7 @@ the consumer decides what to do (tear down, start a new session, etc.).
 **Reconnect/resume.** Keep the existing room after a transport tear. A
 `SeamRoomFactory` joiner attempts resume automatically within the host's reconnect
 window, using its `room.resumeToken` (non-null once admitted). The loom must heal
-the same seam instance with the same `selfId`; `MuxClientLoom` provides this.
+the same seam instance with the same `selfId`; `MuxClientLoom` and `NwLoom` provide this.
 `room.resume(token)` is for manual control once that seam is usable again.
 A loom that returns a new seam leaves the old room torn and reconnect ends in
 `HostLost`; a later resume on that room returns `WindowClosed`. Rebuilding the room

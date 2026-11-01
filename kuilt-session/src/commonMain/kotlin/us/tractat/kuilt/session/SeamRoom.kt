@@ -95,8 +95,9 @@ public typealias JoinerReconnectControllerFactory =
 /**
  * [Loom]-backed implementation of [RoomFactory].
  *
- * Each call to [host] or [join] weaves a new [Seam] via [loom], wraps it in a
- * [SeamRoom], and drives the admit/identify handshake:
+ * Each call to [host] or [join] weaves a [Seam] via [loom] (new on most looms; one holding a live
+ * session may answer a repeat with it), wraps it in a [SeamRoom], and drives the admit/identify
+ * handshake:
  * - **Host** side: passively collects [AdmitMessage.Hello] from new peers and
  *   replies with [AdmitMessage.Welcome], adding the peer to the roster and
  *   broadcasting the welcome to all other admitted members.
@@ -222,7 +223,7 @@ public class SeamRoomFactory(
     /**
      * Adopt an **already-woven** [seam] into a [Room] with an explicit [role] — no re-weave.
      *
-     * Unlike [host]/[join] (which each weave a fresh seam), [adopt] takes ownership of a seam the
+     * Unlike [host]/[join] (which each weave through the loom), [adopt] takes ownership of a seam the
      * caller wove, so the calling layer can weave the mesh once and decide role afterward (the
      * host-election lobby, #1439). The returned [Room] owns the seam's lifetime from here:
      * [Room.leave] closes it — correct, because the seam is handed over exactly once.

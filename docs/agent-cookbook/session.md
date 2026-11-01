@@ -46,7 +46,7 @@ public suspend fun callerSuppliedRoomIdSample(
 Keep the existing room. After a transport tear, a joiner built by `SeamRoomFactory` attempts
 resume automatically within the reconnect window; the explicit call below is for manual control.
 This requires a loom that heals the **same seam instance** the room already holds, with the
-**same `selfId`**. `MuxClientLoom` provides that stable handle. The host keys the held seat by
+**same `selfId`**. `MuxClientLoom` and `NwLoom` provide that stable handle. The host keys the held seat by
 `token.peerId`, so a new transport identity cannot take it over.
 
 A loom that returns a new seam on each join leaves the old room's seam torn: reconnect ends in
@@ -412,7 +412,7 @@ public suspend fun perMemberFramesSample(room: Room, member: PeerId, onFrame: su
 **Intent:** several peers are connected and one of them has to host — and then that one walks out before the session starts.
 **Primitive:** `SeamRoomFactory.electLobby(pattern)` → `ElectionLobby` (`:kuilt-session`). Every peer computes the same `electHost(peers)`; the elected one calls `start()`, the rest call `awaitRoom()`.
 
-`awaitRoom()` returns a sealed **`ElectionOutcome`**, not a bare `Room`, and the case that catches people is `BecameHost`: the peer that was hosting left the roster, so this peer is now the elected host — the seam is healthy and the other members are still parked on it. **The recovery is `start()` on the SAME lobby.** Re-running `electLobby(...)` weaves a *fresh* seam and strands them; `leave()` first closes the shared seam and collapses them (#1483).
+`awaitRoom()` returns a sealed **`ElectionOutcome`**, not a bare `Room`, and the case that catches people is `BecameHost`: the peer that was hosting left the roster, so this peer is now the elected host — the seam is healthy and the other members are still parked on it. **The recovery is `start()` on the SAME lobby.** Re-running `electLobby(...)` starts a second lobby beside this one: on most looms that is a *fresh* seam, which strands them, and `NwLoom`, which holds one session, answers with this same seam for both lobbies to read; `leave()` first closes the shared seam and collapses them (#1483).
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#handleEveryElectionOutcomeSample -->
 ```kotlin
@@ -421,8 +421,8 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
         is ElectionOutcome.Adopted -> outcome.room
         // The hosting peer left and this peer is now the elected host, with the co-members still
         // parked in their own awaitRoom on the SAME seam — so they ack this freeze round at once.
-        // Re-running electLobby(...) would weave a FRESH seam and strand them; calling leave() first
-        // would close the shared seam and collapse them.
+        // Re-running electLobby(...) would start a SECOND lobby beside this one, which strands them on
+        // most looms; calling leave() first would close the shared seam and collapse them.
         ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2")
         // A genuine mid-2PC collapse: the co-electors are gone. Retryable — leave this lobby, then
         // re-run electLobby(...). A lobby left open stays on the mesh and can hold a host's start().
