@@ -2,18 +2,25 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
@@ -24,6 +31,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -301,7 +309,183 @@ class StarTopologyPresenceFanoutTest {
             )
         }
 
+    /**
+     * A member that gets back in by **resuming** must read as recovered to every other member (#2908).
+     *
+     * This is the order that used to strand it: the `Resume` frame reaches the host before any ping
+     * has come back, so `handleReconnectResumed` is what restores `Connected`. That path set the level
+     * and told nobody. By the time the detector's `PeerRecovered` arrived the member was already
+     * `Connected`, so `markRecovered`, the only other sender of `Unpaused`, did nothing either, and a
+     * star's other members held a pause whose deadline had passed for the rest of the session.
+     *
+     * [partitionUntilPaused] parks the clock between host pings so the order is forced rather than
+     * hoped for, and the assertions taken before the clock moves prove it was reached.
+     */
+    @Test
+    fun `a resume that beats the detector still tells the other members`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val star = star()
+            val seen = star.watchEvents(this)
+            val token = star.partitionUntilPaused(this)
+
+            star.droppedLink.heal()
+            val resume = async { star.dropped.resume(token) }
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertIs<ResumeResult.Success>(resume.getCompleted(), "rig: the resume landed at this instant") },
+                { assertEquals(1, seen.host.count { it is MembershipEvent.Resumed }, "rig: the host resumed it") },
+                { assertEquals(0, seen.host.count { it is MembershipEvent.Recovered }, "rig: no pong has come back") },
+            )
+
+            // Long enough for the detector's own PeerRecovered, and past the host's window, so a
+            // second Unpaused or a window left armed would both show up here.
+            testScheduler.advanceTimeBy(expiryBudget)
+            testScheduler.runCurrent()
+
+            star.assertOneRecoveryReachedBystander(seen, hostEvents = listOf(MembershipEvent.Resumed::class))
+        }
+
+    /**
+     * The other arrival order: the detector hears a pong first, `markRecovered` sends the `Unpaused`,
+     * and the `Resume` frame lands on a member that is already `Connected`. The controller still
+     * answers `Success`, because a healed window stays resumable (#2556). The resume path must add
+     * nothing to what the bystander already heard, so this is the arm that catches a double send: the
+     * wire count sees it, where [MembershipEvent.Recovered] alone could not, since `handleUnpaused`
+     * drops a repeat without trace.
+     */
+    @Test
+    fun `a resume that follows the detector does not announce it twice`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val star = star()
+            val seen = star.watchEvents(this)
+            val token = star.partitionUntilPaused(this)
+
+            // One interval for the detector's next ping to draw a pong, one for its next poll to see it.
+            star.droppedLink.heal()
+            testScheduler.advanceTimeBy(hostConfig.interval * 2)
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertEquals(1, seen.host.count { it is MembershipEvent.Recovered }, "rig: the pong came first") },
+                { assertEquals(1, star.unpausedSeenByBystander(), "rig: markRecovered announced it") },
+            )
+
+            val resume = async { star.dropped.resume(token) }
+            testScheduler.runCurrent()
+            assertIs<ResumeResult.Success>(resume.getCompleted(), "rig: a healed window still answers Success")
+
+            testScheduler.advanceTimeBy(expiryBudget)
+            testScheduler.runCurrent()
+
+            star.assertOneRecoveryReachedBystander(
+                seen,
+                hostEvents = listOf(MembershipEvent.Recovered::class, MembershipEvent.Resumed::class),
+            )
+        }
+
+    /** Control for the two arms above: the same drop and heal with no resume at all. */
+    @Test
+    fun `a member that recovers without resuming tells the other members once`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val star = star()
+            val seen = star.watchEvents(this)
+            star.partitionUntilPaused(this)
+
+            star.droppedLink.heal()
+            testScheduler.advanceTimeBy(expiryBudget)
+            testScheduler.runCurrent()
+
+            star.assertOneRecoveryReachedBystander(seen, hostEvents = listOf(MembershipEvent.Recovered::class))
+        }
+
     // ── Harness ───────────────────────────────────────────────────────────────
+
+    /** The recovery-shaped events each side emitted about the dropped member, in order. */
+    private class SeenEvents(
+        val host: MutableList<MembershipEvent> = mutableListOf(),
+        val bystander: MutableList<MembershipEvent> = mutableListOf(),
+    )
+
+    private fun Star.watchEvents(test: kotlinx.coroutines.test.TestScope): SeenEvents {
+        val seen = SeenEvents()
+        fun collectInto(room: Room, into: MutableList<MembershipEvent>) = test.backgroundScope.launch {
+            room.events.collect { event ->
+                when (event) {
+                    is MembershipEvent.Recovered -> if (event.peerId == droppedId) into += event
+                    is MembershipEvent.Resumed -> if (event.peerId == droppedId) into += event
+                    else -> Unit
+                }
+            }
+        }
+        collectInto(host, seen.host)
+        collectInto(bystander, seen.bystander)
+        test.testScheduler.runCurrent()
+        return seen
+    }
+
+    /**
+     * Drops the link until the bystander holds the member as paused, and leaves the clock **between**
+     * the host detector's polls, which fall on multiples of [HeartbeatConfig.interval]: a frame sent
+     * at this instant reaches the host before the detector can conclude anything from it.
+     */
+    private fun Star.partitionUntilPaused(test: kotlinx.coroutines.test.TestScope): ResumeToken {
+        val token = assertNotNull(dropped.resumeToken, "the joiner must hold a resume token after admit")
+        droppedLink.partition()
+        test.testScheduler.advanceTimeBy(hostConfig.timeout + hostConfig.interval * 2 + hostConfig.interval / 2)
+        test.testScheduler.runCurrent()
+        assertIs<Liveness.Partitioned>(
+            bystander.roster.value.first { it.id == droppedId }.liveness,
+            "rig: the bystander must hold the dropped member as paused before it comes back",
+        )
+        return token
+    }
+
+    private fun Star.unpausedSeenByBystander(): Int =
+        bystanderWire.frames.count { it is AdmitMessage.Unpaused && it.peerId == droppedId.value }
+
+    /**
+     * The whole contract, stated once for every arm. The wire count is what tells a missed or doubled
+     * `Unpaused` apart. [MembershipEvent.Resumed] is specified for the host and the resuming member
+     * only, so a bystander must hear [MembershipEvent.Recovered] instead.
+     */
+    private fun Star.assertOneRecoveryReachedBystander(
+        seen: SeenEvents,
+        hostEvents: List<kotlin.reflect.KClass<out MembershipEvent>>,
+    ) = assertAll(
+        { assertEquals(hostEvents, seen.host.map { it::class }, "the host's own events, in order") },
+        { assertEquals(1, unpausedSeenByBystander(), "exactly one Unpaused must reach the other member") },
+        {
+            assertEquals(
+                listOf<kotlin.reflect.KClass<out MembershipEvent>>(MembershipEvent.Recovered::class),
+                seen.bystander.map { it::class },
+                "the other member must hear Recovered, once, and never Resumed",
+            )
+        },
+        {
+            assertEquals(
+                Liveness.Connected,
+                bystander.roster.value.first { it.id == droppedId }.liveness,
+                "the other member's roster must read Connected",
+            )
+        },
+        {
+            assertEquals(
+                Liveness.Connected,
+                host.roster.value.first { it.id == droppedId }.liveness,
+                "the host's roster must read Connected, and its window must not have evicted the member",
+            )
+        },
+    )
+
+    /** Records every admit frame reaching a member, which its roster and events cannot show a repeat of. */
+    private class AdmitWireTap(private val delegate: Seam) : Seam by delegate {
+        val frames = mutableListOf<AdmitMessage>()
+
+        override val incoming: Flow<Swatch> = delegate.incoming.onEach { swatch ->
+            AdmitMessage.decode(swatch.toByteArray())?.let { frames += it }
+        }
+    }
 
     /**
      * A [JoinerReconnectController] whose hold policy is "until [expiresAt], whatever the room's
@@ -340,8 +524,10 @@ class StarTopologyPresenceFanoutTest {
     private class Star(
         val host: Room,
         val droppedLink: FaultySeam,
-        val droppedId: us.tractat.kuilt.core.PeerId,
+        val dropped: Room,
+        val droppedId: PeerId,
         val bystander: Room,
+        val bystanderWire: AdmitWireTap,
     )
 
     /**
@@ -365,13 +551,14 @@ class StarTopologyPresenceFanoutTest {
         val hostRoom = hostFactory.host(Pattern("Host"))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
         val droppedRoom = joinerFactory.adopt(droppedLink, SessionRole.Joiner)
-        val bystanderRoom = joinerFactory.join(InMemoryTag("Bystander"))
+        val bystanderWire = AdmitWireTap(loom.join(InMemoryTag("Bystander")))
+        val bystanderRoom = joinerFactory.adopt(bystanderWire, SessionRole.Joiner)
 
         hostRoom.roster.first { it.size == 2 }
         droppedRoom.roster.first { it.size == 2 }
         bystanderRoom.roster.first { it.size == 2 }
 
-        return Star(hostRoom, droppedLink, droppedRoom.selfId, bystanderRoom)
+        return Star(hostRoom, droppedLink, droppedRoom, droppedRoom.selfId, bystanderRoom, bystanderWire)
     }
 
     private companion object {
