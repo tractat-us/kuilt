@@ -56,9 +56,11 @@ grows, while Quilter's anti-entropy reconcile still converges every peer. See
 
 `close()` drops any write that has not left yet. `apply` and `mutate` return before their frame goes out, so a goodbye written just before `close()` never reaches anyone, and the peer looks present until something times it out. When the last write matters, leave with `drainAndClose()` instead:
 
+<!-- verbatim from kuilt-quilter/src/commonSamples/kotlin/us/tractat/kuilt/quilter/QuilterSamples.kt#sampleQuilterDrainAndClose -->
 ```kotlin
-quilter.mutate { it.set(quilter.replica, now, "alice", "left") }
-withTimeout(5.seconds) { quilter.drainAndClose() }
+    // Publish the goodbye, then wait for it to reach the seam before closing.
+    alice.mutate { it.set(alice.replica, 1L, "alice", "left") }
+    kotlinx.coroutines.withTimeout(5.seconds) { alice.drainAndClose() }
 ```
 
 It waits until every write has been handed to the connection, then closes. Keep the timeout: a slow connection can hold a send for a long time, and the replicator closes even if the timeout fires. "Handed to the connection" is the whole promise. It does not mean the peer received the frame.
