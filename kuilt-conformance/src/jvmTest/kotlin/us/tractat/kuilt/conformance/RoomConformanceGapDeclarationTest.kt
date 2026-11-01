@@ -9,7 +9,7 @@ import kotlin.test.assertFailsWith
 import kotlin.time.Instant
 
 /**
- * Runs [RoomConformanceSuite]'s seven fault-injection-gated obligations against a harness that
+ * Runs [RoomConformanceSuite]'s eight fault-injection-gated obligations against a harness that
  * declares [RoomConformanceSuite.FaultInjection.Unsupported] — **the first time in this suite's
  * life that its skip path has been executed at all** (#2306).
  *
@@ -25,7 +25,7 @@ import kotlin.time.Instant
  *  - a **blank** tracking URL fails every gated obligation — this is the one runtime hole the sealed
  *    fixture leaves, since `Unsupported("")` is the only way left to write a declaration that
  *    declares nothing;
- *  - a **real** tracking URL lets all seven skip cleanly, which is the survivability check above.
+ *  - a **real** tracking URL lets all eight skip cleanly, which is the survivability check above.
  *
  * ## Why `jvmTest` and not `commonTest`
  *
@@ -122,14 +122,20 @@ class RoomConformanceGapDeclarationTest {
         assertFailsWith<AssertionError> { suite.leaveDoesNotMintACancellationWhenTeardownIsSlow() }
     }
 
+    @Test
+    fun blankTrackingUrlFailsTheLostFarewellObligation() {
+        val suite = unsupported("")
+        assertFailsWith<AssertionError> { suite.aHostsLostFarewellFallsBackToTheWindow() }
+    }
+
     // ── A declared gap skips cleanly — the survivability half ──
 
     /**
-     * All seven gated obligations skip without throwing, without hanging and without leaking a
+     * All eight gated obligations skip without throwing, without hanging and without leaking a
      * coroutine, so a harness that genuinely cannot partition its links can still subclass this
-     * suite. Deliberately **one** test over all seven rather than seven: what is under assertion is
+     * suite. Deliberately **one** test over all eight rather than eight: what is under assertion is
      * that the declared-gap path is survivable as a whole, and a per-obligation split would report
-     * seven identical greens for one property.
+     * eight identical greens for one property.
      *
      * Note what this cannot do: it cannot tell a harness that *truly* cannot fault-inject from one
      * that could and declared otherwise. Nothing at this layer can — the declaration is a claim
@@ -146,6 +152,7 @@ class RoomConformanceGapDeclarationTest {
         suite.theTeardownFaultReallyFires()
         suite.leaveIsIdempotentEvenWhenTeardownFails()
         suite.leaveDoesNotMintACancellationWhenTeardownIsSlow()
+        suite.aHostsLostFarewellFallsBackToTheWindow()
     }
 
     // ── The ungated obligations are unaffected by the declaration ──
@@ -175,5 +182,6 @@ class RoomConformanceGapDeclarationTest {
         suite.resumeExpiredHasExactCode()
         suite.resumeInvalidTokenHasExactCode()
         suite.resumeAfterLeaveIsLocalWindowClosed()
+        suite.aHostsLeaveEndsTheJoinersRoomWithoutOpeningAWindow()
     }
 }
