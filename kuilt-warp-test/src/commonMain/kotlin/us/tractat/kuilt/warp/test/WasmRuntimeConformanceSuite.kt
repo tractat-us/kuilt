@@ -330,6 +330,37 @@ public abstract class WasmRuntimeConformanceSuite {
         )
     }
 
+    /**
+     * The cap covers one memory, so a module with two is refused however well its first behaves.
+     *
+     * [WasmKernelFixtures.SECOND_MEMORY_NO_MAX] is a live breach rather than a shape: with no guard,
+     * its `warp_run` grows the second memory by 100 pages against a 16-page cap and reports success.
+     * Measured before the guard: Chicory and the browser both loaded and ran it, and only wasm3
+     * refused it, because its parser allows one memory.
+     */
+    @Test
+    public fun loadRejectsModuleDeclaringASecondMemory() {
+        assertFailsWith<WasmLoadException> { newRuntime().load(WasmKernelFixtures.SECOND_MEMORY_NO_MAX) }
+    }
+
+    /**
+     * A memory64 max too big for a 32-bit decode must still be refused: a decoder that overflows
+     * reads 2^32 as 0 and 2^31 as negative, and both pass a `max > cap` check.
+     *
+     * **Today this is a tripwire, and no sandbox mutation reds it.** Each engine refuses both vectors
+     * on its own: Chicory calls the limits flag invalid, V8 reports a max above its 262,144-page
+     * limit, and wasm3 reads the flag as "has a max", truncates 2^32 to 0, and lands on the no-max
+     * guard. It reds the day an engine raises that limit. The decode itself is pinned beside the
+     * browser runtime, where the parser lives.
+     */
+    @Test
+    public fun loadRejectsMemory64MaxPastThe32BitRange() {
+        assertAll(
+            { assertFailsWith<WasmLoadException> { newRuntime().load(WasmKernelFixtures.MEMORY64_MAX_2_POW_32) } },
+            { assertFailsWith<WasmLoadException> { newRuntime().load(WasmKernelFixtures.MEMORY64_MAX_2_POW_31) } },
+        )
+    }
+
     @Test
     public fun loadRejectsMalformedBytes() {
         assertFailsWith<WasmLoadException> { newRuntime().load(byteArrayOf(0x00, 0x61, 0x73, 0x6d, 0x09)) }

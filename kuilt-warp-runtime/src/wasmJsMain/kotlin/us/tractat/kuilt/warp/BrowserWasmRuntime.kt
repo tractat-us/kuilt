@@ -164,7 +164,7 @@ private const val LEB_CONTINUATION_BIT = 0x80
 private const val LEB_SHIFT = 7
 private const val LIMITS_HAS_MAX_FLAG = 0x01
 
-private class DeclaredMemoryLimits(val initialPages: Int, val maxPages: Int?)
+internal class DeclaredMemoryLimits(val initialPages: Int, val maxPages: Int?)
 
 /**
  * Bytes `WebAssembly.Module` has accepted, with the module it compiled from them. The constructor
@@ -221,7 +221,7 @@ private fun declaredMemoryLimits(compiled: CompiledModule): DeclaredMemoryLimits
 }
 
 /** Cursor over the WASM binary with minimal unsigned-LEB128 + section helpers. */
-private class WasmByteReader(private val bytes: ByteArray, private var pos: Int) {
+internal class WasmByteReader(private val bytes: ByteArray, private var pos: Int) {
     fun hasMore(): Boolean = pos < bytes.size
 
     fun u8(): Int = bytes[pos++].toInt() and 0xFF
