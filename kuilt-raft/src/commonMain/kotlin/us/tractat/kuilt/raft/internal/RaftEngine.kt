@@ -939,6 +939,7 @@ internal class RaftEngine(
             // - 1], which assumes the list begins at snapshotIndex + 1) would then silently return the wrong
             // entry for every lookup. Filtering here restores the invariant regardless of the crash window.
             state.log.addAll(checkedRestoredEntries(storage.entries(state.snapshotIndex + 1)))
+            resumeDurableSerials()
             // Recompute effective membershipState from the recovered log + snapshot (restart recovery).
             // This is load-bearing: a node that crashed mid-transition comes back under exactly
             // the config its durable log justifies — no special restart path needed.
@@ -3406,6 +3407,34 @@ internal class RaftEngine(
             "[raft:${transport.selfId}] clientId collision: auto id '${old.value}' seen with a foreign " +
                 "serial ${entry.dedupKey?.requestId} — re-minted as '${myClientId.value}'"
         }
+    }
+
+    /**
+     * Carry a [ClientIdentity.Durable] id's serial space across a restart, from the log it retained.
+     * Runs in the restore, before the actor starts, so no proposal or commit can see the old values.
+     *
+     * A durable id outlives the process, so its own earlier serials are not foreign: without this,
+     * the first replayed entry reads as another writer and [detectCollision] kills the node before it
+     * issues anything (#3060). The auto serial resumes too, or the next one-argument [propose] would
+     * reuse a serial a consumer's [us.tractat.kuilt.raft.ClientSessionTable] already holds, and
+     * that table would drop the new command as a duplicate.
+     *
+     * The retained log is all this knows. A snapshot that covered every entry under this id, or a
+     * node that retained nothing, resumes from zero, and a serial of an earlier incarnation that
+     * reaches this node only by replication still reads as foreign. Closing that needs the serial
+     * persisted, tracked by #3060.
+     *
+     * An [ClientIdentity.Auto] id is exempt: one it finds in its own log came from the same seed,
+     * and re-minting in [detectCollision] is how that incarnation stops aliasing the last.
+     */
+    private fun resumeDurableSerials() {
+        if (!isDurableId) return
+        val highest = state.log.mapNotNull { it.dedupKey }
+            .filter { it.clientId == myClientId }
+            .maxOfOrNull { it.requestId }
+            ?: return
+        serial = highest
+        collisions.issued(highest)
     }
 
     /**
