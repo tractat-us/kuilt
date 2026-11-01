@@ -116,10 +116,8 @@ class NearbyLoomKnobsTest {
             )
 
             val startedAt = currentTime
-            // SupervisorJob'd backgroundScope: the stalled join fails, and that must not fail the test.
-            val join = backgroundScope.async { loom.join(NearbyTag("device", HOST_ENDPOINT)) }
             assertFailsWith<ConnectionFailedException>("a handshake nothing answers must not hang") {
-                join.await()
+                loom.join(NearbyTag("device", HOST_ENDPOINT))
             }
 
             assertEquals(
