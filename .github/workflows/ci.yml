@@ -347,15 +347,6 @@ jobs:
         run: >-
           ./gradlew build koverXmlReport --max-workers=2
           -x wasmJsTest -x wasmJsBrowserTest -x macosArm64Test -x iosSimulatorArm64Test
-          -x checkKotlinAbi
-          -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
-          -Dkotlin.daemon.jvmargs="-Xmx3g"
-
-      # TEMPORARY (#2684 measurement): the ABI check split into its own step so its marginal cost
-      # shows as a step duration. Reverted before merge; `check` runs it inside the step above.
-      - name: TEMP ABI check (measurement)
-        run: >-
-          ./gradlew checkKotlinAbi --continue --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
