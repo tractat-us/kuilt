@@ -50,8 +50,8 @@ public interface OtlpEdge {
      * ids already in [digest]; a lost digest or failed acknowledgement may cause
      * another send, so the backend must provide that delivery deduplication.
      * This requirement does not deduplicate the local span buffer: an unstamped
-     * export retried after an indeterminate write can leave distinct stamped values
-     * with the same id (see [SpanRecord]).
+     * export retried after an indeterminate write and a restart can leave distinct
+     * stamped values with the same id (see [SpanRecord]).
      *
      * [spans] is non-empty when called by the bridge (an empty delta is never sent).
      *

@@ -29,7 +29,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.tap.MetricTapHo
  * is entirely opt-in.
  *
  * Under the surface the host rides a [Quilter] over the woven [Seam], replicating the
- * device's [MetricCatalog] (counters, gauges, cardinalities) to whoever joins.
+ * device's [MetricCatalog] (counters, gauges, cardinalities, histograms) to whoever joins.
  * Replication is idempotent by construction, so a puller that reconnects converges without
  * double-counting.
  *

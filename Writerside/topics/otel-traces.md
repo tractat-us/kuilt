@@ -29,7 +29,7 @@ telemetry.spans.export(span)   // one timed unit of work
 Recording is only the first step. Your spans are held safely on the device, survive
 being offline, and can reach your dashboard through another device that happened to
 be online. Sharing saved snapshots is idempotent. Retrying an unstamped export after
-a failed write can leave distinct stamped copies with the same span id. That
+a failed write and a restart can leave distinct stamped copies with the same span id. That
 limitation and the delivery path are on
 **[Device to dashboard](observability.md)**.
 

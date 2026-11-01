@@ -3921,20 +3921,23 @@ internal class SeamRoom(
  * data"*. The frame also has to get off the room's own lane first. The real fix is the explicit
  * `flush(timeout)` ruled for #2830, and this constant should go when that lands.
  *
- * A frame sent and closed at once, against a pause before the close, on a box at load 50 of 16 cores:
+ * A frame sent and closed at once, against a pause before the close, on a 16-core box whose 5-minute
+ * load ran from 20 to 130 across the runs (`NwSendThenCloseStressTest` reproduces the kuilt-nw row):
  *
  * | Fabric | no pause | 5 ms | 25 ms | 100 ms |
  * |---|---|---|---|---|
  * | WebSocket, real localhost socket | 10/60 | 60/60 | 60/60 | 60/60 |
- * | kuilt-nw, real loopback TLS-PSK | 58/60 | 40/40 | 60/60 | 40/40 |
+ * | kuilt-nw, real loopback TLS-PSK | 107/120 | 100/100 | 120/120 | 100/100 |
  *
- * 100 ms is that margin again, for a slower radio and a slower phone. It is a hand-off wait rather than a
- * round trip, so link latency is not what it has to cover. **Loopback is not AWDL**, so a real two-iPhone
- * run still owes this number its confirmation.
+ * And this wait end to end, a real room over kuilt-nw, counting joiners that reached `HostLeft`: 120/120
+ * with it, 38/40 without. 100 ms is that margin again, for a slower radio and a slower phone. It is a
+ * hand-off wait rather than a round trip, so link latency is not what it has to cover. **Loopback is not
+ * AWDL**, so a real two-iPhone run still owes this number its confirmation.
  *
- * **What it does not cover.** A backlog ahead of the frame: with 8 MiB queued in front of it the frame
- * was lost at 100 ms on kuilt-nw. The joiner then falls back to the reconnect window, the behaviour every
- * joiner had before this, so a lost `Farewell` costs time and nothing else.
+ * **What it does not cover.** A backlog ahead of the frame. On kuilt-nw at this wait the frame survived
+ * 1 MiB queued ahead of it (40/40) and did not survive 8 MiB (1/80). The joiner then falls back to the
+ * reconnect window, the behaviour every joiner had before this, so a lost `Farewell` costs time and
+ * nothing else.
  *
  * Paid only by a host leaving cleanly with someone to tell.
  */

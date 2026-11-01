@@ -21,6 +21,7 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SeamRoomFactory
+import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -69,14 +70,21 @@ internal suspend fun departOverTheRealRadio(seed: Int, ceiling: Duration): Depar
     val joinerApi = RealNwApi(psk, NwLoopbackConfig(dial = true, rendezvous = rendezvous))
     val heartbeat = HeartbeatConfig(reconnectWindow = 2.minutes)
     val clock = { Clock.System.now() }
-    fun factory(api: RealNwApi, offset: Int) =
-        SeamRoomFactory(NwLoom(api, serviceType = serviceType, random = Random(seed + offset)), scope, clock, heartbeat)
+    fun loom(api: RealNwApi, offset: Int) = NwLoom(api, serviceType = serviceType, random = Random(seed + offset))
+    val hostLoom = loom(hostApi, 0)
+    val joinerLoom = loom(joinerApi, 1)
     try {
-        val (host, joiner) = coroutineScope {
-            val h = async { factory(hostApi, 0).host(Pattern("host")) }
-            val j = async { factory(joinerApi, 1).join(InMemoryTag("host", peerKey = "nw-loopback-joiner")) }
+        val (hostSeam, joinerSeam) = coroutineScope {
+            val h = async { hostLoom.host(Pattern("host")) }
+            val j = async { joinerLoom.join(InMemoryTag("host", peerKey = "nw-loopback-joiner")) }
             h.await() to j.await()
         }
+        // Adopted with `reweave = { seam }`, the shape a room out of an election lobby has: NwSeam heals
+        // in place, and a second weave on one RealNwApi would throw off `bytesReceived`'s single-collection
+        // guard the moment a lost frame sent this joiner into its reconnect loop.
+        val host = SeamRoomFactory(hostLoom, scope, clock, heartbeat).adopt(hostSeam, SessionRole.Host)
+        val joiner = SeamRoomFactory(joinerLoom, scope, clock, heartbeat)
+            .adopt(joinerSeam, SessionRole.Joiner, reweave = { joinerSeam })
         withTimeout(ceiling) { host.roster.first { it.size == 1 } }
         withTimeout(ceiling) { joiner.roster.first { it.size == 1 } }
         val events = mutableListOf<MembershipEvent>()
