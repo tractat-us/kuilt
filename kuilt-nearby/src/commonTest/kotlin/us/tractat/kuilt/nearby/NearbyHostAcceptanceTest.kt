@@ -2,6 +2,8 @@
 
 package us.tractat.kuilt.nearby
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -90,6 +92,10 @@ class NearbyHostAcceptanceTest {
         var advertisingStops = 0
         var discoveryStops = 0
 
+        /** When set, this peer's identity send parks here until the test opens it. */
+        var identitySendGate: CompletableDeferred<Unit>? = null
+        var identitySendsFinished = 0
+
         /** [payloads]' subscribers at the moment of the dial — the rig for "the seam was live". */
         var payloadSubscribersDuringDial = -1
 
@@ -142,6 +148,8 @@ class NearbyHostAcceptanceTest {
         }
 
         override suspend fun sendBytesPayload(endpointId: String, bytes: ByteArray) {
+            identitySendGate?.await()
+            identitySendsFinished++
             if (endpointId == FAR_ENDPOINT && far == FarDevice.COMPLETES) {
                 payloads.emit(PayloadReceived(endpointId, FAR_PEER.value.encodeToByteArray()))
             }
@@ -520,14 +528,26 @@ class NearbyHostAcceptanceTest {
             )
         }
 
-    /** The caller walking away is an exit too, and it arrives through the same unreturned seam. */
+    /**
+     * The caller walking away is an exit too, and it arrives through the same unreturned seam. It must
+     * stay a cancellation on the way out: reported as a failure, it would fail a parent that only
+     * asked this one child to stop.
+     */
     @Test
-    fun cancellingAJoinClosesItsSeam() =
+    fun cancellingAJoinClosesItsSeamAndStaysACancellation() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val api = ScriptedNearbyApi() // nothing is ever found, so the join waits in discovery
             val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            val thrown = CompletableDeferred<Throwable>()
 
-            val join = backgroundScope.launch { loom.joinFar() }
+            val join = backgroundScope.launch {
+                try {
+                    loom.joinFar()
+                } catch (out: Throwable) {
+                    thrown.complete(out)
+                    throw out
+                }
+            }
             runCurrent()
             assertTrue(api.payloads.subscriptionCount.value > 0, "rig: the seam exists and is listening")
 
@@ -537,6 +557,7 @@ class NearbyHostAcceptanceTest {
             assertAll(
                 { assertEquals(0, api.payloads.subscriptionCount.value, "nothing is left listening") },
                 { assertEquals(1, api.discoveryStops, "and discovery is not left running") },
+                { assertIs<CancellationException>(thrown.getCompleted(), "the caller's own cancel stays one") },
             )
         }
 
@@ -555,6 +576,36 @@ class NearbyHostAcceptanceTest {
             runCurrent()
 
             assertEquals(0, api.payloads.subscriptionCount.value, "and the seam is closed behind it")
+        }
+
+    /**
+     * Resolving the handshake cancels its listeners, so it must not happen with this peer's identity
+     * still in flight: the remote would then wait out its own clock for an id that was cancelled here.
+     * The remote's identity arriving first is the order that exposes it.
+     */
+    @Test
+    fun aHandshakeDoesNotResolveWhileItsOwnIdentityIsStillGoingOut() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val gate = CompletableDeferred<Unit>()
+            api.identitySendGate = gate
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+            val joiner = PeerId("joiner")
+
+            admitJoiner(api, FIRST_ENDPOINT, joiner)
+
+            assertAll(
+                { assertEquals(0, api.identitySendsFinished, "rig: our identity is still going out") },
+                { assertIs<SeamState.Weaving>(host.state.value, "so the host has not resolved") },
+            )
+
+            gate.complete(Unit)
+            runCurrent()
+
+            assertAll(
+                { assertEquals(1, api.identitySendsFinished, "the send was allowed to finish") },
+                { assertTrue(joiner in host.peers.value, "and the link resolved after it") },
+            )
         }
 
     // ── the advertiser's lifetime ─────────────────────────────────────────────────────────────────
