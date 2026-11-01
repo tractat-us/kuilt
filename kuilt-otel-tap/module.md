@@ -124,7 +124,7 @@ val host = installLogTap(loom, exporter, scope, admission = LogTapAdmission.Veri
 val client = LogTapClient(
     loom.join(InMemoryTag("puller")),
     scope,
-    admission = LogTapAdmission.Present(token.code),
+    admission = LogTapAdmission.Present(token.code, secure),
 )
 val logs: List<LogRecord> = client.pull()
 

@@ -55,7 +55,7 @@ class TapAdmissionAttackTest {
 
     private fun verifier(seed: Int = VERIFIER_SEED) = GateRole.Verifier(token, clock, Random(seed))
 
-    private fun prover() = GateRole.Prover(code)
+    private fun prover() = GateRole.Prover(code, Random(PROVER_SEED))
 
     // ── the relay ──────────────────────────────────────────────────────────────────────────────
 

@@ -109,7 +109,7 @@ class TokenGatedSeamTest {
         val proverSeam = loom.host(Pattern("prover-hosts"))
         val hostSeam = loom.join(InMemoryTag("host")) // the legitimate verifier device
         val attackerSeam = loom.join(InMemoryTag("attacker"))
-        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234"), backgroundScope)
+        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234", Random(11)), backgroundScope)
         val proverId = proverGate.selfId
 
         // The legitimate host challenges first; the prover binds to it and answers.
@@ -143,7 +143,7 @@ class TokenGatedSeamTest {
         val proverSeam = loom.host(Pattern("prover-hosts"))
         val attackerSeam = loom.join(InMemoryTag("attacker"))
         val hostSeam = loom.join(InMemoryTag("host")) // the legitimate verifier device
-        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234"), backgroundScope)
+        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234", Random(11)), backgroundScope)
         val proverId = proverGate.selfId
 
         // A zero-length nonce: HMAC(code, "") has no per-attempt freshness whatsoever.
@@ -201,7 +201,7 @@ class TokenGatedSeamTest {
         val hostSeam = loom.host(Pattern("gate-test"))
         val joinerSeam = loom.join(InMemoryTag("puller"))
         val hostGate = hostSeam.tokenGated(GateRole.Verifier(token, verifierClock, Random(7)), scope)
-        val joinerGate = joinerSeam.tokenGated(GateRole.Prover(presentedCode), scope)
+        val joinerGate = joinerSeam.tokenGated(GateRole.Prover(presentedCode, Random(11)), scope)
         return hostGate to joinerGate
     }
 }

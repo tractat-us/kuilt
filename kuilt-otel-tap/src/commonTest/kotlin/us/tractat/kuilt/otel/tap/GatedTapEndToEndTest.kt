@@ -54,7 +54,7 @@ class GatedTapEndToEndTest {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
         host = installLogTap(loom, exporterWith(3), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
-        val c = LogTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config, LogTapAdmission.Present(token.code))
+        val c = LogTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
             .also { client = it }
 
         val pulled = c.pull()
@@ -67,7 +67,7 @@ class GatedTapEndToEndTest {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
         host = installLogTap(loom, exporterWith(3), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
-        val c = LogTapClient(loom.join(InMemoryTag("attacker")), backgroundScope, config, LogTapAdmission.Present("WRONGGGG"))
+        val c = LogTapClient(loom.join(InMemoryTag("attacker")), backgroundScope, config, LogTapAdmission.Present("WRONGGGG", Random(11)))
             .also { client = it }
 
         // The host never admits the attacker, so it never sends its buffer; pull() times out.
@@ -83,7 +83,7 @@ class GatedTapEndToEndTest {
         val loom = InMemoryLoom()
         val pattern = us.tractat.kuilt.core.Pattern("inverted")
         // Laptop hosts the rendezvous AND is the puller.
-        val laptop = LogTapClient(loom.host(pattern), backgroundScope, config, LogTapAdmission.Present(token.code))
+        val laptop = LogTapClient(loom.host(pattern), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
             .also { client = it }
         // Device joins and offers its buffer.
         host = installLogTapJoining(
@@ -104,7 +104,7 @@ class GatedTapEndToEndTest {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
         val laptopSeam = loom.host(us.tractat.kuilt.core.Pattern("inverted"))
-        val laptop = LogTapClient(laptopSeam, backgroundScope, config, LogTapAdmission.Present(token.code))
+        val laptop = LogTapClient(laptopSeam, backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
             .also { client = it }
         val stranger = loom.join(InMemoryTag("stranger"))
         val answers = mutableListOf<TapAdmitMessage.Proof>()
@@ -135,7 +135,7 @@ class GatedTapEndToEndTest {
         val pullerSeam = loom.join(InMemoryTag("puller"))
         val nonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES))
         stranger.sendTo(pullerSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
-        val puller = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present(token.code))
+        val puller = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
             .also { client = it }
 
         assertEquals(listOf("log 1", "log 2", "log 3"), puller.pull().map { it.body })

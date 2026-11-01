@@ -8,8 +8,8 @@ import kotlin.random.Random
  * [CryptoRand], multiplatform).
  *
  * This is the source to use in production when minting a [LogTapJoinToken] or when
- * supplying the nonce source to [us.tractat.kuilt.otel.tap.LogTapAdmission.Verify]. The
- * join code is the only secret in the admission scheme, so it must be drawn from a CSPRNG —
+ * supplying the nonce source to [us.tractat.kuilt.otel.tap.LogTapAdmission.Verify] or
+ * [us.tractat.kuilt.otel.tap.LogTapAdmission.Present]. The join code is the only secret in the admission scheme, so it must be drawn from a CSPRNG —
  * never `Random.Default` or a seeded `Random`, which are predictable. The `Random` parameters
  * on those APIs are injectable **only so tests can supply a seeded, deterministic source**.
  *
