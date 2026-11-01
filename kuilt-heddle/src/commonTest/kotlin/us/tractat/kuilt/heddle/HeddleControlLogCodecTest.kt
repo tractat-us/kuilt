@@ -1,5 +1,8 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.descriptors.elementNames
+import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -24,8 +27,21 @@ class HeddleControlLogCodecTest {
             ControlLogCodec.encode(ControlLogVectors.envelope(command)).toHexString() !=
                 ControlLogVectors.TAGGED_PREFIX + ControlLogVectors.bodies.getValue(name)
         }
-        assertEquals(10, ControlLogVectors.commands.size, "rig: every ControlCommand subclass has a vector")
         assertEquals(emptyList(), wrong.map { it.first }, "commands whose bytes moved")
+    }
+
+    /**
+     * Read from the sealed serializer rather than counted by hand, because a new command is exactly
+     * what a hand count misses: it would write bytes no vector pins, into a format that halts on them.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun everyControlCommandSubclassHasAVector() {
+        val subclasses = ControlCommand.serializer().descriptor.getElementDescriptor(1).elementNames
+            .map { it.substringAfterLast('.') }
+            .toSet()
+        val covered = ControlLogVectors.commands.map { (_, command) -> command::class.simpleName }.toSet()
+        assertEquals(subclasses, covered, "the sealed type's subclasses against the vectors")
     }
 
     /** Fixed bytes in, so a broken encoder cannot agree with a broken decoder. */
@@ -157,6 +173,12 @@ internal object ControlLogVectors {
         "Activate" to OPENING + "782f" + NS + "4163746976617465" + "bf64656467656165" + CLOSING,
         "Close" to OPENING + "782c" + NS + "436c6f7365" + "bf64656467656165" + CLOSING,
         "Retire" to OPENING + "782d" + NS + "526574697265" + "bf64656467656165" + CLOSING,
+        "RetireWithWitness" to OPENING + "782d" + NS + "526574697265" + "bf64656467656165" + "677769746e657373" +
+            "bf677265636f726473bfff666d696e746564bfff" +
+            "66697373756564bf6165bf66636f756e7473bf617003ffffff" +
+            "6872657475726e6564bfff696c6561665370656e74bfff6b726f6c6c75705370656e74bfff697472616e7366657273bfff" +
+            "66676175676573bf6165bf65666c6f6f72bf696e756d657261746f72016b64656e6f6d696e61746f7202ff66666f6c64656404ffff" +
+            "ff" + CLOSING,
         "Reconcile" to OPENING + "7830" + NS + "5265636f6e63696c65" + "bf656368696c646163" + CLOSING,
         "Quiesce" to OPENING + "782e" + NS + "51756965736365" + "bf64656467656165" + CLOSING,
         "QuiesceAck" to OPENING + "7831" + NS + "5175696573636541636b" +
@@ -173,6 +195,16 @@ internal object ControlLogVectors {
         "Activate" to ControlCommand.Activate(EDGE),
         "Close" to ControlCommand.Close(EDGE),
         "Retire" to ControlCommand.Retire(EDGE),
+        // What `GovernedHeddleNode.retire` actually sends: it always carries a witness, which brings
+        // the ledger, the gauge, `Rational` and `GCounter` into this format. One counter and one gauge
+        // on one edge, so no map here has two entries and key order cannot move these bytes.
+        "RetireWithWitness" to ControlCommand.Retire(
+            EDGE,
+            EntitlementLedger.of(
+                issued = mapOf(EDGE to GCounter.of(P to 3L)),
+                gauges = mapOf(EDGE to Gauge(Rational.of(1L, 2L), 4L)),
+            ).drainWitnessFor(EDGE),
+        ),
         "Reconcile" to ControlCommand.Reconcile(GroupId("c")),
         "Quiesce" to ControlCommand.Quiesce(EDGE),
         "QuiesceAck" to ControlCommand.QuiesceAck(EDGE, P, SlotFinals(1L, 2L, 3L, 4L, mapOf(ReplicaId("q") to 5L))),

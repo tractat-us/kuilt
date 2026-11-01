@@ -27,6 +27,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -273,6 +274,22 @@ class HeddleControlLogFailClosedTest {
             release.complete(Unit)
 
             assertIs<ControlOutcome.Indeterminate>(reconciling.await())
+        }
+
+    /** The premise of the witness vector in [ControlLogVectors]: production's retire is never witness-free. */
+    @Test
+    fun aGovernedRetireProposesAWitness() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val raft = FakeRaftNode(initialRole = RaftRole.Leader)
+            val governed = boot(raft, "retire-witness")
+            val edge = AttachmentId("edge")
+            assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(edge, ROOT, GroupId("child"), Weight.of(1))))
+            assertIs<ControlOutcome.Applied>(governed.activate(edge))
+            assertIs<ControlOutcome.Applied>(governed.close(edge))
+            assertIs<ControlOutcome.Applied>(governed.retire(edge))
+
+            val act = assertIs<ControlEntry.Act>(ControlLogCodec.decode(raft.proposals.last()))
+            assertNotNull(assertIs<ControlCommand.Retire>(act.envelope.command).witness)
         }
 
     /** A restart replays the same log to the same entry, so restarting cannot clear the latch either. */
