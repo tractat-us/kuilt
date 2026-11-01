@@ -868,8 +868,8 @@ internal class FakeNwRadio {
      * Any budget `>= payload.size` yields ONE emission — i.e. silently no chunking at all, and a green test
      * that proved nothing. The budget is therefore never the interesting number on its own: a test that sets
      * it must also **count the emissions it caused** and assert that count is at least two and is what the
-     * budget implies. Every test in `NwChunkedReceiveTest` does, against an independent collector on the
-     * receiving device's own [NwApi.bytesReceived] rather than against anything this class reports.
+     * budget implies. Every test in `NwChunkedReceiveTest` does, against [FakeNwApi.bytesDeliveredForTest]
+     * on the receiving device rather than against anything this class reports.
      */
     var maxChunkBytes: Int? = null
         set(value) {

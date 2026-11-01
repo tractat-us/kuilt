@@ -155,6 +155,13 @@ internal class FakeNwApi(
         }
     }
 
+    /**
+     * Test-only: every chunk this device's radio delivers, for a rig that counts receives **beside** a live
+     * seam. Not part of the `NwApi` contract, and not a second collection of [bytesReceived]: the binding
+     * would refuse that, so a rig written against it describes a setup that cannot exist (#3031).
+     */
+    internal val bytesDeliveredForTest: Flow<NwBytesReceived> = _bytesReceived.asSharedFlow()
+
     override val connectionClosed: Flow<NwConnectionClosed> = _connectionClosed.asSharedFlow()
     override val connectionStates: StateFlow<Map<NwConnectionId, NwConnState>> = _connectionStates.asStateFlow()
     override val pathState: StateFlow<NwPathState?> = _pathState.asStateFlow()
