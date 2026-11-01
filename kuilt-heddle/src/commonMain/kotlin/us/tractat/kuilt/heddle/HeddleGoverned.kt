@@ -51,6 +51,13 @@ import kotlin.time.Instant
  * dependencies its path needs — the repo's "Optional ≠ tuning" rule forbids one door with a nullable
  * `RaftNode?` knob.
  *
+ * **Give the control plane a dedicated Raft node.** A log entry this module can show no version of
+ * heddle wrote is stepped over with a warning, but a heddle act it cannot read stops this node for
+ * good: writes are refused with [GateClosed.Reason.UnreadableControlEntry], and only a build that can
+ * read the entry, or an explicit offline migration of the log, recovers it. So upgrade a cluster
+ * together. A build from before the control log carried a header cannot read this one's acts at all,
+ * and drops them silently (#1738).
+ *
  * **Shared-RaftNode compaction caveat.** v1 does not publish snapshots to [raft] (log compaction is
  * off), so the control plane can replay the whole log via `committedFrom(1)`. If [raft] is a node
  * shared with another state machine that publishes snapshots, a control entry below the compaction
@@ -187,7 +194,11 @@ public class GovernedHeddleNode internal constructor(
      * ("call it after quiescing local work, or the peer keeps a promise it has already broken").
      * Stated precisely here because the fence's quantifier rests on the departure promise, and an
      * overstated "it is transitively gated" would invite a reader to assume enforcement that this
-     * class does not perform.
+     * class does not perform. The same goes for [GateClosed.Reason.UnreadableControlEntry], the third
+     * way it closes: a reservation taken before the halt can still be completed after it.
+     *
+     * [GateClosed.Reason.UnreadableControlEntry] outranks everything above: once this peer has met a
+     * control act it cannot read, no [enroll] reopens the gate. See [heddleGoverned].
      */
     public val isWritable: Boolean get() = control.writeGateClosedBecause == null
 
@@ -458,8 +469,9 @@ public class GovernedHeddleNode internal constructor(
      * enroll has applied every entry before it — every quiesce mark this incarnation lost to a restart
      * is restored before the first mutator can run. Do it on **every** boot, including a restart where
      * the replica is already enrolled: the fold is then idempotent, but the act still commits, still
-     * applies, and opens the gate unless a later departure has already closed it (and it is also
-     * what re-attaches a lost peer's detector, #1652).
+     * applies, and opens the gate unless a later departure has already closed it, or this peer has
+     * halted at a control act it cannot read, in which case the call is refused without proposing
+     * (and it is also what re-attaches a lost peer's detector, #1652).
      *
      * The gate opens on this run's own applied enroll and nothing else: a third party enrolling this
      * replica proves nothing about what this run has applied, and neither does an enroll an earlier

@@ -285,11 +285,12 @@ class HeddleControlLogFailClosedTest {
             }
 
             leader.propose("set x=1".encodeToByteArray())
-            val first = ids.first()
-            assertIs<ControlOutcome.Applied>(governed.getValue(first).enroll(ReplicaId(first.value)))
-            sim.awaitTrue("every node stepped over the foreign entry and applied the enroll") {
-                governed.values.all { ReplicaId(first.value) in it.enrolledReplicas() }
+            for ((id, node) in governed) assertIs<ControlOutcome.Applied>(node.enroll(ReplicaId(id.value)))
+            sim.awaitTrue("every node stepped over the foreign entry and applied every enroll") {
+                governed.values.all { it.enrolledReplicas().size == ids.size }
             }
+            // Without this the wait below passes on a node that never opened.
+            assertTrue(governed.values.all { it.isWritable }, "rig: all open before the entry arrives")
 
             val unreadable = leader.propose(ControlLogVectors.taggedAtVersion(99))
             sim.awaitTrue("every node latched") { governed.values.none { it.isWritable } }

@@ -10,11 +10,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
@@ -986,16 +984,15 @@ class HeddleControlPlaneTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // #1717: an entry that does not decode as a ControlEnvelope is SKIPPED — no outcome,
+    // #1717, narrowed by #1738: an entry no version of heddle wrote is SKIPPED — no outcome,
     // no projection change — while the roster's applied index still advances over it, so
     // the prefix marker `enrolledAt` answers against keeps tracking the DELIVERED log.
-    // Both halves are load-bearing and pinned here. The skip is now also logged at `warn`
+    // Both halves are load-bearing and pinned here. The skip is also logged at `warn`
     // with the entry index; the log line itself has no assertable sink in commonTest, so
     // only the behavioural half is asserted.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-    fun undecodableEntryIsSkippedAndStillAdvancesTheAppliedIndex() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+    fun nonHeddleEntryIsSkippedAndStillAdvancesTheAppliedIndex() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
@@ -1006,14 +1003,13 @@ class HeddleControlPlaneTest {
         val projectionBefore = plane.projectionSnapshot()
         val indexBefore = plane.rosterSnapshot().appliedIndex
 
-        // Bytes that are not a ControlEnvelope. `0xFF` is CBOR's break byte, so it can never open a
-        // valid encoding. This is what a non-heddle entry looks like — and equally what an older
-        // heddle entry stranded by a ControlEnvelope/ControlCommand schema change would look like on
-        // the replay-from-index-1 every governed node performs at boot.
+        // Bytes no version of heddle wrote. `0xFF` is CBOR's break byte, so it can never open a valid
+        // encoding. An act heddle cannot read halts the node instead: HeddleControlLogFailClosedTest.
         val bytes = byteArrayOf(0xFF.toByte(), 0x00, 0x42)
-        assertTrue(
-            runCatchingCancellable { Cbor.decodeFromByteArray(ControlEnvelope.serializer(), bytes) }.isFailure,
-            "fixture non-vacuity: the bytes must genuinely fail to decode as a ControlEnvelope",
+        assertEquals(
+            ControlEntry.NotHeddle,
+            ControlLogCodec.decode(bytes),
+            "fixture non-vacuity: the bytes must be positively not heddle's",
         )
         val undecodable = fake.pushCommitted(bytes)
         runCurrent()

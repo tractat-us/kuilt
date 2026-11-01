@@ -31,37 +31,21 @@ import us.tractat.kuilt.crdt.ReplicaId
  * never lower it. Every field is grow-only in time at its writer, so max is the correct join, and
  * [transfers] joins per recipient by the same rule.
  *
- * ## ⚠ [transfers] is a wire-schema evolution, ahead of #1738 — a stated decision
+ * ## [transfers] is a wire-schema evolution, and how a build that cannot read it behaves
  *
  * This is a `@Serializable` type carried inside a `ControlCommand.QuiesceAck`, i.e. **on the
- * control log**, and `HeddleControlPlane.applyEntry`'s KDoc says in as many words: *"Settle them
- * before any schema evolution of the wire types."* #1738 is open. Adding [transfers] evolves the
- * type anyway, so the exposure is written down here rather than left to be rediscovered.
+ * control log**. `ControlLogCodec` decodes with the default `Cbor`, which is `encodeDefaults = false`
+ * and `ignoreUnknownKeys = false`. The first half keeps most acks unchanged: an ack whose [transfers]
+ * is the default `emptyMap()` emits **no** field. The second half means an ack that actually carries a
+ * row cannot be read by a build from before this field.
  *
- * The mechanism, exactly. `applyEntry` decodes with the default `Cbor`, which is
- * `encodeDefaults = false` and `ignoreUnknownKeys = false`. The first half is why this is not a
- * blanket break: an ack whose [transfers] is the default `emptyMap()` emits **no** field, so an
- * older binary decodes it byte-for-byte as before. The second half is why the remainder is
- * unrecoverable: an ack that actually carries a row emits the key, an older binary throws on it,
- * `applyEntry` takes its `envelope == null` branch — which logs at `warn`, **advances the roster's
- * applied index anyway**, and returns. The ack is then permanently absent from that peer's
- * [FenceState] while its log prefix reads fully applied. `FenceState` is a log-pure derivation
- * precisely so that every peer holds an equal value; this is a permanent local divergence in it,
- * and the affected acks are exactly the ones #2366 exists for.
- *
- * Two concrete cases, since "upgrade together" is the pre-1.0 posture and the posture is what makes
- * this acceptable rather than the code:
- *
- *  - **A downgrade.** Rolling one peer back to a pre-#2377 binary after a fenced edge has acked a
- *    row. It replays the log, drops that ack, and derives a `FenceState` no other peer holds.
- *  - **An offline node.** A peer that was away while newer peers fenced a strand, and boots on its
- *    old binary. Governed nodes replay from index 1 on every boot, so this is not a narrow window —
- *    the stale entry is re-encountered on every start until the binary is updated.
- *
- * Neither is recoverable by anti-entropy: the divergence is in the log-pure derivation, not in the
- * gossip-merged data plane. The remedy is #1738's — tag heddle entries so *"not a heddle entry"* is
- * a positive determination and fail closed on a tagged-but-undecodable one — and it is not taken
- * here.
+ * Such a build dates from before the control log carried a header, so it gets no protection from
+ * #1738's fail-closed rule. It drops the ack and reads the prefix as fully applied, which leaves a
+ * permanent local divergence in a [FenceState] every peer is meant to hold equal, and anti-entropy
+ * cannot repair that because it is not in the gossip-merged data plane. Two cases reach it: rolling one
+ * peer back to a pre-#2377 binary, and booting an old binary on a peer that was offline. Upgrading
+ * together is what keeps both away. A build that does have the header stops at an ack it cannot
+ * read rather than diverging, which is the rule any later change to this type falls under.
  *
  * @property transfers this replica's own hand-offs at the fenced edge's path key, recipient →
  *   cumulative. Empty for a replica that never handed entitlement to anyone there — which is most

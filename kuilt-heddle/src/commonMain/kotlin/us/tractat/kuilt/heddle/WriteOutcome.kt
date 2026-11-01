@@ -50,8 +50,8 @@ public sealed interface ScheduleOutcome {
  * static [HeddleNode] has no gate and never returns it.
  *
  * It is one type in both results on purpose. "Closed" is a property of the *node*, not of the call,
- * so a caller can handle it once — and a later reason the gate closes (for instance a control-log
- * entry this peer cannot decode, issue #1738) arrives as a new [Reason], not a new arm in
+ * so a caller can handle it once — and each reason the gate closes, such as a control-log entry this
+ * peer cannot read ([Reason.UnreadableControlEntry]), is a [Reason], not a new arm in
  * [ReserveOutcome] or [ScheduleOutcome]. A caller that branches on `GateClosed` and treats [reason]
  * as diagnostic text keeps compiling when one is added; a caller that `when`s over [Reason] does not,
  * which is the point of matching on it.
@@ -59,7 +59,8 @@ public sealed interface ScheduleOutcome {
  * Closed is not always a bug. Every governed node boots closed and opens only when its own
  * post-boot `enroll(self)` has applied, so the gate is legitimately shut for a short window on every
  * start. What used to be the bug is that nothing *said* so (`docs/heddle-ledger-relocation-design.md`
- * §13.2, §14 item 7).
+ * §13.2, §14 item 7). Closed for [Reason.UnreadableControlEntry] is the opposite case: it does not
+ * clear by itself, and it needs an operator.
  *
  * @property replica the peer whose gate is closed.
  * @property reason why it is closed.

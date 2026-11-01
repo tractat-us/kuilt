@@ -8,9 +8,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
@@ -352,6 +350,17 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControl
  * under a reused [incarnation]. Without it, the normal boot (enroll first, sequence number 0, replay
  * still behind) would be resolved by the old entry, opening the gate with later barriers unreplayed.
  *
+ * ## The log is dedicated to this control plane, and an act it cannot read stops it
+ *
+ * The control log is a consensus log, so a peer that cannot read one of its acts cannot know the true
+ * control state. Scheduling from what happened to decode is how a conservation break arrives by a
+ * second route, so [applyEntry] halts there: no later entry applies, and [submit] refuses from then
+ * on. The reason latches in [writeGateClosedBecause] and outranks enrollment (#1738). Recovery is a
+ * build that can read the entry, or an explicit offline migration of the log. A restart alone
+ * replays to the same entry and halts again.
+ *
+ * The one thing it steps over is an entry [ControlLogCodec] can show no version of heddle wrote.
+ *
  * @param membership the seam the node's local enrollment effects ride ([ControlMembershipSink]).
  * @param barrier the seam the §6.2 step-2 peer-local quiesce barrier runs on ([ControlBarrierSink]).
  *   Required, never defaulted: it gates a functional code path (the fence's whole safety argument),
@@ -360,7 +369,6 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControl
  * @param nextIndex the first log index to replay from — `1` for a fresh node ([RaftNode.committedFrom]
  *   replays from the start with no gap; replay-0 `committed` would miss an act committed before subscription).
  */
-@OptIn(ExperimentalSerializationApi::class)
 internal class HeddleControlPlane(
     private val raft: RaftNode,
     private val self: ReplicaId,
@@ -393,7 +401,8 @@ internal class HeddleControlPlane(
     /**
      * Why this peer may not author entitlement, or `null` when it may. Written ONLY by [applyEntry],
      * under [lock], in index order; read without the lock so the data plane's `reserve` and `schedule`
-     * never wait on an apply in progress.
+     * never wait on an apply in progress. Once it holds a [GateClosed.Reason.UnreadableControlEntry]
+     * it never moves again, because [applyEntry] applies nothing further.
      */
     private val closedBecause = atomic<GateClosed.Reason?>(GateClosed.Reason.AwaitingEnrollment)
 
@@ -515,10 +524,16 @@ internal class HeddleControlPlane(
      * Applied effects do not depend on the caller resuming. That includes the write gate: a caller that
      * gave up on an `Enroll(self)` or `Depart(self)` needs no repair, whether the entry applied before
      * the timeout or commits after it (see the class KDoc).
+     *
+     * **Halted.** Once this peer has met a control act it cannot read, this answers a
+     * [ControlOutcome.Conflict] at [ControlOutcome.NOT_COMMITTED] without proposing. A call already in
+     * flight when the halt happens gets the same answer rather than hanging, though its act may yet
+     * commit: nothing past the unreadable entry will ever apply here, so this peer cannot say.
      */
     suspend fun submit(command: ControlCommand, timeout: Duration? = null): ControlOutcome {
         val movesGate = movesOwnGate(command)
         val (key, requestId) = lock.withLock {
+            halt()?.let { return haltedOutcome(it) }
             val base = "${self.value}#$incarnation#$seq"
             val k = if (movesGate) "$base#$gateNonce" else base
             if (movesGate) ownGateActs += k
@@ -531,7 +546,7 @@ internal class HeddleControlPlane(
             applied[key]?.let { return it }
             pending[key] = deferred
         }
-        val bytes = Cbor.encodeToByteArray(ControlEnvelope.serializer(), ControlEnvelope(key, command, self))
+        val bytes = ControlLogCodec.encode(ControlEnvelope(key, command, self))
         try {
             // The timeout spans BOTH the propose and the apply-await, so a leader *crash* (a forwarded
             // proposal that never commits and never rejects) surfaces instead of hanging forever.
@@ -570,72 +585,96 @@ internal class HeddleControlPlane(
         }
     }
 
+    private fun halt(): GateClosed.Reason.UnreadableControlEntry? =
+        closedBecause.value as? GateClosed.Reason.UnreadableControlEntry
+
+    private fun haltedOutcome(halt: GateClosed.Reason.UnreadableControlEntry): ControlOutcome =
+        ControlOutcome.Conflict(
+            ControlOutcome.NOT_COMMITTED,
+            ControlConflict.Refused(
+                "control log halted at the unreadable entry at index ${halt.index} " +
+                    "(format version ${halt.version}): this peer applies nothing past it",
+            ),
+        )
+
     /**
-     * Apply one delivered committed entry, in log order.
+     * Apply one delivered committed entry, in log order, or stop at it (see the class KDoc).
      *
-     * An entry that does not decode as a [ControlEnvelope] is **skipped** — the intended case is a
-     * genuine non-heddle entry sharing the log. The skip is unavoidable but not silent: it is logged
-     * at `warn` with the entry's **index** (the identity — it names the exact log position a reader
-     * can go re-fetch) plus the term and byte length as supporting detail, and the decode failure's
-     * **type and message** — interpolated, not attached as the cause, because this line is on the
-     * expected path for every non-heddle entry and a replay walks the whole log on every boot. What
-     * a reader needs from a CBOR failure is which kind it was (`"Unexpected CBOR major type"` vs
-     * `"Field 'x' is required"`); the trace under it is kotlinx-serialization's own frames, the same
-     * ones every time. Attaching it would also put a routine skip in line to be the process's first
-     * symbolication, a one-time cost on Apple targets that collapses under load (#1596).
-     * Reason (#1717): the decode cannot distinguish *"not mine"* from *"mine, but no
-     * longer decodable"*, and governed nodes replay from index 1 on every boot — so a
-     * [ControlEnvelope]/[ControlCommand] **schema change** that stranded an older entry would make
-     * those acts vanish from the projection (a `Prepare` disappears, its edge is never known) while
-     * the roster index advance below makes the prefix look fully applied. The log line is what turns
-     * that hole into something greppable in the on-device store.
+     * [ControlLogCodec] sorts the entry three ways:
      *
-     * Tagging heddle entries so *"not a heddle entry"* becomes a positive determination, and failing
-     * closed on a tagged-but-undecodable entry, are the louder options — deliberately **not** taken
-     * here and still open (#1738). Settle them before any schema evolution of the wire types.
+     *  - **Readable** — applied, whichever format it was written in.
+     *  - **Not heddle's** — stepped over. It contributes only its index to the delivered prefix, and is
+     *    logged at `warn` with that index, since a foreign entry on a log the control plane is meant to
+     *    own is worth someone's attention.
+     *  - **Heddle's, but unreadable** — the end of the line for this peer. The roster's applied index
+     *    stays below it, so the prefix never reads as covering an act whose effect is missing, and every
+     *    later entry returns at the top of this function. The latch therefore cannot be overwritten by a
+     *    later enroll, in flight or otherwise: nothing past this point reaches the code that moves
+     *    the gate.
+     *
+     * Both logs interpolate the failure rather than attaching it. A trace here would be
+     * kotlinx-serialization's own frames, while the type and message are the whole diagnosis, and a
+     * foreign entry is walked again on every boot's replay (#1596).
      */
     private fun applyEntry(entry: LogEntry) {
-        val decoded = runCatchingCancellable {
-            Cbor.decodeFromByteArray(ControlEnvelope.serializer(), entry.command)
-        }
-        val envelope = decoded.getOrNull()
-        if (envelope == null) {
-            logger.warn {
-                "[heddle:${self.value}] skipping undecodable committed entry at index ${entry.index} " +
-                    "(term ${entry.term}, ${entry.command.size} bytes) — expected for a non-heddle entry; " +
-                    "if this was a heddle act, its effect is now missing from the projection (#1717). " +
-                    "Decode failure: ${decoded.exceptionOrNull()}"
+        if (halt() != null) return
+        val decoded = ControlLogCodec.decode(entry.command)
+        when (decoded) {
+            is ControlEntry.Act -> Unit
+            is ControlEntry.NotHeddle -> logger.warn {
+                "[heddle:${self.value}] skipping a non-heddle entry at index ${entry.index} " +
+                    "(term ${entry.term}, ${entry.command.size} bytes): the control log should be dedicated"
+            }
+            is ControlEntry.Unreadable -> logger.error {
+                "[heddle:${self.value}] HALTED at an unreadable control act at index ${entry.index} " +
+                    "(term ${entry.term}, ${entry.command.size} bytes, format version ${decoded.version}). " +
+                    "Writes are refused until a build can read it or the log is migrated: ${decoded.failure}"
             }
         }
         lock.withLock {
-            // Advance the roster's applied index for every DELIVERED entry, decodable or not — it is the
-            // prefix marker `enrolledAt` answers against, so it must track the delivered log, not just
-            // the roster acts. An undecodable entry contributes only its index.
-            //
-            // It therefore tracks the *application-visible* prefix, NOT Raft's commit index: the §5.4.2
-            // election no-op and configuration entries advance commitIndex but are deliberately withheld
-            // from `committedFrom`, so they never arrive here and this index can sit legitimately below
-            // `readIndex()`. Any caller comparing the two must expect that gap: "behind" does not
-            // imply "stale", so treating the difference as evidence costs a false refusal on a
-            // perfectly fresh view. Nothing compares them today — the one gate that did was
-            // `GovernedHeddleNode.prepareNeutral`'s, retired with the frozen seat (#1752).
-            roster = roster.advancedTo(entry.index)
-            // Undecodable — no outcome, no projection change. Already logged at `warn` above.
-            if (envelope == null) return
-            val prior = applied[envelope.requestKey]
-            if (prior != null) {
-                // A retry that still committed a second entry — never apply twice; hand back the first outcome.
-                pending[envelope.requestKey]?.complete(prior)
-                return
+            when (decoded) {
+                is ControlEntry.Unreadable -> latch(entry.index, decoded.version)
+                is ControlEntry.NotHeddle -> roster = roster.advancedTo(entry.index)
+                is ControlEntry.Act -> applyAct(decoded.envelope, entry.index)
             }
-            val outcome = decideAndApply(envelope, entry.index)
-            applied[envelope.requestKey] = outcome
-            // Before the completion below, so a caller that does resume reads the gate it just moved.
-            if (ownGateActs.remove(envelope.requestKey)) {
-                closedBecause.value = if (envelope.command is ControlCommand.Depart) GateClosed.Reason.Departed else null
-            }
-            pending[envelope.requestKey]?.complete(outcome)
         }
+    }
+
+    /** Close the gate for good and release every caller still waiting. Called under [lock]. */
+    private fun latch(index: Long, version: Int?) {
+        val reason = GateClosed.Reason.UnreadableControlEntry(index, version)
+        closedBecause.value = reason
+        val outcome = haltedOutcome(reason)
+        pending.values.forEach { it.complete(outcome) }
+    }
+
+    /** Apply one readable act. Called under [lock]. */
+    private fun applyAct(envelope: ControlEnvelope, index: Long) {
+        // Advance the roster's applied index for every APPLIED OR STEPPED-OVER entry — it is the prefix
+        // marker `enrolledAt` answers against, so it must track the delivered log, not just the roster
+        // acts.
+        //
+        // It therefore tracks the *application-visible* prefix, NOT Raft's commit index: the §5.4.2
+        // election no-op and configuration entries advance commitIndex but are deliberately withheld
+        // from `committedFrom`, so they never arrive here and this index can sit legitimately below
+        // `readIndex()`. Any caller comparing the two must expect that gap: "behind" does not
+        // imply "stale", so treating the difference as evidence costs a false refusal on a
+        // perfectly fresh view. Nothing compares them today — the one gate that did was
+        // `GovernedHeddleNode.prepareNeutral`'s, retired with the frozen seat (#1752).
+        roster = roster.advancedTo(index)
+        val prior = applied[envelope.requestKey]
+        if (prior != null) {
+            // A retry that still committed a second entry — never apply twice; hand back the first outcome.
+            pending[envelope.requestKey]?.complete(prior)
+            return
+        }
+        val outcome = decideAndApply(envelope, index)
+        applied[envelope.requestKey] = outcome
+        // Before the completion below, so a caller that does resume reads the gate it just moved.
+        if (ownGateActs.remove(envelope.requestKey)) {
+            closedBecause.value = if (envelope.command is ControlCommand.Depart) GateClosed.Reason.Departed else null
+        }
+        pending[envelope.requestKey]?.complete(outcome)
     }
 
     /**
