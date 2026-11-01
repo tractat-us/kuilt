@@ -365,6 +365,32 @@ class QuilterDrainAndCloseTest {
         )
     }
 
+    // ── A long-lived replica must not pay for this in memory ─────────────────────────────────
+
+    /**
+     * The tracking holds what is in flight and nothing else. The first assertion is what keeps the
+     * second honest: it shows the hook really does see a send, so an empty list afterwards means the
+     * sends left it, not that it never had them.
+     */
+    @Test
+    fun finishedSendsLeaveNothingBehind() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val writes = 200
+        val gates = gates(writes)
+        val (seam, quilter) = fixture { call -> gates[call].await() }
+
+        repeat(writes) { quilter.write() }
+        runCurrent()
+        assertEquals(writes, quilter.writeSendsForTest.size, "precondition: every send is in flight and visible")
+
+        gates.forEach { it.complete(Unit) }
+        runCurrent()
+
+        assertAll(
+            { assertEquals(writes, seam.handedSeqs.size, "every send finished") },
+            { assertEquals(emptyList(), quilter.writeSendsForTest, "and none of them is still tracked") },
+        )
+    }
+
     // ── Degenerate calls ─────────────────────────────────────────────────────────────────────
 
     @Test
