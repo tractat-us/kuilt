@@ -3,6 +3,7 @@
 package us.tractat.kuilt.otel.tap
 
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
@@ -12,6 +13,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
+import us.tractat.kuilt.otel.tap.admit.TapAdmitMessage
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.random.Random
@@ -90,6 +92,53 @@ class GatedTapEndToEndTest {
         )
 
         assertEquals(listOf("log 1", "log 2", "log 3", "log 4"), laptop.pull().map { it.body })
+    }
+
+    /**
+     * Lock-out (#1865): a stranger reaches the hosting laptop first and challenges it. The laptop
+     * used to answer only the first peer to challenge it, so the device behind the stranger was
+     * never answered and the pull could never finish.
+     */
+    @Test
+    fun aStrangerChallengingFirstDoesNotLockOutARoleInvertedPull() = runTest(UnconfinedTestDispatcher()) {
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val loom = InMemoryLoom()
+        val laptopSeam = loom.host(us.tractat.kuilt.core.Pattern("inverted"))
+        val laptop = LogTapClient(laptopSeam, backgroundScope, config, LogTapAdmission.Present(token.code))
+            .also { client = it }
+        val stranger = loom.join(InMemoryTag("stranger"))
+        val answers = mutableListOf<TapAdmitMessage.Proof>()
+        backgroundScope.launch {
+            stranger.incoming.collect { swatch ->
+                (TapAdmitMessage.decode(swatch.toByteArray()) as? TapAdmitMessage.Proof)?.let { answers += it }
+            }
+        }
+        val nonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES))
+        stranger.sendTo(laptopSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
+        assertEquals(1, answers.size, "rig: the stranger's challenge must have reached the laptop first")
+
+        host = installLogTapJoining(
+            loom, exporterWith(4), backgroundScope, InMemoryTag("inverted"), config,
+            LogTapAdmission.Verify(token, clock, Random(9)),
+        )
+
+        assertEquals(listOf("log 1", "log 2", "log 3", "log 4"), laptop.pull().map { it.body })
+    }
+
+    /** The plain topology's half: with a stranger on the mesh, the device still admits its puller. */
+    @Test
+    fun aStrangerOnTheMeshDoesNotStopAPlainPull() = runTest(UnconfinedTestDispatcher()) {
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val loom = InMemoryLoom()
+        host = installLogTap(loom, exporterWith(3), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
+        val stranger = loom.join(InMemoryTag("stranger"))
+        val pullerSeam = loom.join(InMemoryTag("puller"))
+        val nonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES))
+        stranger.sendTo(pullerSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
+        val puller = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present(token.code))
+            .also { client = it }
+
+        assertEquals(listOf("log 1", "log 2", "log 3"), puller.pull().map { it.body })
     }
 
     @Test
