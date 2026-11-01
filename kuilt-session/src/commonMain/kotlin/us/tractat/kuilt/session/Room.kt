@@ -181,7 +181,7 @@ public interface Room {
      *
      * **Best-effort for valid application payloads.** A member the transport cannot
      * currently reach — including, on a star, the relaying host itself — is silently skipped, and
-     * so is a payload over [maxPayloadBytes]. Use the roster and the membership events to reason
+     * so is a payload whose encoded frame will not fit the fabric. Use the roster and the membership events to reason
      * about who is present; do not read a returned `Unit` as delivery. Deliberately weaker than
      * [sendTo], which is addressed and does report.
      *
@@ -254,7 +254,9 @@ public interface Room {
      *
      * ## What happens past it
      *
-     * Each send keeps its own contract. [sendTo] is addressed, so it reports:
+     * This number is a promise, not the refusal threshold. A payload above it whose encoded frame still
+     * fits the fabric on the route it takes is delivered. When the frame will not fit, each send keeps
+     * its own contract. [sendTo] is addressed, so it reports:
      * [us.tractat.kuilt.core.PayloadTooLarge], named for the overflow and carrying the budget.
      * [broadcast] is lossy-without-error, so it drops the frame with a debug log and returns
      * normally — a `Quilter`'s timer-driven broadcast that threw would kill the coroutine driving
@@ -276,9 +278,10 @@ public interface Room {
      *
      * @throws ReservedRoomPrefix if a non-terminal room classifies [bytes] as protocol traffic.
      *
-     * @throws us.tractat.kuilt.core.PayloadTooLarge if [bytes] exceeds [maxPayloadBytes]. Raised
-     *   before the frame is built, so the caller gets the budget it should have respected rather
-     *   than the fabric's own frame error.
+     * @throws us.tractat.kuilt.core.PayloadTooLarge if the encoded frame will not fit the fabric —
+     *   measured on the frame, so a direct send is charged no envelope and a relayed one is charged
+     *   exactly what its own envelope cost. Raised before the frame reaches the fabric, so the caller
+     *   gets a budget it can use rather than the fabric's own frame error.
      * @throws us.tractat.kuilt.core.PeerNotConnected if the hop this member must perform cannot be
      *   made. Where the frame is relayed via a host, the peer named is that **host** — the hop that
      *   failed — rather than [peer], to which this member has no direct route. Delivery beyond the

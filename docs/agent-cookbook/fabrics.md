@@ -218,7 +218,7 @@ Order matters if you are catching: the `Torn` check runs first, so a self-send o
 
 `null` means **unknown, not unbounded** — the honest answer from a fabric that names no ceiling. A non-null value is a promise: a payload that size or smaller will not be refused for being too big, *whatever route the frame takes*.
 
-That last clause is the whole point. On a star, a spoke's frame reaches only the host, so once the roster diverges from what the transport can address the payload is wrapped in a relay envelope and forwarded — and the wrapper costs bytes. The budget holds them back **unconditionally**, even while no relay is in use, because routing flips the instant a member enters its reconnect window: a limit that moved with the route would be a trap for a caller that checked it and then sent. A `room.channel(id)` view reports a further-reduced budget, since its own framing costs bytes too. A relayed member's channel budget is currently over-reported and can still produce `PayloadTooLarge` ([#2958](https://github.com/tractat-us/kuilt/issues/2958)).
+That last clause is the whole point. On a star, a spoke's frame reaches only the host, so once the roster diverges from what the transport can address the payload is wrapped in a relay envelope and forwarded — and the wrapper costs bytes. The budget holds them back **unconditionally**, even while no relay is in use, because routing flips the instant a member enters its reconnect window: a limit that moved with the route would be a trap for a caller that checked it and then sent. A `room.channel(id)` view reports a further-reduced budget, since its own framing costs bytes too.
 
 Every layer that wraps a seam answers the same way, so read the budget off the seam you actually hold rather than the fabric at the bottom. A `MuxSeam`/`NamedMux` channel view subtracts its channel header; a `CompositeSeam` reports the tightest of its **live** plies less its own envelope, so the number moves as plies attach and detach; a tiered union reports the tighter of its two tiers; a gossip overlay subtracts its relay header even on the `sendTo` route that does not pay it. Where several routes are folded, a member that names no ceiling is skipped rather than collapsing the answer — a bond of one bounded and one unknown transport is still bounded by what it does know — and `0` is a real answer, not a bug: it means the framing above you has eaten the whole ceiling underneath.
 
@@ -242,8 +242,9 @@ while (start < blob.size) {
     val end = minOf(start + budget, blob.size)
     // Index arithmetic, not `asSequence().chunked()` — the latter boxes every byte and builds
     // an ArrayList<Byte> per chunk. On a blob big enough to need chunking that is the point.
-    // Past the budget, sendTo reports PayloadTooLarge (addressed sends do) while broadcast
-    // drops with a log (lossy by contract) — neither surfaces the fabric's own oversize error.
+    // A frame that will not fit the wire makes sendTo report PayloadTooLarge (addressed sends
+    // do) while broadcast drops it with a log (lossy by contract) — neither surfaces the
+    // fabric's own oversize error. A chunk at the budget fits on every route.
     ch.sendTo(peer, blob.copyOfRange(start, end))
     start = end
 }
