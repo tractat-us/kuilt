@@ -42,10 +42,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.game.SpeculativeSequ
  * - **No match** (a foreign peer's action, or one whose proposer already gave up on it, first-apply):
  *   the authoritative snapshot advances and all pending inputs are replayed on top.
  *
- * The authoritative snapshot is always the fold of the committed log, whatever the buffer holds. The
- * buffer only decides what is predicted on top of it, and [speculativeState] always equals that fold
- * with the buffer applied after it. So a mistake in matching can cost a moment's prediction, but never
- * the state the session settles on.
+ * The authoritative snapshot is always the fold of the committed log, whatever the buffer holds, so a
+ * mistake in matching never reaches it. The buffer only decides what is predicted on top, and
+ * [speculativeState] always equals that fold with the buffer applied after it. That prediction can
+ * stay wrong: an entry nothing retires keeps being applied for as long as it is there. The two known
+ * ways in are an action whose equality does not survive the codec (#3065) and a retry answered from
+ * the leader's cache (#3064).
  *
  * ## A rejected action leaves the state unchanged
  *
@@ -60,10 +62,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.game.SpeculativeSequ
  *   action: it did commit.
  *
  * Rejecting this way is what keeps the collector alive: an exception escaping it would freeze
- * [speculativeState] for good, and on Kotlin/Native would abort the process. An [Error] is not a
- * rejection and still escapes. [SpeculativeGame.fromSnapshot] failing also still escapes, deliberately:
- * folding later commits over a snapshot that was never installed would corrupt the state silently.
- * What those two should do instead of ending the collector is tracked by #3066.
+ * [speculativeState] for good, and on Kotlin/Native would abort the process. It covers an [Exception]
+ * from [SpeculativeGame.apply] and nothing else, so these still end the collector: an [Error] from
+ * `apply`, a throw from [SpeculativeGame.snapshot] or [SpeculativeGame.restore], a commit that will
+ * not decode, and a failed [SpeculativeGame.fromSnapshot]. The last is deliberate, since folding later
+ * commits over a snapshot that was never installed would corrupt the state silently. What an
+ * undecodable commit and a failed install should do instead is tracked by #3066.
  *
  * ## What "equal" has to mean for [A]
  *
@@ -246,9 +250,13 @@ public class SpeculativeSequencer<S, A>(
 
     /**
      * Takes back the entry of a propose that failed. If a commit has already claimed it, that commit may
-     * really have been an equal proposal's, so an equal entry goes instead. Each proposal therefore
-     * retires one entry of its value when it resolves, which is what bounds the buffer by the proposals
-     * still unresolved; a removal by identity alone would leave the other proposal's entry stuck.
+     * really have been an equal proposal's, so an equal entry goes instead; a removal by identity alone
+     * would leave the other proposal's entry stuck.
+     *
+     * The bound this keeps, per value `v` under `==`, is
+     * `pending(v) <= proposals of v whose commit or failure has not yet been delivered`. A proposal that
+     * returned before its commit was delivered still counts, and the bound does not promise that the
+     * buffer empties: nothing retires an entry whose equal commit never arrives (#3064, #3065).
      */
     private fun withdraw(entry: PendingEntry<A>): Unit = stateLock.withLock {
         val own = pendingBuffer.indexOf(entry)
