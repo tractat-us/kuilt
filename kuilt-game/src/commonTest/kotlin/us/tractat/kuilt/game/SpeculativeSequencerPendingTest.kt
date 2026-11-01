@@ -23,6 +23,7 @@ import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.Snapshot
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -61,8 +62,8 @@ private class Call(val value: Int, val gate: CompletableDeferred<LogEntry>, val 
 
 /**
  * A sequencer over a [FakeRaftNode] whose every propose parks until the test decides how it ends.
- * Commits carry explicit keys under one client, so each is fresh and the dedup path stays out of
- * the arms that are not about it.
+ * Commits carry explicit keys under one client, so each is fresh unless a test calls [redeliver], and
+ * the dedup path stays out of the arms that are not about it.
  */
 private class Rig(private val test: TestScope, rejects: Rule = NOTHING_REJECTED) {
     val node = FakeRaftNode(initialRole = RaftRole.Leader)
@@ -117,8 +118,16 @@ private class Rig(private val test: TestScope, rejects: Rule = NOTHING_REJECTED)
         test.runCurrent()
     }
 
-    suspend fun commit(value: Int) {
-        node.pushCommitted(entry(value))
+    /** Commits [value] under a fresh key, and returns the key for [redeliver]. */
+    suspend fun commit(value: Int): DedupKey {
+        val key = DedupKey(ClientId("commits"), nextIndex)
+        redeliver(value, key)
+        return key
+    }
+
+    /** Commits [value] at a new index under [key], as a new leader appending a retry does. */
+    suspend fun redeliver(value: Int, key: DedupKey) {
+        node.pushCommitted(entry(value, key))
         test.runCurrent()
     }
 
@@ -132,15 +141,13 @@ private class Rig(private val test: TestScope, rejects: Rule = NOTHING_REJECTED)
         test.runCurrent()
     }
 
-    private fun entry(value: Int): LogEntry {
-        val index = nextIndex++
-        return LogEntry(
-            index = index,
+    private fun entry(value: Int, key: DedupKey = DedupKey(ClientId("commits"), nextIndex)): LogEntry =
+        LogEntry(
+            index = nextIndex++,
             term = 1L,
             command = Cbor.encodeToByteArray(Int.serializer(), value),
-            dedupKey = DedupKey(ClientId("commits"), index),
+            dedupKey = key,
         )
-    }
 }
 
 private fun runRigTest(body: suspend TestScope.() -> Unit) = runTest(timeout = TEST_WEDGE_BACKSTOP) { body() }
@@ -337,6 +344,53 @@ class SpeculativeSequencerPendingTest {
 
         assertEquals(0, rig.seq.pendingCount)
         assertEquals(listOf(4), rig.seq.speculativeState.value)
+    }
+
+    // ── A duplicate key: the retry path ───────────────────────────────────────
+
+    /**
+     * A commit claims the entry, the attempt fails, the caller retries, and a new leader appends the
+     * retry under the key that already committed. The fold must not move, and the retry's entry must
+     * go wherever it sits: first from behind other entries, then from the head, which is the position
+     * where a fresh commit would need no replay and a duplicate still does.
+     */
+    @Test
+    fun duplicateKeyRetiresTheRetryWhereverItSitsAndLeavesTheFoldAlone() = runRigTest {
+        val rig = Rig(this)
+        val firstFour = rig.propose(4).parked()
+        val fourKey = rig.commit(4)
+        rig.fail(firstFour)
+        val firstFive = rig.propose(5).parked()
+        val fiveKey = rig.commit(5)
+        rig.fail(firstFive)
+        assertEquals(0, rig.seq.pendingCount, "rig: each commit claimed its entry before the attempt failed")
+
+        val retryFour = rig.propose(4).parked()
+        val other = rig.propose(2).parked()
+        val retryFive = rig.propose(5).parked()
+        assertEquals(listOf(4, 5, 4, 2, 5), rig.seq.speculativeState.value, "rig: both retries are predicted again")
+
+        rig.redeliver(5, fiveKey)
+        rig.succeed(retryFive)
+        assertAll(
+            { assertEquals(2, rig.seq.pendingCount, "the twin behind the head is retired") },
+            { assertEquals(listOf(4, 5, 4, 2), rig.seq.speculativeState.value, "and the replay drops its prediction") },
+        )
+
+        rig.redeliver(4, fourKey)
+        rig.succeed(retryFour)
+        assertAll(
+            { assertEquals(1, rig.seq.pendingCount, "the twin at the head is retired") },
+            { assertEquals(listOf(4, 5, 2), rig.seq.speculativeState.value, "a head duplicate still has to replay") },
+        )
+
+        rig.commit(2)
+        rig.succeed(other)
+        assertAll(
+            { assertEquals(5, rig.seq.confirmedCount.value) },
+            { assertEquals(0, rig.seq.pendingCount) },
+            { assertEquals(listOf(4, 5, 2), rig.seq.speculativeState.value) },
+        )
     }
 
     // ── Cancellation ──────────────────────────────────────────────────────────
