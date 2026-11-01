@@ -2,6 +2,7 @@ package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback proof — a real Network.framework socket needs a real IO dispatcher; there is no virtual-time option here
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -74,10 +75,12 @@ internal suspend fun departOverTheRealRadio(seed: Int, ceiling: Duration): Depar
     val hostLoom = loom(hostApi, 0)
     val joinerLoom = loom(joinerApi, 1)
     try {
-        val (hostSeam, joinerSeam) = coroutineScope {
-            val h = async { hostLoom.host(Pattern("host")) }
-            val j = async { joinerLoom.join(InMemoryTag("host", peerKey = "nw-loopback-joiner")) }
-            h.await() to j.await()
+        val (hostSeam, joinerSeam) = withTimeout(ceiling) {
+            coroutineScope {
+                val h = async { hostLoom.host(Pattern("host")) }
+                val j = async { joinerLoom.join(InMemoryTag("host", peerKey = "nw-loopback-joiner")) }
+                h.await() to j.await()
+            }
         }
         // Adopted with `reweave = { seam }`, the shape a room out of an election lobby has: NwSeam heals
         // in place, and a second weave on one RealNwApi would throw off `bytesReceived`'s single-collection
@@ -89,14 +92,12 @@ internal suspend fun departOverTheRealRadio(seed: Int, ceiling: Duration): Depar
         withTimeout(ceiling) { joiner.roster.first { it.size == 1 } }
         val events = mutableListOf<MembershipEvent>()
         val terminal = CompletableDeferred<MembershipEvent.HostLost>()
-        val recorder = scope.launch {
+        val recorder = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             joiner.events.collect { event ->
                 events += event
                 if (event is MembershipEvent.HostLost) terminal.complete(event)
             }
         }
-        // The events flow does not replay: the recorder has to be subscribed before the frame can land.
-        kotlinx.coroutines.delay(5)
 
         host.leave()
         val lost = withTimeoutOrNull(ceiling) { terminal.await() }
