@@ -138,7 +138,8 @@ class DurableIdentityRestartTest {
 
     /**
      * Surviving the replay is what makes the next auto serial reachable, and a restart at 1 would
-     * hand a consumer's table a serial it holds, which it drops as a duplicate without a word.
+     * reuse one. A leader that replayed it refuses the new bytes, and without that cached entry a
+     * consumer's table drops the command as a duplicate: see the full-compaction arm below.
      */
     @Test
     fun theNextAutoSerialResumesAboveTheReplayedMaximum() = raftRunTest {

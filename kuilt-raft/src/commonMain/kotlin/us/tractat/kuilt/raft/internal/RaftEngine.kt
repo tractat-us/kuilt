@@ -3417,8 +3417,8 @@ internal class RaftEngine(
      * A durable id outlives the process, so its own earlier serials are not foreign: without this,
      * the first replayed entry reads as another writer and [detectCollision] kills the node before it
      * issues anything (#3060). The auto serial resumes too, or the next one-argument [propose] would
-     * reuse a serial a consumer's [us.tractat.kuilt.raft.ClientSessionTable] already holds, and
-     * that table would drop the new command as a duplicate.
+     * reuse one: a leader that replayed it refuses the new bytes, and otherwise a consumer's
+     * [us.tractat.kuilt.raft.ClientSessionTable] drops the command as a duplicate.
      *
      * The retained log is all this knows. A snapshot that covered every entry under this id, or a
      * node that retained nothing, resumes from zero, and a serial of an earlier incarnation that
