@@ -70,7 +70,7 @@ internal class EntitlementLedgerConvergenceTest : LatticeLawSuite<EntitlementLed
                 )
             },
             LatticeOp("transfer", OpKind.ASSERT) { state, replicaIndex, random ->
-                val row = mapOf(random.path() to mapOf(ReplicaId("R$replicaIndex") to random.counter(replicaIndex)))
+                val row = mapOf(random.path() to mapOf(ReplicaId(IDS[replicaIndex]) to random.counter(replicaIndex)))
                 state.piece(
                     when (random.nextInt(3)) {
                         0 -> EntitlementLedger.of(transfers = row)
