@@ -58,8 +58,9 @@ public suspend fun chunkToTheRoomsBudgetSample(room: Room, peer: PeerId, blob: B
         val end = minOf(start + budget, blob.size)
         // Index arithmetic, not `asSequence().chunked()` — the latter boxes every byte and builds
         // an ArrayList<Byte> per chunk. On a blob big enough to need chunking that is the point.
-        // Past the budget, sendTo reports PayloadTooLarge (addressed sends do) while broadcast
-        // drops with a log (lossy by contract) — neither surfaces the fabric's own oversize error.
+        // A frame that will not fit the wire makes sendTo report PayloadTooLarge (addressed sends
+        // do) while broadcast drops it with a log (lossy by contract) — neither surfaces the
+        // fabric's own oversize error. A chunk at the budget fits on every route.
         ch.sendTo(peer, blob.copyOfRange(start, end))
         start = end
     }
