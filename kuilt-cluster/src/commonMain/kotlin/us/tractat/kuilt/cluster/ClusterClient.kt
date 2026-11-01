@@ -240,7 +240,7 @@ public data class ClusterEndpoints(
  *   memory, so when replication brings the earlier incarnation's entries back they read as another
  *   writer, and its node fails with [us.tractat.kuilt.raft.ClientIdCollisionException]. Re-proposing
  *   your highest persisted `requestId` straight after building the client raises the bar first, but
- *   that is a race with replication, not a guarantee, tracked by #3060.
+ *   that is a race with replication, not a guarantee. This trap is tracked by #3060.
  * @param clock Injected clock for session resume-token timestamps. **Required** — no real-clock
  *   default (prevents silent virtual-time breakage per the "optional ≠ tuning" policy).
  *   Threaded into the room-layer [SeamRoomFactory], which stamps reconnect-token `issuedAt`

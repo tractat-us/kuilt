@@ -143,8 +143,9 @@ its retained log holds under that id, and its auto serial resumes above it. Repl
 its own entries is then not a collision. The retained log is all it has to go on: a node
 that kept no log, or one that crashed with a forwarded proposal in flight, reads its own
 history as a collision when replication brings it back, and a snapshot covering every
-entry under the id loses the floor. `ClientIdentity.Durable` spells out all three; #3060
-tracks closing them.
+entry under the id loses the floor. The same log also hides a genuine second writer once
+it holds that writer's serial, so a clean boot says nothing about whether the id is
+shared. `ClientIdentity.Durable` spells all of this out, and closing it is tracked by #3060.
 
 **Bounding (v2 — supersession prune).** The table is self-bounding without any
 clock, horizon, or heuristic. A `NodeId` is cluster-unique, so two incarnations
