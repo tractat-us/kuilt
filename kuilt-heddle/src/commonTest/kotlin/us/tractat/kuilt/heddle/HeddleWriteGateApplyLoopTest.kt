@@ -232,6 +232,52 @@ class HeddleWriteGateApplyLoopTest {
         }
 
     /**
+     * A retry can commit one act twice. Between the copies this replica departed, so the second copy
+     * of the enroll must change nothing, in the gate as in the roster.
+     */
+    @Test
+    fun secondCommittedCopyOfAnEnrollDoesNotReopenTheGateAfterDeparture() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val raft = FakeRaftNode(initialRole = RaftRole.Leader)
+            val governed = boot(raft, "duplicate-commit")
+            assertIs<ControlOutcome.Applied>(governed.enroll(SELF))
+            assertIs<ControlOutcome.Applied>(governed.depart())
+            assertFalse(governed.isWritable, "rig: departed before the duplicate arrives")
+
+            val beforeDuplicate = raft.commitIndex.value
+            val duplicate = raft.pushCommitted(raft.proposals.first())
+            runCurrent()
+
+            assertAll(
+                { assertTrue(duplicate.index > beforeDuplicate, "rig: the copy landed after the departure") },
+                { assertEquals(emptySet(), governed.enrolledReplicas(), "the roster dedups the copy") },
+                { assertFalse(governed.isWritable, "and so does the gate") },
+            )
+        }
+
+    /**
+     * The per-run nonce stays on the two gate-moving acts. A mint's identity comes from its key and
+     * lands in the ledger, so a nonce there would make the ledger differ between identical runs.
+     */
+    @Test
+    fun onlyGateMovingActsCarryTheNonce() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val raft = FakeRaftNode(initialRole = RaftRole.Leader)
+            val governed = boot(raft, "keys")
+            assertIs<ControlOutcome.Applied>(governed.enroll(SELF))
+            assertIs<ControlOutcome.Applied>(governed.mint(SELF, 5L))
+            assertIs<ControlOutcome.Applied>(governed.enroll(ReplicaId("other")))
+            val keys = raft.proposals.map { Cbor.decodeFromByteArray(ControlEnvelope.serializer(), it).requestKey }
+
+            assertAll(
+                { assertEquals(3, keys.size, "rig: three acts proposed") },
+                { assertTrue(keys[0].startsWith("self#keys#0#"), "a self-enroll carries it, was ${keys[0]}") },
+                { assertEquals("self#keys#1", keys[1], "a mint does not") },
+                { assertEquals("self#keys#2", keys[2], "nor does enrolling another replica") },
+            )
+        }
+
+    /**
      * The same bug on the real engine: a follower's `enroll(self)` times out while its forwarded
      * entry is still on the way, the proposal outlives the await, and the entry then applies with
      * no caller left to move the gate. The timeout is one virtual millisecond, shorter than any
