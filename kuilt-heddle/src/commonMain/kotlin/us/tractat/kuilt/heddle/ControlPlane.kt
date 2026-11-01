@@ -1,6 +1,7 @@
 package us.tractat.kuilt.heddle
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
@@ -17,6 +18,7 @@ import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.LogEntry
 import us.tractat.kuilt.raft.RaftNode
+import kotlin.random.Random
 import kotlin.time.Duration
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -331,6 +333,24 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControl
  * would hit the [applied] dedup and silently vanish behind a stale outcome. The node cannot
  * self-generate this without durable storage or true entropy, so the caller injects it ([heddleGoverned])
  * — a boot id, a persisted monotonic epoch, or a UUID. Never derive it from a test-seedable `Random`.
+ * Nothing checks this: it is a plain caller-supplied `String`, and a reused value is not detected.
+ *
+ * ## The write gate moves here, not in the caller
+ *
+ * [writeGateClosedBecause] moves when the apply loop applies this instance's own `Enroll(self)` or
+ * `Depart(self)`, in the same locked step as the entry itself. A caller that is cancelled or times
+ * out after its entry applied never resumes, and [submit] tells it not to resubmit once a read shows
+ * the act landed, so a gate moved by the caller's continuation would stay wrong for good (#2921). It
+ * also makes the gate follow log order with no index bookkeeping, because that is the order this loop
+ * runs in.
+ *
+ * Which entries count is decided by membership of [ownGateActs], never by reading the key's text.
+ * The gate must open only on *this run's* enroll, and a run's own acts cannot be recognised by the
+ * `self#incarnation#` prefix: that rests on [incarnation] being fresh, which nothing enforces, and a
+ * reused one would let replay open the gate of a node that never enrolled. For the same reason these
+ * two acts get [gateNonce] in their key, so an older run's act cannot share a key with this run's even
+ * under a reused [incarnation]. Without it, the normal boot (enroll first, sequence number 0, replay
+ * still behind) would be resolved by the old entry, opening the gate with later barriers unreplayed.
  *
  * @param membership the seam the node's local enrollment effects ride ([ControlMembershipSink]).
  * @param barrier the seam the §6.2 step-2 peer-local quiesce barrier runs on ([ControlBarrierSink]).
@@ -369,6 +389,29 @@ internal class HeddleControlPlane(
      * [roster] is, and log-pure by the same argument: mutated ONLY by [applyEntry], in index order.
      */
     private var fence: FenceState = FenceState.EMPTY
+
+    /**
+     * Why this peer may not author entitlement, or `null` when it may. Written ONLY by [applyEntry],
+     * under [lock], in index order; read without the lock so the data plane's `reserve` and `schedule`
+     * never wait on an apply in progress.
+     */
+    private val closedBecause = atomic<GateClosed.Reason?>(GateClosed.Reason.AwaitingEnrollment)
+
+    /**
+     * The keys of `Enroll(self)` and `Depart(self)` acts this instance issued and has not yet seen
+     * apply. In memory only, so replay cannot match it by construction. An entry deliberately outlives
+     * the caller that issued it: a cancelled or timed-out call's proposal may still commit, and the
+     * gate has to move when it does. One that never commits costs one string per abandoned call.
+     */
+    private val ownGateActs = HashSet<String>()
+
+    /**
+     * Fresh per instance and never derived from a seedable generator: the same requirement as
+     * [incarnation], met here without trusting a caller. It only has to tell one run of this replica
+     * from another, so it reaches nothing but the two gate-moving keys. [MintId]s stay derived from
+     * keys without it, which keeps a ledger's contents reproducible between runs.
+     */
+    private val gateNonce: String = Random.nextLong().toULong().toString(radix = 16).padStart(16, '0')
 
     /** In-flight local submits awaiting their committed outcome, keyed by requestKey. */
     private val pending = HashMap<String, CompletableDeferred<ControlOutcome>>()
@@ -411,6 +454,9 @@ internal class HeddleControlPlane(
             }
         }
     }
+
+    /** Why this peer's write gate is closed, or `null` when it is open (see the class KDoc). */
+    val writeGateClosedBecause: GateClosed.Reason? get() = closedBecause.value
 
     /** The log-order control state as applied so far — test/inspection support (never the Quilter). */
     fun projectionSnapshot(): EntitlementLedger = lock.withLock { projection }
@@ -465,10 +511,17 @@ internal class HeddleControlPlane(
      * still commit afterwards. A fresh [submit] call draws a *new* requestKey, so a caller retry after a
      * timeout is a **new logical act** (a retried mint can double-mint). Exactly-once across a timeout is
      * a caller concern — resubmit only if a subsequent read shows the first act did not land.
+     *
+     * Applied effects do not depend on the caller resuming. That includes the write gate: a caller that
+     * gave up on an `Enroll(self)` or `Depart(self)` needs no repair, whether the entry applied before
+     * the timeout or commits after it (see the class KDoc).
      */
     suspend fun submit(command: ControlCommand, timeout: Duration? = null): ControlOutcome {
+        val movesGate = movesOwnGate(command)
         val (key, requestId) = lock.withLock {
-            val k = "${self.value}#$incarnation#$seq"
+            val base = "${self.value}#$incarnation#$seq"
+            val k = if (movesGate) "$base#$gateNonce" else base
+            if (movesGate) ownGateActs += k
             val r = seq
             seq++
             k to r
@@ -494,6 +547,13 @@ internal class HeddleControlPlane(
         } finally {
             lock.withLock { pending.remove(key) }
         }
+    }
+
+    /** Only this replica's own enroll and depart move its gate; a third party's enroll of it proves nothing. */
+    private fun movesOwnGate(command: ControlCommand): Boolean = when (command) {
+        is ControlCommand.Enroll -> command.replica == self
+        is ControlCommand.Depart -> command.replica == self
+        else -> false
     }
 
     private suspend fun proposeWithRetry(bytes: ByteArray, requestId: Long) {
@@ -570,6 +630,10 @@ internal class HeddleControlPlane(
             }
             val outcome = decideAndApply(envelope, entry.index)
             applied[envelope.requestKey] = outcome
+            // Before the completion below, so a caller that does resume reads the gate it just moved.
+            if (ownGateActs.remove(envelope.requestKey)) {
+                closedBecause.value = if (envelope.command is ControlCommand.Depart) GateClosed.Reason.Departed else null
+            }
             pending[envelope.requestKey]?.complete(outcome)
         }
     }
