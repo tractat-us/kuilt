@@ -81,5 +81,20 @@ public data class GateClosed(
 
         /** This peer applied its own `depart()` and has promised to author nothing more. */
         public data object Departed : Reason
+
+        /**
+         * This peer met a control act it cannot read, at log [index], and has stopped applying the
+         * log there. It no longer knows the true control state, so writing from what it does know
+         * could break conservation (issue #1738).
+         *
+         * This is a latch. Nothing in this process clears it: `enroll` is refused, and a restart
+         * replays the same log to the same entry and closes again. Recovery is a build that can read
+         * the entry, or an explicit offline migration of the log.
+         *
+         * @property index the log index of the entry.
+         * @property version the format the entry was written in: `0` for an untagged entry from
+         *   before the control log carried a header, or `null` if it was cut off before its version byte.
+         */
+        public data class UnreadableControlEntry(public val index: Long, public val version: Int?) : Reason
     }
 }
