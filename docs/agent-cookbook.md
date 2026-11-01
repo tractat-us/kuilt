@@ -24,7 +24,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 |---|---|---|
 | a rejoin / reconnect loop, a resume token, a "grace window / hold the slot open" | `Room.resumeToken` + `Room.resume` | [Rejoin & reconnect](agent-cookbook/session.md#rejoin--reconnect) |
 | a fixed-list or exponential retry/back-off loop | `ExponentialBackoff` | [Rejoin & reconnect](agent-cookbook/session.md#rejoin--reconnect) |
-| a reconnect banner / "why did we drop" classifier — transient vs. unrecoverable buckets | `MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`), plus their `localFabric` tag | [Rejoin & reconnect](agent-cookbook/session.md#rejoin--reconnect) |
+| a reconnect banner / "why did we drop" classifier — transient vs. unrecoverable buckets, the host left on purpose vs. dropped | `MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`, `FailureReason.HostLeft`), plus their `localFabric` tag | [Rejoin & reconnect](agent-cookbook/session.md#rejoin--reconnect) |
 | a propose→authoritative/rejected turn/session facade, host election with a term | `GameSession` + `TurnSequencer` | [Consensus & turns](agent-cookbook/consensus.md#consensus--turns) |
 | a `host == selfId` check plus a re-election when the peer that was hosting walks out mid-lobby | `ElectionLobby.awaitRoom` → `ElectionOutcome.BecameHost` → `start()` on the **same** lobby | [Host election & the lobby](agent-cookbook/session.md#host-election--the-lobby) |
 | a heartbeat, an idle reaper, "is this peer still alive", "evict stale session" | `HeartbeatPartitionDetector` | [Liveness & presence](agent-cookbook/session.md#liveness--presence) |

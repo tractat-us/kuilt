@@ -465,6 +465,10 @@ private const val RELAY_FORWARD_CAPACITY = 64
  *   to every remaining member ([propagateFarewell]), so joiners also evict promptly with
  *   `Normal` instead of waiting out the heartbeat window (#1292). The detector paths above
  *   remain the fallback for peers that vanish without a Goodbye.
+ * - **A host's own clean leave**: the host fans out an [AdmitMessage.Farewell] naming itself
+ *   ([queueHostFarewell]), and each joiner goes straight to [MembershipEvent.HostLost] with
+ *   [FailureReason.HostLeft], opening no window (#2670). Best effort: when the frame is lost the tear
+ *   takes the joiner down the transport path above, as it always did.
  *
  * **Terminal state**: once [MembershipEvent.HostLost] fires, [broadcast] and [sendTo]
  * become silent no-ops. No auto-election is performed.

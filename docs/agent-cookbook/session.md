@@ -128,8 +128,9 @@ Check the `localFabric` tag **before** the reason. Both events carry this peer's
 so their quiet says nothing about them. Skip that check and a joiner whose own radio died renders
 "lost the host", which is the bug this pattern used to ship.
 
-One boundary worth knowing before you apply it broadly. `HostLost` is always something you observed,
-so the tag always inverts attribution there. `Partitioned` is not always yours: on a joiner in a room
+One boundary worth knowing before you apply it broadly. `HostLost` is nearly always something you
+observed, so the tag inverts attribution there. The exception is `FailureReason.HostLeft`, which the
+host told you. `Partitioned` is not always yours either: on a joiner in a room
 of three or more, the host relays "peer C paused", and that report is authoritative — it reached you
 over a link that was working, so an `Unavailable` tag means only that your end was down when you
 processed it, not that the report is wrong. Suppress it and C stays shown as present while the host
@@ -145,7 +146,8 @@ timestamp. See [the "you are offline" entry](#liveness--presence) for the level 
 public suspend fun reconnectBannerSample(room: Room) {
     room.events.collect { event ->
         // The tag inverts attribution only for silence *we* observed — our own detector, or our own
-        // link tearing. `HostLost` is always that. `Partitioned` is not: on a joiner in a 3+-peer
+        // link tearing. `HostLost` is that, except `HostLeft`: the host told us, so it is true whatever
+        // our end is doing. `Partitioned` is not either: on a joiner in a 3+-peer
         // room the host relays "peer C paused", and that report is host-authoritative — it arrived
         // over a link working well enough to deliver it, so an `Unavailable` tag there says our end
         // was down when we *processed* the report, not that the report is unfounded. Suppressing it
@@ -155,7 +157,8 @@ public suspend fun reconnectBannerSample(room: Room) {
         // tell the two apart from the event alone. In a two-peer session it does not matter (the only
         // peer you watch *is* the host). In a larger room, scope this to peers you observe yourself.
         val ourOwnEndWasDown = when (event) {
-            is MembershipEvent.HostLost -> event.localFabric is FabricAvailability.Unavailable
+            is MembershipEvent.HostLost ->
+                event.reason != FailureReason.HostLeft && event.localFabric is FabricAvailability.Unavailable
             else -> false
         }
         when {
@@ -176,6 +179,28 @@ public suspend fun reconnectBannerSample(room: Room) {
     }
 }
 ```
+
+**Intent:** say "the host ended the game" instead of "lost the host", and not leave a room on screen
+for a minute after the host walked away.
+**Primitive:** `FailureReason.HostLeft`, on `HostLost.reason`. You write nothing to get it, only the
+branch above.
+
+A host's `room.leave()` sends every member a `Farewell` naming itself. A joiner that receives it goes
+terminal at once: `HostLost(HostLeft)`, no `Partitioned`, no `WindowOpened`, no minute of a room that
+looks alive. If a tear beat the frame and a window is already open, the frame ends the window early.
+
+It is best effort, so treat the reason as one-way evidence. `HostLeft` proves the host meant it.
+`WindowExpired` does not prove the host did not: the `Farewell` can be lost, most easily behind a large
+frame still on its way out, and the joiner then falls back to the window exactly as it always did. A
+joiner older than this ignores the frame and takes the window too.
+
+`leave` on a host with members takes about 100 ms longer, because the frame needs a moment to get out
+before the link closes. If you send your own last frame before leaving, the same moment now helps it,
+but nothing promises it arrives. That promise is
+[the open `flush` work (#2830)](https://github.com/tractat-us/kuilt/issues/2830).
+
+Only `LeaveReason.Normal` announces. `LeaveReason.Error` closes without a word, and a joiner sees a
+dropped link.
 
 ## Liveness & presence
 
@@ -376,8 +401,9 @@ Five things to know before you bind this to a UI:
   what earns a `true`.
 - **`Partitioned` and `HostLost` carry the same value as a tag**, captured at the instant they were
   emitted, which is what makes precedence readable from the stream. When the tag is `Unavailable` for
-  silence *you* observed, that event is not evidence about the peer it names. `HostLost` always is
-  yours; a `Partitioned` relayed by the host about a third peer is **not**, and stays authoritative —
+  silence *you* observed, that event is not evidence about the peer it names. `HostLost` is yours
+  unless its reason is `HostLeft`; that, and a `Partitioned` relayed by the host about a third peer,
+  are **not**, and stay authoritative —
   see [the reconnect-banner entry](#rejoin--reconnect) for where that boundary falls and why the event
   alone cannot tell you which side of it you are on.
 - **The level is authoritative; the edges are notifications.** `Room.localFabric` is a `StateFlow`, so

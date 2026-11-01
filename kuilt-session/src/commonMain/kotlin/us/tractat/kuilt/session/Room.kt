@@ -417,6 +417,12 @@ public interface Room {
     /**
      * Leave the room cleanly. Idempotent.
      *
+     * A host leaving with [LeaveReason.Normal] tells its members, so a joiner reports
+     * [MembershipEvent.HostLost] with [FailureReason.HostLeft] rather than waiting out its reconnect
+     * window. That message is best effort: if it is lost the joiner falls back to the window. A host
+     * with members therefore takes a moment longer to return from this call, and the wait is short and
+     * bounded whatever state its members' links are in.
+     *
      * A leave failure must **not** be reported as a cancellation — the obligation
      * [us.tractat.kuilt.core.Seam.close] states in full (#1826). A host calls this from a teardown path
      * that is itself usually already cancelled, under a best-effort guard, so a callee-minted

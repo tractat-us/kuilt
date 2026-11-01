@@ -117,15 +117,17 @@ public sealed interface MembershipEvent {
     public data class Resumed(val peerId: PeerId) : MembershipEvent
 
     /**
-     * The host's transport link was permanently lost (joiner perspective only).
+     * This room no longer has a host and never will again (joiner perspective only): the host's
+     * transport link was permanently lost, or the host left on purpose and said so.
      *
      * Terminal state — no further events follow. [Room.broadcast] and [Room.sendTo]
      * become silent no-ops after this event.
      *
      * Driven by [us.tractat.kuilt.session.partition.PartitionEvent.PeerLost] for the
-     * host peer. The room does not auto-elect a new host.
+     * host peer, by a reconnect attempt running out, or by the host's own `Farewell`. The room does
+     * not auto-elect a new host.
      *
-     * [reason] classifies the terminal failure (window expired / refused / unrecoverable) — see
+     * [reason] classifies how it ended (window expired / refused / unrecoverable / the host left) — see
      * [FailureReason], the post-admission analogue of [AdmissionFailure] on [AdmissionFailed].
      */
     public data class HostLost(
@@ -139,6 +141,9 @@ public sealed interface MembershipEvent {
          * nothing about it. This is the highest-value site for the distinction: a joiner whose own
          * radio died would otherwise render "the host is gone" (#1712). Read it off the event
          * rather than correlating two streams by timestamp.
+         *
+         * [FailureReason.HostLeft] is the exception: that is not silence, the host told us, over a
+         * link working well enough to carry it. The event stands whatever this says.
          *
          * [FabricAvailability.Unknown] means the fabric has no path observer, so precedence cannot
          * be determined — treat it as "no information", not as "we were fine". It is the **normal**
