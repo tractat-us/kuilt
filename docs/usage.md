@@ -464,7 +464,9 @@ val transport = SeamRaftTransport(seam)
 //      DurableStoreRaftStorage.open(FileChannelDurableStore(nodeDirectory))
 val storage = InMemoryRaftStorage()
 
-// 4. Start the node — its lifetime is tied to the scope.
+// 4. Start the node — its lifetime is tied to the scope. A torn seam does NOT end it: the node
+//    stays up and drops every send (tracked by #3053), so watch seam.state and call
+//    node.close() or cancel the scope. A follower's propose needs a caller timeout.
 val node: RaftNode = scope.raftNode(cluster, transport, storage)
 
 // 5. Apply committed entries on every node.

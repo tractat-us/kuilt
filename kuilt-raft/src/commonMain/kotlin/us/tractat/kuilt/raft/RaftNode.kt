@@ -268,13 +268,19 @@ public interface RaftNode {
      * distributed-propose contract: eventual completion of a forwarded proposal is a caller
      * timeout+retry responsibility, not a library guarantee.)
      *
+     * **A torn transport seam does not end the node.** Over a [SeamRaftTransport] whose seam is
+     * torn, the node stays up and drops every send, so a follower's forward is never answered and
+     * this call suspends until the caller cancels it. Nothing ends the node: the owner must watch
+     * `seam.state` and [close] the node or cancel its scope. Tracked by #3053.
+     *
      * @throws LeadershipLostException if a forwarded proposal is rejected by the target leader
      *   (e.g. the leader stepped down); the caller may retry on the new leader.
      * @throws ForwardedProposalFailedException if the leader a proposal was forwarded to reports it
      *   failed for a non-retryable reason. Do not retry the same command. No leader in this release
      *   reports one (#2922).
      * @throws NotLeaderException only in terminal cases: the node is [close]d, or the leader
-     *   is rejecting proposals because a leadership transfer is in flight.
+     *   is rejecting proposals because a leadership transfer is in flight. A torn transport seam
+     *   is not one of them: the call suspends instead (see above, #3053).
      * @throws PayloadTooLarge if [command] exceeds the transport's published payload budget less an
      *   envelope reserve (#2069). The caller preflight refuses before drawing a serial. Admission
      *   checks again on the actor, before forwarding or appending, so a changed budget can refuse
@@ -520,7 +526,10 @@ public suspend fun RaftNode.awaitRead(applied: StateFlow<Long>): Long {
  *   transition. Use to route metrics to Prometheus, StatsD, OpenTelemetry, or a test
  *   assertion. **Must not block** — the callback runs synchronously on the engine actor;
  *   blocking stalls replication for the entire cluster. `null` (default) disables the hook.
- * @return A running [RaftNode] ready to receive proposals and emit committed entries.
+ * @return A running [RaftNode] ready to receive proposals and emit committed entries. Its lifetime
+ *   is this scope's, or [RaftNode.close]. A torn [SeamRaftTransport] seam does not end it: the node
+ *   stays up and drops every send, so the owner must watch `seam.state` and close the node or
+ *   cancel the scope (tracked by #3053).
  * @throws IllegalArgumentException if [clusterConfig] has no voters and its learners do not include
  *   `transport.selfId`. A bootstrap must seat at least one voter, or be a **learner seed**: no voters,
  *   with this node among the learners, as in `ClusterConfig(voters = emptySet(), learners = setOf(self))`.

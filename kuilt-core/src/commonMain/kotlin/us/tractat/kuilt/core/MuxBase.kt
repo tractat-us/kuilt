@@ -298,14 +298,36 @@ internal class MuxBase<K>(
             }
         }
 
+        /**
+         * Latch the base's `Torn` here without waiting for the state pump, so a view never hands its
+         * caller the base's refusal while still reading `Woven`.
+         *
+         * A pump only mirrors the base once it is next scheduled. Until then a send passes [checkLive]
+         * and the base refuses it, and a caller reading [state] to tell a tear from a programming error
+         * would conclude the wrong one: `SeamRaftTransport` does exactly that, and the wrong answer
+         * fails its whole node (#3022). A `finally` rather than a `catch`, because nothing about the
+         * outcome changes this: if the base has torn, this view has too.
+         */
+        private fun latchIfBaseTorn() {
+            (delegate.state.value as? SeamState.Torn)?.let { tear(it.reason) }
+        }
+
         override suspend fun broadcast(payload: ByteArray) {
             checkLive()
-            delegate.broadcast(framing.wrap(payload))
+            try {
+                delegate.broadcast(framing.wrap(payload))
+            } finally {
+                latchIfBaseTorn()
+            }
         }
 
         override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
             checkLive()
-            delegate.sendTo(peer, framing.wrap(payload))
+            try {
+                delegate.sendTo(peer, framing.wrap(payload))
+            } finally {
+                latchIfBaseTorn()
+            }
         }
 
         /**

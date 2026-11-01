@@ -3,6 +3,9 @@
 package us.tractat.kuilt.raft
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.StateFlow
@@ -12,6 +15,7 @@ import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.raft.SeamRaftTransport")
 
@@ -27,7 +31,11 @@ private fun Set<PeerId>.toNodeIds(): Set<NodeId> = mapTo(mutableSetOf()) { NodeI
  * **Peer reachability.** [peers] reflects [Seam.peers] — nodes connected on
  * the fabric, not necessarily all configured voters. A voter absent from the
  * [Seam] is simply unreachable at the transport layer; the Raft engine handles
- * this as an ordinary network partition.
+ * this as an ordinary network partition. A torn seam reaches nobody, so [sendTo] drops every frame
+ * (#3022). Unlike a partition it never heals, and nothing ends the node: it stays up over the torn
+ * seam, drops every send and, as a follower, can never commit. The owner must watch [Seam.state]
+ * and call `RaftNode.close` or cancel the node's scope; a follower's `propose` needs a caller
+ * timeout. The library does not end the node itself, tracked by #3053.
  *
  * **Incoming filtering.** Swatches with a `null` sender (e.g. broadcast
  * frames from the fabric layer itself) are silently dropped; only frames with
@@ -40,6 +48,8 @@ private fun Set<PeerId>.toNodeIds(): Set<NodeId> = mapTo(mutableSetOf()) { NodeI
  * and so travels with the budget rather than with the transport.
  */
 public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
+
+    private val tornDropLogged = atomic(false)
 
     override val selfId: NodeId get() = NodeId(seam.selfId.value)
 
@@ -108,6 +118,27 @@ public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
             log.warn {
                 "raft.send.drop self=${selfId.value} to=${peer.value} " +
                     "reason=payload-over-budget ${tooLarge.message}"
+            }
+        } catch (refused: IllegalStateException) {
+            // A torn seam refuses with a plain IllegalStateException, and the node must outlive it: a
+            // torn seam is an unreachable peer, and the engine goes on sending to a peer it cannot
+            // reach (#3022). Decided from the seam's state rather than the exception's type, because
+            // the type is shared: a cancellation is one too, and so is a programming error, which must
+            // still surface. Read AFTER the refusal, which is what covers a tear landing between the
+            // seam's own check and its send. That a refusing seam has already published Torn is an
+            // assumption, not an invariant: two seams can refuse while still reading live, tracked
+            // by #3048. Where it fails the refusal rethrows and the node's scope dies, as it did
+            // before this drop.
+            currentCoroutineContext().ensureActive()
+            val torn = seam.state.value as? SeamState.Torn ?: throw refused
+            // Warn once: a tear never heals, so every later drop is the same news at debug.
+            if (tornDropLogged.compareAndSet(false, true)) {
+                log.warn {
+                    "raft.send.drop self=${selfId.value} to=${peer.value} reason=seam-torn " +
+                        "closeReason=${torn.reason}; the node stays up and drops every send until closed"
+                }
+            } else {
+                log.debug { "raft.send.drop self=${selfId.value} to=${peer.value} reason=seam-torn" }
             }
         }
     }
