@@ -83,7 +83,9 @@ import kotlin.time.Duration.Companion.seconds
  * before registration is closed by the loom, including when admission is cancelled.
  *
  * A hosted room's own `close` takes it out of this loom, so the next [host] of that name opens a
- * fresh room (#3041). A connection whose link outlived the old room carries nothing into the new one:
+ * fresh room (#3041). **Caller contract:** finish closing the old room before re-hosting its name.
+ * [host] is idempotent per name, so a [host] of a name whose room is still open returns that room,
+ * even one about to close; only a [host] arriving after the room's `close` has begun gets a fresh one. A connection whose link outlived the old room carries nothing into the new one:
  * its next frame on the channel is a first frame there, authorized and admitted like any other.
  *
  * ## Thread safety
