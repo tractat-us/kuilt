@@ -130,7 +130,8 @@ internal suspend fun sampleMetricTapHostAndPull(scope: CoroutineScope): MetricSn
     val host = installMetricTap(loom, exporter, scope)
 
     // In the test / CI harness: join the same session and pull the converged snapshot —
-    // every counter, gauge and cardinality collapsed to the numbers the device reports.
+    // every counter, gauge and cardinality collapsed to the numbers the device reports,
+    // and every histogram as a sketch to ask for quantiles.
     val client = MetricTapClient(loom.join(InMemoryTag("puller")), scope)
     val metrics: MetricSnapshot = client.pull()
 

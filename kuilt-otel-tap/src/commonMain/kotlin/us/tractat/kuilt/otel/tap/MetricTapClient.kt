@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class, ExperimentalVersionOverloading::class)
 
 package us.tractat.kuilt.otel.tap
 
@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.crdt.DDSketch
 import us.tractat.kuilt.otel.MetricCatalog
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.quilter.Quilter
@@ -17,12 +18,17 @@ import us.tractat.kuilt.quilter.Quilter
 /**
  * A reconstructed snapshot of a device's metric buffer — the CRDTs collapsed to the plain
  * numbers they report.
+ *
+ * A histogram reports a distribution rather than one number, so [histograms] carries the
+ * sketch itself: ask it for [DDSketch.quantile] or [DDSketch.count].
  */
 public data class MetricSnapshot(
     public val sums: Map<MetricKey, Long>,
     public val doubleSums: Map<MetricKey, Double>,
     public val gauges: Map<MetricKey, Double>,
     public val cardinalities: Map<MetricKey, Long>,
+    @IntroducedAt("0.8")
+    public val histograms: Map<MetricKey, DDSketch> = emptyMap(),
 )
 
 /**
@@ -104,10 +110,12 @@ public class MetricTapClient(
         // (the key exists only because setGauge wrote one). requireNotNull, never `!!`.
         gauges = cat.gauges.mapValues { requireNotNull(it.value.value) { "gauge ${it.key} has no value" } },
         cardinalities = cat.cardinalities.mapValues { it.value.estimate() },
+        histograms = cat.histograms,
     )
 
     private fun MetricCatalog.isNotEmpty(): Boolean =
-        sums.isNotEmpty() || doubleSums.isNotEmpty() || gauges.isNotEmpty() || cardinalities.isNotEmpty()
+        sums.isNotEmpty() || doubleSums.isNotEmpty() || gauges.isNotEmpty() || cardinalities.isNotEmpty() ||
+            histograms.isNotEmpty()
 
     override fun onClose() {
         replicator.close()
