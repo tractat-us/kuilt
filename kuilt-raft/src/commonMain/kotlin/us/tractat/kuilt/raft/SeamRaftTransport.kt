@@ -30,7 +30,8 @@ private fun Set<PeerId>.toNodeIds(): Set<NodeId> = mapTo(mutableSetOf()) { NodeI
  * **Peer reachability.** [peers] reflects [Seam.peers] — nodes connected on
  * the fabric, not necessarily all configured voters. A voter absent from the
  * [Seam] is simply unreachable at the transport layer; the Raft engine handles
- * this as an ordinary network partition.
+ * this as an ordinary network partition. A torn seam reaches nobody, so it is the same partition for
+ * every voter: [sendTo] drops the frame, and the node stays up until its scope ends it (#3022).
  *
  * **Incoming filtering.** Swatches with a `null` sender (e.g. broadcast
  * frames from the fabric layer itself) are silently dropped; only frames with
