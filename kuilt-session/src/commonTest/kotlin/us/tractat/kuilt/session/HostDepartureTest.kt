@@ -120,26 +120,22 @@ class HostDepartureTest {
             val joiner = factory.join(InMemoryTag("Joiner"))
             joiner.roster.first { it.isNotEmpty() }
             val events = recordEvents(joiner)
-            val before = testScheduler.currentTime
 
             host.leave()
             testScheduler.runCurrent()
-            val elapsedAtTerminal = testScheduler.currentTime - before
+            // Read before the clock moves on: the window is still far off, so only the frame can have
+            // ended the room by now.
+            val endedByTheTimeLeaveReturned = events.hostLost().map { it.reason }
 
             // Run well past the window: a window opened behind the terminal event would surface here.
             testScheduler.advanceTimeBy(config.reconnectWindow * 2)
             testScheduler.runCurrent()
 
             assertAll(
+                { assertEquals(listOf<FailureReason>(FailureReason.HostLeft), endedByTheTimeLeaveReturned) },
                 { assertEquals(listOf<FailureReason>(FailureReason.HostLeft), events.hostLost().map { it.reason }) },
                 { assertTrue(!events.openedAWindow(), "no window may open on a deliberate departure: $events") },
                 { assertTrue(events.none { it is MembershipEvent.Partitioned }, "nor a Partitioned: $events") },
-                {
-                    assertTrue(
-                        elapsedAtTerminal < config.reconnectWindow.inWholeMilliseconds,
-                        "terminal must not wait out the ${config.reconnectWindow} window, took ${elapsedAtTerminal}ms",
-                    )
-                },
             )
         }
 
@@ -278,18 +274,19 @@ class HostDepartureTest {
             testScheduler.advanceTimeBy(config.interval)
             testScheduler.runCurrent()
             val windowOpenAtFarewell = events.openedAWindow()
-            val before = testScheduler.currentTime
 
             seam.deliver(hostId, AdmitMessage.encode(AdmitMessage.Farewell(hostId.value)))
             testScheduler.runCurrent()
-            val elapsed = testScheduler.currentTime - before
+            // Virtual time has not moved since the frame landed, so this is the reason at that instant:
+            // a HostLeft held back to the window's deadline is absent here and present below.
+            val endedAtOnce = events.hostLost().map { it.reason }
             testScheduler.advanceTimeBy(config.reconnectWindow * 2)
             testScheduler.runCurrent()
 
             assertAll(
                 { assertTrue(windowOpenAtFarewell, "rig: the window must be open when the frame lands: $events") },
+                { assertEquals(listOf<FailureReason>(FailureReason.HostLeft), endedAtOnce, "at once, not at the deadline") },
                 { assertEquals(listOf<FailureReason>(FailureReason.HostLeft), events.hostLost().map { it.reason }) },
-                { assertEquals(0L, elapsed, "the frame ends the window at once, not at its deadline") },
             )
         }
 
@@ -419,8 +416,8 @@ class HostDepartureTest {
 
     /**
      * One wedged recipient must not hold the host's leave open or stop the others hearing, which is what
-     * a fan-out per recipient is for. `fanOutSendBudget` is 15 s here, so a leave that waited for its
-     * lanes to drain would show it.
+     * a fan-out per recipient is for. `fanOutSendBudget` is 5.2 s with this [config] (window plus timeout),
+     * so a leave that waited for its lanes to drain would show it.
      */
     @Test
     fun aWedgedRecipientHoldsUpNeitherTheLeaveNorItsNeighbours() =

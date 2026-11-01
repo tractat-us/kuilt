@@ -90,19 +90,20 @@ class NwHostDepartureRoomTest {
     fun theFrameLeavesBeforeTheLinkIsCancelled() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val rooms = formRoom()
-            val before = testScheduler.currentTime
 
             rooms.host.leave()
             testScheduler.runCurrent()
-            val elapsed = testScheduler.currentTime - before
+            // Read before the clock moves on: the window is still far off, so only the frame can have
+            // ended the room by now.
+            val endedByTheTimeLeaveReturned = rooms.events.hostLost().map { it.reason }
             testScheduler.advanceTimeBy(heartbeat.reconnectWindow * 2)
             testScheduler.runCurrent()
 
             assertAll(
                 { assertEquals(listOf(SendFate.Delivered), rooms.radio.farewells().map { it.fate }, "the radio's ledger") },
+                { assertEquals(listOf<FailureReason>(FailureReason.HostLeft), endedByTheTimeLeaveReturned) },
                 { assertEquals(listOf<FailureReason>(FailureReason.HostLeft), rooms.events.hostLost().map { it.reason }) },
                 { assertTrue(rooms.events.none { it is MembershipEvent.WindowOpened }, "no window: ${rooms.events}") },
-                { assertTrue(elapsed < heartbeat.reconnectWindow.inWholeMilliseconds, "took ${elapsed}ms") },
             )
         }
 
