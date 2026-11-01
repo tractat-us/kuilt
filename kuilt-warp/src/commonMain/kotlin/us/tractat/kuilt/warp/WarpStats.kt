@@ -96,5 +96,8 @@ public class WarpStats private constructor(
     public companion object {
         /** An empty stats map with no observed sources. */
         public fun empty(): WarpStats = WarpStats(emptyMap())
+
+        /** Stats over sketches a test chose, such as a low precision [observe] cannot seed. */
+        internal fun of(sketches: Map<OpId, HyperLogLog>): WarpStats = WarpStats(sketches)
     }
 }
