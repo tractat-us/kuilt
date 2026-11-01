@@ -37,9 +37,10 @@ private const val SPECTATE_DECLARED = "spectate"
  * Marker value stored under a replica's slot to declare "I am voluntarily leaving".
  *
  * Published by a voter that calls [GameSession.leave] to signal a graceful departure to the
- * host. The host observes this via [vacaters] and immediately evicts the voter via
- * [RaftNode.changeMembership] without waiting the [HeartbeatConfig.reconnectWindow] — the
- * vacate signal is the explicit path; the dead-man's-switch timeout is the crash-only fallback.
+ * host. A host running liveness monitoring observes this via [GamePresence.vacating] and
+ * immediately evicts the voter via [RaftNode.changeMembership] without waiting the
+ * [HeartbeatConfig.reconnectWindow] — the vacate signal is the explicit path; the
+ * dead-man's-switch timeout is the fallback, for a crash or a frame that was lost.
  */
 private const val VACATE_DECLARED = "vacate"
 
@@ -242,7 +243,7 @@ public class GamePresence(
     /**
      * The converged set of replicas that have declared a voluntary departure via [declareVacate].
      *
-     * The host observes this to trigger immediate eviction without waiting the reconnect window.
+     * A snapshot: the host's eviction watcher collects [vacating] rather than polling this.
      * Returns replicas whose current slot value equals [VACATE_DECLARED].
      */
     public fun vacaters(): Set<ReplicaId> = vacatersIn(quilter.state.value)
