@@ -48,8 +48,10 @@ internal class EnrolledRoster private constructor(
     data class Transition(val index: Long, val replica: ReplicaId, val enrolled: Boolean)
 
     /**
-     * This roster advanced to [index] with no membership change — what the apply loop does for
-     * *every* committed entry, so [appliedIndex] tracks the prefix actually applied.
+     * This roster advanced to [index] with no membership change — what the apply loop does for every
+     * committed entry it applies or steps over, so [appliedIndex] tracks the prefix actually applied.
+     * It does not advance over a control act it cannot read, or over anything after one: the prefix
+     * stops there, so it never reads as covering an act whose effect is missing.
      *
      * Requires [index] to advance **strictly**: `RaftNode.committedFrom` delivers "every subsequent
      * instruction exactly once, in index order", so a repeat or a regression is a broken contract

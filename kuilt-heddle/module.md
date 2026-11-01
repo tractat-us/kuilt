@@ -121,7 +121,8 @@ whole ledger inherits the three merge laws for free.
   and liveness over a `Seam`, and its fixed-roster bootstrap (see below).
 - `GovernedHeddleNode` / `heddleGoverned` — the same node with runtime supply creation and
   reshapes serialized through `kuilt-raft`; its control calls return a `ControlOutcome`
-  (`Applied` / `Conflict`) so an overlapping reshape's loser surfaces, never silently drops.
+  (`Applied` / `Conflict` / `Indeterminate`) so an overlapping reshape's loser surfaces, never
+  silently drops.
 - `HeddleConfig` — the node's policy caps, the §8.2 bound cap, the demand-staleness window,
   and the injected replication/liveness/RNG knobs.
 - `DemandBoard` — one peer's advertised appetite across the edges it serves; the value
@@ -215,13 +216,17 @@ and nothing else does:
   truth about who holds what. A peer that meets an entry it cannot read, say one written by a newer
   version, no longer knows that truth, so it refuses to spend rather than guess. `reserve` and
   `schedule` answer `GateClosed` naming the entry, and this one does not clear by itself: it takes a
-  version that can read the entry, or a deliberate migration of the record. So upgrade a group
-  together, and give the agreement step its own log.
+  version that can read the entry, or a deliberate migration of the record. The stop reaches the
+  whole group, because everyone reads the same record: the same entry on the same version stops
+  every peer, and one peer on a newer version stops the older ones until they upgrade. There is no
+  way to skip an entry. So upgrade a group together, and give the agreement step its own log.
 
 `heddleGoverned` returns a `GovernedHeddleNode`: the same data-plane calls as `HeddleNode` plus
 `mint`/`prepare`/`activate`/`close`/`retire` and `enroll`/`depart`, each of which returns a
-`ControlOutcome` — `Applied` when it took effect, or `Conflict` carrying the structured reason when
-it lost a race (`enrolledReplicas()` reads back the agreed list). Reclaiming a
+`ControlOutcome` — `Applied` when it took effect, `Conflict` carrying the structured reason when it
+was refused, or `Indeterminate` when the peer stopped at an unreadable entry with the call still in
+flight, so the act may yet land and must not be retried blindly (`enrolledReplicas()` reads back the
+agreed list). Reclaiming a
 crashed peer's stranded share is a fenced control-plane act whose seam is **defined but not yet
 shipped** (`revocation`): a wrong reclaim would let two peers spend the same units, so v1 leaves the
 share safely stranded.

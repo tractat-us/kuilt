@@ -62,6 +62,11 @@ internal object ControlLogCodec {
     /** The format this build writes, and the only tagged one it can read. */
     const val CURRENT_VERSION: Int = 1
 
+    /**
+     * **Never change this; change only the version byte.** A build that meets a magic it does not know
+     * reads the entry as [ControlEntry.NotHeddle] and steps over it, so a new magic would make every
+     * older peer skip acts silently, while a new version makes them halt and say why.
+     */
     private val MAGIC = "KHCL".encodeToByteArray()
     private val UNTAGGED_PREFIX = byteArrayOf(0xBF.toByte(), 0x6A) + "requestKey".encodeToByteArray()
 

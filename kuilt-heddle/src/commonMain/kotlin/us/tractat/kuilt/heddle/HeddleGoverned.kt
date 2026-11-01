@@ -54,9 +54,14 @@ import kotlin.time.Instant
  * **Give the control plane a dedicated Raft node.** A log entry this module can show no version of
  * heddle wrote is stepped over with a warning, but a heddle act it cannot read stops this node for
  * good: writes are refused with [GateClosed.Reason.UnreadableControlEntry], and only a build that can
- * read the entry, or an explicit offline migration of the log, recovers it. So upgrade a cluster
- * together. A build from before the control log carried a header cannot read this one's acts at all,
- * and drops them silently (#1738).
+ * read the entry, or an explicit offline migration of the log, recovers it. A build from before the
+ * control log carried a header cannot read this one's acts at all, and drops them silently (#1738).
+ *
+ * **That stop is group-wide, and nothing overrides it.** Every peer applies the same log, so the same
+ * bytes on the same build stop every peer at the same index. One peer on a newer build, writing an act
+ * older peers cannot read, stops those older peers until they upgrade. There is deliberately no way to
+ * skip an entry, since skipping is what lets peers disagree about who holds what. So upgrade a cluster
+ * together.
  *
  * **Shared-RaftNode compaction caveat.** v1 does not publish snapshots to [raft] (log compaction is
  * off), so the control plane can replay the whole log via `committedFrom(1)`. If [raft] is a node
@@ -70,7 +75,10 @@ import kotlin.time.Instant
  *   plane's committed-log apply loop) live on; cancel it to tear the node down.
  * @param seam the data-plane fabric this peer participates over.
  * @param self this peer's replica identity; matches [Seam.selfId] by string value.
- * @param raft the control plane — the required consensus log mint and reshape serialize through.
+ * @param raft the control plane — the required consensus log mint and reshape serialize through. It
+ *   must use `ClientIdentity.Auto`, the default: this plane replays from index 1 and restarts its
+ *   request serials on every boot, and a `ClientIdentity.Durable` node may throw on its own entries
+ *   when it replays after a restart, tracked by #3060.
  * @param root the root group of the fairness tree (the handle consumers build [AttachmentRecord]s
  *   against), and the group every mint this peer proposes credits its supply at. **Every peer must
  *   pass an identical value** — one ledger describes one tree (#1751). A peer that passes a
@@ -136,8 +144,10 @@ private const val GOVERNED_GENESIS_NONCE: String = "heddle-governed-genesis"
  *
  * The control verbs **suspend** until their act commits and return a [ControlOutcome] — [Applied]
  * [ControlOutcome.Applied] when admitted, or [Conflict][ControlOutcome.Conflict] carrying a structured
- * [ControlConflict] when the log serialized the act as a loser. The data-plane verbs are the exact H4
- * calls and never coordinate.
+ * [ControlConflict] when the log serialized the act as a loser. A peer that halts at a control act it
+ * cannot read while a call is in flight answers [ControlOutcome.Indeterminate]: that act may still
+ * commit, so do not treat it as a refusal. The data-plane verbs are the exact H4 calls and never
+ * coordinate.
  *
  * The **ungoverned** lifecycle mutators (`HeddleNode.prepare`/`activate`/…) are deliberately **not**
  * re-exposed here: routing them around the log would recreate the very [LedgerConflict.DualActiveInbound]
@@ -379,8 +389,11 @@ public class GovernedHeddleNode internal constructor(
      * peer is *exactly* the peer that may hold an unreplicated reservation crossing [edge], so it is
      * the one promise the barrier cannot do without. A crashed peer therefore leaves relocation
      * refused until it returns and acks, or formally departs — this design trades the availability of
-     * a rare recovery operation for its correctness, and stands by that trade. Use this to *see* the
-     * blockage; there is deliberately no way to proceed without them.
+     * a rare recovery operation for its correctness, and stands by that trade. A peer halted at a
+     * control act it cannot read ([GateClosed.Reason.UnreadableControlEntry]) can do neither, because
+     * its acks and its [depart] are refused, so it blocks the fence until a build that can read the
+     * entry recovers it. Use this to *see* the blockage; there is deliberately no way to proceed
+     * without them.
      */
     public fun pendingAcks(edge: AttachmentId): Set<ReplicaId>? = control.pendingAcks(edge)
 
@@ -466,11 +479,12 @@ public class GovernedHeddleNode internal constructor(
      * So enrolling **self** is what opens this node's [isWritable] boot gate — until it returns
      * [ControlOutcome.Applied] here, [reserve] and [schedule] answer [GateClosed] and author nothing.
      *
-     * It doubles as the §6.5.3 **boot-ordering** fence: `submit` returns only once this peer's apply
-     * loop has applied the entry, and Raft applies in index order, so a peer that has applied its own
-     * enroll has applied every entry before it — every quiesce mark this incarnation lost to a restart
-     * is restored before the first mutator can run. Do it on **every** boot, including a restart where
-     * the replica is already enrolled: the fold is then idempotent, but the act still commits, still
+     * It doubles as the §6.5.3 **boot-ordering** fence: [ControlOutcome.Applied] comes back only once
+     * this peer's apply loop has applied the entry, and Raft applies in index order, so a peer that has
+     * applied its own enroll has applied every entry before it — every quiesce mark this incarnation
+     * lost to a restart is restored before the first mutator can run. Do it on **every** boot,
+     * including a restart where the replica is already enrolled: the fold is then idempotent, but the
+     * act still commits, still
      * applies, and opens the gate unless a later departure has already closed it, or this peer has
      * halted at a control act it cannot read, in which case the call is refused without proposing
      * (and it is also what re-attaches a lost peer's detector, #1652).
