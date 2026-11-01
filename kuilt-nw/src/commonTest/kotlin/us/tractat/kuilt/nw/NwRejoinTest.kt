@@ -4,6 +4,7 @@ package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
@@ -12,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
@@ -45,6 +47,10 @@ import kotlin.time.Instant
  *
  * Every test here runs on the virtual clock, so "the process survived" is spelled as `runTest` reporting no
  * uncaught exception: a throw escaping a seam's scope fails the test that provoked it.
+ *
+ * Every seam is closed in a `finally`, because a loom's seam scope is detached from the test: one left open
+ * re-arms its timers on the test scheduler for ever, and a failed assertion then reads as a test JVM spinning
+ * in virtual time rather than as a red.
  */
 class NwRejoinTest {
 
@@ -57,18 +63,21 @@ class NwRejoinTest {
     private val tag = InMemoryTag("session", peerKey = "joiner")
 
     private class Formed(
-        val radio: FakeNwRadio,
         val api: FakeNwApi,
         val loom: NwLoom,
         val seam: Seam,
         val peerSeam: Seam,
-    )
+    ) {
+        /** Seams a test wove beyond these two, closed with them. */
+        val others = mutableListOf<Seam>()
+    }
 
-    private suspend fun formed(
-        scope: TestScope,
+    /** Two peers woven over one radio, handed to [block], and closed whatever [block] does. */
+    private suspend fun TestScope.withFormed(
         weaveTimeout: Duration = NwLoom.DEFAULT_WEAVE_TIMEOUT,
         wrap: (FakeNwApi) -> NwApi = { it },
-    ): Formed {
+        block: suspend (Formed) -> Unit,
+    ) {
         val radio = FakeNwRadio()
         val api = FakeNwApi(radio, deviceId = "joiner", serviceName = "joiner")
         val peerApi = FakeNwApi(radio, deviceId = "peer", serviceName = "peer")
@@ -79,8 +88,15 @@ class NwRejoinTest {
             val b = async { peerLoom.join(InMemoryTag("session", peerKey = "peer")) }
             a.await() to b.await()
         }
-        scope.testScheduler.runCurrent()
-        return Formed(radio, api, loom, seam, peerSeam)
+        testScheduler.runCurrent()
+        val rig = Formed(api, loom, seam, peerSeam)
+        try {
+            block(rig)
+        } finally {
+            withContext(NonCancellable) {
+                (rig.others + seam + peerSeam).forEach { it.close() }
+            }
+        }
     }
 
     @Test
@@ -102,161 +118,163 @@ class NwRejoinTest {
                 val j = async { joinerFactory.join(tag) }
                 h.await() to j.await()
             }
-            host.roster.first { it.size == 1 }
-            joiner.roster.first { it.size == 1 }
+            try {
+                host.roster.first { it.size == 1 }
+                joiner.roster.first { it.size == 1 }
 
-            val events = mutableListOf<MembershipEvent>()
-            val resumed = CompletableDeferred<Unit>()
-            backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                joiner.events.collect { event ->
-                    events += event
-                    if (event is MembershipEvent.Resumed) resumed.complete(Unit)
+                val events = mutableListOf<MembershipEvent>()
+                val resumed = CompletableDeferred<Unit>()
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    joiner.events.collect { event ->
+                        events += event
+                        if (event is MembershipEvent.Resumed) resumed.complete(Unit)
+                    }
+                }
+                testScheduler.runCurrent()
+                val listensBefore = joinerApi.startListeningCalls
+
+                val dropped = radio.dropAllLinks()
+
+                withTimeout(heartbeat.reconnectWindow) { resumed.await() }
+                assertAll(
+                    { assertTrue(dropped > 0, "the rig must have a live link to drop") },
+                    { assertTrue(events.any { it is MembershipEvent.WindowOpened }, "the drop was seen: $events") },
+                    { assertTrue(events.none { it is MembershipEvent.HostLost }, "the seat survived: $events") },
+                    { assertEquals(listensBefore, joinerApi.startListeningCalls, "no second session was started") },
+                    { assertEquals(1, joinerApi.bytesReceivedSubscriberCountForTest(), "still one seam reading") },
+                )
+            } finally {
+                withContext(NonCancellable) {
+                    joiner.leave()
+                    host.leave()
                 }
             }
-            testScheduler.runCurrent()
-            val listensBefore = joinerApi.startListeningCalls
-
-            val dropped = radio.dropAllLinks()
-
-            withTimeout(heartbeat.reconnectWindow) { resumed.await() }
-            assertAll(
-                { assertTrue(dropped > 0, "the rig must have a live link to drop") },
-                { assertTrue(events.any { it is MembershipEvent.WindowOpened }, "the drop was seen: $events") },
-                { assertTrue(events.none { it is MembershipEvent.HostLost }, "the seat survived: $events") },
-                { assertEquals(listensBefore, joinerApi.startListeningCalls, "no second session was started") },
-                { assertEquals(1, joinerApi.bytesReceivedSubscriberCountForTest(), "still one seam reading") },
-            )
-            joiner.leave()
-            host.leave()
         }
 
     @Test
     fun aRepeatOfTheSameRendezvousWhileLiveAnswersWithTheLiveSeam() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val rig = formed(this)
-            val again = rig.loom.join(tag)
-            assertAll(
-                { assertSame(rig.seam, again) },
-                { assertEquals(1, rig.api.startListeningCalls, "no second listener") },
-                { assertEquals(1, rig.api.bytesReceivedSubscriberCountForTest(), "no second collector") },
-            )
-            rig.seam.close()
-            rig.peerSeam.close()
+            withFormed { rig ->
+                val again = rig.loom.join(tag)
+                assertAll(
+                    { assertSame(rig.seam, again) },
+                    { assertEquals(1, rig.api.startListeningCalls, "no second listener") },
+                    { assertEquals(1, rig.api.bytesReceivedSubscriberCountForTest(), "no second collector") },
+                )
+            }
         }
 
     @Test
     fun aRepeatDuringAnOutageTimesOutWithoutClosingTheSeamItBorrowed() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val rig = formed(this, weaveTimeout = 1.seconds)
-            rig.peerSeam.close()
-            rig.seam.state.first { it is SeamState.Weaving }
+            withFormed(weaveTimeout = 1.seconds) { rig ->
+                rig.peerSeam.close()
+                rig.seam.state.first { it is SeamState.Weaving }
 
-            assertFailsWith<NwUnreachableException> { rig.loom.join(tag) }
+                assertFailsWith<NwUnreachableException> { rig.loom.join(tag) }
 
-            assertIs<SeamState.Weaving>(rig.seam.state.value, "the first caller's seam is still theirs")
-            rig.seam.close()
+                assertIs<SeamState.Weaving>(rig.seam.state.value, "the first caller's seam is still theirs")
+            }
         }
 
     @Test
     fun aDifferentSessionOnALiveLoomIsRefusedToItsCallerAndLeavesTheLiveOneAlone() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val rig = formed(this)
-            val newSession = assertFailsWith<IllegalStateException> { rig.loom.host(Pattern("other")) }
-            val otherTag = assertFailsWith<IllegalStateException> { rig.loom.join(InMemoryTag("other")) }
-            testScheduler.runCurrent()
-            assertAll(
-                { assertTrue("close" in newSession.message.orEmpty(), "says what to do: ${newSession.message}") },
-                { assertTrue("close" in otherTag.message.orEmpty(), "says what to do: ${otherTag.message}") },
-                { assertIs<SeamState.Woven>(rig.seam.state.value) },
-                { assertEquals(1, rig.api.startListeningCalls, "no second listener") },
-                { assertEquals(0, rig.api.stopListeningCalls, "the live listener is untouched") },
-            )
-            rig.seam.close()
-            rig.peerSeam.close()
+            withFormed { rig ->
+                val newSession = assertFailsWith<IllegalStateException> { rig.loom.host(Pattern("other")) }
+                val otherTag = assertFailsWith<IllegalStateException> { rig.loom.join(InMemoryTag("other")) }
+                testScheduler.runCurrent()
+                assertAll(
+                    { assertTrue("close" in newSession.message.orEmpty(), "says what to do: ${newSession.message}") },
+                    { assertTrue("close" in otherTag.message.orEmpty(), "says what to do: ${otherTag.message}") },
+                    { assertIs<SeamState.Woven>(rig.seam.state.value) },
+                    { assertEquals(1, rig.api.startListeningCalls, "no second listener") },
+                    { assertEquals(0, rig.api.stopListeningCalls, "the live listener is untouched") },
+                )
+            }
         }
 
     @Test
     fun aWeaveStraightAfterACloseIsAFreshSeamOnTheSameBinding() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val rig = formed(this)
-            rig.seam.close()
-            // No pump here on purpose. On a real dispatcher the old collector is still unwinding at this
-            // point, and its latch on `bytesReceived` is still held: the weave has to wait it out.
-            val fresh = rig.loom.join(tag)
-            assertAll(
-                { assertNotSame(rig.seam, fresh) },
-                { assertIs<SeamState.Woven>(fresh.state.value) },
-                { assertEquals(2, rig.api.startListeningCalls, "a fresh session listens again") },
-                { assertEquals(1, rig.api.bytesReceivedSubscriberCountForTest(), "one collector, the new one") },
-            )
-            fresh.close()
-            rig.peerSeam.close()
+            withFormed { rig ->
+                rig.seam.close()
+                // No pump here on purpose. On a real dispatcher the old collector is still unwinding at this
+                // point, and its latch on `bytesReceived` is still held: the weave has to wait it out.
+                val fresh = rig.loom.join(tag)
+                rig.others += fresh
+                assertAll(
+                    { assertNotSame(rig.seam, fresh) },
+                    { assertIs<SeamState.Woven>(fresh.state.value) },
+                    { assertEquals(2, rig.api.startListeningCalls, "a fresh session listens again") },
+                    { assertEquals(1, rig.api.bytesReceivedSubscriberCountForTest(), "one collector, the new one") },
+                )
+            }
         }
 
     @Test
     fun aWeaveRacingACloseWaitsSoThatCloseCannotStopTheNewListener() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val stopGate = CompletableDeferred<Unit>()
-            val rig = formed(this, wrap = { api -> StopHeldApi(api, stopGate) })
-            backgroundScope.launch { rig.seam.close() }
-            rig.seam.state.first { it is SeamState.Torn }
-            testScheduler.runCurrent()
+            withFormed(wrap = { api -> StopHeldApi(api, stopGate) }) { rig ->
+                backgroundScope.launch { rig.seam.close() }
+                rig.seam.state.first { it is SeamState.Torn }
+                testScheduler.runCurrent()
 
-            val weaving = async { rig.loom.join(tag) }
-            testScheduler.advanceTimeBy(100.milliseconds)
-            testScheduler.runCurrent()
-            val listensWhileCloseInFlight = rig.api.startListeningCalls
+                val weaving = async { rig.loom.join(tag) }
+                testScheduler.advanceTimeBy(100.milliseconds)
+                testScheduler.runCurrent()
+                val listensWhileCloseInFlight = rig.api.startListeningCalls
 
-            stopGate.complete(Unit)
-            val fresh = weaving.await()
-            testScheduler.runCurrent()
-            assertAll(
-                { assertEquals(1, listensWhileCloseInFlight, "the rig held the close, and the weave waited on it") },
-                { assertEquals(1, rig.api.stopListeningCalls, "the rig's stop did land") },
-                { assertEquals(2, rig.api.startListeningCalls, "then the fresh session listened") },
-                { assertNotNull(rig.api.advertisedName.value, "and nothing stopped it afterwards") },
-            )
-            fresh.close()
-            rig.peerSeam.close()
+                stopGate.complete(Unit)
+                val fresh = weaving.await()
+                rig.others += fresh
+                testScheduler.runCurrent()
+                assertAll(
+                    { assertEquals(1, listensWhileCloseInFlight, "the rig held the close, and the weave waited on it") },
+                    { assertEquals(1, rig.api.stopListeningCalls, "the rig's stop did land") },
+                    { assertEquals(2, rig.api.startListeningCalls, "then the fresh session listened") },
+                    { assertNotNull(rig.api.advertisedName.value, "and nothing stopped it afterwards") },
+                )
+            }
         }
 
     @Test
     fun aCloseThatNeverFinishesBoundsTheNextWeaveRatherThanWedgingIt() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val rig = formed(this, weaveTimeout = 1.seconds, wrap = { api -> StopHeldApi(api, CompletableDeferred()) })
-            backgroundScope.launch { rig.seam.close() }
-            rig.seam.state.first { it is SeamState.Torn }
+            withFormed(weaveTimeout = 1.seconds, wrap = { api -> StopHeldApi(api, CompletableDeferred()) }) { rig ->
+                backgroundScope.launch { rig.seam.close() }
+                rig.seam.state.first { it is SeamState.Torn }
 
-            assertFailsWith<NwUnreachableException> { rig.loom.join(tag) }
+                assertFailsWith<NwUnreachableException> { rig.loom.join(tag) }
 
-            assertEquals(1, rig.api.startListeningCalls, "no listener was started over a close still in flight")
-            rig.peerSeam.close()
+                assertEquals(1, rig.api.startListeningCalls, "no listener was started over a close still in flight")
+            }
         }
 
     @Test
     fun aSecondSeamOverOneBindingTearsItselfInsteadOfEscaping() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val rig = formed(this)
-            // The one way left to reach a second collector: two looms over one binding. Nothing in the loom
-            // can prevent it, so the seam contains it. Reaching this assertion at all is half the point:
-            // an escaped throw fails this test through `runTest`.
-            val secondLoom = NwLoom(rig.api, SERVICE_TYPE, random = Random(3))
-            val started = testScheduler.currentTime
+            withFormed { rig ->
+                // The one way left to reach a second collector: two looms over one binding. Nothing in the loom
+                // can prevent it, so the seam contains it. Reaching this assertion at all is half the point:
+                // an escaped throw fails this test through `runTest`.
+                val secondLoom = NwLoom(rig.api, SERVICE_TYPE, random = Random(3))
+                val started = testScheduler.currentTime
 
-            val failure = assertFailsWith<NwUnreachableException> { secondLoom.join(tag) }
+                val failure = assertFailsWith<NwUnreachableException> { secondLoom.join(tag) }
 
-            assertAll(
-                { assertTrue("single-collection" in failure.message.orEmpty(), "names the cause: ${failure.message}") },
-                {
-                    assertTrue(
-                        testScheduler.currentTime - started < NwLoom.DEFAULT_WEAVE_TIMEOUT.inWholeMilliseconds,
-                        "a torn seam fails the weave at once rather than waiting out the timeout",
-                    )
-                },
-                { assertEquals(1, rig.api.bytesReceivedSubscriberCountForTest(), "the first seam kept the bytes") },
-            )
-            rig.seam.close()
-            rig.peerSeam.close()
+                assertAll(
+                    { assertTrue("single-collection" in failure.message.orEmpty(), "names the cause: ${failure.message}") },
+                    {
+                        assertTrue(
+                            testScheduler.currentTime - started < NwLoom.DEFAULT_WEAVE_TIMEOUT.inWholeMilliseconds,
+                            "a torn seam fails the weave at once rather than waiting out the timeout",
+                        )
+                    },
+                    { assertEquals(1, rig.api.bytesReceivedSubscriberCountForTest(), "the first seam kept the bytes") },
+                )
+            }
         }
 
     @Test
