@@ -252,7 +252,7 @@ class WarpNodeCoordinatedWindowsTest {
      * new tenure begins and no re-drive runs, so the task whose only entry was lost stays stranded.
      * The pre-#2923 code has the same gap (#879 b class). The structural fix is a term on the
      * leader role or a `RaftNode.currentTerm` flow, with the tenure keyed by term; that changes the
-     * kuilt-raft API and is tracked separately (issue drafted on #3008, not yet filed).
+     * kuilt-raft API and is tracked separately (follow-up to #3008).
      *
      * This test goes red when that fix lands. Invert it then: the task should run exactly once.
      */

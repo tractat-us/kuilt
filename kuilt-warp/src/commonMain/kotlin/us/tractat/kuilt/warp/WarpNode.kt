@@ -84,8 +84,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   skips it on the role check, and `committed` is replay=0) is **re-driven**: on acquiring
  *   leadership a node re-proposes every coordinated-queue task it has not executed and
  *   that has no replicated result, giving the stranded task a fresh committed entry to
- *   fire from (#879 b). It skips tasks it has itself proposed as leader in the same tenure:
- *   those entries are in its own log and cannot be stranded.
+ *   fire from (#879 b). It skips tasks it has itself proposed as leader in the same tenure,
+ *   whose entries are in its own log. That holds only while the role collector sees every
+ *   leadership acquisition. [RaftRole.Leader] carries no term, so a step-down and re-election
+ *   between two collections is invisible: the new term gets no re-drive at all (a gap older
+ *   than the skip), and a task tagged just before the unseen step-down is skipped even if its
+ *   entry was lost. Closing both needs a term-keyed tenure (follow-up to #3008).
  * - A local [coordinatedApplied] set plus the replicated coordinated-queue membership and
  *   [Results]-board gates deduplicate when two entries for the same task both committed
  *   (ring churn double-propose, or a re-drive racing the original entry).
@@ -437,10 +441,18 @@ public class WarpNode(
      * they were proposed under. Guarded by [lock]; cleared whenever a new tenure begins.
      *
      * Such a proposal is appended to this leader's own log, so its commit fires
-     * [onCoordinatedCommit] while this node still leads. It cannot be stranded in this tenure,
-     * and [redriveStrandedCoordinated] skips it rather than append a second entry. Under the
-     * old pinned request id the leader's dedup cache coalesced that second propose; an auto
-     * serial does not (#2923).
+     * [onCoordinatedCommit] while this node still leads, and [redriveStrandedCoordinated] skips
+     * it rather than append a second entry. Under the old pinned request id the leader's dedup
+     * cache coalesced that second propose; an auto serial does not (#2923).
+     *
+     * **Assumption: the role collector observes every leadership acquisition.** [RaftRole.Leader]
+     * carries no term, and a StateFlow collector that does not run between `Leader`, `Follower`
+     * and `Leader` again sees no change. Then no new tenure begins and the tags survive. A task
+     * tagged after the raft actor had already stepped down, whose forwarded propose then hung or
+     * never executed, is skipped by the re-drive although it is stranded. The same blind spot
+     * already loses the new term's re-drive outright (#879 b class, older than this guard). Both
+     * close once the tenure is keyed by raft term, which needs a kuilt-raft API change
+     * (follow-up to #3008).
      */
     private val proposedAsLeader = mutableMapOf<TaskId, Long>()
 
@@ -1525,8 +1537,8 @@ public class WarpNode(
 
     /**
      * Re-drives coordinated tasks stranded by a commit that fired while no node held
-     * leadership (#879 window b). Launched on every transition of [raftNode]'s role into
-     * [RaftRole.Leader].
+     * leadership (#879 window b). Launched on every *observed* transition of [raftNode]'s role
+     * into [RaftRole.Leader].
      *
      * [RaftNode.committed] is replay=0: an entry whose commit every node consumed as a
      * `Follower`/`Candidate` (mid-election) is skipped by every [onCoordinatedCommit] role
@@ -1546,7 +1558,9 @@ public class WarpNode(
      * A task this node itself proposed during [leaderTenure] is skipped (see [proposedAsLeader]):
      * its entry is in this leader's log and fires here, so re-proposing it would only append a
      * duplicate. That covers every task claimed between the role emission and the fence, which
-     * is the common case when this node already leads at construction.
+     * is the common case when this node already leads at construction. The skip is sound only if
+     * the role collector observed every leadership acquisition; [proposedAsLeader] describes the
+     * re-election it can miss, and what that costs.
      */
     private fun redriveStrandedCoordinated(leaderTenure: Long) {
         val raft = raftNode ?: return
