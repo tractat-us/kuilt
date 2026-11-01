@@ -303,6 +303,10 @@ class NearbyHostAcceptanceTest {
     /**
      * Moving the clock must not have removed it. The host idles for longer than the bound first, so
      * the two possible clock starts disagree: from the open, this attempt would already be late.
+     *
+     * The idle deliberately stops **between** multiples of the bound. A clock that restarted every
+     * [TIMEOUT] from the open would, at an exact multiple, expire at the same instant as this one, and
+     * this test could not tell them apart.
      */
     @Test
     fun aHandshakeThatStallsTimesOutOnItsOwnClockAndTheHostAcceptsAgain() =
@@ -310,7 +314,7 @@ class NearbyHostAcceptanceTest {
             val api = ScriptedNearbyApi()
             val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
 
-            advanceTimeBy(TIMEOUT * 10)
+            advanceTimeBy(TIMEOUT * 10 + TIMEOUT / 2)
             runCurrent()
             api.connInit.emit(ConnectionInitiated(FIRST_ENDPOINT, "joiner"))
             runCurrent()
