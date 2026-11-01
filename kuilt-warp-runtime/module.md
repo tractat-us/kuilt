@@ -32,9 +32,10 @@ do not control:
 
 - **No capabilities.** A module that declares *any* import is rejected outright. There is no
   host function to call, so there is nothing to escape into.
-- **A bounded memory ceiling.** A module must declare a maximum linear-memory size, and it must
-  be within the configured cap. "No maximum" is rejected — it is the memory bomb — and the
-  engine then enforces the declared maximum itself when the guest tries to grow.
+- **A bounded memory ceiling.** A module must declare one linear memory with a maximum size, and
+  it must be within the configured cap. "No maximum" is rejected — it is the memory bomb — and so
+  is a second memory, which would grow outside the cap. The engine then enforces the declared
+  maximum itself when the guest tries to grow.
 - **A bounded run time.** A kernel that spins forever is cut off at
   `WasmSandboxConfig.executionTimeout`. The mechanism differs per engine — the JVM interpreter
   is interrupted, wasm3 polls a deadline the vendored source is patched to check on every

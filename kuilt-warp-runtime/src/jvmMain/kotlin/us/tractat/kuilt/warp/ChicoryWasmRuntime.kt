@@ -186,6 +186,8 @@ public class ChicoryWasmRuntime(
      * memory is caught after instantiation ("module exports no memory").
      *
      * Policy (checked in this order, matching the native and browser runtimes):
+     * - More than one memory is rejected. The cap below reads the first, and Chicory runs a guest
+     *   that grows the second past it.
      * - A declared initial exceeding [WasmSandboxConfig.maxMemoryPages] is rejected.
      * - A missing declared max — [MemoryLimits.MAX_PAGES] (65536) is Chicory's sentinel for "no
      *   max declared in the binary" — is rejected: an unbounded module could `memory.grow` to
@@ -200,6 +202,9 @@ public class ChicoryWasmRuntime(
     private fun rejectUnboundedOrOversizeMemory(module: WasmModule) {
         val memSection = module.memorySection().orElse(null) ?: return
         if (memSection.memoryCount() == 0) return
+        if (memSection.memoryCount() > 1) {
+            throw WasmLoadException("module declares ${memSection.memoryCount()} memories; the sandbox cap covers one")
+        }
         val limits = memSection.getMemory(0).limits()
         val initial = limits.initialPages()
         if (initial > config.maxMemoryPages) {

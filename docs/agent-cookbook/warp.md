@@ -57,8 +57,8 @@ cache, a "who has these bytes" protocol, or a sandbox.
   is **transient** — the task stands by and is retried; only a kernel that is broken or hostile
   fails terminally.
 - **`WasmRuntime`** is the sandbox contract, and it is strict on purpose because kernels come
-  from peers you don't control: a module declaring any import is rejected, it must declare a
-  bounded memory maximum within `WasmSandboxConfig.maxMemoryPages`, and every invocation is cut
+  from peers you don't control: a module declaring any import is rejected, it must declare one
+  memory with a bounded maximum within `WasmSandboxConfig.maxMemoryPages`, and every invocation is cut
   off at `WasmSandboxConfig.executionTimeout`. `ChicoryWasmRuntime` (JVM), `Wasm3WasmRuntime`
   (iOS/macOS) and `BrowserWasmRuntime` (wasmJs) all pass the same `WasmRuntimeConformanceSuite`.
 

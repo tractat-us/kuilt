@@ -16,7 +16,8 @@ internal const val WASM_MAX_MEMORY_PAGES: Int = 65536
  * Target-neutral: every [WasmRuntime] implementation (JVM Chicory, browser WebAssembly API,
  * native wasm3) takes the same policy. [maxMemoryPages] caps linear memory at load time (a
  * conforming runtime rejects a module whose declared initial or max exceeds the cap, or that
- * declares memory with no explicit max — see [WasmRuntime]); [executionTimeout] bounds each
+ * declares memory with no explicit max or more than one memory — see [WasmRuntime]);
+ * [executionTimeout] bounds each
  * invocation's wall-clock CPU time (a runaway guest is interrupted and surfaces as
  * [WasmExecutionException]).
  *
