@@ -1,0 +1,487 @@
+1723 C kuilt-session: a joiner never sets its host's Member.liveness — roster contradicts events during a host partition
+1724 C kuilt-session: a joiner's markPartitioned lane opens no reconnect window — Partitioned with no expiresAt, nothing to count down
+1725 C kuilt-websocket: make Seam.capability reactive via a platform connectivity observer
+1728 C build: resolveWasmOpt downloads wasm-opt from github.com with no retry — one DNS blip fails the whole build
+1737 C heddle: §7.3 step 3 promises a diagnostic that HeddlePolicy.pick never emits
+1738 O heddle: tag control-log entries so an undecodable heddle act is a distinct, loud outcome (and decide fail-closed)
+1739 C Test-harness class: 293 hand-rolled 5 s real-time runTest budgets are load-sensitive false-red generators
+1745 C otel-logging: attributeMapper runs before the trace/sampling gate, so a DROP-policy untraced event pays for a discarded mapping
+1746 C Loom.capability() still defaults to a confident roleless Available — the un-audited half of the #1712 floor fix
+1748 C kuilt-websocket: -Pserver.realnet.tests is never forwarded to the test JVM, so WebSocketPeerLinkRealNetworkTest can never run
+1749 C kuilt-mdns / kuilt-tcp: the remaining #1590 port-probe sites (mDNS needs a restructure; TcpLoom sites are one-line)
+1750 C Port-probe TOCTOU: group 2 (TcpLoom / mDNS / raw-socket sites) still live after #1590 was closed
+1751 C heddle: MintRecord is not bound to a root — merging two bootstraps double-counts every mint
+1752 C heddle: revise the newborn-seat register (§5.2) — the effIssued==0 gate and additive read path are refuted
+1756 O heddle lane costing is per-execution, not per-task (§8.2/§14.4)
+1761 C ReferenceTrainer.step and FedAvgKernelCodec.encodeInput return NaN on an empty batch instead of failing fast
+1768 O concurrency-probes runs on every PR but cannot fail a merge — a regressed real-threaded race lands green
+1778 C Precedence tag can permanently capture a transient Available from the composite rollup (one site of four)
+1781 C refineWindow can move a reconnect deadline backwards across a recover→re-partition cycle
+1782 O heddle: Quilter needs a "one full anti-entropy exchange completed" signal (unblocks §6.5.2(a)'s ack narrowing)
+1783 O heddle: residue sweep — an under-acked LEAF spend is a real conservation break, not a benign residue (§6.5.2)
+1784 C CompositeSeam peers wedges permanently: recomputePeers publishes its snapshot outside the lock (third strand of the #1135/#1712 class)
+1788 C CompositeSeam's remaining unguarded pumps: an upstream flow throw still aborts the process on Kotlin/Native, plus two teardown leaks (item 1 fixed in 
+1790 C A joiner emits Partitioned twice for its host on a Timeout-then-tear sequence
+1792 C Nothing enforces <!-- verbatim from --> citations — 11 of 87 had drifted on main
+1796 C CI never compiles :spike — the hardware-validation vehicle can break silently
+1802 C warp: a post-timeout invoke inherits the dying runaway's queue wait, so its execution budget under-measures
+1803 O Two recurring concurrency shapes: 13 Shape A + ~19 Shape B sites, and both remedies already half-exist
+1808 C Key the admit fan-out queue by recipient, so one wedged link cannot delay announcements to healthy peers
+1810 C warp-test: an absorbed budget-overrun retry is invisible, and the reference price is biased toward blaming the host
+1811 C Name the CompositeSeam per-ply pumps so the coroutine census can tell them apart
+1812 C MeshHello/NwHello decode a nonce of any length while their KDoc declares it fixed — dedup identity is peer-controllable
+1814 C PlyInboundGate's per-origin maps are keyed on a peer-chosen id with no cap on the number of origins
+1815 C An Announce lets any transport peer assert any composite PeerId, including the empty id and the local selfId
+1816 C Seam contract does not require collapsing peers before latching Torn, so CompositeSeam's peers fold trusts a convention
+1817 C ReadIndexTracker.recordAck stores an unvalidated echoedRound — one voter can fake a freshness quorum for a whole leadership term, serving a stale read
+1818 C SnapshotSender.onAck stores an unclamped nextOffset — a follower can permanently kill the leader, or forge matchIndex for bytes it never stored
+1819 C ChunkCodec binds an array from the first chunk's chunkCount but validates it per-chunk — 16 bytes from a peer make a NearbySeam permanently deaf
+1820 C TokenGatedSeam MACs a Challenge nonce of any length — an empty nonce turns the documented online grind into offline precomputation and disarms the TTL
+1821 C PeerIdentityRegistry closed the duplicate-id eviction bug in one of three peer-bytes paths — :kuilt-nearby and :kuilt-multipeer jvmMain still keep a b
+1822 C epic: enforce documented fixed-width wire fields structurally — a codec TCK, not a lint rule
+1823 C single()/getValue() inside an assertAll lambda masks every sibling assertion — exactly in the failing state where the diagnosis matters
+1825 C verifyDocCitations: support an elision marker so "class shell with members elided" can be verified
+1826 C Seam.close carries no 'must not report failure as cancellation' obligation, so every best-effort close guard is defending against conforming code
+1827 C The three forbid* verification tasks declare no output, so they re-run on every build
+1829 C nextIndexAfterFailure stores an unvalidated conflictIndex — a malformed rejection reaches the #1175 error() and permanently kills the leader
+1831 C AppendEntries stale-term rejection echoes the old request's round into the current term — a foreign echo with no forgery, confirming a stale read
+1832 C AppendEntries entries are appended with unvalidated indices — a non-contiguous batch breaks log contiguity and wins every election (Leader Completenes
+1833 C term adoption has no sanity bound and currentTerm + 1 overflows — one Long.MAX_VALUE frame permanently prevents any future election, cluster-wide
+1834 C MeshSeam's two unshielded best-effort close loops abort on the first callee-minted cancellation, leaking the rest of the roster
+1835 C CLAUDE.md's exception-discipline rule, followed literally, reintroduces the #1803 bug in a form the guard cannot see
+1836 C spike scenario 4 asserts the joiner sees Torn, which NwSeam's contract forbids — it can only ever time out
+1837 O The connectivity spike should drain its logs off-device through kuilt's own LogTap instead of Share-the-report
+1840 C A disconnected host renders "Player left the game", blaming the peer — and saves a replay that does too
+1842 O NearbySeam.receiveLoop has no corrupt-inbound backstop — any throw under assembleFrame kills receiveJob without latching Torn
+1844 C docs/extending-fabrics.md teaches the TOCTOU port-probe that forbidPortProbeRebind rejects — a doc that invites the file the guard refuses
+1847 C The #1835 carve-out covers only the SHIELDED case — an unshielded best-effort loop still gets advice that produces the #1834 bug
+1849 C kuilt-core: InMemorySeam does not collapse peers on tear — a closed seam reports { remote }, without selfId (fails the #1816 TCK obligation)
+1850 C kuilt-nearby: NearbySeam.close removes selfId from the SHARED roster instead of collapsing its own peers (fails the #1816 TCK obligation)
+1851 C kuilt-multipeer: MCSessionLink/BridgePeerLink tearDown never collapses peers on local close (fails the #1816 TCK obligation)
+1853 C kuilt-webrtc: WebRTCPeerLink.close does not collapse peers (the remote-tear path does) — fails the #1816 TCK obligation
+1854 C kuilt-core: TieredSeam and RoomHubSeam (production commonMain) collapse peers to emptySet() on tear, dropping selfId — no conformance coverage
+1855 C kuilt-raft: #1833's term sanity bound is not applied on init-restore, so a term persisted by a pre-fix binary comes back poisoned
+1856 C kuilt-raft: CheckQuorumTest's docstring claims it exercises 'success=false counts as contact' but the seeded peer wins the election and leads
+1858 C Cookbook's resume sample branches on a ResumeResult a joiner can never receive — and sends the reachable case to the opposite action
+1860 C WarpLogRecordExporter: whole-buffer rewrite per record, tombstones never compacted, and a failing store is unobservable — confirmed hard stop on devic
+1861 C kuilt-core: CompositeSeam.close's per-ply close loop is unguarded — one ply's throw skips every remaining ply, and a minted cancellation makes the com
+1863 C spike/ is compiled but still unlinted — wire detekt into :spike
+1865 O Tap admission MACs a counterparty-chosen nonce — the challenge carries no prover-contributed freshness, so the harvest path is precomputable and the T
+1868 C kuilt-raft: InstallSnapshot's lastIncludedTerm/lastIncludedIndex are unvalidated — the same §5.4.1 Leader Completeness violation #1832 closes, reached
+1870 O kuilt-core: concurrency stress can stall at the 'state.first { it is Torn }' stage (~1 in 1,800) — distinct from #1784's peers wedge, which #1807 fixe
+1871 C Conformance coverage is bounded by which Looms have a bound harness, not by which Seams exist — two production seams slipped through a 6/6-correct mat
+1874 O PlyInboundGate never prunes origin state, so a flooder can occupy the origin cap for the life of the seam
+1876 C kuilt-raft: in-range InstallSnapshot metadata is unauthenticated — a plausibility ceiling cannot separate a forged snapshot from a far-ahead honest on
+1878 C kuilt-nearby: NearbyLoom's session-wide roster is never pruned, so a reused loom seeds the next seam with a phantom roster and false-latches Woven
+1879 C kuilt-nearby: NearbySeam._state is an unguarded MutableStateFlow — rosterWatcher's check-then-act can stamp Woven over a terminal Torn (reasoning-only
+1880 C kuilt-raft: InstallSnapshot.config is adopted unvalidated — a well-formed frame can re-parent a voter into a single-voter cluster
+1881 C kuilt-raft: SnapshotReceiver reassembles into an uncapped ArrayList<Byte> — attacker-driven done=false chunks OOM the follower
+1884 O Release flow: the README version-bump PR is opened by GITHUB_TOKEN, so its CI is withheld as action_required and the PR wedges
+1886 C kuilt-raft: the term ceiling is inclusive but leaves no headroom for `+ 1` — one frame at exactly MAX_PLAUSIBLE_TERM reproduces #1833 cluster-wide
+1887 C kuilt-raft: restored log entries and snapshot metadata are unvalidated on init-restore — the §5.4.1 domination of #1832/#1868, reached from storage in
+1889 C kuilt-raft: TimeoutNow is outside the §5.2 leader-authority gate — any peer can force elections at will
+1890 O build: AGP 9 + Gradle 9.6 — one change, blocked on IntelliJ AGP 9 support
+1891 C apple-nightly failing on main
+1892 O heddle: the §13.2 write gate fails SILENTLY — `reserve`→null and `schedule`→0 already mean something else
+1893 C build: `compileTestDevelopmentExecutableKotlinWasmJs` ICEs non-deterministically in a parallel `--rerun-tasks` build — makes the mandated pre-merge ga
+1894 C heddle: the randomized conservation property test never exercises RELOCATION — the one family a real conservation break was found in
+1895 C heddle: the EIGHTH interleaving — a re-homed charge whose landing edge is fenced before Reconcile permanently wedges the child's recovery
+1897 C kuilt-raft: replace the absolute term ceiling with a relative jump bound — an absolute ceiling cannot avoid a boundary that wedges the cluster
+1898 C kuilt-raft: the §5.2 leader-authority gate keys on the recipient's possibly-stale voter set, so a long-absent node can drop the current leader's frame
+1900 C kuilt-raft: onTimeoutNow still accepts a same-term frame from any voter when _leader is null
+1903 C androidMain MDNSServiceDiscoverer never implements departures(), so NSD consumers accumulate ghost peers
+1904 O discoveryRoster: merge() gives no per-source failure isolation, so one throwing source freezes the whole roster
+1906 C kuilt-raft: _leader is set from a frame with no per-term uniqueness check — a voter can depose a healthy leader and seize leadership in two frames
+1907 O kuilt-raft: snapshot metadata has no authorization mechanism — the accepted exposures behind #1876/#1880 need a tracker
+1910 C kuilt-raft: InstallSnapshot's lastIncludedTerm is not checked against the recipient's own committed term — a locally-available floor nobody enforces
+1911 C kuilt-raft: ForwardResponse has no provenance check — a forged receipt makes propose() report a commit that never happened, and the consumer marks the
+1912 C kuilt-raft: delete the redundant sender-identity wire fields (leaderId/candidateId) and read `from` — five forgeable inputs, one structural fix
+1913 C build: make `--rerun-tasks` actually invalidate Kotlin's incremental-compilation caches, so the mandated pre-merge gate means what it says
+1914 O build: re-enable Kotlin/Wasm incremental compilation once a stable Kotlin carries the upstream ICE fix
+1915 O test: `RelayConvergenceIntegrationTest` dies with ClosedReadChannelException under load — real-socket relay test, not a flake
+1916 C kuilt-heddle: reconcile does not require the live and retired edges to share a parent — honest acks double the mint (no crash needed)
+1917 C jvmMain MDNSServiceDiscoverer.departures() never emits: serviceRemoved's ServiceInfo carries no TXT records
+1919 C kuilt-heddle: confirm or refute — a re-homed child may be STARVED because committedService counts issuedRelocIn (unproven code reading)
+1922 C kuilt-conformance: RaftStorageConformanceSuite does not pin the field ranges and log contiguity the engine now refuses to start on
+1926 C kuilt-raft: a snapshot rejected by snapshotTotalCeiling stalls the follower with only a debug log — emit a RaftMetric
+1929 C kuilt-raft: CheckQuorumTest.healAfterStepDown_nodeRejoinsAsFollower_noTermInflation asserts neither of the two properties its docstring claims
+1931 C Surface elapsed-vs-ceiling on timeout failures — the data is already in the results XML, just not where the reader looks
+1934 C 21 @Suppress("ForbiddenMethodCall") suppress nothing — the rule is configured nowhere, and detekt-test.yml's header documents it as if it were
+1935 C TieredSeam.sendTo silently drops a frame addressed to a peer in neither tier — Seam.sendTo requires PeerNotConnected
+1936 C Decorator Looms (MuxClientLoom, FaultyLoom, FlakyLifecycleLoom) discard their delegate's capability() and substitute the confident default
+1946 O kuilt-game: TurnSequencer.events drops Committed.Internal, so a game consumer cannot build an applied index comparable to readIndex()
+1948 C kuilt-raft: RaftNode.membership KDoc claims 'latest committed config entry' but the flow is adopt-on-append
+1949 C kuilt-game: GameReplacementTest's tail awaitVoterCount samples a transient, but its comment claims the spectator never takes a seat
+1952 C kuilt-raft: the whole commonTest suite shares ONE stateful seeded Random, so a test's verdict depends on what ran before it
+1955 C crdt: investigate Merkle state digests for the non-causal CRDTs (LWWMap/GSet/Rga) — anti-entropy still ships full state
+1956 O spike: REAPI execution backend over :kuilt-warp, with :kuilt-heddle multi-tenant admission
+1957 C crdt-test: cross-target convergence digest — prove a wasm/Native/JVM replica converges byte-identically
+1960 C detekt never scans commonTest — no metadata task exists for it, so detekt-test.yml's bans (and every rule) are unenforced across most of the suite
+1964 C crdt: collapse the three Dot serializers onto CanonicalMap/SetSerializer
+1965 C kuilt-raft: two RaftEngine comments still state the term-ceiling justification #1897 retired
+1966 C kuilt-liveness: host emits spurious Recovered for an evicted peer, flapping presence and re-arming the reconnect window
+1968 C kuilt-session: a joiner's resume-refusal loop burns its whole reconnect budget silently
+1972 C kuilt-raft: RaftConfig.maxTermJump is unvalidated — Long.MAX_VALUE silently reinstates the one-frame wedge #1897 removed
+1973 C kuilt-raft: the §5.2 leader-authority gate hand-rolls the leader→peer type list that isLeaderToPeer now derives exhaustively
+1975 O Speculative: a fused suspicion score for :kuilt-liveness (SWIM indirect probing / phi-accrual as inputs)
+1978 C crdt: Rga and Fugue Compact.positions encode non-canonically (same class as #1957)
+1979 C crdt: Histogram, DDSketch and GCounterDouble are non-canonical and have no convergence binding
+1980 C kuilt-raft: mutation-survey the dispatch-boundary gates — a downstream guard silently zeroed TimeoutNow's authority-gate coverage
+1982 C crdt-test: pin canonicalDigest's absolute value with a golden vector
+1983 C crdt-test: strengthen everyConstructionIsMultiEntry and correct its rationale
+1984 C kuilt-raft: RaftConfig validates only maxTermJump — the two timing relations its own KDoc states as constraints are unchecked
+1986 C crdt: gate anti-entropy on a version-vector diff for the dot-based CRDTs (ORSet/ORMap/MVRegister)
+1989 C kuilt-raft: a refused frame carries no attribution — every dispatch-boundary guard is pinnable only by absence, so a downstream guard silently un-pins
+1991 C kuilt-raft: a sub-millisecond heartbeatInterval truncates to delay(0) and spins the leader's heartbeat loop — presenting as a virtual-time hang, not a
+1993 C otel-logging: timestampEpochNanos is stamped on the drain coroutine, so it is a flush time, not an event time
+1994 C RoomChannelSeam publishes the roster as Seam.peers but routes sendTo through the transport — a Quilter cannot converge between spokes of a star fabric
+1997 C kuilt: a dangling KDoc link in a test source is caught by nothing — Dokka skips test sources and verifyDocCitations only reads markdown
+2000 C kuilt-raft: the init restore seeds leaderForTerm raw, so a pin above currentTerm arms itself once the node campaigns — the restore's own argument does
+2002 C Three tests assert convergence "via anti-entropy" but exercise none of it (deltaTargets gates GC, not sending)
+2005 C :kuilt-scale is compiled but entirely unlinted — detekt is registered only by kuilt.kmp-library
+2006 C quilter: a new peer's anti-entropy digest is silently dropped by an old peer — no signal, no fallback
+2007 C Room frame discriminators are five loose constants in four packages, two of them not even the same kind — reserve the byte space in one registry befor
+2010 C crdt: VersionVector.entries encodes non-canonically — merge-order dependent, and it is on the wire
+2015 C quilter/scale: three deferred minors from the #1955 root-hash reviews
+2016 C build: :demo-shared and :demo-web are plain KMP modules with no detekt wiring
+2019 C crdt-test: no convergence generator reaches compact(), so every compaction-only field is unpinned
+2020 C :kuilt-cluster: voterMeshSimTest's 5 s default is a fourth wrapper-hidden runTest ceiling — 10 sites, invisible to forbidTightRunTestTimeout
+2021 C kuilt-raft: the sole §5.4.2/Figure 8 term guard is un-pinned, and the comment above it credits a function that cannot enforce it
+2022 C kuilt-raft: isWellFormedBatch's three bounds are each individually deletable — the suite pins their disjunction, not one conjunct
+2023 C kuilt-raft: onChangeMembership's uncommitted-config guard is unmeasured — its named test injects the refusal from a double, so the guard never runs
+2024 C kuilt-raft: the forward-only commit clamp is deletable — commitIndex can regress silently on a reordered AppendEntries
+2025 C build: enforce forbidUnlintedModule's allowlist citation format, and document kuilt.detekt-jvm
+2032 C kuilt-raft: local command refusals have no attribution — onChangeMembership's two in-progress guards are indistinguishable, so the subsumed one is unm
+2033 C kuilt-raft: frame refusals outside the dispatch boundary still carry no RefusalGate, and everyRefusalGateIsReachable is blind to it
+2035 C crdt: canonical sort encodes keys with an empty SerializersModule, so a @Contextual key throws
+2037 O crdt: dot-based payloads carry a flat 47-78% per-entry causal tax that scale never dilutes
+2038 C crdt-test: three unpinned canonical-encoding properties — DotContext cloud, no cross-target vector for Rga/Fugue/JsonCrdt
+2039 C build: detekt on wasm/native source sets is parse-only — every rule kuilt enables needs type resolution
+2044 C crdt: ORSet/ORMap have no delta mutator — every write broadcasts the entire state (1,585x a minimal delta, metered)
+2047 C The relay envelope is unbudgeted — a payload that fits unrelayed can overflow the fabric once wrapped
+2048 C Fan-out queues are global FIFOs — one wedged recipient starves healthy ones; key them per PeerId
+2049 C kuilt-raft: onConfigCommitted's Joint-supersession guard is held up by blast radius, not by any assertion — and its claiming test exercises a differen
+2050 C kuilt-raft: the InstallSnapshotResponse round-echo loop is unmeasured at both ends — the BLOCKER 1 round-slip regression survives there, suite green
+2051 C kuilt-raft: an undecodable inbound frame kills the node — the decode in transport.incoming.collect catches only ClosedSendChannelException
+2052 C kuilt-raft: DenyReason is reconstructed by a priority-ordered when, so a second failing conjunct is masked — attribution shadows itself
+2053 C test(raft): neither arm of isWellFormedSnapshotChunk's minOf(m.term, MAX_PLAUSIBLE_TERM) is pinned — mutual shadowing reopens #1868 under a plausible 
+2054 C test(raft): both sign clauses of isWellFormedSnapshotChunk are un-pinned — a negative lastIncludedIndex/lastIncludedTerm is dropped by nothing the sui
+2058 C Seam decorators drop the payload budget they could pass on (Mux / Tiered / Composite / Gossip)
+2067 C kuilt-raft: the §5.3 fast-backup livelock guard is unmeasurable by mutation — it hangs rather than fails, and wants a progress-per-round method
+2068 O Neither fan-out send budget is pinned by a test after per-recipient lanes
+2069 C Seam.maxPayloadBytes has no TCK coverage — a fabric can publish any number and pass
+2072 C forbidSourcelessKmpTarget reads :kuilt-warp-test's KSP output with no declared ordering — order-dependent local build failure
+2073 C Nothing bounds a joiner-asserted PeerId at admission — one long id breaks the payload budget for every other member
+2077 C kuilt-warp: WarpNode.enqueue(Coordinated) mutates outside the lock — two concurrent enqueues mint the same dot and BOTH are annihilated
+2078 O crdt: decide per type whether MVRegister and EphemeralMap want delta mutators — O(replicas), not O(entries)
+2083 C kuilt-game: GamePresence.declare read-modify-writes the presence board outside any lock — a concurrent declaration is silently dropped
+2086 C crdt: ORMap.piece is not associative on the value axis (and the law test hides it)
+2087 C crdt: LWWMap.set/remove assign rather than join, so a losing-tag write moves the state DOWN the lattice
+2090 C kuilt-quilter: Quilter.mutate cannot decline, so every conditional read-modify-write hand-rolls an identity patch
+2101 C crdt-test: consolidate the four overlapping lattice-law surfaces — each has a different blind spot, and all four passed on a broken ORMap
+2102 O crdt: ORMap.putDelta is O(the sender's own contribution to the key), so a single-writer append key costs O(n²) cumulative
+2104 C quilter over Room: a joiner's writes reach the host only via the ~30 s anti-entropy backstop on a two-peer room, since #2026
+2106 C RoutedRaftTransport.incoming has the #2104 merge-subscription hazard (latent — Raft's retries mask it)
+2107 C test: migrate off jqwik — retire the JVM-only property surface (78 properties, 2 modules)
+2111 C crdt: JsonCrdt.set/remove still return the whole document, so every write ships O(document)
+2114 C kuilt-raft: the pure model cannot reach §5.4.2 — the Figure-8 mutation is structurally unkillable without bounded AppendEntries batches
+2116 C test: ~50 of ~80 @sample functions compile but never execute, so their assertions are dead code
+2117 O AdmitMessage.Hello.protocolVersion defaults to the value that gets you rejected — and the safe-looking fix would silently defeat the gate
+2118 O test(examples): ClusterClientFailoverE2ETest's 20s real-socket window has ~zero headroom on a cold runner — failed at 106%
+2119 C test: kotlin.assert is -ea-gated, so it is a launcher property not a code property — 3 sites left, and nothing forbids it
+2120 C NSFileManagerDurableStore.write deletes the destination before renaming, so a failed rename loses committed data
+2124 C CapturingAppender's unbounded channel grows without limit when the drain is slower than the producer
+2125 C RgaCache omits the `sequence` field, so every mutated Rga re-derives it — O(n log n) per op for append-then-read consumers
+2127 C otel: bound the total size of the persisted log, not just the per-export write
+2129 O kuilt-raft: decide whether a sustained run of undecodable frames deserves a RaftMetric, not just a trace event
+2134 C kuilt-nw silently DROPS received bytes under burst — a large frame never completes and the stream desynchronizes
+2141 O NSFileManagerDurableStore does not flush the temp file before renaming, so power loss can lose a committed record
+2145 C Vacuity: most residual no-op steps are RETIRE ops drawn on a replica still at the lattice bottom
+2150 C kuilt-raft: AppendEntries batches the whole un-replicated tail unbounded — a lagging follower wedges permanently on a budgeted transport
+2151 O crdt-test: a wider alphabet silently drops the exhaustive-small bound below the shape it exists to find
+2152 C crdt-test: pin the vacuity floors' discriminating power with a harness self-test
+2155 O kuilt-raft: a FORWARDED propose bypasses the propose-time payload bound — and ForwardOutcome.Failed surfaces as a retryable exception
+2156 C kuilt-raft: HEADER_BUDGET's 256 B reserve is unenforced against an unbounded consumer-supplied ClientId
+2157 C crdt-test: samplesReAssertAfterRetirement passes with the shape it guards entirely absent
+2158 C crdt-test: the retirement floor mostly measures the critical shape, so retirement dead on 2 of 3 replicas passes it
+2159 C crdt-test: surface 3 and the lattice binding publish opposite definitions of retirement for MVRegister
+2160 O kuilt-raft: @ByteString would halve the wire cost of every Raft payload
+2162 C otel: WarpLogRecordExporter silently admits past the cap when visibleCount goes stale
+2163 O otel: BufferPolicy documents two meanings for DROP_NEWEST — consider splitting the enum
+2167 C crdt-test: six retiring types read as grow-only on surface 3, because retirementIsMeaningful defaults false
+2170 O Rga: a compaction floor discards the lamport high-water it swallows
+2172 O Android Lint's embedded Kotlin (2.2.0) can't read our 2.4.10 metadata — 593 errors per touched module, masked on main by the build cache
+2173 C Rga: withCompactCaches and computeMaxSeqByReplica disagree on a Compact above the local high-water
+2175 C CanonicalGoldenVectorTest: the 'regenerate every vector together' rule is destructive for RGA_PRE_FLOOR
+2176 C Quilted.causalDots KDoc has Remove and Compact backwards
+2177 O ORMap and Causal don't aggregate causalDots of nested Quilted values — a nested Rga gets an empty frontier and never GCs
+2179 C Test the multi-peer floor-absorption path before #2127's exporter PR lands
+2181 O WarpLogRecordExporter.adoptNumberingOnly has no test coverage — and it is the only producer of unknown segment content
+2182 C WarpMetricExporter encodes under lock and writes outside it — concurrent metric updates can silently drop one another
+2183 O A high-export-count :kuilt-otel test fails wasmJsBrowserTest with a misleading 'did not discover any tests'
+2184 C crdt-test: a RetirementReAssertion.shows predicate written against the other samples satisfies the guard while proving nothing
+2185 C Ten :kuilt-otel commonTest classes (~66 tests) silently produce no wasm results — including the delete-path refusal guards
+2186 O adoptRemoteSegment moves the layout at build time — a refused segment write leaves a permanently pinned phantom segment
+2191 O Reduce build-jvm wall time — it needed a 45-minute ceiling after three timeout-cancellations
+2193 O Rga/Fugue: the Θ(N)-per-append residual — measured, and it is computeSequence recomputation, not the op-set copy
+2194 C otel log capture pays two file writes per log record — batch the write turn
+2206 O Dokka does not expand `@sample` inside a module.md — the tag renders literally
+2208 C otel: no supported way to reset a WarpTelemetry's persisted log — segment keys are unenumerable and a live buffer rewrites whatever you delete
+2210 C epic: :kuilt-bolt — a write-only archive so a server can outlive a phone's forgetting
+2211 C kuilt-bolt 1/7: OpLogCrdt — decide and land the public op-log surface
+2212 C kuilt-bolt 2/7: the module, the Bolt SPI, the frame format, and the conformance suite
+2213 C kuilt-bolt 3/7: mmap backend — JVM / Android
+2214 C kuilt-bolt 4/7: mmap backend — iOS / macOS
+2215 C kuilt-bolt 5/7: wasmJs — honest unavailability
+2216 C kuilt-bolt 6/7: the decorator — and the gossip path, which is the headline scenario
+2217 C kuilt-bolt 7/7: docs, sample, cookbook and skill routing
+2218 C otel: the exporter logs a WARN per evicted record — at the production cap that is one per exported record
+2219 C otel: evictLeading materialises the whole buffer to read its head — ~0.18 ms/record at the production cap
+2223 C crdt: Rga.compactedIds is public, Fugue.compactedIds is private — the same concept, two visibilities
+2225 C crdt: Rga sequence threading misses an already-forced lazy — the append-then-read loop never threads
+2226 C Flaky under load: WebSocketVoterMeshFormationTimeoutTest reports a type mismatch when the dial fails before the timeout fires
+2229 C Seam has no way to await delivery — send() returns on acceptance, so a frame sent during shutdown is silently lost
+2232 C otel: WarpMetricExporter has no write mutex — two concurrent increments can lose one durably
+2233 O kuilt-bolt: a chunked-IndexedDB backend for wasmJs
+2236 C kuilt-bolt: MappedBolt.replay reads the whole archive even for a FromOffset resume
+2237 C Load-sensitive: WarpLogRecordExporterRetirementTest's crash-sweep test has only a 2× margin on macosArm64
+2240 C kuilt-bolt: BoltConformanceSuite cannot catch a cross-segment hole — both mmap backends shipped the same defect independently
+2242 O kuilt-bolt: decide whether a mapped bolt's append should block its caller
+2243 C kuilt-bolt: a failed msync is invisible — both mmap backends degrade to async silently
+2247 C Audit every conformance suite for properties the in-memory reference satisfies for free
+2249 C otel: WarpTelemetry.clear()'s best-effort fan-out across signals is untested
+2250 C crdt: DotContextTest's witnessing-equivalence generator can never produce duplicate dots
+2251 C otel: WarpSpanExporter.clear()'s failure contract is undocumented and unpinned
+2254 C kuilt-bolt: suppress archived inserts from an O(authors) dot frontier, not a bounded identity window
+2256 C verifyDocCitations does not scan any module.md — every citation in one is silently unenforced
+2257 C kuilt-bolt is absent from CLAUDE.md's and README.md's module tables
+2259 C build: a dangling @sample KDoc link is caught by no build — 114 tags unverified
+2267 C verifyDocCitations still does not scan root-level .md — parked, with a reopen trigger
+2268 C kuilt-bolt: promote 'a resume from beyond a hole still reports it' into BoltConformanceSuite
+2269 O kuilt-bolt: BoltDecorator's dot frontier is not persisted across a restart — the trade, and when to revisit
+2270 C build/core: promote freshPeerId() into :kuilt-core and add a LoomDefaults home (#1430 slice 1)
+2271 O kuilt-nw/module.md points at the internal NwNativeLib.jvmAvailability; there is no public JVM availability probe
+2272 C A mutation receipt that adds a module reds on the BOM, not on the guard under test
+2273 O Apple targets: PeerId/PlyId/Principal are value classes, so they erase to Any on the Swift boundary
+2274 C docs: a 'consuming kuilt from Swift' section in usage.md
+2279 O test: newFixedThreadPoolContext/newSingleThreadContext evade the real-dispatcher ban, and 5 :kuilt-otel harnesses use them behind a @file:Suppress tha
+2281 C docs: bare line-range citations (path:NN-MM) are enforced by nothing, and one was already wrong on main
+2283 C assertAll: 210 of 1454 blocks can still be aborted by a throw-on-empty call — decide the structural fix before converting more by hand
+2284 C RoomConformanceSuite: a fabric that never admits burns 60s per case and fails with UncompletedCoroutinesError instead of naming the roster it saw
+2286 C Three more unshielded best-effort teardowns have the #1834 shape — mDNS accept loop, voter redial, joiner resume
+2288 O kuilt-session: the lobby's became-host/heartbeat signals are pinned to the host as of awaitRoom entry
+2289 C Three @sample functions fail when first executed — one false assertion, one wedge, one missing slf4j binding
+2292 C A catch(CancellationException){throw} wrapping a withTimeout makes the timeout branch dead code — ServerCluster.admitLearner is one, and the shape is 
+2301 C kuilt-conformance: RaftStorageConformanceSuite has no reopen hook, so the durability the interface exists for is untestable
+2302 C kuilt-conformance: RaftStorageConformanceSuite never round-trips LogEntry's isNoOp/config/dedupKey, SnapshotMeta.config, or a snapshot overwrite
+2303 C conformance: no SeamConformanceSuite property asserts a peer's departure is observable on the survivor — reportsPeerLoss is a flag nothing reads
+2304 C conformance: ordersDelivery is a SeamCapabilities flag no property reads AND an ungated core obligation contradicts — plus reportsPeerLoss, securesTra
+2305 C kuilt-core: ScopedCloseable._closed is an unguarded var, so onClose() can run twice under a concurrent close()
+2306 C conformance: RoomConformanceSuite has four unaccountable silent early-returns and exactly one subclass — the reference
+2307 C conformance: RoomFanoutIsolationConformanceSuite tests only the egress half — a non-member's frame ENTERING a room is unasserted
+2308 C kuilt-conformance: CloseableLifecycleConformanceSuite passes vacuously on an empty backgroundJobsOf, and its KDoc claims an ownJob assertion that does
+2309 C kuilt-conformance: simultaneousDialsDedupToOneLink reads Seam.peers, which a surviving duplicate link cannot change — and no exactly-once delivery pro
+2310 C kuilt-conformance: meshDelivery's "enforced by the capability matrix" is enforced by nothing — no fabric is ever put in a MatrixEntry
+2311 C kuilt-deal: CommutativeSchemeConformanceSuite draws every key from ONE scheme instance — cross-peer commutativity is untested
+2312 C kuilt-conformance: QuiltedConformanceSuite's documented "at least three distinct" samples() floor is unenforced, unlike its sibling LatticeLawSuite
+2313 C kuilt-deal: the scheme TCK's security-bearing properties all pin the benign branch — verify* is accept-only and uncalled, and nothing asserts cipherte
+2314 C kuilt-warp: every OOB conformance vector sets bit 31, so a sign-only guard passes — no in-range-past-end and no successful-grow fixture
+2315 C kuilt-warp: loadRejectsModuleWithOversizeInitialMemory's fixture also violates the no-max rule, so it cannot attribute the rejection
+2316 C kuilt-conformance: PrincipalAttestationConformanceSuite pins carriage, not provenance — a self-asserted principal is unstateable
+2317 C kuilt-conformance: LatticeLawSuite encodes but never decodes — a lossy-but-deterministic serializer satisfies every lattice law
+2321 O The release job's README-coords PR can stall indefinitely — its workflow run needs manual approval
+2323 C handshaking() drops DeliveryPolicy, so no stream fabric can honour a policy knob
+2326 O crdt: a consumer cannot write the sound segment-retirability predicate against Fugue
+2328 C Unguarded check-then-set once guards outside ScopedCloseable: InMemorySeam.closed, DelayedWovenSeam.closed, HeartbeatPartitionDetector
+2330 C kuilt-core: a throwing onClose() leaks the coroutine tree — the latch is already set, so ownJob.cancel() never runs and no retry is possible
+2331 C kuilt-bolt: three residual hole-replay gaps the TCK still cannot express
+2332 O gradle/libs.versions.toml: the atomicfu comment says 'locks API only' — 23 main sources use the atomic-field API
+2334 C build: androidMain production source has no detekt task, so Android-only public API ships unlinted
+2335 O kuilt-bolt: the reserved event-time key slot has no tracking issue
+2336 C docs: the guide's "all modules" page lists 17 of 45 and claims to be complete — and nothing guards it
+2337 C kuilt-bolt: PosixMappedBolt prunes a resume prefix with nothing proving it was skipped rather than read
+2344 C docs: architecture.md's Near/Far overview still frames Apple as Multipeer
+2347 C kuilt-deal: an empty validPlaintexts() silently switches off two CommutativeScheme TCK properties
+2349 O build: kuilt-deal and kuilt-deal-test cite a karma.config.d/timeouts.js that no longer exists
+2354 C docs(guide): kuilt-nw has no guide coverage, and the Apple fabric section routed readers to the superseded kuilt-multipeer
+2355 O docs: uncited code snippets are verified by nothing — a Pattern/Tag parameter rename left four that would not compile
+2357 C kuilt-core: an unattested peer claiming an attested peer's PeerId displaces it — roster entry erased, unicast hijacked
+2359 C docs: agent-cookbook has no entry for dealing, TCP, stream framing or the cluster facade — four categories CLAUDE.md names as required
+2361 O docs: migrate the guide off Writerside — spike the generator choice, then plan the port
+2363 C kuilt-deal: SraScheme's domain check admits p-1, a fixed point of every key it generates
+2364 C kuilt-session: the cookbook tells consumers to branch Room.resume on two values it can never return, and WindowClosed silently means "refused for any 
+2366 O heddle: a generation move abandons the strand's transfer rows, silently reassigning a recipient's entitlement to the donor
+2367 C heddle: extend the randomized relocation property to a ROLL-UP-carrying strand — only the leaf half of a generation move is probed
+2372 C core: a closed mux ChannelView reports the base's Woven — close() never reaches its own state, and no conformance harness closes one
+2374 C build: forbidSourcelessKmpTarget fails a module-scoped :kuilt-warp-test build on an undeclared dependency on kspCommonMainKotlinMetadata
+2377 O heddle: the control plane cannot observe the transfer tangle it must refuse — FenceState.relocations carries no transfer rows
+2381 O kuilt-conformance: RoomConformanceSuite pins that a resume refusal is terminal, but not WHICH RejectCode — the verdict→code mapping is enforced by one
+2386 C kuilt-nw: both loopback conformance suites inherit production's 30 s weave deadline as a test gate — a contended host is indistinguishable from a brok
+2387 O kuilt-core: an unattested link can still take an attested peer's id on a Mesh (dispossession) — the hub's #2357 fix cannot transfer
+2388 O kuilt-core: a refused dispossession attempt on RoomHubSeam is silent — no signal a deployment can alarm on
+2389 C heddle: no relocation test moves a rung carrying BOTH leaf and roll-up charge — the 'former leaf gains a child' shape
+2390 C kuilt-nw: deleting NwSeam's double-dial dedup entirely reds nothing — a surviving duplicate link is unobservable through the Seam contract
+2393 C kuilt-core: mux channel views drop the per-ply breakdown — plies collapses a multi-ply CompositeSeam to a single synthetic Sole entry
+2394 O mDNS cross-platform discovery matrix (Apple × Android × JVM) — untracked since the transport-mdns extraction
+2397 O kuilt-nearby: nearbyLoom() registers a process-lifetime BroadcastReceiver with no route to release it
+2399 C build: forbidUnlintedAndroidMain does not assert the covering detekt task is type-resolved — #2039's shape through the new guard's back door
+2400 C iosMain MDNSServiceDiscoverer never implements departures(), so Bonjour consumers accumulate ghost peers
+2403 O otel-logging: nothing enforces that a capture edge routes through resolveAtEdge
+2405 C mdns jvmMain: discoveries() blocks up to 6s per unresolved service on JmDNS's single dispatch thread
+2407 O mdns: NsdManagerBrowser and NetServiceBonjourBrowser are executed by no test
+2408 O mdns: NSD resolutions are serialised per browser instance, not per NsdManager
+2409 C mdns/iOS: per-NSNetService delegates are never cleared, so a resolve in flight at teardown can call through a freed pointer
+2410 O multipeer: departures() on appleMain and jvmMain only emits while discoveries() is collected
+2411 C verifyDocCitations scans gitignored .superpowers/, so a local full build fails on SDD scratch
+2413 O kuilt-websocket: Apple connectivity observer (NWPathMonitor) for the live Seam.capability lane
+2416 O kuilt-nw: under Rendezvous.New the dial target is a shared Bonjour NAME while identity is the TXT PeerId — the two can resolve to different devices
+2419 O kuilt-nw: the JVM bridge threads neither selfId nor identityResolved across the ABI — and its tracking issue (#1539) is closed
+2420 C kuilt-nw: a stuck formation is SILENT — the diagnostics that would have made #2416 a one-line read
+2424 O conformance: no SeamConformanceSuite property asks whether two peers pointed at one session can collide on a discovery name
+2425 C kuilt-nw: double-dial dedup closes the link the seam just settled on — 8 s wedge, then an 11 ms formation on retry
+2427 C kuilt-webrtc: WebRTCPeerLink has two unguarded tear paths, so a locally-closed seam can report CloseReason.RemoteRequested
+2428 C WebSocketPeerLinkFactoryTest: 'sendTo self throws IllegalArgumentException' asserts a contract Seam no longer has — and the whole suite should probabl
+2432 C kuilt-test: FakeSeam's constructor can build a Torn seam with an un-collapsed roster — a state no conforming seam can reach
+2433 C Test flake: WebSocketPingHalfOpenTest 404s its WS handshake under load — route may not be installed when start(wait=false) returns
+2436 C ManagedSeam.swap overwrites peers with the BACKING seam's roster, dropping its own selfId
+2439 O conformance: bind ManagedSeam (and the unwoven decorators) to the single-seam half of SeamConformanceSuite
+2441 C conformance: bind the four bindable-but-unbound seams, shrinking #2437's opt-out list
+2443 C kuilt-test: a Torn ControllableSeam advertises every remaining remote and drops its own selfId
+2444 C multipeer: the Apple MCSessionLink never got #1390's torn-send guard — a torn link warn-drops a broadcast and reports PeerNotConnected for an addresse
+2445 C multipeer: the Apple MCSessionLink has no self-connection guard — a self-dial registers, and its own broadcast loops back to it
+2448 C conformance: sendOnTornSeamThrows is satisfied by PeerNotConnected, so a seam that blames the peer for its own death passes
+2449 C kuilt-nw: Bonjour advertiser dies with DNS Error: DefunctConnection after suspend; listener is never re-created, so the session never re-forms
+2450 O OSLogAppender: INFO maps to OS_LOG_TYPE_INFO, which never persists — state-transition logs are unreadable post-hoc on Apple devices
+2454 O A re-forming seam blames the addressee too: after an eviction NwSeam is Weaving, so sendTo answers PeerNotConnected for a link that died locally
+2455 C kuilt-nw: RealNwApi.send cannot fail, so a frame written to a dead connection vanishes silently and NwSeam's send-failure eviction is dead code
+2456 O Six seams' sendTo consults a roster that does not collapse on a local tear, so their Torn guard is the only thing refusing the send
+2457 C kuilt-nw: decide #2425's fix shape — D-degenerate (don't cancel the loser, drain it) recommended; half-close probed and unavailable on TLS-PSK
+2460 O kuilt-nw: the inbound-silence watchdog cannot fire on the #2425 wedge — that link carried a heartbeat every ~1 s
+2461 C wasmJsBrowserTest leaks a headless Chrome tree that outlives the build and its worktree
+2462 C kuilt-nw: NwSeam.silenceJob reads watchdogWake before it is initialized — SIGSEGV in NwLoopbackConformanceTest on a real dispatcher
+2463 C kuilt-nw: NwSeam's watchdog launch races its own field initialisation — NPE on a real dispatcher
+2465 C A coroutine launched from a property initialiser should be a build failure (follow-up to #2462)
+2466 O kuilt-nw conformance suites detect races ONLY under load — 0/6 reds at load ~5 vs 6/6 at ~17-28 for the same defect, so a green run is not evidence
+2469 O crdt: a nested JsonCrdt write still ships the whole rebuilt subtree — needs a path-addressed mutator
+2471 C build: UnsafeCallOnNullableType does not fire on a real `!!` in kuilt-gossip's commonMain — a false negative inside the type-resolved tier
+2474 C MeshSeam: port kuilt-nw's D+ displacement drain — ordering hold + in-band GOODBYE
+2478 C kuilt-nw: nothing tests subscribe-before-trigger on NwSeam's four lifecycle collectors — removing UNDISPATCHED is fully green
+2479 C kuilt-nw: FakeNwRadio delivers every payload whole, so seam-level chunked-receive reassembly is untested
+2480 C Build guard: forbid a suspend call inside withLock — the violation compiles today and no test dispatcher can reach it
+2481 C kuilt-nw has no *ConcurrencyTest: NwSeam's lock coverage is unpinned, while the MeshSeam rule it ports has a probe
+2482 C The #2462 construction-order guards miss a non-terminal init { launch }: BridgeNwApi has that shape and is safe only positionally
+2485 C MeshSeam: buildMesh's construction-time dedup still closes its losers abruptly
+2487 C NwBridgeLoopbackConformanceTest executes in ZERO CI lanes — run :kuilt-nw:jvmTest on the apple-nightly macOS host
+2488 C Two kuilt-nw claims are reasoned but never measured on hardware: the (2) rename delivery, and the #2475 flag day
+2497 C Extract DurableStore out of :kuilt-otel into :kuilt-store — plus the conformance suite it never had
+2501 C RoomConformanceSuite has no teardown obligation: Room.leave's documented idempotency and no-minted-cancellation are unasserted, and FaultySeam.close i
+2502 C BoundedCounterTransferCoordinator.close() does not stop the in-flight borrow-retry coroutine, contradicting its own KDoc
+2503 O WasmRuntime/Op have no teardown member, so every kernel a peer serves permanently costs a wasm3 runtime (Apple) or a Web Worker (browser)
+2504 C kuilt-bolt: PosixMappedBolt's caught-up CleanTail short-circuit is pinned by nothing
+2506 C store: the two file-backed DurableStores silently MERGE distinct StoreKeys — a write under one destroys the value under another
+2507 C kuilt-otel/module.md links every type as [Type] with no link target — the table looks checked and is not
+2512 C otlp: the #2506 filename re-encoding orphans the sent-set, so the first run after upgrade re-POSTs already-sent telemetry
+2513 C otlp: OtlpHttpEdge keys its sent-set on base.hashCode(), so two endpoints can share one dedup set
+2514 O store: a malformed StoreKey name throws only on the file backends — validate at StoreKey construction instead
+2515 C conformance: DurableStore has no conformance suite — six filename properties are duplicated verbatim across the two file backends
+2516 O store: legacy-orphan disjointness holds only up to case folding — a new key can adopt an old key's file on APFS
+2518 O Should Room.leave defend against a Seam that mints a CancellationException from close?
+2524 O otel: WarpOtlpBridge.drain reports Success while a signal fails permanently, and discards every cause on Failure
+2527 C module.md link targets are unguarded — Dokka already detects all 29, nothing reads it
+2530 C build: sweep the 11 not-null-assertion sites that #2471 widened the guard onto
+2531 O conformance: the filename TCK's case-folding arm is gated only nightly — a folding filesystem in build-jvm would gate it per-PR
+2534 C build: re-evaluate detekt 2.x (dev.detekt) now that 1.23.8 type resolution is known to be partial
+2535 C catch (IllegalStateException) silently swallows CancellationException — five concurrency probes destroy their own wedge reports
+2536 C kuilt-test: FakeSeam's constructor accepts a roster without selfId — the live-path twin of #2432
+2537 C spike/harness.sh pattern-kills devicectl, reaping concurrent agents' device runs
+2538 O conformance: selfDialIsRejected's roster arm is structurally vacuous on any fabric that recomputes peers as <bound> + selfId
+2539 O kuilt-nw: three NwSeam lock sites are pinned by neither concurrency probe
+2540 C build: drop detekt — it enforces nothing that is both working and unique
+2541 C Vendored kuilt-primitives skill drifts silently — fireworks-compose is 7 routes behind and failing open
+2546 C kuilt-test: removePeer(selfId) reopens the roster hole #2536 closes — the guard is a snapshot, not an invariant
+2550 O kuilt-nw: is a ~3 s post-drop Resumed a premature resume, or #1637 working as designed? (unmeasured)
+2554 O conformance: availabilityReturnsAKnownVariant is a tautology — the only property reading Loom.availability() cannot fail
+2556 C A recovered peer's stale WindowExpired broadcasts Farewell for a healthy member, diverging every survivor's roster (REPRODUCED)
+2557 O wire: a same-serializer round-trip test cannot detect a cross-version break — no golden vectors outside :kuilt-crdt
+2558 O CompositeSeam has no seam-level failure channel, so a dead reconcile pump can only be absorbed
+2561 O SeamConformanceSuite has no case for a duplicate (or blank) announced peer id — the TCK half of #1821
+2565 O warp.tasks.duplicate is a lower bound, not a count — it reads zero during exactly the churn it exists to reveal
+2568 C SeamConformanceSuite gap hooks cannot express "inapplicable by design" — 9 of #1442's 16 routers are not gaps, and the framing invites re-introducing 
+2569 O withLogContext: on Apple/wasmJs a scope resuming beside a sibling still reads the sibling's attributes — #1659 survives on iOS
+2572 C kuilt-primitives skill has no route for pumpIn, so the interception that prevents a hand-rolled pump never fires
+2581 O singleCollection's republish buffer ignores the caller's DeliveryPolicy, so a lossy policy is only honoured at the seam
+2583 C docs: 173 code blocks in live reference docs are uncited, so nothing catches API drift — ratchet the count
+2587 C assembleVoterMesh: a dial cancelled mid-handshake leaks its Connection on the formation-failure path
+2591 C conformance: SeamConformanceSuite asserts peers.size >= 2 on the HOST only — a fabric whose joiner never learns its peer is conformant
+2592 C test: a seeded generator that walks a HashSet is not reproducible across targets — a JVM-only measurement can be false on native
+2593 C WarpSpanExporter and WarpMetricExporter log a stack trace per refused write, forever
+2594 C heddle: witness() does not copy transferRelocIn, so carried credit spends unwitnessed — fixing it crosses the plane-ownership boundary
+2595 C build: Android Lint is blind to every Kotlin library symbol — a partial gate inside ci-required (#2471 shape, one layer over)
+2598 C Guard the catch (IllegalStateException) cancellation-swallow shape in test sources, and say so in CLAUDE.md
+2600 O heddle: one departed donor with a residual carried row freezes the generation move for every peer on that edge
+2601 C conformance: 15 more SeamConformanceSuite obligations are asserted on the HOST only, on a contract that is symmetric
+2605 C conformance: four shipped fabrics declare FilledByConstruction, so the defect that shipped in :kuilt-nearby is still undetectable for them
+2608 O release: the next tag must be a MINOR bump (v0.8.0) — two breaking API changes are on main, unshipped
+2611 O otel: WarpSpanExporter and WarpMetricExporter have no health surface, so only logs can answer "is telemetry landing?"
+2616 O Quilter.close() cancels in-flight broadcasts, so a write-then-close loses the frame
+2618 O kuilt-webrtc: WebRTCPeerLink seeds its roster with a random placeholder, so the joiner-roster obligation cannot fail
+2621 C test-harness: a runtime-gated probe self-skips as PASS, so a green XML cannot distinguish 'ran' from 'never ran'
+2622 C kuilt-test: FakeSeam.weave() un-tears a torn seam, so any consumer test resting on terminality is vacuous
+2623 C Conformance: prove the membership-drain obligation on CompositeConformanceTest and GossipSeamConformanceTest
+2625 O conformance: KtorMeshClientLoom has no harness, and the coverage registry cannot express the gap
+2626 C kuilt-multipeer: BridgePeerLink's roster publish races its own teardown, so a Torn seam can advertise a lost peer
+2627 C Shape A: lexical guard — a MutableStateFlow<SeamState> in production must be a SeamStateGate
+2628 O Put the lost-terminal-Torn property in ci-required via a SeamConformanceSuite fixture hook
+2630 C main is red: forbidUncitedDocCodeBlock trips on docs/agent-cookbook.md (#2615 guard vs #2620 block, zero file overlap)
+2633 C FlakyLifecycleSeam: three unlocked check-then-set writes on a bare MutableStateFlow<SeamState>
+2639 O capability-probes membership is pinned only by a name, and one member already breaks the property
+2640 O midSessionDeathDeclarationIsHonest's Proven arm cannot detect a rig that injects nothing
+2642 O Seam decorators publish a payload budget they do not enforce (the other half of #2058)
+2643 O plies still collapses on TieredSeam, RoomHubSeam and GossipSeam
+2647 C Four in-tree comments assert work is outstanding under an issue that is CLOSED — and one's surrounding claim is now false
+2648 C kuilt-nw: NwSeam.close latches Torn BEFORE collapsing peers — the exact ordering violation Seam.peers' KDoc predicts the TCK cannot see
+2650 C kuilt-deal: FairRandomMessage.Reveal's fixed widths are enforced in the handler, not the wire type
+2654 O #1803 remedy 2 prescribes a FOLD for the roster race; the measurement says it needs a LATCH — five fabrics hand-roll one today
+2655 C Roster read-then-write sweep: ManagedSeam.close collapses outside its lock, and mdns PeerRoster has no lock at all
+2662 C kuilt-primitives' description is 1,254 tokens — the largest single eager-context item in any consuming repo
+2663 C kuilt-raft: a peer-supplied ConfigPayload with empty voters disarms the §5.2 leader-authority gate — the local API path guards it, the wire path does 
+2665 O core: a mux channel view's close() has no wire representation, so a survivor keeps advertising a peer it can no longer deliver to
+2666 O kuilt-deal: a malformed reveal is now dropped with the sender in scope and no trace — attribution lost, and the module has no logger at all
+2670 O session: a host's clean leave is announced to nobody — joiners burn the full reconnect window on a departure the host already decided
+2673 C heddle: EntitlementLedgerConservationTest's under-ack arm fires 1 run in 80 — too thin to convert its bound into a frequency floor
+2674 O kuilt-raft: a first-come leaderForTerm pin denies the legitimate leader for the term — durable across restart, and NOT confined to the pre-bootstrap w
+2676 O kuilt-raft: a snapshot config restored from disk is never bounded — checkedRestoredSnapshotMeta ignores `config`
+2684 O release: nothing detects a breaking public-API change — the `!` marker missed one of the two known breaks, and it was spelled `fix:`
+2685 C test: :kuilt-warp-heddle duplicates TEST_WEDGE_BACKSTOP with its own constant — and its private KDoc had already rotted twice
+2686 C WebSocketSeam drops DeliveryPolicy, so KtorClientLoom cannot honour a policy knob
+2687 C WebSocket 2-peer looms drop DeliveryPolicy: WebSocketSeam never forwards one to identified()
+2692 C build: CLAUDE.md's new `clean`-leads-the-gate measurement is pinned by nothing — it rots when wasm IC returns (#1914) or Kotlin passes 2.4.10
+2695 O WebRTC weave() is pinned at the 30 s handshake deadline its own KDoc says WASM callers should widen
+2696 O ci: #408's cold-build heap fix was never confirmed sufficient on the real runner — and the exit-143 fingerprint does not identify its own cause
+2697 O conformance: payloadBudgetObligationIsTrackedWhenUnpublished reads the HOST only, so a joiner that publishes no budget is a silent skip
+2701 C build: DetektCatalogScanner and AgpCatalogScanner match their catalog alias unanchored — a neighbouring alias makes the skew guard confirm itself and 
+2702 C build: DetektCatalogScanner / AgpCatalogScanner match their alias as a SUBSTRING, so a prefixed neighbour is a false GREEN
+2706 O kuilt-multipeer: policy and dispatcher must land together — a policy knob alone is unwitnessable
+2707 O Two different libkuilt.dylib libraries export the same kuilt_protocol_version symbol — after #2705 the ABI check can no longer tell them apart
+2708 O dial cancellation-cleanliness is documented but unpinned — no in-tree fabric can demonstrate the resume-into-cancellation window
+2710 O acceptPump: the post-handshake tail of addLink is still an unclosed-conn window — #2587 closed only the mid-preamble half
+2711 O buildMesh: a cancellation in the async DISPATCH window skips handshakeLink entirely, so #2587's close guard is never entered
+2712 O crdt: Gauge.observe shares #2087's shape under a delta-mutator contract — decide whether it adopts the join too
+2714 O FlakyLifecycleSeam: the delegate-peers collector is still an unlocked check-then-write
+2715 O crdt: EntitlementLedger, MetricCatalog and WarpStats are non-canonical — root cause A, three modules outside the zoo
+2716 O kuilt-test: FakeSeam's roster guards are per-writer, so a fifth writer is silently uncovered
+2717 O kuilt-test: FakeSeam retains the caller's ByteArray in broadcasts/directed — the #2546 shape one field over
+2718 O crdt-test: Histogram, DDSketch and GCounterDouble have no cross-target golden vector
+2720 O kuilt-raft: chunkBytes' 256 B reserve is already overrun by an ordinary 5-voter ConfigPayload, on every InstallSnapshot chunk
+2721 O kuilt-raft: a ConfigPayload entry can exceed the batch bound with no gate to refuse it — boundedBatch's always-send-one clause has a second entrance
+2722 O conformance: LatticeLawHarness cannot see a mutator that moves its replica DOWN the lattice — 'changed' is the only bit it records
+2725 O kuilt-primitives routes to symbols newer than consumers' pins — the skill has no way to state a minimum version
+2726 O crdt-test: RetirementReAssertion.subject is mandatory in arity and optional in content — a blank one passes
+2729 O kuilt-raft: record the exact (actor-loop) propose-envelope measurement rejected in #2156, and when to revisit it
+2730 O conformance: LWWRegister's no-op ceiling now catches #2158's shape by only 2.9 points (was 7.3) — the detection band narrowed with #2087
+2733 O kuilt-nw: NwCrossProcessProbeTest self-skips as PASS on a Mac with the dylib — the #2621 defect on a capability gate
+2737 O kuilt-raft: onChangeMembership's settled-Simple guard has no reachable emit trajectory — keep it, delete it, or find the trajectory
+2740 O LogTapAdmission cannot express a symmetric mesh — two offering peers both get Verifier and deadlock
+2741 O A second collector of a Spool-backed incoming STEALS frames, and nothing reds
+2745 O heddle test: the under-ack arm's frequency floor is bought with 1,200 runs because the trials are not independent
+2747 O cluster/session: three relay envelopes still double their opaque payload — the ByteArray-through-CBOR sites outside :kuilt-raft
