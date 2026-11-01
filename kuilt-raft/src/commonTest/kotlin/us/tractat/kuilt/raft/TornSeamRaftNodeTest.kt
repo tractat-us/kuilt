@@ -116,6 +116,30 @@ class TornSeamRaftNodeTest {
         }
     }
 
+    /** A view's own close: the base stays live, and the view alone refuses the election timer's send. */
+    @Test
+    fun muxViewClosedWithNothingBuffered() = raftRunTest {
+        val loom = InMemoryLoom()
+        val base = loom.host(Pattern("test"))
+        val remote = loom.join(InMemoryTag("joiner"))
+        val muxScope = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())
+        val view = MuxSeam(base, muxScope).channel(RAFT_TAG)
+        val rig = startNode(view, NodeId(remote.selfId.value))
+        try {
+            view.close()
+            runCurrent()
+            assertAll(
+                { assertEquals(SeamState.Woven, base.state.value, "the rig: the base must stay live") },
+                { assertEquals(0, rig.seam.sendsAfterTear, "the rig: nothing may have tried to send yet") },
+            )
+            pastTheElectionTimeout()
+            assertSurvivedElectionTimerAfterTear(rig)
+        } finally {
+            rig.scope.cancel()
+            muxScope.cancel()
+        }
+    }
+
     /**
      * The check-then-send race, forced: the base tears at the moment the node sends, so the view's own
      * liveness check still passes and the refusal comes from the base underneath.
