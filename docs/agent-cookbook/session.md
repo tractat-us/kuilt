@@ -451,9 +451,15 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
         // Re-running electLobby(...) would weave a FRESH seam and strand them; calling leave() first
         // would close the shared seam and collapse them.
         ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2")
-        // A genuine mid-2PC collapse: the co-electors are gone. Retryable — re-run electLobby(...).
-        is ElectionOutcome.Torn -> null
+        // A genuine mid-2PC collapse: the co-electors are gone. Retryable — leave this lobby, then
+        // re-run electLobby(...). A lobby left open stays on the mesh and can hold a host's start().
+        is ElectionOutcome.Torn -> {
+            lobby.leave()
+            null
+        }
     }
 ```
 
-`awaitRoom` suspends indefinitely while the lobby is simply empty or still weaving in — that is a lobby doing its job, not a collapse, and it is why `host == selfId` on its own does **not** mean you were promoted (during weave-in you are momentarily the lowest id you can see). Cancel the call to stop waiting.
+`awaitRoom` suspends indefinitely while the lobby is simply empty or still weaving in, or while the elected host is alive and has not called `start()` — that is a lobby doing its job, not a collapse, and the weave-in case is why `host == selfId` on its own does **not** mean you were promoted (during weave-in you are momentarily the lowest id you can see). An app that wants a limit sets its own: cancel the call, then `leave()`.
+
+**Abandoning a lobby requires `leave()`.** A lobby left open stays on the mesh, and it answers its peers' heartbeat pings until its own election collapses. So a host's `start()`, which has no overall bound, keeps retrying for an acknowledgement from a member that has walked away without leaving.

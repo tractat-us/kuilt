@@ -18,11 +18,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -64,6 +66,9 @@ private class PromotedToHostSignal(val roster: Set<PeerId>) :
  * [lobbyMessages] for [start]/[awaitRoom] to consume. At adopt time that collector is cancelled and
  * joined BEFORE [SeamRoomFactory.adopt] starts the room's own collector — preserving the
  * single-collection `incoming` contract (ADR-034).
+ *
+ * That collector also answers every heartbeat ping (see [answerPing]), so a peer's detector reads this
+ * lobby as alive for as long as it is, whichever role it is in and however long its user takes to act.
  */
 internal class SeamElectionLobby(
     private val seam: Seam,
@@ -116,30 +121,87 @@ internal class SeamElectionLobby(
     private var adopted = false
     private var epoch: Long = 0L
 
+    // Peers with a pong on its way, and whether this lobby still answers at all. Declared above
+    // [collectorJob], whose launch can run on a real dispatcher before this class finishes initializing.
+    private val pongsInFlight = MutableStateFlow<Set<PeerId>>(emptySet())
+    private val answersPings = MutableStateFlow(true)
+
     private val collectorJob: Job = scope.launch {
         seam.incoming.collect { swatch ->
             rawIncoming.emit(swatch)
             val sender = swatch.sender ?: return@collect
+            if (swatch.decodeToString().startsWith(HeartbeatPartitionDetector.PING_PREFIX)) {
+                answerPing(sender)
+                return@collect
+            }
             val msg = LobbyMessage.decode(swatch.toByteArray()) ?: return@collect
             _lobbyMessages.emit(sender to msg)
+        }
+    }
+
+    /**
+     * Answers a heartbeat ping whatever this lobby is doing. Without this only a running detector
+     * answers, and a host creates its detectors inside [start], so a host waiting for its user's Start
+     * tap read as dead to every member waiting on it (#2995). The answer comes from the lobby itself,
+     * so a host that really is gone still reads as gone.
+     *
+     * An answer proves this lobby is open, not that anyone is taking part. So a lobby whose election
+     * collapsed stops answering (see [stopAnsweringPings]), and a peer that collapsed with it is released
+     * rather than kept waiting. An app that walks away by any other route has to call [leave].
+     *
+     * Launched as a child of the collector so it ends with the lobby's collector at adoption, and off
+     * the collector's own path because [Seam.sendTo] can stall on a wedged link, and that collector is
+     * what carries `Freeze` and `Commit`. One send per peer at a time: a pong is only evidence of life,
+     * so one already on its way is as good as a second, and a wedged peer cannot grow a queue of them.
+     *
+     * A peer with a detector running here also gets that detector's own pong. That is harmless, since a
+     * detector counts inbound frames rather than pongs, and tracking it would cost more than the frame.
+     * That detector sends its pong inline, though, so a wedged link can still park its collection, and
+     * [rawIncoming] can then back up into the collector. This path is only clear of that for a peer
+     * with no detector running here.
+     */
+    private fun CoroutineScope.answerPing(sender: PeerId) {
+        if (!answersPings.value) return
+        if (sender in pongsInFlight.getAndUpdate { it + sender }) return
+        launch {
+            try {
+                runCatchingCancellable { seam.sendTo(sender, PONG) }
+                    .onFailure { logger.debug { "lobby.pong.failed self=${selfId.value} to=${sender.value}: $it" } }
+            } finally {
+                pongsInFlight.update { it - sender }
+            }
         }
     }
 
     override suspend fun start(memberName: String?): Room {
         // Host collapse (the transport-tear watcher in guardElection handles a fabric that latches Torn;
         // startElection itself handles the membership-drain case where the seam stays Woven).
+        answersPings.value = true
         return try {
             // The freeze round runs INSIDE guardElection (collapse-abortable); adoption runs OUTSIDE it
             // (finding #1) so a collapse signal cannot cancel adoptRoom mid-commit and wedge the lobby.
             // Host monitors the current members (roster - self) for the silent-but-present collapse (#1480).
-            guardElection(collapseSignals = listOf(coElectorLostSignal(peers.value - selfId))) {
+            guardElection(collapseSignals = listOf(membersLostSignal())) {
                 runHostElection()
             }
             adoptAfterCommit(SessionRole.Host, memberName)
+        } catch (e: LobbyTornException) {
+            stopAnsweringPings()
+            throw e
         } catch (e: Throwable) {
             logger.debug { "lobby.start.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
             throw e
         }
+    }
+
+    /**
+     * This lobby's election collapsed, so it has stopped taking part: answering would keep a peer that
+     * is still watching it waiting on nobody. The KDoc on [ElectionOutcome.Torn] sends the app to a fresh
+     * lobby, and this covers one that does not [leave] this one first. Calling [start] or [awaitRoom]
+     * here again answers again.
+     */
+    private fun stopAnsweringPings() {
+        answersPings.value = false
     }
 
     /** Run the host freeze round until it commits (broadcasting `Commit`); adoption is the caller's job. */
@@ -231,6 +293,7 @@ internal class SeamElectionLobby(
         }
 
     override suspend fun awaitRoom(memberName: String?): ElectionOutcome {
+        answersPings.value = true
         return try {
             guardElection(
                 collapseSignals = listOf(
@@ -251,6 +314,7 @@ internal class SeamElectionLobby(
             ElectionOutcome.BecameHost
         } catch (e: LobbyTornException) {
             logger.debug { "lobby.awaitRoom.exit self=${selfId.value} collapsed: ${e.reason}" }
+            stopAnsweringPings()
             ElectionOutcome.Torn(e.reason)
         } catch (e: Throwable) {
             logger.debug { "lobby.awaitRoom.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
@@ -443,6 +507,20 @@ internal class SeamElectionLobby(
     }
 
     /**
+     * Follow the host's members for the whole of [start]. Each roster change cancels and joins the
+     * previous signal before watching the new set, so a member that joined late is pinged and watched
+     * (#2995), and one that left is not reported lost while the rest can still complete the election.
+     *
+     * A change restarts every member's silence clock, so roster churn delays detection, and churn faster
+     * than the detector's roughly 6 s to [PartitionEvent.PeerLost] holds it off for as long as it lasts.
+     * Each change also aborts the freeze round, so [start] does not end during that churn.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun membersLostSignal(): suspend () -> LobbyTornException = {
+        peers.mapLatest { roster -> coElectorLostSignal(roster - selfId)() }.first()
+    }
+
+    /**
      * A [guardElection] collapse-signal that catches the **present-but-silent** co-elector — the
      * #1478 root condition (a path-lost `waiting` connection that never fires a close): `seam.peers`
      * still lists the peer and `state` stays [SeamState.Woven], so no set-based abort (the Torn
@@ -536,6 +614,8 @@ internal class SeamElectionLobby(
         }
 
     private companion object {
+        private val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
+
         /**
          * Lobby-tuned heartbeat profile. The default [HeartbeatConfig] (5s/15s/60s) targets a
          * long-lived [Room]; its 60s reconnect window outlives the entire lobby, so a dead co-elector
