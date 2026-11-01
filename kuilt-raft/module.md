@@ -133,10 +133,18 @@ into your apply loop and serialize it **into your own snapshot**
 `InstallSnapshot` carries it with **zero raft-side change**.
 
 **Collision detection.** A committed entry under this node's own `clientId`
-bearing a serial it never issued proves another live writer shares the identity. A
-**durable** id fails loud with `ClientIdCollisionException` (two processes were
-handed one id — an operational error; do not retry under it). An **auto** id
-silently re-mints a fresh suffix and logs a warning.
+bearing a serial above everything it has issued reads as another live writer sharing
+the identity. A **durable** id fails loud with `ClientIdCollisionException` (two
+processes were handed one id — an operational error; do not retry under it). An
+**auto** id silently re-mints a fresh suffix and logs a warning.
+
+A durable id outlives its process, so on boot the node also counts the highest serial
+its retained log holds under that id, and its auto serial resumes above it. Replaying
+its own entries is then not a collision. The retained log is all it has to go on: a node
+that kept no log, or one that crashed with a forwarded proposal in flight, reads its own
+history as a collision when replication brings it back, and a snapshot covering every
+entry under the id loses the floor. `ClientIdentity.Durable` spells out all three; #3060
+tracks closing them.
 
 **Bounding (v2 — supersession prune).** The table is self-bounding without any
 clock, horizon, or heuristic. A `NodeId` is cluster-unique, so two incarnations

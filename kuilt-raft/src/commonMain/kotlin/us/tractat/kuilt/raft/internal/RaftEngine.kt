@@ -3386,7 +3386,8 @@ internal class RaftEngine(
 
     /**
      * §8 collision check on every committed application entry: a committed entry under [myClientId]
-     * bearing a serial this node never issued proves another live writer shares the identity. A
+     * bearing a serial above everything this node has issued or retained reads as another live writer
+     * sharing the identity (see [resumeDurableSerials] for what a restart can and cannot tell apart). A
      * **durable** id (caller-supplied) is an operational error — throw [ClientIdCollisionException]
      * loud from the actor loop. An **auto** id silently re-mints (fresh suffix, reset serial +
      * detector) and logs a warning; the in-flight writes already committed are unaffected.

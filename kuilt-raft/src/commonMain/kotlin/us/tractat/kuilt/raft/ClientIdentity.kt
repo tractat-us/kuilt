@@ -22,6 +22,18 @@ public sealed interface ClientIdentity {
      * the same `requestId` on a post-crash retry yields cross-crash exactly-once. A collision under a
      * durable id is an operational error (two live writers sharing one id) and surfaces as a
      * [ClientIdCollisionException] rather than a silent re-mint.
+     *
+     * **A restart picks its serials up from the log the node retained.** Replaying its own entries
+     * is not a collision, and the auto-serial `propose(command)` resumes above the highest serial it
+     * finds. Three cases are not covered, all tracked by #3060:
+     *
+     * - A node that retained no log (`InMemoryRaftStorage` across a process restart) reads its own
+     *   history as a collision when replication brings that history back.
+     * - So does a node that crashed with a forwarded proposal in flight, when the leader commits it.
+     *   Its next boot has that entry in its log and recovers.
+     * - If a snapshot covered every entry under this id, nothing records the floor, and the auto
+     *   serial restarts at 1. A consumer's [ClientSessionTable] then drops those commands as
+     *   duplicates, so use the `propose(command, requestId)` form with a serial you persist.
      */
     public data class Durable(public val clientId: ClientId) : ClientIdentity
 }
