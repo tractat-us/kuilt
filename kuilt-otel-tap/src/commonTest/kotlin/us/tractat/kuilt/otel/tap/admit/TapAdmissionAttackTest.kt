@@ -172,6 +172,7 @@ class TapAdmissionAttackTest {
         harvester.challenge(pullerGate.selfId, predicted)
         runCurrent()
         val harvestedFrame = assertNotNull(harvester.proofFrames.singleOrNull(), "rig: the puller must have answered")
+        pullerGate.close() // long gone by the time it matters, and the device's first draw is the harvester's
 
         val deviceGate = loom.join(InMemoryTag("device")).tokenGated(verifier(), backgroundScope)
         runCurrent()
