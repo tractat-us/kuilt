@@ -21,6 +21,7 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import kotlinx.serialization.serializer
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
@@ -30,6 +31,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.PNCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -371,5 +373,91 @@ class QuilterConcurrencyTest {
                 scope.cancel()
             }
         }
+    }
+
+    /**
+     * [Quilter.drainAndClose] against writers on other threads (#2616): **a write that returned
+     * normally was never lost**, across many races between `apply` and the close.
+     *
+     * The single-threaded `QuilterDrainAndCloseTest` pins the waiting and the ordering, but it cannot
+     * see this property, because it needs a real thread inside the gap. If the check that nothing is
+     * in flight were not atomic with the close, a writer could land between the two, have its write
+     * accepted, and have its send cancelled.
+     *
+     * The rig asserts it fired. [refusedWrites] counts writers that met the closed replica, which is
+     * the boundary under test: with that at zero every drain merely outlasted its writers, and the
+     * equality below would hold for an unsafe drain too.
+     */
+    @Test
+    fun aWriteThatReturnedIsNeverLostToARacingDrain() = runTest(timeout = CONCURRENCY_PROBE_WEDGE_BACKSTOP) {
+        val rounds = 300
+        val writers = 4
+        val perWriter = 300
+        val refusedWrites = AtomicInteger()
+        var roundsRun = 0
+
+        withContext(Dispatchers.Default) {
+            repeat(rounds) { round ->
+                val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+                try {
+                    val accepted = AtomicInteger()
+                    val handed = AtomicInteger()
+                    val raw = InMemoryLoom().host(Pattern("drain-race-$round"))
+                    val seam = object : Seam by raw {
+                        override suspend fun broadcast(payload: ByteArray) {
+                            yield() // a send that suspends, so sends overlap the drain
+                            handed.incrementAndGet()
+                        }
+                    }
+                    val rep = Quilter(
+                        replica = ReplicaId(seam.selfId.value),
+                        seam = seam,
+                        initial = PNCounter.ZERO,
+                        messageSerializer = QuiltMessage.serializer(PNCounter.serializer()),
+                        scope = scope,
+                    )
+
+                    var handedWhenTheDrainReturned = 0
+                    coroutineScope {
+                        val writerJobs = List(writers) {
+                            launch {
+                                for (i in 0 until perWriter) {
+                                    try {
+                                        rep.mutate { it.increment(rep.replica) }
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (_: IllegalStateException) {
+                                        refusedWrites.incrementAndGet()
+                                        break
+                                    }
+                                    accepted.incrementAndGet()
+                                    yield()
+                                }
+                            }
+                        }
+                        yield()
+                        rep.drainAndClose()
+                        handedWhenTheDrainReturned = handed.get()
+                        writerJobs.joinAll()
+                    }
+
+                    assertEquals(
+                        accepted.get(),
+                        handedWhenTheDrainReturned,
+                        "round $round: every accepted write should have been handed to the seam by " +
+                            "the time the drain returned",
+                    )
+                    roundsRun++
+                } finally {
+                    scope.cancel()
+                }
+            }
+        }
+
+        assertEquals(rounds, roundsRun, "every round should have run")
+        assertTrue(
+            refusedWrites.get() > 0,
+            "rig never fired: no writer ever met the closed replica, so no drain raced a write",
+        )
     }
 }
