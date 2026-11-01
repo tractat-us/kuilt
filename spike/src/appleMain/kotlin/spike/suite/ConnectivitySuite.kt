@@ -1862,6 +1862,7 @@ public class ConnectivitySuite {
     private fun FailureReason.describe(): String = when (this) {
         FailureReason.WindowExpired -> "WindowExpired"
         FailureReason.Unrecoverable -> "Unrecoverable"
+        FailureReason.HostLeft -> "HostLeft"
         is FailureReason.Refused ->
             "Refused(code=${code.id.ifEmpty { "<none>" }},retryable=${code.retryable},msg=$message)"
     }

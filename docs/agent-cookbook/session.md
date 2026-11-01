@@ -169,6 +169,7 @@ public suspend fun reconnectBannerSample(room: Room) {
                 FailureReason.WindowExpired -> Unit // "Lost the host — rejoin"
                 FailureReason.Unrecoverable -> Unit // "Can't reconnect — return to lobby"
                 is FailureReason.Refused -> Unit // show reason.message (auth-expired / version, …)
+                FailureReason.HostLeft -> Unit // "The host ended the game" — no rejoin to offer
             }
             else -> Unit
         }

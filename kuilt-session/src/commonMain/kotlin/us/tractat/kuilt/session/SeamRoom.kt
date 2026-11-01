@@ -63,6 +63,7 @@ import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
@@ -3840,6 +3841,11 @@ internal class SeamRoom(
         )
     }
 }
+
+/**
+ * How long a host's [SeamRoom.leave] holds its seam open after queuing the `Farewell`.
+ */
+internal val HOST_FAREWELL_HANDOFF: Duration = 100.milliseconds
 
 /**
  * A thin [Seam] view that presents only frames from [targetPeerId] via [rawIncoming].
