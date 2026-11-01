@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
@@ -790,6 +791,56 @@ class FakeRoomTest {
         room.leave()
 
         assertEquals(listOf("a0"), frames.toList().texts())
+    }
+
+    @Test
+    fun `leave empties the roster before it completes a member's flow`() = runTest {
+        val room = FakeRoom()
+        val alice = PeerId("alice")
+        room.addMember(member(alice))
+        val channelView = room.channel("terminal-room")
+        var rosterAtCompletion: Set<PeerId>? = null
+        // Unconfined, so the reader resumes in place when the inbox closes and reads the roster as the
+        // fake had published it then. The ordinary scheduler would hide a roster cleared afterwards.
+        val reader = launch(UnconfinedTestDispatcher(testScheduler)) {
+            room.incomingFrom(alice).toList()
+            rosterAtCompletion = room.roster.value.mapTo(mutableSetOf()) { it.id }
+        }
+        assertEquals(setOf(alice), room.roster.value.mapTo(mutableSetOf()) { it.id }, "rig: alice is listed before the leave")
+
+        room.leave()
+        reader.join()
+
+        assertAll(
+            { assertEquals(emptySet(), rosterAtCompletion, "the roster is already empty when the flow completes") },
+            { assertEquals(emptySet(), room.roster.value, "a terminal room has no members") },
+            { assertEquals(setOf(room.selfId), channelView.peers.value, "a channel of a terminal room can address nobody else") },
+        )
+    }
+
+    @Test
+    fun `hostLost ends the room after its event as the real room does`() = runTest {
+        val room = FakeRoom()
+        val host = PeerId("host")
+        room.addMember(member(host))
+        var rosterAtCompletion: Set<PeerId>? = null
+        val reader = launch(UnconfinedTestDispatcher(testScheduler)) {
+            room.incomingFrom(host).toList()
+            rosterAtCompletion = room.roster.value.mapTo(mutableSetOf()) { it.id }
+        }
+
+        room.hostLost(Instant.fromEpochMilliseconds(5000L))
+        runCurrent()
+        val readerCompleted = reader.isCompleted
+        reader.cancel()
+
+        val event = room.events.first { it is MembershipEvent.HostLost }
+        assertAll(
+            { assertIs<MembershipEvent.HostLost>(event, "the event still arrives") },
+            { assertTrue(readerCompleted, "the member's flow has completed") },
+            { assertEquals(emptySet(), rosterAtCompletion, "the roster was already empty when it did") },
+            { assertEquals(emptySet(), room.roster.value, "a room that lost its host has no members") },
+        )
     }
 
     @Test
