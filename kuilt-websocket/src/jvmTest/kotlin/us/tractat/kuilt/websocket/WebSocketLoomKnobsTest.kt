@@ -11,6 +11,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FrameOverflow
 import us.tractat.kuilt.core.Overflow
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -19,6 +20,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -88,12 +90,17 @@ class WebSocketLoomKnobsTest {
                     "frame raises FrameOverflow in the read loop and tears the seam. Still Woven means " +
                     "the factory's policy never got past WebSocketSeam (#2686).",
             )
+            val reason = assertIs<SeamState.Torn>(torn).reason
+            assertIs<FrameOverflow>(
+                assertIs<CloseReason.Error>(reason, "the client must tear on a read failure").throwable,
+                "the tear must be the overflow, not some other lost wire",
+            )
             serverSeam.close(CloseReason.Normal)
         }
 
     /**
      * The control arm for [a strict capacity-1 policy reaches the client seam's inbox]: the same
-     * three frames, the same undrained inbox, the default policy — and no tear.
+     * two frames, the same undrained inbox, the default policy — and no tear.
      */
     @Test
     fun theDefaultReliablePolicyAbsorbsTheSameBurst() =
@@ -117,7 +124,7 @@ class WebSocketLoomKnobsTest {
                 },
                 {
                     assertContentEquals(
-                        listOf<Byte>(0, 1, 2),
+                        listOf<Byte>(0, 1),
                         received.map { it.toByteArray().single() },
                         "…and a 256-deep SUSPEND inbox still holds every frame of the burst",
                     )
@@ -191,8 +198,11 @@ class WebSocketLoomKnobsTest {
         }
 
     private companion object {
-        /** Three frames: one fits a capacity-1 inbox, the rest do not. */
-        const val BURST = 3
+        /**
+         * Two frames: one fits a capacity-1 inbox and the other does not. A third would race the tear,
+         * because a `broadcast` on a seam the tear has already reached throws by contract (#3001).
+         */
+        const val BURST = 2
 
         /**
          * How long a tear is waited for. It is *also* how long the control arm waits to be sure no
