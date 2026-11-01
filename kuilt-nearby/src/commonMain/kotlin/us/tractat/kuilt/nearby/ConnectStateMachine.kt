@@ -1,15 +1,26 @@
 package us.tractat.kuilt.nearby
 
+import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerIdentityRegistry
 import us.tractat.kuilt.core.PeerIdentityRejectedException
+import us.tractat.kuilt.core.PumpFailure
+import us.tractat.kuilt.core.PumpVerdict
+import us.tractat.kuilt.core.pumpIn
 import kotlin.time.Duration
+
+private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.ConnectStateMachine")
 
 /**
  * Drives the Nearby Connections request→initiate→accept→result handshake
@@ -17,12 +28,30 @@ import kotlin.time.Duration
  * or throws on failure / timeout.
  *
  * ## [handshakeTimeout] bounds ONE connection, not a rendezvous
- * The ceiling covers exactly the span this machine drives: kick off (`requestConnection`
- * on an endpoint the discoverer has **already found**, or nothing at all on the advertiser
- * side) through `CONNECTED` plus the identity payload. Endpoint *discovery* happens in
- * [NearbyLoom] before this machine is constructed and is deliberately **not** covered, so
- * this is not a `weaveTimeout` and must not be renamed to one — see
+ * The ceiling covers exactly the span this machine drives. On the discoverer side that is from
+ * `requestConnection`, on an endpoint it has **already found**, to `CONNECTED` plus the identity
+ * payload. On the advertiser side the clock starts at `ConnectionInitiated`, because that is when
+ * there is a connection to bound: waiting for a joiner to turn up is not a handshake, and a clock
+ * started at the host's open silently stopped a host listening while it went on advertising (#2811).
+ * Endpoint *discovery* happens in [NearbyLoom] before this machine is constructed and is deliberately
+ * **not** covered, so this is not a `weaveTimeout` and must not be renamed to one — see
  * [NearbyLoom.DEFAULT_HANDSHAKE_TIMEOUT].
+ *
+ * Running out of time is a [ConnectionFailedException], not a `TimeoutCancellationException`:
+ * [us.tractat.kuilt.core.Loom.weave] may let a cancellation out only for the caller's own cancel,
+ * and a minted one would cancel that caller rather than fail it.
+ *
+ * ## A failed handshake leaves nothing behind
+ * Whatever ends it short of a link — refusal, timeout, a throw from the radio, the caller's own
+ * cancel — the id it bound is released and the endpoint it claimed is disconnected, so a link that
+ * came up and then failed identity does not stay up with nobody listening to it. That is all a failed
+ * attempt costs: whether anyone tries again is the caller's business ([NearbyLoom] does on the
+ * advertiser side, and fails the `join` on the discoverer side).
+ *
+ * One exit has nothing to disconnect: a dial the radio itself turned down. Nothing of this machine's
+ * is on that endpoint, and something else's may be, since the radio answers
+ * `STATUS_ALREADY_CONNECTED_TO_ENDPOINT` for the link this loom's own host took from that device. A
+ * dial that was only cancelled is different, by [radioCallMayStillBeRunning], and is still released.
  *
  * ## Subscribe-before-trigger
  * All event collectors are launched with [CoroutineStart.UNDISPATCHED] so they
@@ -59,8 +88,8 @@ import kotlin.time.Duration
  * A single [NearbyApi] may serve both roles at once (one loom, two machines in the
  * fake), so events are filtered by endpoint ID:
  * - non-null [endpointId] → only that endpoint's events (discoverer path);
- * - null [endpointId] → the FIRST [ConnectionInitiated] seen claims the endpoint
- *   (advertiser path), and subsequent events are filtered to it.
+ * - null [endpointId] → the FIRST [ConnectionInitiated] that [mayClaim] allows claims the
+ *   endpoint (advertiser path), and subsequent events are filtered to it.
  */
 internal class ConnectStateMachine(
     private val selfId: PeerId,
@@ -75,65 +104,108 @@ internal class ConnectStateMachine(
      * the same weave already holds. The one shared instance is what makes the answer true.
      */
     private val registry: PeerIdentityRegistry<String>,
+    /**
+     * Whether the advertiser path may claim this endpoint, asked at the moment of the claim. One radio
+     * reports incoming joiners and this loom's own outgoing dials through the same callback, with
+     * nothing in the event to tell them apart, so only the loom can say which this one is. The
+     * discoverer path already knows its endpoint and never asks.
+     */
+    private val mayClaim: (String) -> Boolean = { true },
 ) {
 
     /**
-     * Subscribe all handshake collectors (synchronously, via UNDISPATCHED),
-     * invoke [trigger] to kick the handshake off, then suspend until the link
-     * resolves or fails / times out.
+     * Subscribe all handshake collectors (synchronously, via UNDISPATCHED), wait for there to be a
+     * handshake at all, then suspend until the link resolves or fails / times out.
      *
-     * [trigger] is the role-specific kickoff: the discoverer calls
-     * `requestConnection`; the advertiser passes a no-op (it has already started
-     * advertising and merely awaits an incoming peer).
+     * [trigger] is the role-specific kickoff: the discoverer calls `requestConnection`, and already
+     * knows its endpoint, so its clock starts here; the advertiser passes a no-op (it has already
+     * started advertising) and suspends **without a bound** until a peer initiates, which is what
+     * starts its clock.
      */
     suspend fun run(
         scope: CoroutineScope,
         trigger: suspend () -> Unit,
-    ): ConnectedLink =
-        withTimeout(handshakeTimeout) {
-            val deferred = CompletableDeferred<ConnectedLink>()
-            val handshake = HandshakeState(initialEndpoint = endpointId)
-            val jobs = launchListeners(scope, deferred, handshake)
-            var resolved = false
+    ): ConnectedLink {
+        val deferred = CompletableDeferred<ConnectedLink>()
+        val claimed = CompletableDeferred<String>()
+        endpointId?.let { claimed.complete(it) }
+        val handshake = HandshakeState(initialEndpoint = endpointId, mayClaim = mayClaim)
+        val jobs = launchListeners(scope, deferred, claimed, handshake)
+        var resolved = false
+        try {
+            val endpoint = claimed.await()
+            val link =
+                withTimeoutOrNull(handshakeTimeout) {
+                    kickOff(trigger, handshake)
+                    deferred.await()
+                } ?: throw ConnectionFailedException(endpoint, "no handshake within $handshakeTimeout")
+            resolved = true
+            return link
+        } finally {
+            jobs.forEach { it.cancel() }
+            // Only the resolving path hands the binding and the link on. Anything else must leave
+            // neither behind: a stale binding would make the id look taken to the next endpoint that
+            // legitimately announces it, and a link nobody reads stays up on the radio.
+            if (!resolved) abandon(handshake)
+        }
+    }
+
+    private suspend fun kickOff(trigger: suspend () -> Unit, handshake: HandshakeState) {
+        try {
+            trigger()
+        } catch (failure: Throwable) {
+            if (!failure.radioCallMayStillBeRunning()) handshake.markDialRefused()
+            throw failure
+        }
+    }
+
+    /**
+     * Release what a failed handshake holds. Shielded, because the reason this runs may be this
+     * coroutine's own cancellation and `disconnect` suspends, with a plain `catch` because inside the
+     * shield a cancellation can only be one `disconnect` minted, and rethrowing it would replace the
+     * failure being reported with a bare cancellation.
+     */
+    private suspend fun abandon(handshake: HandshakeState) {
+        val endpoint = handshake.abandon(registry) ?: return
+        withContext(NonCancellable) {
             try {
-                trigger()
-                deferred.await().also { resolved = true }
-            } finally {
-                jobs.forEach { it.cancel() }
-                // A handshake that failed, timed out or was cancelled AFTER the identity payload
-                // bound its id must not leave that binding behind: the endpoint never became a
-                // peer, and a stale binding would make the id look taken to the next endpoint that
-                // legitimately announces it. Only the resolving path hands the binding on.
-                if (!resolved) handshake.releaseBinding(registry)
+                api.disconnect(endpoint)
+            } catch (failure: Throwable) {
+                log.debug { "nearby.handshake.release-failed endpoint=$endpoint failure=$failure" }
             }
         }
+    }
 
     private fun launchListeners(
         scope: CoroutineScope,
         deferred: CompletableDeferred<ConnectedLink>,
+        claimed: CompletableDeferred<String>,
         handshake: HandshakeState,
-    ): List<Job> =
-        listOf(
+    ): List<Job> {
+        fun <T> Flow<T>.listen(name: String, body: suspend (T) -> Unit): Job =
+            pumpIn(
+                scope = scope,
+                onFailure = { failure, cause -> failHandshake(name, failure, cause, deferred, claimed, handshake) },
+                name = "nearby-handshake-$name[${selfId.value}]",
+                start = CoroutineStart.UNDISPATCHED,
+                body = body,
+            )
+
+        return listOf(
             // Accept connection initiation when it arrives for our endpoint.
-            scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                api.connectionInitiated.collect { event ->
-                    if (deferred.isCompleted) return@collect
-                    if (!handshake.claimEndpoint(event.endpointId)) return@collect
+            api.connectionInitiated.listen("initiated") { event ->
+                if (!deferred.isCompleted && handshake.claimEndpoint(event.endpointId)) {
+                    claimed.complete(event.endpointId) // before the accept, so the clock covers it
                     api.acceptConnection(event.endpointId)
                 }
             },
             // Observe connection result; on success send our identity.
-            scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                api.connectionResult.collect { event ->
-                    if (deferred.isCompleted) return@collect
-                    if (!handshake.isOurEndpoint(event.endpointId)) return@collect
+            api.connectionResult.listen("result") { event ->
+                if (!deferred.isCompleted && handshake.isOurEndpoint(event.endpointId)) {
                     if (event.success) {
-                        handshake.connected = true
-                        val endpoint = requireNotNull(handshake.endpoint) {
-                            "connection result for our endpoint but no claimed endpoint set"
-                        }
-                        api.sendBytesPayload(endpoint, selfId.value.encodeToByteArray())
-                        handshake.maybeResolve(deferred)
+                        api.sendBytesPayload(event.endpointId, selfId.value.encodeToByteArray())
+                        // Only now: resolving cancels this collector, and a send still in flight with it.
+                        handshake.markConnected()?.let { deferred.complete(it) }
                     } else {
                         deferred.completeExceptionally(
                             ConnectionFailedException(event.endpointId, event.reason),
@@ -142,16 +214,42 @@ internal class ConnectStateMachine(
                 }
             },
             // Receive remote's identity payload (first BYTES for our endpoint).
-            scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                api.payloadReceived.collect { event ->
-                    if (deferred.isCompleted) return@collect
-                    if (!handshake.isOurEndpoint(event.endpointId)) return@collect
-                    if (handshake.remoteSelfId == null) {
-                        admitAnnouncedIdentity(event, handshake, deferred)
-                    }
+            api.payloadReceived.listen("identity") { event ->
+                if (!deferred.isCompleted && handshake.isOurEndpoint(event.endpointId)) {
+                    admitAnnouncedIdentity(event, handshake, deferred)
                 }
             },
         )
+    }
+
+    /**
+     * A listener failed, which fails this handshake. An item failure (the radio threw on one call,
+     * possibly a cancellation it minted) becomes a [ConnectionFailedException] and costs one attempt.
+     * A failed *stream* is [NearbyEventStreamLostException], since no later attempt could see anything
+     * either, and it also wakes an advertiser that has not claimed anybody yet.
+     */
+    private fun failHandshake(
+        listener: String,
+        failure: PumpFailure,
+        cause: Throwable,
+        deferred: CompletableDeferred<ConnectedLink>,
+        claimed: CompletableDeferred<String>,
+        handshake: HandshakeState,
+    ): PumpVerdict {
+        log.warn(cause) { "nearby.handshake.listener-failed listener=$listener kind=$failure" }
+        when (failure) {
+            PumpFailure.ITEM ->
+                deferred.completeExceptionally(
+                    ConnectionFailedException(handshake.endpointOrUnclaimed(), "$listener failed: $cause"),
+                )
+            PumpFailure.UPSTREAM -> {
+                val lost = NearbyEventStreamLostException(listener, cause)
+                claimed.completeExceptionally(lost)
+                deferred.completeExceptionally(lost)
+            }
+        }
+        return PumpVerdict.STOP
+    }
 
     /**
      * Turn the remote's announced bytes into an admitted [PeerId], or fail the handshake.
@@ -166,6 +264,7 @@ internal class ConnectStateMachine(
         deferred: CompletableDeferred<ConnectedLink>,
     ) {
         val endpoint = event.endpointId
+        if (handshake.hasIdentity()) return
         val announced = decodeAnnouncedId(event.bytes)
         if (announced == null) {
             deferred.completeExceptionally(
@@ -173,20 +272,13 @@ internal class ConnectStateMachine(
             )
             return
         }
-        when (val outcome = registry.bind(announced, endpoint)) {
-            // ALREADY_BOUND is this same endpoint re-announcing the id it already holds — the
-            // `remoteSelfId == null` guard above makes that unreachable today, and it is admitted
-            // rather than refused so a duplicate payload could never fail a healthy handshake.
-            PeerIdentityRegistry.BindResult.BOUND,
-            PeerIdentityRegistry.BindResult.ALREADY_BOUND,
-            -> {
-                handshake.bind(announced)
-                handshake.maybeResolve(deferred)
-            }
-            else ->
+        when (val admission = handshake.bindIdentity(announced, endpoint, registry)) {
+            is IdentityAdmission.Admitted -> admission.link?.let { deferred.complete(it) }
+            is IdentityAdmission.Refused ->
                 deferred.completeExceptionally(
-                    PeerIdentityRejectedException(endpoint, "announced id refused: $outcome"),
+                    PeerIdentityRejectedException(endpoint, "announced id refused: ${admission.outcome}"),
                 )
+            IdentityAdmission.Abandoned -> Unit
         }
     }
 
@@ -207,63 +299,138 @@ internal class ConnectStateMachine(
             null
         }
 
-    private class HandshakeState(initialEndpoint: String?) {
-        var endpoint: String? = initialEndpoint
-            private set
-        var connected: Boolean = false
+    private sealed interface IdentityAdmission {
+        /** Bound; [link] is non-null if that was the last thing the handshake was waiting for. */
+        data class Admitted(val link: ConnectedLink?) : IdentityAdmission
+
+        data class Refused(val outcome: PeerIdentityRegistry.BindResult) : IdentityAdmission
+
+        /** The handshake is already over, so nothing was bound. */
+        data object Abandoned : IdentityAdmission
+    }
+
+    /**
+     * One handshake's progress. Three listeners write it, each on whatever thread its flow resumes on,
+     * so every field is guarded by [lock]: a `connected` written on one thread and an identity written
+     * on another must not each read the other as unset, because neither would then resolve and a
+     * healthy handshake would run out its clock. Nothing under the lock suspends.
+     */
+    private class HandshakeState(
+        initialEndpoint: String?,
+        private val mayClaim: (String) -> Boolean,
+    ) {
+        private val lock = reentrantLock()
+        private var endpoint: String? = initialEndpoint
+        private var connected: Boolean = false
 
         /**
-         * The remote's admitted identity — set only by [bind], i.e. only once the shared
+         * The remote's admitted identity — set only by [bindIdentity], i.e. only once the shared
          * [PeerIdentityRegistry] has accepted it. A non-null value therefore means "this endpoint
-         * holds this id in the registry", which is what [releaseBinding] relies on to undo it.
+         * holds this id in the registry", which is what [abandon] relies on to undo it.
          */
-        var remoteSelfId: PeerId? = null
-            private set
-
-        /** Record the id this endpoint was just admitted under. */
-        fun bind(admitted: PeerId) {
-            remoteSelfId = admitted
-        }
+        private var remoteSelfId: PeerId? = null
 
         /**
-         * Give the id back if this handshake bound one and then failed. A no-op when nothing was
-         * bound, and identity-scoped through [PeerIdentityRegistry.unbind], so it can only ever
-         * release *this* endpoint's own binding.
+         * Set by [abandon] and read by everything that could still add to this handshake, because
+         * cancelling a listener does not stop one already past its checks: without this, an identity
+         * bound just after the release would stay bound for good.
          */
-        fun releaseBinding(registry: PeerIdentityRegistry<String>) {
-            val bound = remoteSelfId ?: return
-            val ep = endpoint ?: return
-            registry.unbind(bound, ep)
-            remoteSelfId = null
+        private var abandoned: Boolean = false
+
+        /** The radio turned the dial down, so the endpoint is not this handshake's to disconnect. */
+        private var dialRefused: Boolean = false
+
+        fun markDialRefused() {
+            lock.withLock { dialRefused = true }
         }
+
+        fun endpointOrUnclaimed(): String = lock.withLock { endpoint ?: "unclaimed" }
+
+        fun hasIdentity(): Boolean = lock.withLock { remoteSelfId != null }
+
+        fun isOurEndpoint(candidate: String): Boolean = lock.withLock { endpoint == candidate }
 
         /**
          * Try to claim [candidate] as our target endpoint.
          * - With a target already set, returns true only if [candidate] matches.
-         * - Without one (first-seen mode), claims it and returns true.
+         * - Without one (first-seen mode), claims it if [mayClaim] agrees.
          */
-        fun claimEndpoint(candidate: String): Boolean {
-            val current = endpoint
-            if (current == null) {
+        fun claimEndpoint(candidate: String): Boolean =
+            lock.withLock {
+                if (abandoned) return false
+                val current = endpoint
+                if (current != null) return current == candidate
+                if (!mayClaim(candidate)) return false
                 endpoint = candidate
-                return true
+                true
             }
-            return current == candidate
-        }
 
-        fun isOurEndpoint(candidate: String): Boolean = endpoint == candidate
+        /** Record that the link is up and our identity has gone out; the link, if that completes it. */
+        fun markConnected(): ConnectedLink? =
+            lock.withLock {
+                connected = true
+                resolvedLink()
+            }
 
-        fun maybeResolve(deferred: CompletableDeferred<ConnectedLink>) {
-            val resolvedRemoteSelfId = remoteSelfId
-            if (connected && resolvedRemoteSelfId != null) {
-                val resolvedEndpoint = requireNotNull(endpoint) {
-                    "resolving link while connected but no claimed endpoint set"
+        /**
+         * Put [announced] to the registry and record the answer, as one step, so that [abandon] either
+         * sees this binding or stops it from happening.
+         */
+        fun bindIdentity(
+            announced: PeerId,
+            endpoint: String,
+            registry: PeerIdentityRegistry<String>,
+        ): IdentityAdmission =
+            lock.withLock {
+                if (abandoned) return IdentityAdmission.Abandoned
+                when (val outcome = registry.bind(announced, endpoint)) {
+                    // ALREADY_BOUND is this same endpoint re-announcing the id it already holds — the
+                    // [hasIdentity] guard makes that unreachable today, and it is admitted rather than
+                    // refused so a duplicate payload could never fail a healthy handshake.
+                    PeerIdentityRegistry.BindResult.BOUND,
+                    PeerIdentityRegistry.BindResult.ALREADY_BOUND,
+                    -> {
+                        remoteSelfId = announced
+                        IdentityAdmission.Admitted(resolvedLink())
+                    }
+                    else -> IdentityAdmission.Refused(outcome)
                 }
-                deferred.complete(ConnectedLink(resolvedEndpoint, resolvedRemoteSelfId))
+            }
+
+        /**
+         * End this handshake: give the id back if it bound one, identity-scoped through
+         * [PeerIdentityRegistry.unbind] so it can only ever release *this* endpoint's own binding, and
+         * return the endpoint it holds, if any, for the caller to disconnect.
+         */
+        fun abandon(registry: PeerIdentityRegistry<String>): String? =
+            lock.withLock {
+                abandoned = true
+                val claimedEndpoint = endpoint
+                val bound = remoteSelfId
+                if (bound != null && claimedEndpoint != null) registry.unbind(bound, claimedEndpoint)
+                remoteSelfId = null
+                claimedEndpoint.takeUnless { dialRefused }
+            }
+
+        // Called with [lock] held.
+        private fun resolvedLink(): ConnectedLink? {
+            val claimedEndpoint = endpoint
+            val identity = remoteSelfId
+            return if (connected && claimedEndpoint != null && identity != null) {
+                ConnectedLink(claimedEndpoint, identity)
+            } else {
+                null
             }
         }
     }
 }
+
+/**
+ * Whether a [NearbyApi] call that threw this may still be running on the radio, and so may yet take
+ * effect. A failure means the radio answered no. A cancellation means nobody heard an answer, which is
+ * what the Play services binding does when cancelled: it stops awaiting a Task, and the Task carries on.
+ */
+internal fun Throwable.radioCallMayStillBeRunning(): Boolean = this is CancellationException
 
 /** A resolved, live Nearby connection. */
 internal data class ConnectedLink(
@@ -271,8 +438,17 @@ internal data class ConnectedLink(
     val remotePeerId: PeerId,
 )
 
-/** Thrown when Nearby reports a connection failure. */
+/** Thrown when Nearby reports a connection failure, or a handshake does not finish in time. */
 public class ConnectionFailedException(
     endpointId: String,
     reason: String?,
 ) : Exception("Connection to $endpointId failed: $reason")
+
+/**
+ * One of [NearbyApi]'s event streams has itself failed, so nothing further can be heard on it: no
+ * handshake can complete on this radio, and trying again would only fail the same way, at once.
+ */
+internal class NearbyEventStreamLostException(
+    listener: String,
+    cause: Throwable,
+) : Exception("the Nearby $listener event stream failed: $cause", cause)

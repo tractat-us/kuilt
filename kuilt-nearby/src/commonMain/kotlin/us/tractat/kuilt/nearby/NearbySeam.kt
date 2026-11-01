@@ -42,9 +42,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbySeam")
  * [NearbyApi.sendBytesPayload] for each chunk.
  *
  * @param selfId              This peer's stable identity.
- * @param endpointPeers       Mutable map from Nearby endpointId → remote [PeerId],
- *                            pre-populated with the just-connected peer after handshake.
- *                            Shared with the owning [NearbyLoom] so later joiners update it.
+ * @param endpointPeers       Mutable map from Nearby endpointId → remote [PeerId]. Empty until
+ *                            [NearbyLoom] hands this seam its one completed handshake through
+ *                            [admitEndpoint]: a host takes one joiner and a joiner dials one host,
+ *                            so it never holds more than one entry.
  * @param endpointPeersMutex  The single [Mutex] that guards [endpointPeers]. Created once
  *                            by [NearbyLoom] and passed here so both sides serialise every
  *                            read and write on the same lock instance.
@@ -80,6 +81,8 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbySeam")
  *                            Deliberately carries **no** availability: a role set answers a
  *                            platform-support question, and reusing it as a live verdict is the
  *                            #1712 defect.
+ * @param advertiserRetired   Completes once this seam's advertising has stopped — see [close]. Only a
+ *                            hosting seam has any; the default is already complete.
  */
 internal class NearbySeam(
     override val selfId: PeerId,
@@ -93,6 +96,7 @@ internal class NearbySeam(
     private val msgIdCounter: MsgIdCounter,
     private val policy: DeliveryPolicy = DeliveryPolicy.Reliable,
     private val staticRoles: Set<TransportRole> = NearbyLoom.NEARBY_BASE_ROLES,
+    private val advertiserRetired: Job = NO_ADVERTISER,
 ) : Seam {
 
     // Guards the _peers write (roster mirror) against the tear-time collapse, with the collapse
@@ -236,15 +240,38 @@ internal class NearbySeam(
      * makes its last-endpoint tear decision (`endpointPeers.isEmpty() && _state.value is Woven`)
      * under that same mutex, so the promotion published here cannot interleave with it: the
      * "the last endpoint leaves while a promotion is in flight, and the seam is left `Woven` with no
-     * endpoints and no tear" ordering is unrepresentable rather than merely unlikely. That is a
-     * property of *where this is called from*, so a future caller that admits outside the mutex
-     * would give it up silently.
+     * endpoints and no tear" ordering is unrepresentable rather than merely unlikely. That is why
+     * [admitEndpoint] is the only caller, and why this is private.
      */
-    internal fun admitRemote(peer: PeerId) {
+    private fun admitRemote(peer: PeerId) {
         weavePeers.update { it + peer }
         peersLock.withReentrantLock { if (!collapsed) _peers.update { it + peer } }
         promoteWovenIfAnyRemoteIn(setOf(peer))
     }
+
+    /**
+     * Take a completed handshake's [link] onto this seam, or return `false` if the seam has already
+     * closed, in which case the link is still the caller's to release.
+     *
+     * The [closed] read and the map write share [endpointPeersMutex] with [close]'s read of the
+     * endpoints it will disconnect, so the two cannot miss each other: a link admitted before the tear
+     * is in that read and [close] disconnects it, and a tear first means this refuses and the caller
+     * does. A handshake that finishes as the seam closes therefore cannot leave a radio link up with
+     * nothing on this side ever to take it down.
+     */
+    internal suspend fun admitEndpoint(link: ConnectedLink): Boolean =
+        endpointPeersMutex.withLock {
+            if (closed.value) return@withLock false
+            endpointPeers[link.endpointId] = link.remotePeerId
+            // The joiner records the host from its OWN completed handshake. It used to learn the
+            // host's id by reading the loom-wide flow the host had written — which worked only
+            // because the fake harness puts both ends in one process, and is the coupling #1878
+            // removes. `admitRemote` rather than a bare flow write because `join` returns right
+            // after this: the seam it hands back must already carry the peer and already be Woven,
+            // and a flow write alone leaves both owing a dispatch.
+            admitRemote(link.remotePeerId)
+            true
+        }
 
     // ── receive ───────────────────────────────────────────────────────────────
 
@@ -410,6 +437,10 @@ internal class NearbySeam(
         for (endpointId in endpoints) {
             api.disconnect(endpointId)
         }
+        // A closing host is still advertising until its acceptance has unwound, and that unwinding
+        // runs on a dispatcher. Waiting for it is what stops `close(); host()` on one radio from having
+        // this seam's stop land after the next seam's start, silencing a host that believes it is up.
+        advertiserRetired.join()
     }
 
     /**
@@ -460,6 +491,9 @@ internal class NearbySeam(
         check(!closed.value) { "NearbySeam for $selfId is closed" }
     }
 }
+
+/** What a seam with no advertising of its own waits for on [NearbySeam.close]: nothing. */
+private val NO_ADVERTISER: Job = Job().apply { complete() }
 
 /** Monotonically increasing message ID counter. Not thread-safe; callers must synchronise. */
 internal class MsgIdCounter {
