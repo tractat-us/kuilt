@@ -1050,6 +1050,9 @@ internal class SeamRoom(
                         // re-entry: JoinerResumeMachine.runReconnect calls this outside its own
                         // critical sections (the lock is reentrant either way).
                         val wasPartitioned = lock.withLock {
+                            // [attemptReconnect] checked before launching this, so the room can have gone
+                            // terminal since. See [claimHostLost] for what this check does and does not stop.
+                            if (hostLost || closed) return
                             val existing = admittedById[hostId]?.liveness as? Liveness.Partitioned
                             updateMemberLiveness(
                                 hostId,
@@ -1879,8 +1882,8 @@ internal class SeamRoom(
      * **A Farewell naming the host itself is the host leaving on purpose (#2670).** It is not a roster
      * eviction: the room goes terminal with [FailureReason.HostLeft], without opening a reconnect
      * window, and cuts short one a tear already opened ([JoinerResumeMachine]'s loop sees the room
-     * terminal, and [leave] cancels it). The claim happens here, under [lock], so a tear racing this
-     * frame finds the room terminal and opens nothing. The teardown is handed to a **detached**
+     * terminal, and [leave] cancels it). The claim happens here, under [lock], so a tear that reaches a
+     * window path after this frame announces nothing ([claimHostLost]). The teardown is handed to a **detached**
      * `scope.launch` because this runs on the room's main loop and [leave] cancels the main loop: inline,
      * that would cancel its own `seam.close` (the discipline of [watchAdmitDeadline]).
      *
@@ -2162,6 +2165,8 @@ internal class SeamRoom(
         // Read the role once: the level and the fan-out must agree on which side owns the window.
         val isHost = _role.value == SessionRole.Host
         val (wasPartitioned, level) = lock.withLock {
+            // See [claimHostLost] for what this check does and does not stop.
+            if (hostLost || closed) return
             val current = admittedById[peerId] ?: return
             val existing = current.liveness as? Liveness.Partitioned
             // `since` is first-detection, so it agrees with the single MembershipEvent.Partitioned
@@ -3405,7 +3410,15 @@ internal class SeamRoom(
         if (claimHostLost()) finishHostLost(at, reason)
     }
 
-    /** The single-shot latch for going terminal on the host's account. Once it is set, no window opens. */
+    /**
+     * The single-shot latch for going terminal on the host's account.
+     *
+     * The two paths that open a window, [markPartitioned] and [JoinerResumeHost.onReconnectStarted], check
+     * it under [lock] before announcing anything, so a path that reaches its check after this is set stays
+     * silent. A path already past its check when the latch lands still finishes: both emit outside [lock],
+     * so on a multi-threaded dispatcher its `Partitioned` and `WindowOpened` can land just after
+     * [MembershipEvent.HostLost]. Closing that would mean emitting under [lock].
+     */
     internal fun claimHostLost(): Boolean = lock.withLock {
         val first = !hostLost
         hostLost = true
@@ -3972,8 +3985,9 @@ internal class SeamRoom(
  * transport accepted the frame, and neither `Seam.close` nor `Connection.close` promises anything about
  * accepted frames: `LinkSeam.close` does not drain its outbox, and `nw_connection_cancel` makes *"no
  * guarantee that any outstanding sends that have not yet delivered send completion handlers will send
- * data"*. The frame also has to get off the room's own lane first. The real fix is the explicit
- * `flush(timeout)` ruled for #2830, and this constant should go when that lands.
+ * data"*. The frame also has to get off the room's own lane first. The measurements below say a wait is
+ * enough on loopback, which is why this did not have to wait for the explicit `flush(timeout)` ruled for
+ * #2830. That flush is the signal this stands in for, and this constant should go when it lands.
  *
  * A frame sent and closed at once, against a pause before the close, on a 16-core box whose 5-minute
  * load ran from 20 to 130 across the runs (`NwSendThenCloseStressTest` reproduces the kuilt-nw row):
@@ -3984,9 +3998,9 @@ internal class SeamRoom(
  * | kuilt-nw, real loopback TLS-PSK | 107/120 | 100/100 | 120/120 | 100/100 |
  *
  * And this wait end to end, a real room over kuilt-nw, counting joiners that reached `HostLeft`: 120/120
- * with it, 38/40 without. 100 ms is that margin again, for a slower radio and a slower phone. It is a
- * hand-off wait rather than a round trip, so link latency is not what it has to cover. **Loopback is not
- * AWDL**, so a real two-iPhone run still owes this number its confirmation.
+ * with it, 38/40 without. 100 ms is that margin again, for a slower radio and a slower phone. Whether it
+ * is enough there is unmeasured: a backlog draining at link rate can lose the frame (below), so a slow link
+ * may need more. **Loopback is not AWDL**, so a real two-iPhone run still owes this number its confirmation.
  *
  * **What it does not cover.** A backlog ahead of the frame. On kuilt-nw at this wait the frame survived
  * 1 MiB queued ahead of it (40/40) and did not survive 8 MiB (1/80). The joiner then falls back to the
