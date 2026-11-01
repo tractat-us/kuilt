@@ -1,10 +1,11 @@
 package us.tractat.kuilt.multipeer
 
 import com.sun.jna.Pointer
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.ActiveSeamSlot
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
@@ -76,6 +77,9 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      */
     internal fun requireRuntimeHandle(): Pointer = runtimeHandle ?: throwUnsupportedPlatform()
 
+    private val discoveryLock = ReentrantLock()
+    internal val discoveryUpdates = MultipeerDiscoveryUpdates()
+
     private val mutableVisiblePeers: MutableStateFlow<Set<MultipeerAdvertisement>> = MutableStateFlow(emptySet())
 
     /**
@@ -89,15 +93,24 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * [handle] entirely when [advertisement] is `null`. Called from
      * `MultipeerServiceBrowser` JVM actual's JNA callbacks — `PeerFoundCallback`
      * passes a non-null advertisement, `PeerLostCallback` passes `null`.
+     *
+     * [session] is the browse generation the calling callback was created under. `mc_browser_stop`
+     * does not wait for callbacks already in flight, so one can arrive after [clearVisiblePeers] has
+     * ended its session; it is then discarded, and `false` tells the caller not to report a departure
+     * either. The check and the update share [discoveryLock] with teardown, so no callback can slip
+     * between them.
      */
     internal fun setVisiblePeer(
+        session: MultipeerBrowseGeneration,
         handle: String,
         advertisement: MultipeerAdvertisement?,
-    ) {
-        mutableVisiblePeers.update { current ->
-            val filtered = current.filterNot { it.handle == handle }.toSet()
-            if (advertisement != null) filtered + advertisement else filtered
-        }
+    ): Boolean = discoveryLock.withLock {
+        if (session !== discoveryUpdates.generation) return@withLock false
+        val filtered = mutableVisiblePeers.value.filterNot { it.handle == handle }.toSet()
+        val current = if (advertisement != null) filtered + advertisement else filtered
+        mutableVisiblePeers.value = current
+        discoveryUpdates.publish(current, advertisement)
+        true
     }
 
     /**
@@ -106,8 +119,9 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * are still in range, so we drop the cache so the next browse session
      * starts clean.
      */
-    internal fun clearVisiblePeers() {
+    internal fun clearVisiblePeers() = discoveryLock.withLock {
         mutableVisiblePeers.value = emptySet()
+        discoveryUpdates.endSession()
     }
 
     /**

@@ -1,13 +1,14 @@
 package us.tractat.kuilt.multipeer
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import platform.Foundation.NSData
 import platform.Foundation.NSError
 import platform.MultipeerConnectivity.MCEncryptionRequired
@@ -50,10 +51,10 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.MultipeerPeer
  * the previous link is closed throws. The lobby is expected to drive at most
  * one live session per device.
  *
- * Browsing is driven from `MultipeerServiceBrowser.discoveries` through
+ * Browsing is shared by both `MultipeerServiceBrowser` feeds through
  * [startBrowsing] / [stopBrowsing]. [join] requires browsing to be active so
- * the discovering browser is still bound to the target peer; the lobby holds
- * the discoveries flow open across the join.
+ * the discovering browser is still bound to the target peer; keep at least
+ * one feed collected across the join.
  *
  * Auto-accept invite policy: the host has already opted in by tapping
  * "Host", so we accept every inbound invitation. A confirmation prompt is
@@ -92,6 +93,9 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * actual ObjC object (whose lifetime is bound to the browse session).
      */
     internal val knownPeers: MutableMap<String, MCPeerID> = mutableMapOf()
+
+    private val discoveryLock = reentrantLock()
+    internal val discoveryUpdates = MultipeerDiscoveryUpdates()
 
     private val _visiblePeers: MutableStateFlow<Set<MultipeerAdvertisement>> = MutableStateFlow(emptySet())
     public actual val visiblePeers: StateFlow<Set<MultipeerAdvertisement>> = _visiblePeers.asStateFlow()
@@ -240,14 +244,15 @@ public actual class MultipeerPeerLinkFactory actual constructor(
 
     /**
      * Starts the shared `MCNearbyServiceBrowser` and routes `foundPeer` /
-     * `lostPeer` callbacks to [onAdvertisement] (after updating
-     * [knownPeers]). Called from `MultipeerServiceBrowser.discoveries` when
-     * the flow is collected. Throws if browsing is already active — the
-     * `MultipeerServiceBrowser` contract is single-collector.
+     * `lostPeer` callbacks to [onAdvertisement] and [lostPeerHandles] respectively,
+     * after updating [knownPeers]. The paired `MultipeerServiceBrowser` starts
+     * this session for its first collector of either feed and stops it for its
+     * last collector. Throws if a separate browser owner is already active.
      */
     internal fun startBrowsing(onAdvertisement: (MultipeerAdvertisement) -> Unit) {
         check(browser == null) { "MultipeerPeerLinkFactory is already browsing" }
-        val delegate = BrowserDelegate(this, onAdvertisement)
+        val session = discoveryLock.withLock { discoveryUpdates.generation }
+        val delegate = BrowserDelegate(this, session, onAdvertisement)
         val nextBrowser =
             MCNearbyServiceBrowser(
                 peer = localPeerId,
@@ -273,9 +278,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * contract at all, which is the state the discovery survey found every non-mDNS source in — see
      * kuilt #2410 for what holding it to the contract then exposed.
      *
-     * Being `null` is itself the observation that matters most: it is exactly what a lone
-     * `departures()` collector sees, because the delegate is installed by [startBrowsing] and
-     * nothing but `MultipeerServiceBrowser.discoveries()` calls that.
+     * Being `null` means no collection-owned browse session is active.
      */
     internal val activeBrowserDelegate: MCNearbyServiceBrowserDelegateProtocol?
         get() = browserDelegate
@@ -295,8 +298,11 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         }
         browser = null
         browserDelegate = null
-        knownPeers.clear()
-        _visiblePeers.value = emptySet()
+        discoveryLock.withLock {
+            knownPeers.clear()
+            _visiblePeers.value = emptySet()
+            discoveryUpdates.endSession()
+        }
     }
 
     /**
@@ -313,7 +319,7 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * and [openSession] (stale-advertiser reap). Idempotent. [grabAndRelease][ActiveSeamSlot.grabAndRelease]
      * nulls the slot **before** `disconnect()` so any re-entrant terminal callback
      * from the disconnect finds an empty slot. Leaves browsing untouched — that is
-     * owned by the discoveries flow, not a session.
+     * owned jointly by collectors of the discovery and departure feeds.
      */
     private fun releaseActiveSession() {
         stopAdvertising()
@@ -366,8 +372,15 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         }
     }
 
+    /**
+     * [session] is the browse generation this delegate was installed under. [stopBrowsing] clears the
+     * browser's delegate but cannot recall a callback already dispatched to it, so each callback
+     * checks [session] against the current generation under the same lock teardown advances it with,
+     * and a callback from a stopped session changes nothing and reports nothing.
+     */
     private class BrowserDelegate(
         private val factory: MultipeerPeerLinkFactory,
+        private val session: MultipeerBrowseGeneration,
         private val onAdvertisement: (MultipeerAdvertisement) -> Unit,
     ) : NSObject(),
         MCNearbyServiceBrowserDelegateProtocol {
@@ -381,15 +394,21 @@ public actual class MultipeerPeerLinkFactory actual constructor(
             // from. The human-facing sessionName strips the identity back off.
             val handle = foundPeer.displayName
             log.info { "mc.discover.peer handle=$handle localPeer=${factory.displayName}" }
-            factory.knownPeers[handle] = foundPeer
             val ad =
                 MultipeerAdvertisement(
                     handle = handle,
                     sessionName = MultipeerPeerId.humanName(handle),
                     serviceType = factory.serviceType,
                 )
-            factory._visiblePeers.update { current -> current.filterNot { it.handle == handle }.toSet() + ad }
-            onAdvertisement(ad)
+            val accepted = factory.discoveryLock.withLock {
+                if (session !== factory.discoveryUpdates.generation) return@withLock false
+                factory.knownPeers[handle] = foundPeer
+                val current = factory._visiblePeers.value.filterNot { it.handle == handle }.toSet() + ad
+                factory._visiblePeers.value = current
+                factory.discoveryUpdates.publish(current, ad)
+                true
+            }
+            if (accepted) onAdvertisement(ad)
         }
 
         override fun browser(
@@ -398,9 +417,15 @@ public actual class MultipeerPeerLinkFactory actual constructor(
         ) {
             val handle = lostPeer.displayName
             log.info { "mc.lose.peer handle=$handle localPeer=${factory.displayName}" }
-            factory.knownPeers.remove(handle)
-            factory._visiblePeers.update { current -> current.filterNot { it.handle == handle }.toSet() }
-            factory.lostPeerHandles.tryEmit(handle)
+            val accepted = factory.discoveryLock.withLock {
+                if (session !== factory.discoveryUpdates.generation) return@withLock false
+                factory.knownPeers.remove(handle)
+                val current = factory._visiblePeers.value.filterNot { it.handle == handle }.toSet()
+                factory._visiblePeers.value = current
+                factory.discoveryUpdates.publish(current)
+                true
+            }
+            if (accepted) factory.lostPeerHandles.tryEmit(handle)
         }
 
         override fun browser(

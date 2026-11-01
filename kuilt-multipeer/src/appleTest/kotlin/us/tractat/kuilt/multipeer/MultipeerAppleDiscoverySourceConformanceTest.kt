@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.yield
 import platform.MultipeerConnectivity.MCNearbyServiceBrowser
 import platform.MultipeerConnectivity.MCNearbyServiceBrowserDelegateProtocol
@@ -45,53 +45,9 @@ private const val ARRIVING_HANDLE = "conformance-peer#a1b2c3d4"
 private const val BROWSE_DELEGATE_YIELDS = 64
 
 /**
- * The substring the two #2410 pins match on.
- *
- * Carries the refusing class's name, not the bare phrase "no browse session": that phrase is not
- * unique in this repo — `:kuilt-mdns`'s `RegistryBonjourBrowser` raises a differently-caused
- * `IllegalStateException` containing it — so matching the phrase alone would make the pins accept a
- * red they were not written for the moment such a rig came within reach of this classpath.
- */
-private const val NO_SESSION_RED = "MultipeerAppleSuite: no browse session"
-
-/**
- * Binds appleMain's [MultipeerServiceBrowser] to [DiscoverySourceConformanceSuite] — the
- * implementation the discovery survey recorded as believed-correct and never checked — and records
- * that **two of the four obligations fail**. The defect is kuilt #2410.
- *
- * ## What is real here, and what is driven by hand
- *
- * The source, the factory, the `MCNearbyServiceBrowser` and its `BrowserDelegate` are all
- * production. What a test cannot produce is the *stimulus*: a `foundPeer` comes from Apple's
- * framework and needs a second physical device on the same Wi-Fi, so the delegate's callbacks are
- * invoked directly (through [MultipeerPeerLinkFactory.activeBrowserDelegate]) with an `MCPeerID` of
- * this test's making. Everything between that entry point and the emitted key — the known-peer map,
- * the visible-peer snapshot, the advertisement, `lostPeerHandles`, the flows — is the shipping code
- * path.
- *
- * What this cannot see, therefore, is whether Apple ever *calls* those methods, and the run-loop
- * thread it would call them on. That is real-device territory.
- *
- * ## What fails, and why
- *
- * `departures()` is `factory.lostPeerHandles`, and the only thing that ever writes it is the
- * `BrowserDelegate` installed by `startBrowsing` — which only `discoveries()` calls. So with no
- * `discoveries()` collector there is no delegate, no arrival and no departure, and both obligations
- * that collect `departures()` alone are unreachable:
- *
- *  - [theLoneCollectorObligationFailsBecauseTheBrowseSessionBelongsToDiscoveries]
- *  - [theArrivalIsNotADepartureObligationCannotEvenStageAnArrival]
- *
- * This is the same defect, in the same shape, as jvmMain's — see
- * `MultipeerDiscoverySourceConformanceTest`, which reaches it through the dylib instead.
- * [SharedBrowseSource] is the **control**: the same factory, the same fixture, one browse session
- * ref-counted across both feeds, and every obligation passes. That is what makes the two reds a
- * statement about the backend rather than about this harness — and it is the fix's shape, needing
- * one shared session rather than the second concurrent one `startBrowsing` refuses.
- *
- * The four properties are invoked by hand rather than inherited so the two failures can be pinned
- * instead of skipped; `DiscoverySourceConformanceSuiteRigTest` records why the suites below are
- * `abstract`.
+ * Binds the production browser to the departure contract. The JVM drives fake JNA callbacks;
+ * Apple drives the real browser delegate. Neither proves that the radio emits a departure.
+ * Same-fixture controls below validate the harness independently of production.
  */
 @OptIn(ExperimentalForeignApi::class)
 class MultipeerAppleDiscoverySourceConformanceTest {
@@ -104,41 +60,13 @@ class MultipeerAppleDiscoverySourceConformanceTest {
     fun cancellingTheCollectorScopeCompletesDepartures() =
         onSuite(object : MultipeerAppleSuite() {}) { cancellingTheCollectorScopeCompletesDepartures() }
 
-    /**
-     * **KNOWN FAILURE — the Apple browser violates `PeerDiscoverySource.departures`. Tracked by
-     * kuilt #2410; delete this pin there.**
-     *
-     * Pinned rather than skipped, so a fix reds this test and names the pin to delete. The assertion
-     * is on the *shape* of the red: it must come from **this suite's own rig** refusing to pretend a
-     * peer arrived with no browse session, because a red for any other reason would be a harness bug
-     * wearing this finding's clothes. Matching the rig's class prefix and not the bare phrase is
-     * what keeps that true — `RegistryBonjourBrowser` in `:kuilt-mdns` raises a
-     * differently-caused failure carrying the same words, and a sibling could yet do so here.
-     */
     @Test
-    fun theLoneCollectorObligationFailsBecauseTheBrowseSessionBelongsToDiscoveries() {
-        val suite = object : MultipeerAppleSuite() {}
-        val failure = assertFailsWith<IllegalStateException> {
-            onSuite(suite) { departuresEmitsWithNoConcurrentDiscoveriesCollector() }
-        }
-        assertTrue(
-            failure.message.orEmpty().contains(NO_SESSION_RED),
-            "expected the rig to refuse to stage an arrival with no discoveries() collector, got: ${failure.message}",
-        )
-    }
+    fun departuresEmitsWithNoConcurrentDiscoveriesCollector() =
+        onSuite(object : MultipeerAppleSuite() {}) { departuresEmitsWithNoConcurrentDiscoveriesCollector() }
 
-    /** **KNOWN FAILURE**, same root cause and same issue (#2410) — this obligation stages an arrival too. */
     @Test
-    fun theArrivalIsNotADepartureObligationCannotEvenStageAnArrival() {
-        val suite = object : MultipeerAppleSuite() {}
-        val failure = assertFailsWith<IllegalStateException> {
-            onSuite(suite) { anArrivalIsNeverReportedAsADeparture() }
-        }
-        assertTrue(
-            failure.message.orEmpty().contains(NO_SESSION_RED),
-            "expected the rig to refuse to stage an arrival with no discoveries() collector, got: ${failure.message}",
-        )
-    }
+    fun anArrivalIsNeverReportedAsADeparture() =
+        onSuite(object : MultipeerAppleSuite() {}) { anArrivalIsNeverReportedAsADeparture() }
 
     // ── the control: this harness DOES admit a conforming source ─────────────
 
@@ -192,20 +120,17 @@ class MultipeerAppleDepartureRigTest {
     }
 
     /**
-     * The factory installs no browser delegate until somebody collects `discoveries()` — the direct
-     * receipt for both pinned failures, stated without going through the suite at all.
-     *
-     * Collecting `departures()` cannot help: it is `lostPeerHandles`, which touches no browser.
+     * Obtaining either flow without collecting it leaves the factory idle.
      */
     @Test
-    fun noBrowserDelegateExistsUntilDiscoveriesIsCollected() {
+    fun obtainingAFlowDoesNotStartBrowsing() {
         val factory = MultipeerPeerLinkFactory(CONFORMANCE_DEVICE, CONFORMANCE_SERVICE_TYPE)
         val source = MultipeerServiceBrowser(factory)
 
         assertAll(
             { assertNull(factory.activeBrowserDelegate, "a fresh factory is not browsing") },
             {
-                // Obtaining the flow is not collecting it, and neither installs a delegate.
+                // Obtaining the flow is not collecting it.
                 source.departures()
                 assertNull(factory.activeBrowserDelegate, "departures() opens no browse session of its own")
             },
@@ -229,10 +154,10 @@ class MultipeerAppleDepartureRigTest {
 /**
  * Run [property] against [suite], then close every factory it built.
  *
- * Each factory owns a real `MCPeerID` and, once `discoveries()` has been collected, a real
- * `MCNearbyServiceBrowser`. `awaitClose { stopBrowsing() }` already tears the browser down on the
+ * Each factory owns a real `MCPeerID` and, once either feed is collected, a real
+ * `MCNearbyServiceBrowser`. Collection cleanup already tears the browser down on the
  * paths that opened one, so this is belt-and-braces rather than a leak fix — but a property that
- * fails part-way (the two #2410 pins do, by design) has no such guarantee, and a test binary that
+ * fails part-way still needs cleanup, and a test binary that
  * leaves browsers advertising their interest is a poor neighbour on a shared CI host.
  */
 @OptIn(ExperimentalForeignApi::class)
@@ -286,10 +211,9 @@ private abstract class MultipeerAppleSuite : DiscoverySourceConformanceSuite() {
     /**
      * Waits for the collectors' browse session to be live, then delivers one `foundPeer`.
      *
-     * The wait is the whole reason this is `suspend`. `callbackFlow` calls `startBrowsing` from a
-     * separately *launched* producer coroutine, so the suite's `onStart` handshake proves the
-     * collection began — not that the delegate exists. Delivering into a delegate that is not there
-     * would look exactly like a source that ignores arrivals.
+     * The suite's `onStart` handshake proves collection began, not that its upstream has
+     * installed the delegate yet. Yield until the source has acquired its session before
+     * delivering a callback; delivering into no delegate would test the harness instead.
      *
      * [awaitBrowseDelegate] throws rather than returning quietly when no delegate ever appears,
      * which is what turns this backend's coupling into a named failure instead of a silent pass.
@@ -333,9 +257,8 @@ private abstract class MultipeerAppleSuite : DiscoverySourceConformanceSuite() {
      * Drain the scheduler until the browse session's delegate appears, or fail with what that
      * absence means.
      *
-     * Bounded rather than looping until quiescent: a delegate that is never going to appear is the
-     * expected outcome on two of this suite's properties, and an unbounded drain would turn that
-     * result into a wedge only `runTest`'s backstop ends.
+     * Bounded rather than looping until quiescent so a missing session fails locally instead
+     * of wedging until the test backstop ends.
      */
     protected suspend fun awaitBrowseDelegate(
         factory: MultipeerPeerLinkFactory,
@@ -344,12 +267,7 @@ private abstract class MultipeerAppleSuite : DiscoverySourceConformanceSuite() {
             factory.activeBrowserDelegate?.let { return it }
             yield()
         }
-        error(
-            "MultipeerAppleSuite: no browse session had started after $BROWSE_DELEGATE_YIELDS " +
-                "scheduler turns, so no peer can be made to arrive or depart. On this backend that " +
-                "is not a timing accident: the browser delegate is installed by startBrowsing, and " +
-                "only discoveries() calls it — so a test collecting only departures() has none.",
-        )
+        throw AssertionError("a collector of either feed must install a browser delegate")
     }
 }
 
@@ -416,18 +334,11 @@ private class SharedBrowseSource(
             }
         }
 
-    /**
-     * Built from flow operators rather than a `callbackFlow`, and that is load-bearing rather than
-     * stylistic. `callbackFlow` subscribes its producer in a separately *launched* coroutine, so
-     * the session would be opened a scheduler turn after the suite's `onStart` handshake resolved —
-     * `causeArrival` would find the delegate, return, and fire the departure into a feed nobody had
-     * subscribed to yet. `onStart` runs inline before the upstream subscription, with no suspension
-     * between, so the attach and the subscription are both done by the time the caller resumes.
-     */
+    /** Register the subscriber before attach can start a browser and deliver callbacks. */
     override fun departures(): Flow<String> =
         factory.lostPeerHandles
+            .onSubscription { attach() }
             .map { departureKey(it) }
-            .onStart { attach() }
             .onCompletion { detach() }
 
     private fun attach() =
