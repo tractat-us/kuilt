@@ -98,7 +98,7 @@ class LobbyHeartbeatTest {
      * sent from it would hold the whole election behind one stuck send.
      */
     @Test
-    fun `a wedged pong delays neither another peer's pong nor the election, and does not stop adoption`() =
+    fun `a wedged pong delays neither another peer's pong nor the election nor adoption`() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val self = PeerId("peer-z")
             val host = PeerId("peer-a")
