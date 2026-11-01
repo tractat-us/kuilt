@@ -645,7 +645,9 @@ internal class SeamRoom(
      * [seam] instance*: the [Loom] must return a stable, resumable handle whose [Seam.selfId] is
      * frozen and whose underlying channel is re-pointed onto a freshly-woven base. [MuxClientLoom]'s
      * `ResumableChannel` satisfies this: `loom.join(tag)` on a torn base re-weaves the base once and
-     * returns the same handle, so this room's [seam] transitions back out of [SeamState.Torn].
+     * returns the same handle, so this room's [seam] transitions back out of [SeamState.Torn]. A
+     * fabric whose seam re-forms by itself without ever reading `Torn` satisfies it by answering a
+     * repeat of the rendezvous with that live seam, which is what `NwLoom` does.
      *
      * The [JoinerResumeMachine]'s reconnect loop checks exactly that — after re-weave, whether
      * [seam] left `Torn` — to tell a resumable loom from a non-conforming one; the [reweave] lambda
