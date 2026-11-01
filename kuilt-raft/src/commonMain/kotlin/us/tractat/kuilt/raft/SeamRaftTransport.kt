@@ -3,6 +3,8 @@
 package us.tractat.kuilt.raft
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.StateFlow
@@ -12,6 +14,7 @@ import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.raft.SeamRaftTransport")
 
@@ -109,6 +112,16 @@ public class SeamRaftTransport(private val seam: Seam) : RaftTransport {
                 "raft.send.drop self=${selfId.value} to=${peer.value} " +
                     "reason=payload-over-budget ${tooLarge.message}"
             }
+        } catch (refused: IllegalStateException) {
+            // A torn seam refuses with a plain IllegalStateException, and the node must outlive it: a
+            // torn seam is an unreachable peer, and the engine goes on sending to a peer it cannot
+            // reach (#3022). Decided from the seam's state rather than the exception's type, because
+            // the type is shared: a cancellation is one too, and so is a programming error, which must
+            // still surface. Read AFTER the refusal, which is what covers a tear landing between the
+            // seam's own check and its send; a refusing seam has already published Torn.
+            currentCoroutineContext().ensureActive()
+            if (seam.state.value !is SeamState.Torn) throw refused
+            log.debug { "raft.send.drop self=${selfId.value} to=${peer.value} reason=seam-torn" }
         }
     }
 
