@@ -67,8 +67,9 @@ internal sealed interface GateRole {
  *
  * [admissionTag] covers the verifier's and the prover's ids as each side reads them off its own seam:
  * [Seam.selfId] for itself and [Swatch.sender] for the other. They agree because that is the seam
- * contract, which `SeamConformanceSuite` holds every fabric to. It stops a relayer who shows up as
- * itself, since the puller's answer then names the relayer and the device expects to be named.
+ * contract, asserted by `SeamConformanceSuite`, and an honest pair is refused on a fabric that breaks
+ * it. The binding stops a relayer who shows up as itself, since the puller's answer then names the
+ * relayer and the device expects to be named.
  *
  * No fabric here authenticates a peer id against anything, so the ids are worth what the fabric makes
  * them hard to claim:
