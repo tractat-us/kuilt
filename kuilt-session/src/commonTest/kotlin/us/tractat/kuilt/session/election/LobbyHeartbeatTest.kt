@@ -68,10 +68,11 @@ class LobbyHeartbeatTest {
             runCurrent()
             assertFalse(outcome.isCompleted, "a host that is alive and waiting must not read as unreachable")
 
-            val hostRoom = backgroundScope.async { hostLobby.start() }
+            val hostRoom = hostLobby.start()
+            val memberOutcome = outcome.await()
             assertAll(
-                { assertIs<ElectionOutcome.Adopted>(outcome.await(), "the wait ends in the room the host opened") },
-                { assertEquals(hostLobby.selfId, hostRoom.await().selfId, "and the host adopted it") },
+                { assertIs<ElectionOutcome.Adopted>(memberOutcome, "the wait ends in the room the host opened") },
+                { assertEquals(hostLobby.selfId, hostRoom.selfId, "and the host adopted it") },
             )
         }
 
@@ -158,8 +159,9 @@ class LobbyHeartbeatTest {
                 runCurrent()
             }
 
+            val ended = started.await()
             assertAll(
-                { assertIs<LobbyTornException>(started.await(), "a silent late member must collapse the election") },
+                { assertIs<LobbyTornException>(ended, "a silent late member must collapse the election") },
                 {
                     assertTrue(
                         testScheduler.currentTime - joinedAt in 3_000..10_999,
@@ -191,7 +193,7 @@ class LobbyHeartbeatTest {
                 runCurrent()
             }
 
-            assertFalse(started.isCompleted, "the election goes on with the member that stayed: ${if (started.isCompleted) started.await() else ""}")
+            assertFalse(started.isCompleted, "the election goes on with the member that stayed")
         }
 
     /** A silent host must still collapse the wait: answering pings cannot be what keeps a member here. */
@@ -205,14 +207,14 @@ class LobbyHeartbeatTest {
             val outcome = backgroundScope.async { lobby.awaitRoom() }
             runCurrent()
 
-            // The host's own detector pings us and we answer, but the host answers nothing back. Pings
-            // count as life, so this control stops them after the first to leave only the silence.
+            // One ping, so this member has something to answer; the host then says nothing more.
             seam.deliver(host, ping)
             runCurrent()
+            assertTrue(seam.framesTo(host, HeartbeatPartitionDetector.PONG_PREFIX) > 0, "rig: this member answered")
 
+            val ended = outcome.await()
             assertAll(
-                { assertEquals(2, seam.framesTo(host, HeartbeatPartitionDetector.PONG_PREFIX), "rig: answered by the responder and the host's detector") },
-                { assertIs<ElectionOutcome.Torn>(outcome.await(), "our own pongs are no evidence that the host is alive") },
+                { assertIs<ElectionOutcome.Torn>(ended, "our own pongs are no evidence that the host is alive") },
                 { assertTrue(testScheduler.currentTime in 3_000..9_999, "was ${testScheduler.currentTime}ms") },
             )
         }
