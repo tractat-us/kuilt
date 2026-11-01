@@ -245,10 +245,22 @@ public class GamePresence(
      * The host observes this to trigger immediate eviction without waiting the reconnect window.
      * Returns replicas whose current slot value equals [VACATE_DECLARED].
      */
-    public fun vacaters(): Set<ReplicaId> =
-        quilter.state.value.entries
-            .filterValues { entry -> entry.value == VACATE_DECLARED }
-            .keys
+    public fun vacaters(): Set<ReplicaId> = vacatersIn(quilter.state.value)
+
+    /**
+     * [vacaters] as a flow, for a watcher that has to wake when a departure lands.
+     *
+     * [announced] cannot do that job. A departing voter has already announced itself, so declaring a
+     * vacate changes the value in its slot and not the set of slots, and a [StateFlow] of that set
+     * does not emit.
+     */
+    internal val vacating: StateFlow<Set<ReplicaId>> =
+        quilter.state
+            .map { map -> vacatersIn(map) }
+            .stateIn(presenceScope, SharingStarted.Eagerly, vacatersIn(quilter.state.value))
+
+    private fun vacatersIn(map: EphemeralMap<String>): Set<ReplicaId> =
+        map.entries.filterValues { entry -> entry.value == VACATE_DECLARED }.keys
 
     /**
      * Re-opens admission by reverting the host's slot to [HOST_DECLARED].

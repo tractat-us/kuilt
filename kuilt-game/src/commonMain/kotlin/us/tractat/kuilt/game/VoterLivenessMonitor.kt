@@ -122,14 +122,13 @@ internal class VoterLivenessMonitor(
     /**
      * Watches for graceful-leave vacate signals on [presence] and triggers immediate eviction.
      *
-     * Polls [GamePresence.vacaters] on every Quilter state change (announced flow). When a new
-     * vacater is seen that is a current voter, sends its [NodeId] to [evictions] to bypass the
-     * reconnect window.
+     * Collects [GamePresence.vacating]. When a new vacater is seen that is a current voter, sends its
+     * [NodeId] to [evictions] to bypass the reconnect window.
      */
     private suspend fun watchVacaters() {
         val seenVacaters = mutableSetOf<NodeId>()
-        presence.announced.collect {
-            val newVacaters = presence.vacaters()
+        presence.vacating.collect { vacating ->
+            val newVacaters = vacating
                 .map { NodeId(it.value) }
                 .filter { it in voters && it !in seenVacaters && it != self }
             newVacaters.forEach { vacaterId ->

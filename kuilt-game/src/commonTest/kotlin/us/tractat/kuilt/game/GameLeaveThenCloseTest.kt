@@ -154,10 +154,12 @@ class GameLeaveThenCloseTest {
         advance(halfWindow)
 
         val voters = table.host.node.membership.value.voters
+        val hostHeard = table.host.lobbyPresence?.vacaters().orEmpty().map { it.value }
         assertAll(
             { assertEquals(1, table.seam.vacateEntered, "the vacate frame reached the seam's send") },
             { assertEquals(0, table.seam.vacateCancelled, "and was not cancelled out of it") },
             { assertEquals(1, table.seam.vacateHanded, "and went through to the fabric") },
+            { assertEquals(listOf(table.leavingId.value), hostHeard, "and the host's board holds the marker") },
             { assertFalse(table.leavingId in voters, "the host freed the seat inside the window, voters were $voters") },
             { assertEquals(2, voters.size, "and only that seat, voters were $voters") },
         )
