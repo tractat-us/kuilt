@@ -50,6 +50,62 @@ class GameNodeTest {
         assertEquals(ClientId("durable-x"), indexed.dedupKey.clientId)
     }
 
+    /**
+     * The route a consumer takes to retained storage: `gameNode(storage = …, identity = Durable(…))`
+     * and the one-argument [TurnSequencer.propose]. A fresh [InMemoryLoom] reuses the seam id, so the
+     * second incarnation is the same voter (#3060).
+     */
+    @Test
+    fun aDurableGameNodeOverRetainedStorageSurvivesARestart() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val failures = mutableListOf<Throwable>()
+        val capturing = CoroutineScope(
+            backgroundScope.coroutineContext +
+                SupervisorJob(backgroundScope.coroutineContext[Job]) +
+                CoroutineExceptionHandler { _, e -> failures += e },
+        )
+        val store = InMemoryDurableStore()
+        val identity = ClientIdentity.Durable(ClientId("durable-x"))
+        val session: suspend CoroutineScope.(Long) -> GameSession = { seed ->
+            val seam = InMemoryLoom().host(Pattern("solo"))
+            gameNode(
+                seam,
+                voterIds = setOf(NodeId(seam.selfId.value)),
+                storage = DurableStoreRaftStorage.open(store),
+                raftConfig = fastRaftConfig(seed = seed),
+                identity = identity,
+            )
+        }
+
+        val firstScope = CoroutineScope(capturing.coroutineContext + Job(capturing.coroutineContext[Job]))
+        val first = firstScope.session(1L)
+        first.node.awaitLeadership()
+        val moves = TurnSequencer(first.node, Int.serializer())
+        repeat(3) { moves.propose(it) }
+        firstScope.cancel()
+
+        val secondScope = CoroutineScope(capturing.coroutineContext + Job(capturing.coroutineContext[Job]))
+        val second = secondScope.session(2L)
+        val walked = mutableListOf<Long>()
+        secondScope.launch {
+            second.node.committed.filterIsInstance<Committed.Entry>().collect { c ->
+                c.entry.dedupKey?.let { walked += it.requestId }
+            }
+        }
+        second.node.awaitLeadership()
+        delay(100.milliseconds)
+        val replayed = walked.toList()
+        val failuresAtReplay = failures.map { it.toString() }
+        val scopeSurvivedReplay = secondScope.isActive
+        val next = if (scopeSurvivedReplay) TurnSequencer(second.node, Int.serializer()).propose(99) else null
+
+        assertAll(
+            { assertEquals(emptyList(), failuresAtReplay, "no failure across the replay") },
+            { assertTrue(scopeSurvivedReplay, "the node's scope must still be active") },
+            { assertEquals(listOf(1L, 2L, 3L), replayed, "the rig: replay re-walked the old serials") },
+            { assertEquals(4L, next?.dedupKey?.requestId, "the next move's serial resumes above them") },
+        )
+    }
+
     @Test
     fun rosterGivenTwoPeersConverge() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val loom = InMemoryLoom()
