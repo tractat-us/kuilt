@@ -46,7 +46,8 @@ import kotlin.time.Duration.Companion.seconds
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.NwLoom")
 
 /**
- * Thrown by [NwLoom.weave] when no peer is reached within the weave timeout — the fabric never wove.
+ * Thrown by [NwLoom.weave] when no peer is reached within the weave timeout — the fabric never wove — or
+ * when the seam tears first, or a previous session on the loom never finishes closing.
  *
  * A plain [Exception], deliberately **not** a [kotlin.coroutines.cancellation.CancellationException]:
  * the earlier code rethrew the raw [TimeoutCancellationException], so a caller wrapping [NwLoom.weave]
