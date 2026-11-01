@@ -176,8 +176,10 @@ class SpeculativeSequencerPendingTest {
 
         rig.commit(2)
         rig.succeed(b)
-        assertEquals(0, rig.seq.pendingCount)
-        assertEquals(listOf(2), rig.seq.speculativeState.value)
+        assertAll(
+            { assertEquals(0, rig.seq.pendingCount) },
+            { assertEquals(listOf(2), rig.seq.speculativeState.value) },
+        )
     }
 
     // ── A throwing apply is never pending (#2767, second way in) ──────────────
@@ -194,8 +196,10 @@ class SpeculativeSequencerPendingTest {
 
         // Today's failure surfaces here: the stuck action replays inside the commit collector.
         rig.commit(1)
-        assertEquals(1, rig.seq.confirmedCount.value, "the commit collector must have processed the commit")
-        assertEquals(listOf(1), rig.seq.speculativeState.value)
+        assertAll(
+            { assertEquals(1, rig.seq.confirmedCount.value, "the commit collector must have processed the commit") },
+            { assertEquals(listOf(1), rig.seq.speculativeState.value) },
+        )
     }
 
     // ── Commits out of proposal order (#2767, third way in) ───────────────────
@@ -239,9 +243,11 @@ class SpeculativeSequencerPendingTest {
 
         rig.commit(5)
         rig.succeed(call)
-        assertEquals(3, rig.seq.confirmedCount.value)
-        assertEquals(0, rig.seq.pendingCount)
-        assertEquals(listOf(7, 8, 5), rig.seq.speculativeState.value)
+        assertAll(
+            { assertEquals(3, rig.seq.confirmedCount.value) },
+            { assertEquals(0, rig.seq.pendingCount) },
+            { assertEquals(listOf(7, 8, 5), rig.seq.speculativeState.value) },
+        )
     }
 
     @Test
@@ -254,8 +260,10 @@ class SpeculativeSequencerPendingTest {
         assertEquals(listOf(7), rig.seq.speculativeState.value)
 
         rig.commit(8)
-        assertEquals(3, rig.seq.confirmedCount.value, "and it is still running")
-        assertEquals(listOf(7, 8), rig.seq.speculativeState.value)
+        assertAll(
+            { assertEquals(3, rig.seq.confirmedCount.value, "and it is still running") },
+            { assertEquals(listOf(7, 8), rig.seq.speculativeState.value) },
+        )
     }
 
     @Test
@@ -268,9 +276,11 @@ class SpeculativeSequencerPendingTest {
         rig.commit(5)
         rig.succeed(call)
 
-        assertEquals(2, rig.seq.confirmedCount.value)
-        assertEquals(0, rig.seq.pendingCount)
-        assertEquals(listOf(7), rig.seq.speculativeState.value)
+        assertAll(
+            { assertEquals(2, rig.seq.confirmedCount.value) },
+            { assertEquals(0, rig.seq.pendingCount) },
+            { assertEquals(listOf(7), rig.seq.speculativeState.value) },
+        )
     }
 
     @Test
@@ -310,8 +320,10 @@ class SpeculativeSequencerPendingTest {
         rig.fail(first)
         rig.succeed(second)
 
-        assertEquals(0, rig.seq.pendingCount)
-        assertEquals(listOf(4), rig.seq.speculativeState.value)
+        assertAll(
+            { assertEquals(0, rig.seq.pendingCount) },
+            { assertEquals(listOf(4), rig.seq.speculativeState.value) },
+        )
     }
 
     /**
@@ -330,8 +342,10 @@ class SpeculativeSequencerPendingTest {
 
         rig.commit(4)
         rig.succeed(local)
-        assertEquals(0, rig.seq.pendingCount)
-        assertEquals(listOf(4, 4), rig.seq.speculativeState.value, "both are in the log, so both are applied")
+        assertAll(
+            { assertEquals(0, rig.seq.pendingCount) },
+            { assertEquals(listOf(4, 4), rig.seq.speculativeState.value, "both are in the log, so both are applied") },
+        )
     }
 
     @Test
@@ -342,8 +356,10 @@ class SpeculativeSequencerPendingTest {
         rig.commit(4)
         rig.fail(local)
 
-        assertEquals(0, rig.seq.pendingCount)
-        assertEquals(listOf(4), rig.seq.speculativeState.value)
+        assertAll(
+            { assertEquals(0, rig.seq.pendingCount) },
+            { assertEquals(listOf(4), rig.seq.speculativeState.value) },
+        )
     }
 
     // ── A duplicate key: the retry path ───────────────────────────────────────
@@ -412,8 +428,10 @@ class SpeculativeSequencerPendingTest {
 
         rig.commit(2)
         rig.succeed(b)
-        assertEquals(0, rig.seq.pendingCount)
-        assertEquals(listOf(1, 2), rig.seq.speculativeState.value)
+        assertAll(
+            { assertEquals(0, rig.seq.pendingCount) },
+            { assertEquals(listOf(1, 2), rig.seq.speculativeState.value) },
+        )
     }
 
     // ── Any interleaving converges ────────────────────────────────────────────
@@ -512,8 +530,10 @@ class SpeculativeSequencerPendingTest {
         while (lateFromSuccess.isNotEmpty()) deliverLate(lateFromSuccess)
         while (lateFromFailure.isNotEmpty()) deliverLate(lateFromFailure)
 
-        assertEquals(0, rig.seq.pendingCount, "seed=$seed: nothing is pending once everything has landed")
-        assertEquals(expected, rig.seq.speculativeState.value, "seed=$seed: the state is the log's fold")
+        assertAll(
+            { assertEquals(0, rig.seq.pendingCount, "seed=$seed: nothing is pending once everything has landed") },
+            { assertEquals(expected, rig.seq.speculativeState.value, "seed=$seed: the state is the log's fold") },
+        )
     }
 
     private companion object {
