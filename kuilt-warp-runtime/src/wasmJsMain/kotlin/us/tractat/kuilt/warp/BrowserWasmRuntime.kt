@@ -30,9 +30,9 @@ import kotlin.js.Promise
  *   [WasmSandboxConfig.maxMemoryPages]; a module is rejected with [WasmLoadException] if its declared
  *   initial exceeds the cap, its explicit max exceeds the cap, **it declares no explicit max at
  *   all**, it declares more than one memory (V8 runs a second one, and the cap reads one), or its
- *   limits use memory64. The JS API exposes no declared memory limits and cannot re-impose a max after compile,
- *   so a no-max module could otherwise `memory.grow` unbounded to ~4 GiB — a memory-exhaustion
- *   DoS. Requiring kernels to declare a bounded max ≤ cap closes that hole (and is the uniform
+ *   limits use memory64. The JS API exposes no declared memory limits and cannot re-impose a max
+ *   after compile, so a no-max module could otherwise `memory.grow` unbounded to ~4 GiB — a
+ *   memory-exhaustion DoS. Requiring kernels to declare a bounded max ≤ cap closes that hole (and is the uniform
  *   contract every [WasmRuntime] impl enforces — see [WasmRuntime]'s memory-ceiling KDoc): the
  *   browser then enforces the declared max at runtime (a `memory.grow` past it fails).
  * - *Malformed bytes* — `new WebAssembly.Module(bytes)` throws on invalid WASM → [WasmLoadException].
