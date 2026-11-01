@@ -156,6 +156,20 @@ class ClusterClientFailoverE2ETest {
 
     @Test
     fun `client fails over to a surviving relay and keeps committing on the same log`() =
+        failoverScenario(loseFirstProposal = false)
+
+    /**
+     * Forces leg 1's first proposal into a reconnect gap, which the scenario above reaches only
+     * when its first admit fails. Without the retry this reds at [leg1Backstop] every time.
+     *
+     * Killing the relay stands in for the failed admit. It reproduces the lost forward and not the
+     * leader step-down that caused it in CI, so it says nothing about the step-down itself.
+     */
+    @Test
+    fun `client whose first proposal falls in a reconnect gap commits it by retrying`() =
+        failoverScenario(loseFirstProposal = true)
+
+    private fun failoverScenario(loseFirstProposal: Boolean) =
         testApplication {
             val clientNodeId = NodeId("cluster-client-failover")
 
@@ -227,6 +241,13 @@ class ClusterClientFailoverE2ETest {
                     raftConfig = raftCfg,
                     clock = { Clock.System.now() },
                 )
+
+                if (loseFirstProposal) {
+                    // A committed entry from the leader means the client knows who leads, so the
+                    // proposal below is forwarded into the gap rather than queued for want of one.
+                    withTimeout(leaderBackstop) { client.committed.first { it is Committed.Internal } }
+                    relayScopeA.cancel()
+                }
 
                 // ── Leg 1: connect to relay A → propose → commit ──────────────────────
                 val cmd1 = "action:before-failover".encodeToByteArray()
