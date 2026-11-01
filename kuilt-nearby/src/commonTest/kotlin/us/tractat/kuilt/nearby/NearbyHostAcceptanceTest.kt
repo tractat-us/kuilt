@@ -460,11 +460,13 @@ class NearbyHostAcceptanceTest {
             val open = assertIs<NearbySeam>(loom.host(Pattern("device")))
             val closed = assertIs<NearbySeam>(loom.host(Pattern("device")))
             closed.close()
+            val openAdmits = open.admitEndpoint(link)
+            val closedAdmits = closed.admitEndpoint(link)
 
             assertAll(
-                { assertTrue(open.admitEndpoint(link), "rig: an open seam takes the same link") },
+                { assertTrue(openAdmits, "rig: an open seam takes the same link") },
                 { assertTrue(link.remotePeerId in open.peers.value) },
-                { assertFalse(closed.admitEndpoint(link), "a closed one refuses, leaving it to the caller") },
+                { assertFalse(closedAdmits, "a closed one refuses, leaving it to the caller") },
                 { assertEquals(setOf(closed.selfId), closed.peers.value, "and its roster stays collapsed") },
             )
             open.close()
