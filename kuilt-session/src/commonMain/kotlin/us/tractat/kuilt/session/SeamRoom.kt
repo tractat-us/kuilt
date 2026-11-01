@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -3830,12 +3831,12 @@ internal class SeamRoom(
 
     override suspend fun leave(reason: LeaveReason) {
         // Flip closed + snapshot jobs under lock; announce, cancel, and close outside.
-        var hostFarewellQueued = false
+        var hostFarewellRecipients = emptyList<PeerId>()
         val plan = lock.withLock {
             if (closed) return
             // Queued BEFORE `closed` flips, since a closed room refuses to mint a lane, and in the same
             // critical section, so this is the last thing any lane carries. Nothing here suspends.
-            hostFarewellQueued = queueHostFarewell(reason)
+            hostFarewellRecipients = queueHostFarewell(reason)
             closed = true
             Triple(
                 _role.value == SessionRole.Joiner && reason is LeaveReason.Normal,
@@ -3892,7 +3893,7 @@ internal class SeamRoom(
         detectorJobsToCancel.forEach { it.cancel() }
         // Last, with the room already quiet: a joiner reacting to the frame drops its link during this
         // wait, and a detector still running here would open a window for a room that has left.
-        if (hostFarewellQueued) awaitHostFarewellHandoff()
+        if (hostFarewellRecipients.isNotEmpty()) awaitHostFarewellHandoff(hostFarewellRecipients)
         seam.close(
             when (reason) {
                 is LeaveReason.Normal -> CloseReason.Normal
@@ -3905,7 +3906,7 @@ internal class SeamRoom(
     /**
      * **Host only, on a clean leave.** Tell every member this host is leaving on purpose (#2670), so a
      * joiner ends its room with [FailureReason.HostLeft] rather than holding a live-looking one for the
-     * whole reconnect window. Returns whether anything was queued, and so whether [leave] owes the wait.
+     * whole reconnect window. Returns who it was queued for, and so whether [leave] owes the wait.
      *
      * A `Farewell` naming the host, on each recipient's own [admitLanes], for the reasons every other
      * fan-out is there: a wedged recipient delays only itself, and the frame cannot overtake an
@@ -3915,11 +3916,12 @@ internal class SeamRoom(
      * [LeaveReason.Normal] only, mirroring the joiner's [AdmitMessage.Goodbye]. Callers must hold [lock],
      * and `closed` must not have flipped yet.
      */
-    private fun queueHostFarewell(reason: LeaveReason): Boolean {
-        if (_role.value != SessionRole.Host || reason !is LeaveReason.Normal) return false
-        if (seam.state.value is SeamState.Torn || admittedById.isEmpty()) return false
-        fanOutToOtherMembers(selfId, AdmitMessage.Farewell(selfId.value))
-        return true
+    private fun queueHostFarewell(reason: LeaveReason): List<PeerId> {
+        if (_role.value != SessionRole.Host || reason !is LeaveReason.Normal) return emptyList()
+        if (seam.state.value is SeamState.Torn) return emptyList()
+        val recipients = admittedById.keys.filter { it != selfId }
+        if (recipients.isNotEmpty()) fanOutToOtherMembers(selfId, AdmitMessage.Farewell(selfId.value))
+        return recipients
     }
 
     /**
@@ -3929,9 +3931,37 @@ internal class SeamRoom(
      * Shielded, because a cancelled caller must not strand an open seam behind a closed room: what closes
      * it is the code below this call in [leave]. The wait is short and fixed, so the shield delays a
      * cancel by at most [HOST_FAREWELL_HANDOFF].
+     *
+     * **A room whose [scope] is already cancelled has no lane writers left**, which is how a host shut
+     * down by cancelling its scope gets here (`LoomRoomHost`, `KtorRoomHost`): a writer launched on that
+     * scope never runs, one already running is dead, and `trySend` into its lane still succeeds. So this
+     * sends the frame itself, inside the shield, one bounded send per recipient alongside the wait. It
+     * cannot overtake anything, because nothing else is left to send on those lanes. A live room keeps the
+     * lane, which is what stops the frame overtaking an announcement already queued for that recipient. A
+     * second copy, from a scope cancelled after its writer sent, is harmless: a joiner ignores it once
+     * closed, and the latch makes it a no-op before that. A scope cancelled during this wait can still
+     * cost a frame its writer had not sent yet, and that frame takes the fallback like any other lost one.
      */
-    private suspend fun awaitHostFarewellHandoff() {
-        withContext(NonCancellable) { delay(HOST_FAREWELL_HANDOFF) }
+    private suspend fun awaitHostFarewellHandoff(recipients: List<PeerId>) {
+        withContext(NonCancellable) {
+            if (!scope.isActive) {
+                val frame = AdmitMessage.encode(AdmitMessage.Farewell(selfId.value))
+                recipients.forEach { recipient ->
+                    launch {
+                        // One guard per recipient, outside the bound. Shielded, so anything arriving here
+                        // is this send's failure and not a cancellation of ours.
+                        try {
+                            withTimeoutOrNull(HOST_FAREWELL_HANDOFF) { seam.sendTo(recipient, frame) }
+                        } catch (failure: Throwable) {
+                            logger.debug {
+                                "room.farewell.drop self=${selfId.value} to=${recipient.value} failure=$failure"
+                            }
+                        }
+                    }
+                }
+            }
+            delay(HOST_FAREWELL_HANDOFF)
+        }
     }
 }
 
