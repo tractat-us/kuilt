@@ -223,14 +223,20 @@ class GameLeaveThenCloseTest {
         return { payload -> if (payload.carriesVacate()) neverReleased.await() }
     }
 
-    /** A caller with no timeout of its own must not hang on a seam that holds the frame for ever. */
+    /**
+     * A caller with no timeout of its own must not hang on a seam that holds the frame for ever.
+     *
+     * The `withTimeout` stands in for "for ever", at twice the bound. Without it a lost bound leaves
+     * virtual time spinning on the session's re-arming timers until the test JVM runs out of memory,
+     * which records this arm as `skipped` rather than failed. Measured on the mutation.
+     */
     @Test
     fun aWedgedSendHoldsCloseOnlyForTheBound() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val lone = lone(wedgedVacate())
 
         lone.session.leave()
         val start = testScheduler.currentTime
-        lone.session.close()
+        withTimeout(DEPARTURE_HANDOFF_BOUND * 2) { lone.session.close() }
 
         assertAll(
             {
