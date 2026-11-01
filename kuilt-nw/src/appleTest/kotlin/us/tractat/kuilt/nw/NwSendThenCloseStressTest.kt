@@ -42,33 +42,43 @@ class NwSendThenCloseStressTest {
     private companion object {
         const val SERVICE_TYPE = "_kuilt._tcp"
         const val ROOM_KEY = "loopback-secret"
-        const val TRIALS_PER_ROW = 40
+        const val TRIALS_PER_ROW = 20
+        val FAREWELL = "farewell".encodeToByteArray()
         val ARRIVAL_CEILING: Duration = 1.seconds
     }
 
-    private data class Row(val wait: Duration, val trials: Int, val arrived: Int)
+    /** One measured condition: [cargoBytes] handed to the seam ahead of the small frame, then [wait], then close. */
+    private data class Row(val cargoBytes: Int, val wait: Duration, val trials: Int, val arrived: Int)
 
     @Test
     fun aFrameSentJustBeforeCloseOverTheRealRadio() = runBlocking {
         withContext(Dispatchers.Default) {
-            val rows = listOf(0.milliseconds, 5.milliseconds, 25.milliseconds, 100.milliseconds)
-                .map { wait -> measureRow(wait) }
-            rows.forEach { println("nw.send-then-close wait=${it.wait} arrived=${it.arrived}/${it.trials}") }
+            val rows = listOf(
+                0 to 0.milliseconds,
+                0 to 25.milliseconds,
+                64 * 1024 to 0.milliseconds,
+                1024 * 1024 to 0.milliseconds,
+                8 * 1024 * 1024 to 0.milliseconds, // the control: a rig that cannot lose a frame reds nothing
+                8 * 1024 * 1024 to 100.milliseconds,
+            ).map { (cargo, wait) -> measureRow(cargo, wait) }
+            rows.forEach {
+                println("nw.send-then-close cargo=${it.cargoBytes} wait=${it.wait} arrived=${it.arrived}/${it.trials}")
+            }
             assertEquals(List(rows.size) { TRIALS_PER_ROW }, rows.map { it.trials }, "every trial ran")
         }
     }
 
-    private suspend fun measureRow(wait: Duration): Row {
+    private suspend fun measureRow(cargoBytes: Int, wait: Duration): Row {
         var arrived = 0
         var trials = 0
         repeat(TRIALS_PER_ROW) { trial ->
             trials += 1
-            if (oneTrial(wait, trial)) arrived += 1
+            if (oneTrial(cargoBytes, wait, trial)) arrived += 1
         }
-        return Row(wait, trials, arrived)
+        return Row(cargoBytes, wait, trials, arrived)
     }
 
-    private suspend fun oneTrial(wait: Duration, trial: Int): Boolean {
+    private suspend fun oneTrial(cargoBytes: Int, wait: Duration, trial: Int): Boolean {
         val psk = NwPsk.derive(ROOM_KEY, SERVICE_TYPE)
         val rendezvous = NwLoopbackRendezvous()
         val hostApi = RealNwApi(psk, NwLoopbackConfig(dial = false, rendezvous = rendezvous))
@@ -84,11 +94,12 @@ class NwSendThenCloseStressTest {
             return coroutineScope {
                 val got = CompletableDeferred<Boolean>()
                 val collector = launch {
-                    val frame = joiner.incoming.first()
-                    got.complete(frame.payload.decodeToString() == "farewell")
+                    joiner.incoming.first { it.toByteArray().size == FAREWELL.size }
+                    got.complete(true)
                 }
                 delay(5.milliseconds) // the collector is live before the send, on a real dispatcher
-                host.sendTo(joiner.selfId, "farewell".encodeToByteArray())
+                if (cargoBytes > 0) host.sendTo(joiner.selfId, ByteArray(cargoBytes))
+                host.sendTo(joiner.selfId, FAREWELL)
                 if (wait > Duration.ZERO) delay(wait)
                 host.close(CloseReason.Normal)
                 val seen = withTimeoutOrNull(ARRIVAL_CEILING) { got.await() } ?: false
