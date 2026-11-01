@@ -16,6 +16,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FrameOverflow
 import us.tractat.kuilt.core.Overflow
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
@@ -29,6 +30,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -186,12 +188,17 @@ class TcpLoomFactoryTest {
      * own — the three hops `tcpLoomJoin` → `TcpLoom` → `weave` → `handshaking` each had to be wired.
      *
      * The joiner asks for a **capacity-1 `FAIL`** inbox and then never collects `incoming`. The
-     * host sends four frames: the first fills the joiner's spool, and the second makes
+     * host sends two frames: the first fills the joiner's spool, and the second makes
      * `Spool.deliver` raise `FrameOverflow` inside `LinkSeam`'s read loop, which treats any read
      * failure as a lost wire and tears the seam down. So an overflow that reaches the seam is
-     * observable at the [Seam] contract level, as [SeamState.Torn].
+     * observable at the [Seam] contract level, as [SeamState.Torn] carrying that `FrameOverflow`.
      *
-     * Under the default [DeliveryPolicy.Reliable] the same four frames sit in a 256-deep buffer and
+     * **Two frames and no more (#3001).** The joiner cannot tear before the second frame arrives, so
+     * neither send can be refused. A third can: the tear closes the socket, the host reads the end
+     * of the stream and tears too, and a `broadcast` on a torn seam throws by contract
+     * (`SeamConformanceSuite.sendOnTornSeamThrows`). That race failed this test on CI.
+     *
+     * Under the default [DeliveryPolicy.Reliable] the same two frames sit in a 256-deep buffer and
      * the seam stays `Woven` forever — which is exactly what a dropped `policy` argument produces,
      * and why the wait below expires rather than passing on a technicality. Real time, not virtual:
      * `TcpLoom` refuses a `TestDispatcher`, and the ceiling is a generous wedge backstop — a live
@@ -205,15 +212,14 @@ class TcpLoomFactoryTest {
         joiner = tcpLoomJoin(selector, policy = DeliveryPolicy(capacity = 1, overflow = Overflow.FAIL)),
     ) { hostSeam, joinerSeam ->
         repeat(2) { hostSeam.broadcast(byteArrayOf(it.toByte())) }
-        // Forces the order CI hit by luck: the joiner's tear reaches the host before frames 3 and 4.
-        withTimeout(5.seconds) { hostSeam.state.first { it is SeamState.Torn } }
-        repeat(2) { hostSeam.broadcast(byteArrayOf((it + 2).toByte())) }
         val torn = withTimeoutOrNull(5.seconds) { joinerSeam.state.first { it is SeamState.Torn } }
         assertTrue(
             torn is SeamState.Torn,
             "a capacity-1 FAIL inbox must overflow on the second frame; the seam is still " +
                 "${joinerSeam.state.value}, so the policy never reached it",
         )
+        val reason = assertIs<CloseReason.Error>(torn.reason, "the joiner must tear on a read failure")
+        assertIs<FrameOverflow>(reason.throwable, "the tear must be the overflow, not some other lost wire")
     }
 
     // A `@JvmInline` value class in the signature makes Kotlin mangle the JVM method name
