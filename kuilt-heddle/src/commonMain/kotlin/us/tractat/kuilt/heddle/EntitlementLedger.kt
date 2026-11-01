@@ -172,8 +172,8 @@ import kotlinx.serialization.Serializable
  * [piece] builds its maps through a `HashMap` and its record sets with `+`, so iteration order follows
  * the merge history. A `Quilter` hashes this encoding for its anti-entropy root, and two peers whose
  * bytes differ would ship the whole ledger to each other on every round, so every unordered field,
- * at every level, goes through a canonical serializer. A new field must too; a binding in
- * `EntitlementLedgerConvergenceTest` is what reds if it does not.
+ * at every level, goes through a canonical serializer. A new field must too, and it needs its own
+ * arm in `EntitlementLedgerCanonicalEncodingTest`, since no test reds on a field it never writes.
  *
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerMerge
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerLifecycle
