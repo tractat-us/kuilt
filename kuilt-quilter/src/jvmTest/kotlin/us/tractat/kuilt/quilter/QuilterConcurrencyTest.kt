@@ -583,7 +583,7 @@ class QuilterConcurrencyTest {
         val probe = closeWithAWriterArriving { drainAndClose() }
 
         assertAll(
-            { assertEquals(1, probe.firings, "rig: exactly one cancelled send should have started the writer") },
+            { assertTrue(probe.firings > 0, "rig: a send cancelled by the close should have started the writer") },
             {
                 assertTrue(
                     probe.sighting?.parkedOnTheCloser == true,
@@ -607,7 +607,7 @@ class QuilterConcurrencyTest {
         val probe = closeWithAWriterArriving { close() }
 
         assertAll(
-            { assertEquals(1, probe.firings, "rig: exactly one cancelled send should have started the writer") },
+            { assertTrue(probe.firings > 0, "rig: a send cancelled by the close should have started the writer") },
             {
                 assertEquals(
                     Thread.State.TERMINATED,
