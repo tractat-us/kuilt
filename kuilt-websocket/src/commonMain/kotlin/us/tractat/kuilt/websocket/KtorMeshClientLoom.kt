@@ -1,7 +1,6 @@
 package us.tractat.kuilt.websocket
 
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.websocket.webSocketSession
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import us.tractat.kuilt.core.DeliveryPolicy
@@ -45,6 +44,12 @@ import kotlin.random.Random
  * identity reused on every call to [weave]/[join] — required wherever a server derives a stable
  * learner identity from the admitted [PeerId]. The default mints a fresh random identity per loom
  * instance.
+ *
+ * **Cancelling a dial:** on the **CIO** or **Darwin** engine, a [weave] cancelled before it returns
+ * leaves no socket behind, whatever the handshake had reached: [ownedWebSocketSession] covers the
+ * upgrade, and the mesh covers its preamble. The **OkHttp** engine does not abort a dial the far end
+ * has not answered, so that socket lasts until OkHttp lets go. [ownedWebSocketSession] states the
+ * exceptions.
  *
  * **HttpClient lifecycle:** the [httpClient] is not closed by this loom. Callers are responsible
  * for closing it when all connections are done.
@@ -101,7 +106,7 @@ public class KtorMeshClientLoom(
                     "KtorMeshClientLoom only joins WebSocketAdvertisement, got ${advertisement::class}"
                 }
                 val urlWithPeer = appendPeerQuery(advertisement.url, selfPeerId)
-                val wsSession = httpClient.webSocketSession(urlWithPeer)
+                val wsSession = httpClient.ownedWebSocketSession(urlWithPeer)
                 peerMesh(
                     selfId = selfPeerId,
                     connections = listOf(WebSocketConnection(wsSession)),
