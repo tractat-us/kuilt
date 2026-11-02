@@ -223,9 +223,9 @@ tasks.matching { it.name == "wasmJsBrowserTest" }.configureEach {
 //
 // Lazy, because the module's own build script declares its cinterops after this plugin runs: the
 // first cinterop to appear installs the gate, once per module. The check and update tasks are
-// reached through abiValidation's own providers, which throw if KGP renames a task, rather than
-// by a name match that would then select nothing and let a Linux `updateKotlinAbi` write the
-// inferred dump. KGP exposes no provider for `internalDumpKotlinAbi`, so it is skipped only if
+// reached through abiValidation's own providers, which follow KGP's registration, rather than by
+// a name match that a KGP rename would leave selecting nothing, letting a Linux `updateKotlinAbi`
+// write the inferred dump. KGP exposes no provider for `internalDumpKotlinAbi`, so it is skipped only if
 // present by that name: skipping it merely saves the dump work, since the check and update that
 // consume it are already skipped. The host is read through a provider inside `onlyIf`, which
 // the configuration cache serializes, rather than by an eager System.getProperty. Everything sits
