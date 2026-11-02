@@ -31,10 +31,13 @@ import kotlin.time.Duration
  * never answers `Failed`, and it drops a frame after its own close and returns normally, so nothing
  * below the seam stops a false `Drained` from reaching the caller.
  *
- * **A rare race, so a red is strong evidence and a green on one run is weak.** Measured on the unfixed
- * seam at the probe's size: 6 violations in 282,648 flushes over 3,000 rounds. The single-threaded
- * forcing of the same window is `LinkSeamFlushTest.aFlushCannotConfirmInsideAnotherPathsTear`, which
- * fails every time without the fix and is what `check` runs; this one is gated by its name, like every
+ * **A rare race, so a red is strong evidence and a green on one run is weak.** Two things keep it from
+ * happening: `tearDown` signalling before the latch, and the connection stage of a flush watching the
+ * tear. With both undone: 83 violations in 3,720,793 flushes over 40,000 rounds, about one per 480, so
+ * 3,000 rounds red all but always. **With only the signal order undone this probe stays green**, 0 in
+ * 40,000 rounds, because the connection stage gives the winner time to finish. That order is pinned by
+ * `LinkSeamFlushTest.aFlushCannotConfirmInsideAnotherPathsTear`, which forces the window on one thread,
+ * reds every time, and is what `check` runs. This one is gated by its name, like every
  * `*ConcurrencyTest`, and runs in the `concurrency-probes` job.
  */
 class LinkSeamFlushConcurrencyTest {
