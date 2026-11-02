@@ -31,6 +31,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -49,16 +50,18 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /**
  * [ownedWebSocketSession] on the engine iOS and macOS actually use.
  *
  * `WeaveCancelledMidDialTest` measures CIO and OkHttp on the JVM. Darwin hands the socket to
- * URLSession, so what a cancel does to it is a separate question, with the same two forced windows:
- * before the upgrade answers, and as the session arrives. The far end is a plain loopback socket that
- * holds the answer until told, and reports what the connection did.
+ * URLSession, so what a cancel does to it is a separate question, with the same forced windows: before
+ * the upgrade answers, with no answer ever coming, and as the session arrives. The far end is a plain
+ * loopback socket that holds the answer until told, and reports what the connection did.
  */
 class WeaveCancelledOnDarwinTest {
 
@@ -102,10 +105,42 @@ class WeaveCancelledOnDarwinTest {
         assertNotEquals<FarEndSaw>(FarEndSaw.StillOpen, farEnd.saw.await(), "nothing closed the socket, so nobody owns it")
     }
 
+    /** An abort: the far end says nothing, so the socket can only end because the client ended it. */
+    @Test
+    fun aWeaveCancelledWithNoAnswerComingEndsTheSocket() = realTime {
+        val farEnd = HeldUpgrade(aSocket(selector).tcp().bind("127.0.0.1", 0), rigScope)
+        val client = darwinClient()
+        val weave = rigScope.launch { loom(client).join(advertisement(farEnd)) }
+        farEnd.requestSeen.await()
+        assertFalse(weave.isCompleted, "rig: the weave finished with no answer, so nothing is in flight")
+
+        weave.cancelAndJoin()
+        farEnd.leaveUnanswered()
+
+        assertEquals<FarEndSaw>(FarEndSaw.SocketEnded, farEnd.saw.await(), "a cancel with no answer has to abort the request")
+    }
+
     @Test
     fun aWeaveCancelledAsTheSessionArrivesGetsANormalClose() = realTime {
         val farEnd = HeldUpgrade(aSocket(selector).tcp().bind("127.0.0.1", 0), rigScope)
+        cancelAsTheSessionArrives(darwinClient(), farEnd)
+        assertEquals<FarEndSaw>(FarEndSaw.CloseFrame(NORMAL_CLOSE, socketEnded = true), farEnd.saw.await())
+    }
+
+    @Test
+    fun aFarEndThatNeverAnswersTheCloseCannotHoldUpTheCancel() = realTime {
+        val farEnd = HeldUpgrade(aSocket(selector).tcp().bind("127.0.0.1", 0), rigScope, answersClose = false)
         val client = darwinClient()
+
+        val waited = cancelAsTheSessionArrives(client, farEnd)
+        val liveCalls = client.coroutineContext.job.children.count { it.isActive }
+
+        println("W3105R darwin silent waited=$waited liveCalls=$liveCalls")
+        assertEquals(0, liveCalls, "the call was not cut: the weave returned after $waited")
+    }
+
+    /** Cancels with the session already handed over, and returns how long the weave then took to end. */
+    private suspend fun cancelAsTheSessionArrives(client: HttpClient, farEnd: HeldUpgrade): Duration {
         var woven: Seam? = null
         val weave = rigScope.launch(gate) { woven = loom(client).join(advertisement(farEnd)) }
         farEnd.requestSeen.await()
@@ -114,12 +149,14 @@ class WeaveCancelledOnDarwinTest {
         farEnd.answer.complete(Unit)
         gate.awaitAResumption()
         weave.cancel()
+        val released = TimeSource.Monotonic.markNow()
         gate.release()
         weave.join()
+        val waited = released.elapsedNow()
 
         assertTrue(weave.isCancelled, "rig: the weave was not cancelled")
         assertNull(woven, "rig: the caller got its seam, so it is the owner and this window was not reached")
-        assertEquals<FarEndSaw>(FarEndSaw.CloseFrame(NORMAL_CLOSE, socketEnded = true), farEnd.saw.await())
+        return waited
     }
 
     @Test
@@ -151,12 +188,23 @@ class WeaveCancelledOnDarwinTest {
     }
 
     /** One upgrade on a plain socket, answered when told, then read until the socket ends. */
-    private class HeldUpgrade(private val listener: ServerSocket, scope: CoroutineScope) {
+    private class HeldUpgrade(
+        private val listener: ServerSocket,
+        scope: CoroutineScope,
+        private val answersClose: Boolean = true,
+    ) {
         val requestSeen = CompletableDeferred<Unit>()
         val answer = CompletableDeferred<Unit>()
         val saw = CompletableDeferred<FarEndSaw>()
         private var closeCode: Int? = null
+        private var answers = true
         val url: String get() = "ws://127.0.0.1:${listener.port}/held"
+
+        /** Never answer, and watch the connection anyway. */
+        fun leaveUnanswered() {
+            answers = false
+            answer.complete(Unit)
+        }
 
         init {
             scope.launch {
@@ -167,10 +215,12 @@ class WeaveCancelledOnDarwinTest {
                 requestSeen.complete(Unit)
                 answer.await()
                 try {
-                    output.writeStringUtf8(
-                        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
-                            "Sec-WebSocket-Accept: ${acceptOf(key)}\r\n\r\n",
-                    )
+                    if (answers) {
+                        output.writeStringUtf8(
+                            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                                "Sec-WebSocket-Accept: ${acceptOf(key)}\r\n\r\n",
+                        )
+                    }
                 } catch (_: IOException) {
                     // The client is already gone, and the read says so.
                 }
@@ -206,7 +256,7 @@ class WeaveCancelledOnDarwinTest {
                     if (closeCode == null) {
                         closeCode = closeCodeIn(received)
                         // What any live peer does, and what lets a client release the socket.
-                        if (closeCode != null) output.writeByteArray(byteArrayOf(0x88.toByte(), 0x00))
+                        if (closeCode != null && answersClose) output.writeByteArray(byteArrayOf(0x88.toByte(), 0x00))
                     }
                 }
             } catch (_: IOException) {
@@ -281,10 +331,11 @@ class WeaveCancelledOnDarwinTest {
         val POLL = 5.milliseconds
 
         /**
-         * URLSession applies a cancel on its own queue. An answer written within microseconds of the
-         * cancel on the first dial of a process beat it, and that socket stayed up past [OBSERVATION];
-         * the 13 dials measured after it did not. So this arm answers once the cancel has been applied,
-         * and the race is left to its own issue (see #3102).
+         * URLSession applies a cancel on its own queue, and this wait hides a real leak. With no wait,
+         * the first dial of a process stayed open in 12 of 12 fresh processes: still up at 4 to 8 s in
+         * eleven and at 90 s in the twelfth. With 1 ms or more it ended in 21 of 21, so this arm cannot
+         * see that race, which needs a fresh process per sample. `ownedWebSocketSession`'s KDoc states
+         * it, and #3102 holds the numbers.
          */
         val URLSESSION_SETTLES = 500.milliseconds
 
