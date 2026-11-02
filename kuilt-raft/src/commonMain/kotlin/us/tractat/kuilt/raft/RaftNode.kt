@@ -254,11 +254,12 @@ public interface RaftNode {
      * - If no leader is known yet (during an election), the call waits, cancellably, until
      *   a leader is elected and then forwards.
      *
-     * **Cancellation is best-effort.** A forward that is still queued when the caller cancels
+     * **Cancellation is best-effort.** A forward still waiting for a leader when the caller cancels
      * is guaranteed not to be sent. However, a command already forwarded to — or appended by —
      * the leader may still commit even if the caller cancels; Raft does not support revocation
-     * of in-flight proposals. Either way this node releases its own copy of [command] once the caller
-     * cancels, so a timeout-and-retry loop does not accumulate them.
+     * of in-flight proposals. A non-leader releases its forwarding copy of [command] once the caller
+     * cancels, so a timeout-and-retry loop does not accumulate them there. A leader's entries stay in
+     * its log.
      *
      * **A forwarded proposal relies on caller-side timeout for a leader *crash*.** If the leader a
      * proposal was forwarded to *steps down*, its rejection surfaces here as [LeadershipLostException]

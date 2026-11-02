@@ -36,7 +36,7 @@ internal data class PendingForward(
  * deferreds on the normal forward/response/flush path. The engine keeps every `send(...)` and
  * `deferred.complete(...)` side-effect at the call site; the machine returns *what* the engine should do
  * next ([ForwardDecision] / [FlushAction]) and *which* [PendingForward] a response resolved. The one
- * exception is [failAll] (the relinquish/actor-teardown path), which completes the residual deferreds
+ * exception is [failAll] (the actor-teardown path), which completes the residual deferreds
  * directly — exactly like the sibling machines' teardown methods.
  *
  * **Correlation + exactly-once dedup (do not regress).** [forward] assigns a monotonic [nextForwardId]
@@ -65,7 +65,9 @@ internal data class PendingForward(
  * completed (never re-sending a cancelled forward), and `completeExceptionally` on an already-cancelled
  * deferred is a harmless no-op. So a follower propose cancelled while parked in [waitingForLeader] is
  * dropped rather than left to hang, and a cancelled propose holds no bytes here. One already sent may
- * still commit on the leader: nothing revokes it, and a retry under the same `requestId` coalesces.
+ * still commit on the leader, since nothing revokes it. A retry under the same `requestId` coalesces at
+ * the leader only once the first has committed in that leader's tenure; otherwise both entries commit
+ * and the consumer's `ClientSessionTable` skips the duplicate.
  *
  * **Concurrency:** actor-confined exactly like the fields it holds — every method is called only from
  * inside the engine's single dispatch loop (or the init-restore coroutine that strictly precedes it).
@@ -208,7 +210,9 @@ internal class ProposalForwarder {
      * actor step via [reProposed]. So nothing here owes a completion, and live forwards are untouched.
      *
      * **The exactly-once reasoning does not rest on this entry.** It rests on the [DedupKey] the leader
-     * appended under, so a reaped forward that still commits coalesces with its retry on the leader. Its
+     * appended under: a retry reaching that leader after the reaped forward committed coalesces there,
+     * and a retry that arrives sooner, or at a new leader, is skipped by the consumer's
+     * `ClientSessionTable`. The reaped forward's
      * late `ForwardResponse` resolves to [ResponseResolution.NoSuchForward] and is dropped, and because
      * [nextForwardId] never reuses an id, that reply cannot complete the retry that replaced it.
      *

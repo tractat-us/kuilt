@@ -3785,7 +3785,7 @@ internal class RaftEngine(
             // This is the only mutation of d that touches the caller's thread; all other map/state
             // mutations stay on the actor. Losing the race to the actor costs one empty sweep:
             // cancel() on a completed deferred is a harmless no-op. The channel is unlimited, so
-            // trySend fails only once it is closed, when failAll has already released everything.
+            // trySend fails only once it is closed, and teardown's failAll then releases everything.
             if (!d.isCompleted) {
                 d.cancel()
                 cmd.trySend(EngineCommand.ReapCancelledForwards)
