@@ -237,6 +237,47 @@ class TapAdmissionAttackTest {
         )
     }
 
+    /**
+     * The fix's own bound. Taking the send off the collector could have swapped a stall for a job per
+     * challenge, which a stranger can run up for free. It also must not strand the newest answer behind
+     * an older one, or a peer back on a fresh link would never hear from the puller.
+     */
+    @Test
+    fun aFloodHoldsOneParkedAnswerAndItIsTheNewest() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val pullerSeam = SendCountingSeam(loom.host(Pattern("stall")))
+        pullerSeam.tokenGated(prover(), backgroundScope)
+        val strangerSeam = loom.join(InMemoryTag("stranger"))
+
+        val sent = floodUntilAnAnswerParks(strangerSeam, pullerSeam)
+        val taken = pullerSeam.deliveredTo(strangerSeam.selfId)
+        val more = 50
+        repeat(more) { i ->
+            strangerSeam.sendTo(pullerSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(challengeNonce(sent + i))))
+            runCurrent()
+        }
+        val parkedAfterTheFlood = pullerSeam.parkedTo(strangerSeam.selfId)
+        val takenDuringTheFlood = pullerSeam.deliveredTo(strangerSeam.selfId) - taken
+
+        val stranger = Harvester(strangerSeam, backgroundScope) // starts reading, which frees the fabric
+        runCurrent()
+
+        val newestNonce = challengeNonce(sent + more - 1)
+        val newest = stranger.proofs.last()
+        assertAll(
+            { assertEquals(1, parkedAfterTheFlood, "the flood must hold one parked answer, however long it runs") },
+            { assertEquals(0, takenDuringTheFlood, "rig: the fabric must have taken nothing while the flood ran") },
+            { assertEquals(taken + 1, stranger.proofs.size, "what it had taken, plus the one parked answer") },
+            {
+                assertContentEquals(
+                    admissionTag(code, strangerSeam.selfId, pullerSeam.selfId, newestNonce, newest.proverNonce),
+                    newest.tag.toByteArray(),
+                    "the answer that survives must be to the newest challenge",
+                )
+            },
+        )
+    }
+
     /** Challenge the puller until the fabric stops taking its answers, and return how many that took. */
     private suspend fun TestScope.floodUntilAnAnswerParks(stranger: Seam, puller: SendCountingSeam): Int {
         var sent = 0

@@ -4,6 +4,8 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,6 +65,23 @@ internal sealed interface GateRole {
  * has one, and with the prover's nonce in the input the grind cannot start until the tag is in hand,
  * so the token's TTL bounds it. See "Entropy ↔ TTL" on [LogTapJoinToken].
  *
+ * ## A proof never waits on the collector
+ *
+ * Answering everyone means a stranger decides how many frames head its way, and a stranger who stops
+ * reading fills its own buffer until the next [Seam.sendTo] suspends, as that call is entitled to.
+ * The sole collector of `inner.incoming` must not be the coroutine suspended there, because every
+ * other peer's frames arrive through it. So a proof goes out in a job of its own, and the collector
+ * moves on. It runs undispatched, so an accepted send finishes in place and only one that truly
+ * suspends leaves anything behind.
+ *
+ * One challenger holds at most one such job. A newer challenge cancels the send still parked for that
+ * peer, so a flood costs one job and one frame rather than one per challenge, and a peer back on a
+ * fresh link is answered there rather than behind a send to the link it left.
+ *
+ * A verifier's sends stay on their collectors, deliberately. It owes a peer one challenge and at most
+ * one reject per connection, which is not enough to fill anything, and it answers nothing else until
+ * the peer is admitted.
+ *
  * ## What the peer ids buy
  *
  * [admissionTag] covers the verifier's and the prover's ids as each side reads them off its own seam:
@@ -97,7 +116,7 @@ internal sealed interface GateRole {
 internal class TokenGatedSeam(
     private val inner: Seam,
     private val role: GateRole,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
 ) : Seam by inner {
 
     private val lock = reentrantLock()
@@ -107,6 +126,10 @@ internal class TokenGatedSeam(
 
     // Verifier-only: peers that have proven the code. Always includes selfId (peers invariant).
     private val verified = MutableStateFlow(setOf(inner.selfId))
+
+    // Prover-only, and touched only by the sole `inner.incoming` collector: the proof still parked for
+    // each challenger, if any.
+    private val parkedProofs = mutableMapOf<PeerId, Job>()
 
     // Replication frames surfaced to the replicator. Buffered so the sole relay collector
     // never blocks; a fresh Seam has no subscriber for a brief construction window.
@@ -212,7 +235,7 @@ internal class TokenGatedSeam(
     }
 
     // Runs only from the sole `inner.incoming` collector, so the draw from `random` is never concurrent.
-    private suspend fun respondToChallenge(challenger: PeerId, challenge: TapAdmitMessage.Challenge) {
+    private fun respondToChallenge(challenger: PeerId, challenge: TapAdmitMessage.Challenge) {
         val prover = role as GateRole.Prover
         val proverNonce = ByteString(prover.random.nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES))
         val tag = admissionTag(
@@ -222,9 +245,14 @@ internal class TokenGatedSeam(
             challengeNonce = challenge.nonce,
             proverNonce = proverNonce,
         )
-        runCatchingCancellable {
-            inner.sendTo(challenger, TapAdmitMessage.encode(TapAdmitMessage.Proof(proverNonce, ByteString(tag))))
-        }.onFailure { logger.debug { "proof send to $challenger failed: ${it.message}" } }
+        val frame = TapAdmitMessage.encode(TapAdmitMessage.Proof(proverNonce, ByteString(tag)))
+        parkedProofs.remove(challenger)?.cancel()
+        val send = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatchingCancellable { inner.sendTo(challenger, frame) }
+                .onFailure { logger.debug { "proof send to $challenger failed: ${it.message}" } }
+        }
+        parkedProofs.values.removeAll { it.isCompleted }
+        if (!send.isCompleted) parkedProofs[challenger] = send
     }
 
     private suspend fun verify(peer: PeerId, proof: TapAdmitMessage.Proof) {
