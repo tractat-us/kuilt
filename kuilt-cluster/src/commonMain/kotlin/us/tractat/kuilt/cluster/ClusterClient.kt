@@ -134,7 +134,7 @@ public class ClusterClient internal constructor(
      *
      * A join still in flight is cancelled. If the fabric finishes it anyway and hands back a seam, this
      * call waits for that and closes the seam. A fabric whose dial outlives the cancel without handing
-     * anything back keeps its link: that case on `KtorClientLoom` is tracked by #3044.
+     * anything back breaks [Loom.weave]'s contract and keeps its link, out of reach of this call.
      *
      * After this call further [propose] calls throw, but [committed] does **not** complete: it is a hot
      * flow on the real engine, so a collector of it stays suspended until its own scope is cancelled.

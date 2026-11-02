@@ -41,6 +41,21 @@ public interface Loom {
      * pattern — it converts its own dial timeout into a plain `NwUnreachableException` for exactly this
      * reason. A ply whose `Loom.weave` breaks this rule used to kill a `CompositeLoom`'s reconciliation
      * for the life of the seam, silently (#1784).
+     *
+     * ## A cancelled weave leaves nothing open
+     *
+     * If the caller is cancelled before this returns, close whatever the dial opened before the
+     * cancellation propagates. Only a return hands anything over, and a coroutine cancelled as this
+     * resumes takes the cancellation instead of the seam, so nobody else can ever reach what was left.
+     * The far end sees a healthy peer that will never speak, for as long as the socket lasts.
+     *
+     * The trap is a library that runs its handshake somewhere the caller's cancel does not reach. Ktor's
+     * `webSocketSession` is one: `ownedWebSocketSession` in `:kuilt-websocket` is what to dial through
+     * instead. `NwLoom.discardUnreturnedSeam` in `:kuilt-nw` is the pattern for a seam built during the
+     * weave.
+     *
+     * No conformance suite checks this: the in-memory reference never suspends in its weave, so it could
+     * not fail a test of it (tracked by #3102).
      */
     public suspend fun weave(rendezvous: Rendezvous): Seam
 

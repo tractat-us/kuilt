@@ -1,6 +1,6 @@
 ---
 name: kuilt-primitives
-description: Use BEFORE writing any networking, session, shared-state, telemetry or scheduling code in a repo that depends on kuilt — it probably already ships the primitive you'd hand-roll. Fires on rejoin/reconnect/resume after a drop, a grace window or held seat, a room/lobby/table container, a seat or peer roster, an id every peer must agree on, presence/heartbeat/liveness/lastSeen/idle-reaper, a countdown to a seat's release, your own outage versus a peer's, reaping a room nobody joined, host election, propose/commit turns, retry back-off, dedup/seenIds, max payload size, chunking a blob, FrameTooLargeException, sending a frame to yourself, frames lost before you subscribed, a last write lost to close, state that must converge across peers (last-write-wins, sets, shared JSON), capping or trimming a replicated log, a conditional write, two guests that cannot see each other, a room too big for all-to-all (N², gossip), federated learning, a server holding the log clients propose into, peer discovery, ghost peers, one bad browse feed killing the rest, writing a fabric (a peer id off the wire, a seam's terminal state, a byte stream or TCP), a long-lived flow pump (launchIn), dealing cards nobody can peek at, an unbiasable random value, fair-share scheduling, quota ledgers, placement by peer capability, a content-hash blob cache, running code another peer sent you, on-device log capture, slow logging, per-session log context, durable storage, sealing bytes to a public key, and an archive the live replica forgets.
+description: Use BEFORE writing any networking, session, shared-state, telemetry or scheduling code in a repo that depends on kuilt — it probably already ships the primitive you'd hand-roll. Fires on rejoin/reconnect/resume after a drop, a grace window or held seat, a room/lobby/table container, a seat or peer roster, an id every peer must agree on, presence/heartbeat/liveness/lastSeen/idle-reaper, a seat-release countdown, your own outage versus a peer's, reaping a room nobody joined, host election, propose/commit turns, retry back-off, dedup/seenIds, max payload size, chunking a blob, FrameTooLargeException, sending a frame to yourself, frames lost before you subscribed, a last write lost to close, state that must converge across peers (last-write-wins, sets, shared JSON), capping or trimming a replicated log, a conditional write, two guests that cannot see each other, a room too big for all-to-all (N², gossip), federated learning, a server holding the log clients propose into, peer discovery, ghost peers, a bad browse feed, writing a fabric (a peer id off the wire, a seam's terminal state, a byte stream or TCP, a socket a cancelled dial left open), a long-lived flow pump (launchIn), dealing cards nobody can peek at, an unbiasable random value, fair-share scheduling, quota ledgers, placement by peer capability, a content-hash blob cache, running code another peer sent you, on-device log capture, slow logging, per-session log context, durable storage, sealing bytes to a public key, and an archive the live replica forgets.
 ---
 
 # kuilt primitives — check before you build
@@ -35,6 +35,7 @@ and primitive groups in order. The cookbook index splits them out.
 |a peer-supplied id straight into a `Set<PeerId>`|`PeerIdentityRegistry`|`fabrics.md#a-peer-id-off-the-wire-straight-into-a-setpeerid`|
 |a 4-byte length prefix and a reassembly loop over a socket|`framed()` → `handshaking()`|`fabrics.md#your-own-transport`|
 |that same plumbing when the transport really is just TCP|`TcpLoom.host` / `TcpLoom.join`|`fabrics.md#plain-tcp-is-already-assembled`|
+|a bare `webSocketSession`, `openOrRelease`; a socket a cancelled dial left open|`ownedWebSocketSession`|`fabrics.md#a-cancelled-dial`|
 |looping a frame back to yourself, a `peers.forEach { sendTo(it, …) }` fan-out|`broadcast`; `peers` includes `selfId`, and `sendTo(selfId, …)` throws|`fabrics.md#sending-to-yourself`|
 |a hard-coded chunk size, a `FrameTooLargeException`|`Room.maxPayloadBytes`/`Seam.maxPayloadBytes`, then `PayloadTooLarge`|`fabrics.md#payload-limits`|
 |a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn(scope, onFailure, name) { … }` — `PumpFailure.ITEM` vs `UPSTREAM`; `onFailure` returns `PumpVerdict.CONTINUE`/`STOP`|`fabrics.md#long-lived-pumps`|
@@ -56,7 +57,6 @@ Inside kuilt, read it directly; consumers take the first working rung:
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
-**Editing this skill:** `verifySkillDescriptionBudget` caps the eager `description:` at
-1,536 characters and rejects YAML-breaking `: `/` #`; adding a trigger means removing one.
-`verifySkillBodyBudget` caps this body at 8,192 bytes (8 KiB). Move explanatory prose to
-`docs/agent-cookbook*`, never drop a route. See kuilt's root `CLAUDE.md` for the rationale.
+**Editing this skill:** a trigger displaces another (`verifySkillDescriptionBudget`: 1,536
+characters, no `: `/` #`). `verifySkillBodyBudget` caps this body at 8 KiB. Prose goes in
+`docs/agent-cookbook*`; never drop a route.

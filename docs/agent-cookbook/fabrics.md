@@ -192,6 +192,34 @@ close as EOF at a frame boundary. Implement it natively, and run its golden vect
 `kuilt-stream/wire/tcp-wire-v1.vectors.json`, as a table test. kuilt's own build checks the same
 file on every target, so the vectors cannot drift from what a kuilt peer actually sends.
 
+## A cancelled dial
+
+**Intent:** you are opening a WebSocket with Ktor's `webSocketSession`, or you wrote an `openOrRelease`
+to stop what it leaks, or the far end still sees you connected after you cancelled the join.
+**Primitive:** `HttpClient.ownedWebSocketSession(url) { … }` (`:kuilt-websocket`, every target). It
+takes the same arguments and returns the same session. `KtorClientLoom`, `KtorMeshClientLoom` and
+`voterMeshOverWebSockets` all dial through it, so reach for it only when you open a session yourself.
+
+<!-- verbatim from kuilt-cluster/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/cluster/WebSocketVoterMesh.kt#voterMeshOverWebSockets -->
+```kotlin
+dial = { _, peer -> WebSocketConnection(httpClient.ownedWebSocketSession(dialUrlByPeer.getValue(peer))) },
+```
+
+Ktor runs the handshake on the client's own scope and only waits for it, so cancelling ends the wait
+and the handshake carries on. When it finishes, the socket stays open with nothing holding it, until
+the session ends from outside or the `HttpClient` closes. Measured on real sockets: the far end saw no
+close within 15 s, on CIO and OkHttp alike. Here a cancel mid-handshake aborts the request, and a cancel
+landing as the session arrives gives that session a normal close, both before the cancellation reaches
+you. Only a return makes the session yours.
+
+Two failures change shape too. A closed `HttpClient` throws `IOException`, where Ktor's call hangs
+forever, and a cancellation that is not yours arrives as `IOException` rather than cancelling you.
+
+It does not put a clock on the dial, and an `HttpClient` closed during one does not end it. Bound the
+dial with `install(HttpTimeout)` or a timeout around the call, which is an ordinary cancel.
+
+The same promise is what `Loom.weave` asks of any fabric: see its KDoc if you are writing one.
+
 ## Sending to yourself
 
 **Intent:** loop a frame back to your own peer — replay your own move locally, feed your own replicator, treat "everyone" uniformly by iterating `peers` and sending to each.

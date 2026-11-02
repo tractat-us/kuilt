@@ -45,6 +45,10 @@ import kotlin.random.Random
  * learner identity from the admitted [PeerId]. The default mints a fresh random identity per loom
  * instance.
  *
+ * **Cancelling a dial:** a [weave] cancelled before it returns leaves no socket behind, whatever
+ * the handshake had reached: [ownedWebSocketSession] covers the upgrade, and the mesh covers its
+ * preamble.
+ *
  * **HttpClient lifecycle:** the [httpClient] is not closed by this loom. Callers are responsible
  * for closing it when all connections are done.
  *

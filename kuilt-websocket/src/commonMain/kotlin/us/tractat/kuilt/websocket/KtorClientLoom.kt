@@ -46,6 +46,9 @@ import us.tractat.kuilt.core.freshPeerId
  * static [WebSocketAdvertisement.url]. See
  * [#1330](https://github.com/tractat-us/kuilt/issues/1330).
  *
+ * **Cancelling a dial:** a [weave] cancelled before it returns leaves no socket behind, whatever
+ * the handshake had reached. See [ownedWebSocketSession], which it dials through.
+ *
  * **HttpClient lifecycle:** the [httpClient] is not closed by this loom.
  * Callers are responsible for closing it when all connections are done.
  *

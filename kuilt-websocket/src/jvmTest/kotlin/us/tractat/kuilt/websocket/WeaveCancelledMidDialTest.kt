@@ -183,6 +183,23 @@ class WeaveCancelledMidDialTest {
         val requestSeen = CompletableDeferred<Unit>()
         val answer = CompletableDeferred<Unit>()
         val heard = CompletableDeferred<CloseReason?>()
+        val netty = startHeldRoute(requestSeen, answer, heard)
+        val url = "ws://127.0.0.1:${netty.engine.resolvedConnectors().first().port}$NETTY_PATH"
+
+        cancelAsTheSessionArrives(clientLoom(client()), url, requestSeen::await) { answer.complete(Unit) }
+
+        val reason = withTimeoutOrNull(OBSERVATION) { heard.await() }
+        assertNotNull(reason, "the route heard no close within $OBSERVATION, so the socket is open with no owner")
+        assertEquals(CloseReason.Codes.NORMAL, reason.knownReason, "a session nobody wanted closes cleanly: $reason")
+    }
+
+    // Not inside `realTime`, whose receiver would bind `embeddedServer` to the `CoroutineScope` overload,
+    // parent the server to the test's bound, and hold the test open until that bound expires.
+    private fun startHeldRoute(
+        requestSeen: CompletableDeferred<Unit>,
+        answer: CompletableDeferred<Unit>,
+        heard: CompletableDeferred<CloseReason?>,
+    ): EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration> {
         val netty = embeddedServer(Netty, port = 0) {
             install(ServerWebSockets)
             intercept(ApplicationCallPipeline.Plugins) {
@@ -195,13 +212,7 @@ class WeaveCancelledMidDialTest {
         }
         nettyServer = netty
         netty.start(wait = false)
-        val url = "ws://127.0.0.1:${netty.engine.resolvedConnectors().first().port}$NETTY_PATH"
-
-        cancelAsTheSessionArrives(clientLoom(client()), url, requestSeen::await) { answer.complete(Unit) }
-
-        val reason = withTimeoutOrNull(OBSERVATION) { heard.await() }
-        assertNotNull(reason, "the route heard no close within $OBSERVATION, so the socket is open with no owner")
-        assertEquals(CloseReason.Codes.NORMAL, reason.knownReason, "a session nobody wanted closes cleanly: $reason")
+        return netty
     }
 
     // ── After the upgrade, before the mesh preamble ──────────────────────────────────────────────

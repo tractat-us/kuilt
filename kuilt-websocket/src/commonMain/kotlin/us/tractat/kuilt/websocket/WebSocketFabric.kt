@@ -32,8 +32,8 @@ import kotlin.random.Random
  * One knob the convention names is **deliberately absent**, because this fabric does not honour
  * it, and an argument that is accepted and then ignored is worse than one that does not exist:
  *
- * - **`weaveTimeout`** — nothing in this loom puts a clock on the dial. `weave` calls Ktor's
- *   `webSocketSession` and waits as long as the [httpClient] waits, so the only ceiling on a
+ * - **`weaveTimeout`** — nothing in this loom puts a clock on the dial. `weave` calls
+ *   [ownedWebSocketSession] and waits as long as the [httpClient] waits, so the only ceiling on a
  *   rendezvous is the one the caller configured on that client (`install(HttpTimeout)`), not
  *   anything this factory could pass. Adding one would be new wiring rather than a forwarded
  *   knob, and it would sit alongside the client's own connect timeout with undefined precedence.
