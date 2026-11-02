@@ -37,6 +37,27 @@ abstract fun interface <#A: kotlin/Any?> us.tractat.kuilt.conformance.lattice/Op
     abstract fun applyRandomOp(#A, kotlin/Int, kotlin.random/Random): #A // us.tractat.kuilt.conformance.lattice/OperationGenerator.applyRandomOp|applyRandomOp(1:0;kotlin.Int;kotlin.random.Random){}[0]
 }
 
+sealed interface us.tractat.kuilt.conformance/CancelledCallerFixture { // us.tractat.kuilt.conformance/CancelledCallerFixture|null[0]
+    final class NeverChecks : us.tractat.kuilt.conformance/CancelledCallerFixture { // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/CancelledCallerFixture.NeverChecks.toString|toString(){}[0]
+    }
+
+    final object Observes : us.tractat.kuilt.conformance/CancelledCallerFixture { // us.tractat.kuilt.conformance/CancelledCallerFixture.Observes|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/CancelledCallerFixture.Observes.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/CancelledCallerFixture.Observes.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/CancelledCallerFixture.Observes.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.conformance/DepartureFixture { // us.tractat.kuilt.conformance/DepartureFixture|null[0]
     final class Emits : us.tractat.kuilt.conformance/DepartureFixture { // us.tractat.kuilt.conformance/DepartureFixture.Emits|null[0]
         constructor <init>(kotlin.coroutines/SuspendFunction0<kotlin/Unit>) // us.tractat.kuilt.conformance/DepartureFixture.Emits.<init>|<init>(kotlin.coroutines.SuspendFunction0<kotlin.Unit>){}[0]
@@ -275,6 +296,25 @@ abstract class us.tractat.kuilt.conformance/CloseableLifecycleConformanceSuite {
 
     // Targets: [wasmJs]
     final fun parentScopeCancellationStopsBackgroundJobs(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/CloseableLifecycleConformanceSuite.parentScopeCancellationStopsBackgroundJobs|parentScopeCancellationStopsBackgroundJobs(){}[0]
+}
+
+abstract class us.tractat.kuilt.conformance/ConnectionSendConformanceSuite { // us.tractat.kuilt.conformance/ConnectionSendConformanceSuite|null[0]
+    constructor <init>() // us.tractat.kuilt.conformance/ConnectionSendConformanceSuite.<init>|<init>(){}[0]
+
+    abstract fun cancelledCaller(): us.tractat.kuilt.conformance/CancelledCallerFixture // us.tractat.kuilt.conformance/ConnectionSendConformanceSuite.cancelledCaller|cancelledCaller(){}[0]
+    abstract suspend fun deadLink(): us.tractat.kuilt.core.fabric/Connection // us.tractat.kuilt.conformance/ConnectionSendConformanceSuite.deadLink|deadLink(){}[0]
+
+    // Targets: [apple]
+    final fun sendIntoADeadLinkFailsALiveCallerWithAnOrdinaryException() // us.tractat.kuilt.conformance/ConnectionSendConformanceSuite.sendIntoADeadLinkFailsALiveCallerWithAnOrdinaryException|sendIntoADeadLinkFailsALiveCallerWithAnOrdinaryException(){}[0]
+
+    // Targets: [apple]
+    final fun sendIntoADeadLinkLeavesACancelledCallerCancelled() // us.tractat.kuilt.conformance/ConnectionSendConformanceSuite.sendIntoADeadLinkLeavesACancelledCallerCancelled|sendIntoADeadLinkLeavesACancelledCallerCancelled(){}[0]
+
+    // Targets: [wasmJs]
+    final fun sendIntoADeadLinkFailsALiveCallerWithAnOrdinaryException(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/ConnectionSendConformanceSuite.sendIntoADeadLinkFailsALiveCallerWithAnOrdinaryException|sendIntoADeadLinkFailsALiveCallerWithAnOrdinaryException(){}[0]
+
+    // Targets: [wasmJs]
+    final fun sendIntoADeadLinkLeavesACancelledCallerCancelled(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/ConnectionSendConformanceSuite.sendIntoADeadLinkLeavesACancelledCallerCancelled|sendIntoADeadLinkLeavesACancelledCallerCancelled(){}[0]
 }
 
 abstract class us.tractat.kuilt.conformance/DiscoverySourceConformanceSuite { // us.tractat.kuilt.conformance/DiscoverySourceConformanceSuite|null[0]

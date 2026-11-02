@@ -1,3 +1,24 @@
+public abstract interface class us/tractat/kuilt/conformance/CancelledCallerFixture {
+}
+
+public final class us/tractat/kuilt/conformance/CancelledCallerFixture$NeverChecks : us/tractat/kuilt/conformance/CancelledCallerFixture {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/CancelledCallerFixture$NeverChecks;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/CancelledCallerFixture$NeverChecks;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/CancelledCallerFixture$NeverChecks;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/CancelledCallerFixture$Observes : us/tractat/kuilt/conformance/CancelledCallerFixture {
+	public static final field INSTANCE Lus/tractat/kuilt/conformance/CancelledCallerFixture$Observes;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/conformance/CanonicalDigestKt {
 	public static final fun canonicalDigest (Lkotlinx/serialization/KSerializer;Ljava/lang/Object;)J
 }
@@ -28,6 +49,14 @@ public abstract class us/tractat/kuilt/conformance/CloseableLifecycleConformance
 	public final fun closeStopsAllBackgroundJobs ()V
 	protected abstract fun create (Lkotlinx/coroutines/CoroutineScope;)Lus/tractat/kuilt/core/ScopedCloseable;
 	public final fun parentScopeCancellationStopsBackgroundJobs ()V
+}
+
+public abstract class us/tractat/kuilt/conformance/ConnectionSendConformanceSuite {
+	public fun <init> ()V
+	protected abstract fun cancelledCaller ()Lus/tractat/kuilt/conformance/CancelledCallerFixture;
+	protected abstract fun deadLink (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun sendIntoADeadLinkFailsALiveCallerWithAnOrdinaryException ()V
+	public final fun sendIntoADeadLinkLeavesACancelledCallerCancelled ()V
 }
 
 public final class us/tractat/kuilt/conformance/DelayedWovenLoom : us/tractat/kuilt/core/Loom {
