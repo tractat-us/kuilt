@@ -246,8 +246,9 @@ puller on a link only it and the device can reach, and close it when you are don
 values, and anyone who reaches the puller can get one answer out of it to test guesses
 against at home. That answer is only useful while the code is valid, which is why a
 code lasts five minutes. Trying them all in that time takes about four quadrillion
-guesses a second. No laptop gets close, but it is a price and not a wall, so this keeps
-out everyone short of an attacker with serious money to spend on you.
+guesses a second. No laptop gets close, but it is a price and not a wall: guessing the
+code stays out of reach of everyone short of an attacker with serious money to spend on
+you. The next two limits take no guessing and no money.
 
 **An attacker in the middle can still get in.** One who passes as the laptop to the
 phone and as the phone to the laptop can be admitted without knowing the code, by passing
@@ -256,10 +257,11 @@ cannot stop one who claims both names, because nothing vouches for who a peer sa
 
 **Getting in once lets in anyone who borrows the name.** The phone remembers which name
 proved the code, not which connection did. Where a fabric will carry a second connection
-under that name, that connection is let in too, with no code at all, and it can read what
-the phone sends that name. The same trick can use up a peer's one challenge and shut it
-out until it reconnects. Reading the source says Multipeer and a hub with no attestation
-both allow this. Nobody has yet run it.
+under that name, that connection is let in too, with no code at all. It can send as that
+name, and it may read what the phone sends that name, depending on which connection the
+fabric picks. The same trick can use up a peer's one challenge and shut it out until it
+reconnects. Reading the source says Multipeer and a hub with no attestation both allow
+this. Nobody has yet run it.
 
 Under the surface: an answer is an HMAC under the code over a nonce from each side and
 both peers' ids. Peers from before this format and peers after it refuse each other,
