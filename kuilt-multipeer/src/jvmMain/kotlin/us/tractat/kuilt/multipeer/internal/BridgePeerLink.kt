@@ -50,7 +50,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.Brid
  * The callback objects are held as fields so JNA's trampoline survives the
  * lifetime of the link. Releasing them (by setting the fields to null
  * inside [close]) is what eventually lets JNA free the trampoline; the
- * underlying `mc_session_close` cancels the K/N pumps and waits for them first.
+ * underlying `mc_session_close` waits for any callback in flight and removes both first.
  *
  * @param policy Governs the inbound [Spool]'s capacity and overflow behaviour.
  *   Defaults to [DeliveryPolicy.Reliable] (bounded, backpressured, lossless).

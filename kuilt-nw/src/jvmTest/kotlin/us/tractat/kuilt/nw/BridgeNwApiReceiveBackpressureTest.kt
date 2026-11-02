@@ -143,19 +143,21 @@ class BridgeNwApiReceiveBackpressureTest {
         }
         lib.callbackThread = callback
         val deadline = System.nanoTime() + PARK_BOUND_NANOS
-        while (callback.state != Thread.State.WAITING && System.nanoTime() < deadline) Thread.sleep(1)
+        while (!callback.isParked() && System.nanoTime() < deadline) Thread.sleep(1)
         val deliveredBeforeClose = delivered.get()
-        val stateBeforeClose = callback.state
+        val parkedBeforeClose = callback.isParked()
 
         bridge.close()
 
         assertAll(
-            { assertEquals(Thread.State.WAITING, stateBeforeClose, "the rig must park the callback before the close") },
+            { assertTrue(parkedBeforeClose, "the rig must park the callback before the close") },
             { assertTrue(deliveredBeforeClose < BURST, "the rig's burst must outrun the staging channel") },
             { assertEquals(1, lib.destroys, "the rig's destroy must have run") },
             { assertEquals(false, lib.callbackAliveAtDestroyEnd, "a parked callback must be released before the destroy") },
         )
     }
+
+    private fun Thread.isParked(): Boolean = state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING
 
     private class DestroyWaitingNativeLib : NwNativeLib by FakeNwNativeLib() {
         lateinit var bytesCallback: NwNativeLib.BytesReceivedCallback

@@ -38,12 +38,9 @@ import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.job
-import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.core.PumpVerdict
 import us.tractat.kuilt.core.pumpIn
@@ -54,18 +51,22 @@ import us.tractat.kuilt.nw.NwEndpoint
 import us.tractat.kuilt.nw.NwLoopbackConfig
 import us.tractat.kuilt.nw.NwPskMaterial
 import us.tractat.kuilt.nw.RealNwApi
-import kotlin.native.concurrent.ThreadLocal
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.nw.bridge.NwBridgeRuntime")
 
 /**
- * The forwarder whose JVM callback this thread is inside, if any. It is what lets [NwBridgeRuntime.destroy]
- * tell a call from inside a callback, which cannot wait for that callback. A thread-local is sound here
- * because a callback is one synchronous call: it is set and cleared with no suspension in between.
+ * Stands between a forwarder and the JVM callback it calls, with one lock held for the length of each call.
+ * So removing the callback waits for a call in flight, and no call can start after it. The lock being
+ * reentrant is what makes that usable from inside the callback: on that thread the removal goes straight
+ * through, where a join on the forwarder would wait for itself. A callback that hands the call to another
+ * thread and blocks on it is not told apart, and hangs.
  */
-@ThreadLocal
-private object CallbackFrame {
-    var forwarder: Job? = null
+private class CallbackGate<T>(private var callback: ((T) -> Unit)?) {
+    private val lock = reentrantLock()
+
+    fun deliver(item: T) = lock.withLock { callback?.invoke(item) }
+
+    fun remove() = lock.withLock { callback = null }
 }
 
 /**
@@ -141,14 +142,16 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
     // explicit lock — the forwarding collectors run on a real multi-threaded dispatcher.
     private val lock = reentrantLock()
     private val openConnections = mutableSetOf<NwConnectionId>()
+    private val gates = mutableListOf<CallbackGate<*>>()
 
     /**
      * Starts one forwarder. `UNDISPATCHED` so it subscribes before the registering call returns. A failure
      * reaches only the log line, since no call is left to report it through; the one known to happen is a
      * second `bytesReceived` collector being refused, and without [pumpIn] that aborts the process.
-     * [body] is not `suspend`, because it is one synchronous JVM callback: that is what [CallbackFrame] needs.
      */
     private fun <T> forward(name: String, items: Flow<T>, body: (T) -> Unit) {
+        val gate = CallbackGate(body)
+        lock.withLock { gates += gate }
         items.pumpIn(
             scope = scope,
             onFailure = { phase, failure ->
@@ -157,15 +160,7 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
             },
             name = "nw-bridge-$name",
             start = CoroutineStart.UNDISPATCHED,
-        ) { item ->
-            val outer = CallbackFrame.forwarder
-            CallbackFrame.forwarder = currentCoroutineContext().job
-            try {
-                body(item)
-            } finally {
-                CallbackFrame.forwarder = outer
-            }
-        }
+        ) { item -> gate.deliver(item) }
     }
 
     fun setEndpointFoundCallback(cb: CPointer<EndpointFoundCb>) {
@@ -284,15 +279,16 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
 
     /**
      * Graceful teardown: stop advertising/browsing, disconnect every still-open connection, cancel the
-     * forwarding scope, then wait for the forwarders. On return no callback of this runtime is running or
-     * will run, so the JVM may release them. Runs on the caller's (JNA) thread via [runBlocking]; each step
-     * is best-effort so a single failure never leaks the rest.
+     * forwarding scope, then remove each callback, which waits for it if it is in flight. On return no
+     * callback of this runtime is running or will run, so the JVM may release them. Runs on the caller's
+     * (JNA) thread via [runBlocking]; each step is best-effort so a single failure never leaks the rest.
      *
      * The wait lasts as long as a callback in flight, and one can block: `BridgeNwApi`'s bytes callback
      * parks on a full staging channel, so its `close` cancels that channel before it destroys this runtime.
      *
      * A call from inside one of this runtime's callbacks cannot wait for that callback, so it waits only
-     * for the rest, and the callback's own frames are still running when it returns.
+     * for the rest, and that callback's own frames are still running when it returns. This is why it is a
+     * gate and not the join `mc_browser_stop` uses.
      */
     fun destroy() {
         runBlocking {
@@ -303,9 +299,7 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
                 runCatchingCancellable { api.disconnect(NwConnectionId(id.value)) }
             }
         }
-        val forwarders = scope.coroutineContext.job
-        forwarders.cancel()
-        val own = CallbackFrame.forwarder
-        runBlocking { forwarders.children.filter { it !== own }.toList().joinAll() }
+        scope.cancel()
+        lock.withLock { gates.toList() }.forEach { it.remove() }
     }
 }

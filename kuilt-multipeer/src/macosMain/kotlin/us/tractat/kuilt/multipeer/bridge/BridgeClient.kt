@@ -10,8 +10,8 @@
  *
  * Pump coroutines live on `BridgeSessionState.scope` (one per session); they
  * stop when `mc_session_close` cancels the scope, or when a fresh
- * `set_*_callback` call replaces the previous pump. Either call waits for the
- * pump it ended: see `BridgeSessionState`.
+ * `set_*_callback` call replaces the previous callback. Either call waits for
+ * the callback it ended: see `BridgeSessionState`.
  *
  * Threading: same as `BridgeBrowser` — JNA's callback trampoline auto-attaches
  * the firing thread to the JVM, so emitting from K/N's `Dispatchers.Default`
@@ -93,7 +93,8 @@ public fun mc_runtime_join(
  * Attaches a data callback to the session, replacing any earlier one. On return the earlier callback is
  * not running and will not run again, so the JVM may release it, and [cb] will not start before that.
  * A replacement from inside the earlier callback cannot wait for itself: it returns at once, and [cb]
- * starts once that callback has returned. No-op if either argument is null.
+ * starts once that callback has returned. No frame is lost across a replacement. No-op if either argument
+ * is null.
  *
  * The JVM caller must hold a strong reference to the underlying JNA
  * callback object for the lifetime of the session — same gotcha as
@@ -108,7 +109,7 @@ public fun mc_session_set_data_callback(
 ) {
     if (session == null || cb == null) return
     val state = session.asStableRef<BridgeSessionState>().get()
-    state.replaceDataPump { frame ->
+    state.replaceDataCallback { frame ->
         memScoped {
             val senderPtr = (frame.sender?.value ?: "").cstr.ptr
             if (frame.payloadSize == 0) {
@@ -143,7 +144,7 @@ public fun mc_session_set_peer_state_callback(
     if (session == null || cb == null) return
     val state = session.asStableRef<BridgeSessionState>().get()
     var seen: Set<PeerId> = setOf(state.link.selfId)
-    state.replacePeerStatePump { current ->
+    state.replacePeerStateCallback { current ->
         val added = current - seen
         val removed = seen - current
         for (peer in added) {

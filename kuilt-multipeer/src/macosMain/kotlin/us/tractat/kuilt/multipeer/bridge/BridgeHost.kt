@@ -49,8 +49,8 @@ public fun mc_runtime_open(handle: COpaquePointer?): COpaquePointer? {
 }
 
 /**
- * Cancels the data and peer-state pumps, waits for them to finish, closes the session and disposes the
- * handle. On return no callback of this session is running or will run, so the JVM may release both.
+ * Cancels the data and peer-state pumps, waits for any callback in flight, closes the session and disposes
+ * the handle. On return no callback of this session is running or will run, so the JVM may release both.
  *
  * It blocks the caller for as long as a callback in flight takes. The one exception is a call from inside
  * one of this session's callbacks, which `BridgePeerLink` can reach when a consumer's unconfined collector
@@ -66,7 +66,7 @@ public fun mc_session_close(session: COpaquePointer?) {
     if (session == null) return
     val ref = session.asStableRef<BridgeSessionState>()
     val state = ref.get()
-    state.cancelAndAwaitPumps()
+    state.endCallbacks()
     runCatchingCancellable { runBlocking { state.link.close() } }
     ref.dispose()
 }
