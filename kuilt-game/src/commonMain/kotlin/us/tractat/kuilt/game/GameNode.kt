@@ -98,7 +98,8 @@ private const val APP_ENVELOPE_CHANNEL: Byte = 3
  * One [HeartbeatPartitionDetector] per remote voter shares this channel (distinguishing peers
  * by [PeerId] in its internal filtering). Heartbeat frames never reach the application layer —
  * they are consumed by the detectors' inner collection loops, which subscribe to the per-peer
- * [GamePerPeerSeam] views that filter the channel's shared incoming flow.
+ * [GamePerPeerSeam] views that filter the channel's shared incoming flow. A joiner runs no detector
+ * and answers these pings through [answerHeartbeatPings].
  */
 internal const val HEARTBEAT_CHANNEL: Byte = 4
 
@@ -536,10 +537,10 @@ public suspend fun CoroutineScope.gameHost(
  * the structural signal is the primary path. Under virtual time the backstop fires promptly.
  *
  * **Internal multiplexing.** [gameJoin] wraps [seam] in a [MuxSeam] and routes Raft traffic
- * on channel tag 1, lobby presence on channel tag 2, and the application-envelope [NamedMux]
- * on channel tag 3 — matching [gameHost]'s channels — so both sides communicate on compatible
- * frames. The caller passes a plain [Seam]; muxing is internal. Ride extra application traffic
- * over [GameSession.appChannel].
+ * on channel tag 1, lobby presence on channel tag 2, the application-envelope [NamedMux]
+ * on channel tag 3, and heartbeat answers on channel tag 4 — matching [gameHost]'s channels — so
+ * both sides communicate on compatible frames. The caller passes a plain [Seam]; muxing is
+ * internal. Ride extra application traffic over [GameSession.appChannel].
  *
  * **Presence announcement.** Before awaiting admission, this peer announces itself as a
  * non-host participant on the presence channel. This is what lets [gameHost]'s
@@ -589,6 +590,7 @@ public suspend fun CoroutineScope.gameJoin(
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
     val (presenceSeam, appMux) = broadcastPlane(mux, overlay)
+    answerHeartbeatPings(mux.channel(HEARTBEAT_CHANNEL))
 
     val self = NodeId(seam.selfId.value)
 
