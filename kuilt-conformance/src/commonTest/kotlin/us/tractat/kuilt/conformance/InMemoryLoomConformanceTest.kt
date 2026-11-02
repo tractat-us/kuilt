@@ -34,6 +34,11 @@ class InMemoryLoomConformanceTest : SeamConformanceSuite() {
     private val loom = InMemoryLoom()
     override fun newLoomPair(): Pair<Loom, Loom> = loom to loom
 
+    override fun flushFixture(): FlushFixture = FlushFixture.CannotHold(
+        "the reference has no queue: InMemoryLoom puts a frame in the recipient's spool before sendTo " +
+            "returns, so there is no accepted-but-not-left state to hold. IdentifiedConformanceTest holds one.",
+    )
+
     /**
      * `meshDelivery = true` here is genuine, not vacuous: [InMemoryLoom] is an
      * N-peer shared mesh, proven against the shared [MeshConformanceSuite] by

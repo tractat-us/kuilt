@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.FlushFixture
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
@@ -98,6 +99,11 @@ class TcpConformanceTest : SeamConformanceSuite() {
     }
 
     override fun joinTag(): Tag = TcpAddress(host = "127.0.0.1", port = port)
+
+    override fun flushFixture(): FlushFixture = FlushFixture.CannotHold(
+        "a real loopback socket leaves no test-side hook between the seam and the kernel. The burst is " +
+            "what runs here, over the real close; HandshakingConformanceTest holds a send on the same seam.",
+    )
 
     /**
      * meshDelivery vacuously true — strictly 2-peer direct socket (Task 1.8 / #1408

@@ -8,6 +8,7 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.FlushFixture
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
@@ -105,6 +106,12 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
 
     override fun newLoomPair(): Pair<Loom, Loom> =
         serverLoom to KtorClientLoom(httpClient, connectivity = connectivity)
+
+    override fun flushFixture(): FlushFixture = FlushFixture.CannotHold(
+        "a real Netty server and a real OkHttp client leave no test-side hook between the seam and the " +
+            "socket. The burst is what runs here, over the real close; IdentifiedConformanceTest holds a " +
+            "send on the same LinkSeam.",
+    )
 
     override fun joinTag(): Tag = WebSocketAdvertisement(
         url = "ws://localhost:$port$serverPath",
