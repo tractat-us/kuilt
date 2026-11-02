@@ -15,10 +15,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.IOException
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -65,8 +67,10 @@ import kotlin.time.Duration.Companion.seconds
  * for a WebSocket request, so on CIO a 500 ms `requestTimeoutMillis` was still waiting at 13 s on a far
  * end holding its `101`, and a 500 ms `socketTimeoutMillis` killed an idle, healthy session within 3 s.
  *
- * A cancelled caller waits at most two seconds on a far end that never answers the close. OkHttp keeps
- * the socket waiting for that answer on a clock of its own, which was still running 15 seconds later.
+ * A closed session keeps its socket until the far end answers the Close frame, because ending it sooner
+ * can lose the frame, and a far end that never answers gets two seconds. So a cancelled caller waits at
+ * most two seconds too. OkHttp keeps the socket waiting for that answer on a clock of its own, which was
+ * still running 15 seconds later.
  *
  * Wrap the returned session in [WebSocketConnection] to build a seam on it.
  *
@@ -77,6 +81,13 @@ import kotlin.time.Duration.Companion.seconds
  */
 public suspend fun HttpClient.ownedWebSocketSession(
     urlString: String,
+    block: HttpRequestBuilder.() -> Unit = {},
+): DefaultClientWebSocketSession = ownedWebSocketSession(urlString, CLOSE_BOUND, block)
+
+/** [ownedWebSocketSession] with its bound in the caller's hands, so a test can make waiting it out visible. */
+internal suspend fun HttpClient.ownedWebSocketSession(
+    urlString: String,
+    closeBound: Duration,
     block: HttpRequestBuilder.() -> Unit = {},
 ): DefaultClientWebSocketSession {
     plugin(WebSockets)
@@ -103,6 +114,8 @@ public suspend fun HttpClient.ownedWebSocketSession(
                     if (cause == null) ended.complete(Unit) else ended.completeExceptionally(cause)
                 }
                 arrived.complete(session)
+                ended.join()
+                session.awaitTheFarEndsAnswer(closeBound)
                 ended.await()
             }
         } catch (failure: Throwable) {
@@ -118,10 +131,28 @@ public suspend fun HttpClient.ownedWebSocketSession(
         return arrived.await()
     } catch (abandoned: CancellationException) {
         // Shielded because the cancel is what brought us here, and the close would be the first casualty.
-        withContext(NonCancellable) { abandonDial(arrived, dial) }
+        withContext(NonCancellable) { abandonDial(arrived, dial, closeBound) }
         currentCoroutineContext().ensureActive()
         throw IOException("the WebSocket dial ended without a session", abandoned)
     }
+}
+
+/**
+ * Keep the call open until the far end has heard this session's Close frame, or [bound] runs out.
+ *
+ * Returning from the dial's block ends the call, and on CIO and Darwin a session's outgoing side closes
+ * the moment its Close frame is queued, before the socket's writer has run. A call ended on that signal
+ * cancels the writer with the frame still in its queue, and the far end hears a dropped connection.
+ * Nothing reports the frame reaching the socket: on CIO it crosses another coroutine after the writer.
+ * The first proof is the far end's answer, or the socket ending, and either one ends the session's job.
+ *
+ * On OkHttp and in the browser the session's job is the call's own, which cannot end before this
+ * returns. Waiting on it would only ever time out, and it is not needed: there the outgoing side stays
+ * open until the far end has answered.
+ */
+private suspend fun DefaultClientWebSocketSession.awaitTheFarEndsAnswer(bound: Duration) {
+    val sessionJob = coroutineContext.job
+    if (sessionJob !== call.coroutineContext.job) withTimeoutOrNull(bound) { sessionJob.join() }
 }
 
 /**
@@ -141,10 +172,14 @@ public suspend fun HttpClient.ownedWebSocketSession(
  * answers the Close frame can hold the session up for as long as it likes. Giving up costs only the
  * courtesy. Nothing here is caught, because `close` swallows its own failures and `join` reports none.
  */
-private suspend fun abandonDial(arrived: CompletableDeferred<DefaultClientWebSocketSession>, dial: Job) {
+private suspend fun abandonDial(
+    arrived: CompletableDeferred<DefaultClientWebSocketSession>,
+    dial: Job,
+    bound: Duration,
+) {
     arrived.cancel()
     if (!arrived.isCancelled) {
-        withTimeoutOrNull(ABANDON_BOUND) {
+        withTimeoutOrNull(bound) {
             arrived.await().close()
             dial.join()
         }
@@ -152,5 +187,5 @@ private suspend fun abandonDial(arrived: CompletableDeferred<DefaultClientWebSoc
     dial.cancel()
 }
 
-/** How long an abandoned dial gets to end politely before its call is cut. */
-internal val ABANDON_BOUND = 2.seconds
+/** How long a closing session gets to end politely before its call is cut. */
+internal val CLOSE_BOUND = 2.seconds

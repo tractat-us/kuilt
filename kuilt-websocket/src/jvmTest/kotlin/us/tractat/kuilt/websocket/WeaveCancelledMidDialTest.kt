@@ -78,8 +78,8 @@ import io.ktor.server.websocket.WebSockets as ServerWebSockets
  *    thread while the session around it reports itself closed, which is when the call used to be cut.
  *
  * Time is real and bounded. [OBSERVATION] is only ever waited out on a red: a green reaches the far
- * end's verdict in well under a second, so it can be generous enough for a loaded box. Two arms wait
- * on a green because the wait is the claim, [OKHTTP_WATCH] and [ABANDON_BOUND], and both are short.
+ * end's verdict in well under a second, so it can be generous enough for a loaded box. A few arms wait
+ * on a green because the wait is the claim, [OKHTTP_WATCH] and [CLOSE_BOUND], and both are short.
  */
 class WeaveCancelledMidDialTest {
 
@@ -314,7 +314,7 @@ class WeaveCancelledMidDialTest {
      * answer on a clock of its own, and the cancelled caller must not wait out the same clock.
      *
      * The bound is also what makes the two steps inside it visible, because this far end keeps the
-     * session up for all of it. A real wait reaches [ABANDON_BOUND] and then cuts the call. Take away
+     * session up for all of it. A real wait reaches [CLOSE_BOUND] and then cuts the call. Take away
      * the `NonCancellable` shield and the join throws at once, so the cut never runs and the call stays
      * on the client. Take away the join and nothing waits, so the close gets no time to land. The
      * elapsed check is a lower bound on a real clock, so a slow box cannot fail it.
@@ -338,7 +338,7 @@ class WeaveCancelledMidDialTest {
             assertNotNull(waited, "the cancelled weave was still waiting on the far end after $HANG_BOUND")
             val liveCalls = httpClient.coroutineContext.job.children.count { it.isActive }
             val seen = "after $waited, with $liveCalls call(s) still on the client"
-            assertTrue(waited >= ABANDON_BOUND, "the weave did not wait out the close: it returned $seen")
+            assertTrue(waited >= CLOSE_BOUND, "the weave did not wait out the close: it returned $seen")
             assertEquals(0, liveCalls, "the bound expired and the call was not cut: the weave returned $seen")
             assertTrue(silent.closeFrameSeen, "the unclaimed session's close was never sent")
         } finally {
@@ -402,6 +402,36 @@ class WeaveCancelledMidDialTest {
         } finally {
             silent.close()
         }
+    }
+
+    /**
+     * With the far end answering, the call ends with the session and not at the bound. The bound here
+     * is far past the check, so a wait that only ever ends by timing out cannot pass as a slow box.
+     * OkHttp is the arm that needs it: its session's job is the call's own, which cannot end until the
+     * dial lets go.
+     */
+    private suspend fun assertTheCallEndsWithTheSession(httpClient: HttpClient) {
+        val session = rigScope.async { httpClient.ownedWebSocketSession(server.url, closeBound = TEST_BOUND) }
+        server.awaitRequest()
+        server.finishHandshake()
+
+        session.await().close()
+
+        assertACleanClose(server.farEnd())
+        val ended = withTimeoutOrNull(HANG_BOUND) {
+            while (httpClient.coroutineContext.job.children.any { it.isActive }) delay(POLL)
+        }
+        assertNotNull(ended, "the far end answered the close and the call was still live after $HANG_BOUND")
+    }
+
+    @Test
+    fun aCioCallEndsWithItsSessionOnceTheFarEndAnswers() = realTime {
+        assertTheCallEndsWithTheSession(client())
+    }
+
+    @Test
+    fun anOkHttpCallEndsWithItsSessionOnceTheFarEndAnswers() = realTime {
+        assertTheCallEndsWithTheSession(client(OkHttp))
     }
 
     // ── After the upgrade, before the mesh preamble ──────────────────────────────────────────────
