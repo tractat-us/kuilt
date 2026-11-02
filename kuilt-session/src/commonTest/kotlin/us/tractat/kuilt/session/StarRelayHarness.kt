@@ -244,6 +244,7 @@ internal class RelayStar(
 internal suspend fun TestScope.relayStar(
     coJoiners: Int = 2,
     wedge: Set<String> = emptySet(),
+    hostRoomScope: CoroutineScope = backgroundScope,
 ): RelayStar {
     require(coJoiners >= 2) { "a relay needs at least two spokes to relay between" }
     val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
@@ -253,7 +254,7 @@ internal suspend fun TestScope.relayStar(
     val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(0L))
 
     val hostWire = WireTapSeam(fabric.serverLoom.host(Pattern(ROOM)), backgroundScope)
-    val hostRoom = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock, relayHeartbeat)
+    val hostRoom = SeamRoomFactory(fabric.serverLoom, hostRoomScope, clock, relayHeartbeat)
         .adopt(hostWire, SessionRole.Host)
     val host = observe(hostRoom, hostWire)
 

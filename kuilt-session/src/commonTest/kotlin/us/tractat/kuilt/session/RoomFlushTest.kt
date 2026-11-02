@@ -2,8 +2,11 @@
 
 package us.tractat.kuilt.session
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -249,6 +252,40 @@ class RoomFlushTest {
         )
         assertIs<FlushOutcome.Failed>(flush.await())
     }
+
+    /**
+     * The room's scope ending kills its lane writers with frames still queued, while its fabric stays up.
+     *
+     * A lane's wait ends when its writer does, because a member leaving is a good reason to stop waiting.
+     * This is the other way a writer ends, and those frames went nowhere, so the fabric's `Drained` would
+     * be an answer about the wrong queue. Holds an admit lane and a relay lane, since each has its own wait.
+     */
+    @Test
+    fun `a scope ending under a waiting flush says Failed without asking the fabric`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val roomScope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
+            val star = relayStar(coJoiners = 3, hostRoomScope = roomScope)
+            star.host.wire.answerFlushWith { FlushOutcome.Drained }
+            star.host.wire.hold(star.joinerBId)
+            star.joinerA.sendRelay(RelayDest.One(star.joinerBId), appPayload("forward"))
+            star.joinerC.room.leave()
+            testScheduler.runCurrent()
+            assertEquals(listOf(star.joinerCId.value), star.farewellsTo(star.joinerB), "rig: both B's lanes are stuck")
+
+            val flush = async { star.host.room.flush(Duration.INFINITE) }
+            testScheduler.advanceTimeBy(settle)
+            testScheduler.runCurrent()
+            assertFalse(flush.isCompleted, "rig: the flush is waiting on B")
+
+            roomScope.cancel()
+            testScheduler.runCurrent()
+
+            assertAll(
+                { assertIs<SeamState.Woven>(star.host.wire.state.value, "rig: the fabric is still up") },
+                { assertIs<FlushOutcome.Failed>(flush.await(), "those frames went nowhere, so this cannot be Drained") },
+                { assertEquals(0, star.host.wire.flushesAsked, "the fabric cannot answer for the lanes") },
+            )
+        }
 
     /** The caller's own cancellation is a cancellation, and costs the room nothing. */
     @Test
