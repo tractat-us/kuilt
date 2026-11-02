@@ -102,7 +102,7 @@ internal typealias ConnectionClosedStateCb = CFunction<(CPointer<ByteVar>?, CPoi
 internal typealias ConnectionViabilityCb = CFunction<(CPointer<ByteVar>?, Int) -> Unit>
 
 @OptIn(ExperimentalForeignApi::class)
-internal class NwBridgeRuntime private constructor(private val api: RealNwApi) {
+internal class NwBridgeRuntime(private val api: RealNwApi) {
 
     /** P2P/Bonjour runtime — the default `nw_runtime_create` path. */
     constructor(psk: ByteArray, identity: ByteArray) : this(RealNwApi(NwPskMaterial(psk = psk, identity = identity)))
@@ -116,7 +116,7 @@ internal class NwBridgeRuntime private constructor(private val api: RealNwApi) {
     constructor(psk: ByteArray, identity: ByteArray, loopback: NwLoopbackConfig)
         : this(RealNwApi(NwPskMaterial(psk = psk, identity = identity), loopback))
 
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    internal val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // Snapshot of the connections currently open, maintained by the connectionOpened/closed
     // forwarding collectors so [destroy] can gracefully disconnect all of them. Guarded by an
