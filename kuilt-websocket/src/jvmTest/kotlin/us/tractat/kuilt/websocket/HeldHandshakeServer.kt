@@ -47,6 +47,7 @@ internal class HeldHandshakeServer(
     private val listener = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
     private val answer = CountDownLatch(1)
     private var answerLine = SWITCHING_PROTOCOLS
+    private var answers = true
 
     private val requestSeen = CompletableDeferred<Unit>()
     private val dataFrameSeen = CompletableDeferred<Unit>()
@@ -77,7 +78,16 @@ internal class HeldHandshakeServer(
         answer.countDown()
     }
 
-    /** What the connection did after the answer, at most [observation] later. */
+    /**
+     * Never answer, and watch the connection anyway. Every other arm answers after the cancel, and an
+     * answer can give a socket a reason to end that the cancel did not.
+     */
+    fun leaveUnanswered() {
+        answers = false
+        answer.countDown()
+    }
+
+    /** What the connection did after the answer, or after [leaveUnanswered], at most [observation] later. */
     suspend fun farEnd(): FarEnd = verdict.await()
 
     override fun close() {
@@ -94,9 +104,11 @@ internal class HeldHandshakeServer(
                 answer.await()
                 socket.soTimeout = observation.inWholeMilliseconds.toInt()
                 try {
-                    socket.getOutputStream().apply {
-                        write(responseTo(key).toByteArray())
-                        flush()
+                    if (answers) {
+                        socket.getOutputStream().apply {
+                            write(responseTo(key).toByteArray())
+                            flush()
+                        }
                     }
                 } catch (_: IOException) {
                     // The client is already gone, and the read below will say so.
