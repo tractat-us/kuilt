@@ -238,7 +238,10 @@ internal class RaftEngine(
     private val isDurableId: Boolean = identity is ClientIdentity.Durable
 
     /** What the caller says this id has issued. It only ever seeds [collisions]. `0` for an auto id. */
-    private val issuedFloor: Long = (identity as? ClientIdentity.Durable)?.issuedThrough ?: 0L
+    private val issuedFloor: Long = when (identity) {
+        is ClientIdentity.Durable -> identity.issuedThrough
+        ClientIdentity.Auto -> 0L
+    }
 
     /** This node's dedup identity. `var` because an auto id re-mints on a detected collision. */
     private var myClientId: ClientId = when (identity) {
