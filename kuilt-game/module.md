@@ -157,6 +157,15 @@ sequencer discards its pending buffer and rehydrates the authoritative state via
 `fromSnapshot`, then folds later commits on top. Implement `fromSnapshot` for
 compaction-enabled sessions; the default throws (fail-loud) the first time an install arrives.
 
+**Refusing a move:** throw from `apply`. At `propose` the exception reaches the caller and nothing
+is proposed. A move legal when proposed can be refused later, once another player's move has landed
+first: a replay then skips it, and a commit of it leaves the state unchanged, on every replica alike.
+
+**The action type needs value equality that survives the codec.** A commit arrives as a decoded
+copy and is matched to a pending action with `==`, so use a data class of values. Equal actions are
+interchangeable: another player's equal move retires your pending one, and until your own commit
+lands the prediction omits it. The state still converges.
+
 ## Single-collection constraint
 
 After any of the three entry points wraps the seam, **do not collect `seam.incoming`**.

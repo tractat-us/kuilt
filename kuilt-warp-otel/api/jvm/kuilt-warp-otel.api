@@ -1,0 +1,9 @@
+public final class us/tractat/kuilt/warp/otel/WarpMetricsKt {
+	public static final fun recordPlan (Lus/tractat/kuilt/otel/WarpMetricExporter;Lus/tractat/kuilt/warp/Draft;Lus/tractat/kuilt/warp/WarpStats;Ljava/util/Map;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun recordPlan$default (Lus/tractat/kuilt/otel/WarpMetricExporter;Lus/tractat/kuilt/warp/Draft;Lus/tractat/kuilt/warp/WarpStats;Ljava/util/Map;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun recordStats (Lus/tractat/kuilt/otel/WarpMetricExporter;Lus/tractat/kuilt/warp/WarpStats;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun recordStats$default (Lus/tractat/kuilt/otel/WarpMetricExporter;Lus/tractat/kuilt/warp/WarpStats;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun recordWarp (Lus/tractat/kuilt/otel/WarpMetricExporter;Lus/tractat/kuilt/warp/WarpNode;Ljava/util/Map;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun recordWarp$default (Lus/tractat/kuilt/otel/WarpMetricExporter;Lus/tractat/kuilt/warp/WarpNode;Ljava/util/Map;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+

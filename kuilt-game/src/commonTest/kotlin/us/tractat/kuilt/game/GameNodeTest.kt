@@ -5,9 +5,18 @@
 
 package us.tractat.kuilt.game
 
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
@@ -18,14 +27,18 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.Committed
+import us.tractat.kuilt.raft.DurableStoreRaftStorage
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftNode
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
 class GameNodeTest {
@@ -48,6 +61,62 @@ class GameNodeTest {
 
         val indexed = TurnSequencer(session.node, Int.serializer()).propose(7)
         assertEquals(ClientId("durable-x"), indexed.dedupKey.clientId)
+    }
+
+    /**
+     * The route a consumer takes to retained storage: `gameNode(storage = …, identity = Durable(…))`
+     * and the one-argument [TurnSequencer.propose]. A fresh [InMemoryLoom] reuses the seam id, so the
+     * second incarnation is the same voter (#3060).
+     */
+    @Test
+    fun aDurableGameNodeOverRetainedStorageSurvivesARestart() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val failures = mutableListOf<Throwable>()
+        val capturing = CoroutineScope(
+            backgroundScope.coroutineContext +
+                SupervisorJob(backgroundScope.coroutineContext[Job]) +
+                CoroutineExceptionHandler { _, e -> failures += e },
+        )
+        val store = InMemoryDurableStore()
+        val identity = ClientIdentity.Durable(ClientId("durable-x"))
+        val session: suspend CoroutineScope.(Long) -> GameSession = { seed ->
+            val seam = InMemoryLoom().host(Pattern("solo"))
+            gameNode(
+                seam,
+                voterIds = setOf(NodeId(seam.selfId.value)),
+                storage = DurableStoreRaftStorage.open(store),
+                raftConfig = fastRaftConfig(seed = seed),
+                identity = identity,
+            )
+        }
+
+        val firstScope = CoroutineScope(capturing.coroutineContext + Job(capturing.coroutineContext[Job]))
+        val first = firstScope.session(1L)
+        first.node.awaitLeadership()
+        val moves = TurnSequencer(first.node, Int.serializer())
+        repeat(3) { moves.propose(it) }
+        firstScope.cancel()
+
+        val secondScope = CoroutineScope(capturing.coroutineContext + Job(capturing.coroutineContext[Job]))
+        val second = secondScope.session(2L)
+        val walked = mutableListOf<Long>()
+        secondScope.launch {
+            second.node.committed.filterIsInstance<Committed.Entry>().collect { c ->
+                c.entry.dedupKey?.let { walked += it.requestId }
+            }
+        }
+        second.node.awaitLeadership()
+        delay(100.milliseconds)
+        val replayed = walked.toList()
+        val failuresAtReplay = failures.map { it.toString() }
+        val scopeSurvivedReplay = secondScope.isActive
+        val next = if (scopeSurvivedReplay) TurnSequencer(second.node, Int.serializer()).propose(99) else null
+
+        assertAll(
+            { assertEquals(emptyList(), failuresAtReplay, "no failure across the replay") },
+            { assertTrue(scopeSurvivedReplay, "the node's scope must still be active") },
+            { assertEquals(listOf(1L, 2L, 3L), replayed, "the rig: replay re-walked the old serials") },
+            { assertEquals(4L, next?.dedupKey?.requestId, "the next move's serial resumes above them") },
+        )
     }
 
     @Test

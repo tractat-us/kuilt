@@ -1,0 +1,412 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-quilter>
+abstract fun interface us.tractat.kuilt.quilter/MonotonicMillis { // us.tractat.kuilt.quilter/MonotonicMillis|null[0]
+    abstract fun now(): kotlin/Long // us.tractat.kuilt.quilter/MonotonicMillis.now|now(){}[0]
+}
+
+abstract fun interface us.tractat.kuilt.quilter/WindowPolicy { // us.tractat.kuilt.quilter/WindowPolicy|null[0]
+    abstract fun idsToTruncate(kotlin.collections/List<us.tractat.kuilt.crdt/RgaId>, kotlin.collections/Set<us.tractat.kuilt.crdt/RgaId>): kotlin.collections/Set<us.tractat.kuilt.crdt/RgaId> // us.tractat.kuilt.quilter/WindowPolicy.idsToTruncate|idsToTruncate(kotlin.collections.List<us.tractat.kuilt.crdt.RgaId>;kotlin.collections.Set<us.tractat.kuilt.crdt.RgaId>){}[0]
+
+    final object Companion { // us.tractat.kuilt.quilter/WindowPolicy.Companion|null[0]
+        final fun byCount(kotlin/Int): us.tractat.kuilt.quilter/WindowPolicy // us.tractat.kuilt.quilter/WindowPolicy.Companion.byCount|byCount(kotlin.Int){}[0]
+        final fun never(): us.tractat.kuilt.quilter/WindowPolicy // us.tractat.kuilt.quilter/WindowPolicy.Companion.never|never(){}[0]
+    }
+}
+
+final class <#A: kotlin/Any?> us.tractat.kuilt.quilter/FugueGcCoordinator : us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.quilter/FugueGcCoordinator|null[0]
+    constructor <init>(kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.crdt/Fugue<#A>>, kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.quilter/CutFrontier>, kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.crdt/VersionVector>, kotlin/Function1<us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/Fugue<#A>>, kotlin/Unit>, kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.quilter/FugueGcCoordinator.<init>|<init>(kotlinx.coroutines.flow.StateFlow<us.tractat.kuilt.crdt.Fugue<1:0>>;kotlinx.coroutines.flow.StateFlow<us.tractat.kuilt.quilter.CutFrontier>;kotlinx.coroutines.flow.StateFlow<us.tractat.kuilt.crdt.VersionVector>;kotlin.Function1<us.tractat.kuilt.crdt.Patch<us.tractat.kuilt.crdt.Fugue<1:0>>,kotlin.Unit>;kotlinx.coroutines.CoroutineScope){}[0]
+}
+
+final class <#A: kotlin/Any?> us.tractat.kuilt.quilter/MovableTreeGcCoordinator : us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.quilter/MovableTreeGcCoordinator|null[0]
+    constructor <init>(kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.crdt/MovableTree<#A>>, kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.quilter/CutFrontier>, kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.crdt/VersionVector>, kotlin/Function1<us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/MovableTree<#A>>, kotlin/Unit>, kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.quilter/MovableTreeGcCoordinator.<init>|<init>(kotlinx.coroutines.flow.StateFlow<us.tractat.kuilt.crdt.MovableTree<1:0>>;kotlinx.coroutines.flow.StateFlow<us.tractat.kuilt.quilter.CutFrontier>;kotlinx.coroutines.flow.StateFlow<us.tractat.kuilt.crdt.VersionVector>;kotlin.Function1<us.tractat.kuilt.crdt.Patch<us.tractat.kuilt.crdt.MovableTree<1:0>>,kotlin.Unit>;kotlinx.coroutines.CoroutineScope){}[0]
+}
+
+final class <#A: kotlin/Any?> us.tractat.kuilt.quilter/RgaGcCoordinator : us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.quilter/RgaGcCoordinator|null[0]
+    constructor <init>(kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.crdt/Rga<#A>>, kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.quilter/CutFrontier>, kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.crdt/VersionVector>, kotlin/Function1<us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/Rga<#A>>, kotlin/Unit>, us.tractat.kuilt.quilter/WindowPolicy = ..., kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.quilter/RgaGcCoordinator.<init>|<init>(kotlinx.coroutines.flow.StateFlow<us.tractat.kuilt.crdt.Rga<1:0>>;kotlinx.coroutines.flow.StateFlow<us.tractat.kuilt.quilter.CutFrontier>;kotlinx.coroutines.flow.StateFlow<us.tractat.kuilt.crdt.VersionVector>;kotlin.Function1<us.tractat.kuilt.crdt.Patch<us.tractat.kuilt.crdt.Rga<1:0>>,kotlin.Unit>;us.tractat.kuilt.quilter.WindowPolicy;kotlinx.coroutines.CoroutineScope){}[0]
+}
+
+final class <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.quilter/Quilter : us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.quilter/Quilter|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.core/Seam, #A, kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/QuiltMessage<#A>>, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.quilter/QuilterConfig = ..., us.tractat.kuilt.quilter/MonotonicMillis = ..., kotlinx.serialization/BinaryFormat = ..., kotlin/Function1<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> = ..., kotlin.random/Random = ...) // us.tractat.kuilt.quilter/Quilter.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.core.Seam;1:0;kotlinx.serialization.KSerializer<us.tractat.kuilt.quilter.QuiltMessage<1:0>>;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.quilter.QuilterConfig;us.tractat.kuilt.quilter.MonotonicMillis;kotlinx.serialization.BinaryFormat;kotlin.Function1<kotlin.collections.Set<us.tractat.kuilt.core.PeerId>,kotlin.collections.Set<us.tractat.kuilt.core.PeerId>>;kotlin.random.Random){}[0]
+
+    final val cutFrontier // us.tractat.kuilt.quilter/Quilter.cutFrontier|{}cutFrontier[0]
+        final fun <get-cutFrontier>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.quilter/CutFrontier> // us.tractat.kuilt.quilter/Quilter.cutFrontier.<get-cutFrontier>|<get-cutFrontier>(){}[0]
+    final val deliveredLocal // us.tractat.kuilt.quilter/Quilter.deliveredLocal|{}deliveredLocal[0]
+        final fun <get-deliveredLocal>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.crdt/VersionVector> // us.tractat.kuilt.quilter/Quilter.deliveredLocal.<get-deliveredLocal>|<get-deliveredLocal>(){}[0]
+    final val replica // us.tractat.kuilt.quilter/Quilter.replica|{}replica[0]
+        final fun <get-replica>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/Quilter.replica.<get-replica>|<get-replica>(){}[0]
+    final val state // us.tractat.kuilt.quilter/Quilter.state|{}state[0]
+        final fun <get-state>(): kotlinx.coroutines.flow/StateFlow<#A> // us.tractat.kuilt.quilter/Quilter.state.<get-state>|<get-state>(){}[0]
+    final val universalAckFlow // us.tractat.kuilt.quilter/Quilter.universalAckFlow|{}universalAckFlow[0]
+        final fun <get-universalAckFlow>(): kotlinx.coroutines.flow/StateFlow<kotlin/Long> // us.tractat.kuilt.quilter/Quilter.universalAckFlow.<get-universalAckFlow>|<get-universalAckFlow>(){}[0]
+
+    final fun apply(us.tractat.kuilt.crdt/Patch<#A>) // us.tractat.kuilt.quilter/Quilter.apply|apply(us.tractat.kuilt.crdt.Patch<1:0>){}[0]
+    final fun mutate(kotlin/Function1<#A, us.tractat.kuilt.crdt/Patch<#A>>) // us.tractat.kuilt.quilter/Quilter.mutate|mutate(kotlin.Function1<1:0,us.tractat.kuilt.crdt.Patch<1:0>>){}[0]
+    final fun mutateOrSkip(kotlin/Function1<#A, us.tractat.kuilt.crdt/Patch<#A>?>): kotlin/Boolean // us.tractat.kuilt.quilter/Quilter.mutateOrSkip|mutateOrSkip(kotlin.Function1<1:0,us.tractat.kuilt.crdt.Patch<1:0>?>){}[0]
+    final suspend fun drainAndClose() // us.tractat.kuilt.quilter/Quilter.drainAndClose|drainAndClose(){}[0]
+}
+
+final class us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig { // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig|null[0]
+    constructor <init>(kotlin.time/Duration, kotlin/Long = ..., kotlin.random/Random = ...) // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.<init>|<init>(kotlin.time.Duration;kotlin.Long;kotlin.random.Random){}[0]
+
+    final val cadence // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.cadence|{}cadence[0]
+        final fun <get-cadence>(): kotlin.time/Duration // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.cadence.<get-cadence>|<get-cadence>(){}[0]
+    final val minImbalanceThreshold // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.minImbalanceThreshold|{}minImbalanceThreshold[0]
+        final fun <get-minImbalanceThreshold>(): kotlin/Long // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.minImbalanceThreshold.<get-minImbalanceThreshold>|<get-minImbalanceThreshold>(){}[0]
+    final val random // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.random|{}random[0]
+        final fun <get-random>(): kotlin.random/Random // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.random.<get-random>|<get-random>(){}[0]
+
+    final fun component1(): kotlin.time/Duration // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.component2|component2(){}[0]
+    final fun component3(): kotlin.random/Random // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.component3|component3(){}[0]
+    final fun copy(kotlin.time/Duration = ..., kotlin/Long = ..., kotlin.random/Random = ...): us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.copy|copy(kotlin.time.Duration;kotlin.Long;kotlin.random.Random){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.quilter/BoundedCounterTransferConfig { // us.tractat.kuilt.quilter/BoundedCounterTransferConfig|null[0]
+    constructor <init>(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ..., kotlin.time/Duration = ...) // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Int;kotlin.time.Duration){}[0]
+
+    final val initialRetryDelay // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.initialRetryDelay|{}initialRetryDelay[0]
+        final fun <get-initialRetryDelay>(): kotlin.time/Duration // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.initialRetryDelay.<get-initialRetryDelay>|<get-initialRetryDelay>(){}[0]
+    final val lowWaterThreshold // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.lowWaterThreshold|{}lowWaterThreshold[0]
+        final fun <get-lowWaterThreshold>(): kotlin/Long // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.lowWaterThreshold.<get-lowWaterThreshold>|<get-lowWaterThreshold>(){}[0]
+    final val maxRetries // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.maxRetries|{}maxRetries[0]
+        final fun <get-maxRetries>(): kotlin/Int // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.maxRetries.<get-maxRetries>|<get-maxRetries>(){}[0]
+    final val requestedAmount // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.requestedAmount|{}requestedAmount[0]
+        final fun <get-requestedAmount>(): kotlin/Long // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.requestedAmount.<get-requestedAmount>|<get-requestedAmount>(){}[0]
+    final val surplusFloor // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.surplusFloor|{}surplusFloor[0]
+        final fun <get-surplusFloor>(): kotlin/Long // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.surplusFloor.<get-surplusFloor>|<get-surplusFloor>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.component2|component2(){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.component3|component3(){}[0]
+    final fun component4(): kotlin/Int // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.component4|component4(){}[0]
+    final fun component5(): kotlin.time/Duration // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.component5|component5(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ..., kotlin.time/Duration = ...): us.tractat.kuilt.quilter/BoundedCounterTransferConfig // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.copy|copy(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Int;kotlin.time.Duration){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.quilter/BoundedCounterTransferConfig.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.quilter/BoundedCounterTransferCoordinator : us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.quilter/BoundedCounterTransferCoordinator|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.crdt/BoundedCounter>, us.tractat.kuilt.crdt/ReplicaId, kotlin/Function1<us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/BoundedCounter>, kotlin/Unit>, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.quilter/BoundedCounterTransferConfig = ..., us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig? = ...) // us.tractat.kuilt.quilter/BoundedCounterTransferCoordinator.<init>|<init>(us.tractat.kuilt.core.Seam;kotlinx.coroutines.flow.StateFlow<us.tractat.kuilt.crdt.BoundedCounter>;us.tractat.kuilt.crdt.ReplicaId;kotlin.Function1<us.tractat.kuilt.crdt.Patch<us.tractat.kuilt.crdt.BoundedCounter>,kotlin.Unit>;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.quilter.BoundedCounterTransferConfig;us.tractat.kuilt.quilter.BoundedCounterEqualizerConfig?){}[0]
+}
+
+final class us.tractat.kuilt.quilter/CutFrontier { // us.tractat.kuilt.quilter/CutFrontier|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/VersionVector, us.tractat.kuilt.crdt/VersionVector) // us.tractat.kuilt.quilter/CutFrontier.<init>|<init>(us.tractat.kuilt.crdt.VersionVector;us.tractat.kuilt.crdt.VersionVector){}[0]
+
+    final val frontierMax // us.tractat.kuilt.quilter/CutFrontier.frontierMax|{}frontierMax[0]
+        final fun <get-frontierMax>(): us.tractat.kuilt.crdt/VersionVector // us.tractat.kuilt.quilter/CutFrontier.frontierMax.<get-frontierMax>|<get-frontierMax>(){}[0]
+    final val stableCut // us.tractat.kuilt.quilter/CutFrontier.stableCut|{}stableCut[0]
+        final fun <get-stableCut>(): us.tractat.kuilt.crdt/VersionVector // us.tractat.kuilt.quilter/CutFrontier.stableCut.<get-stableCut>|<get-stableCut>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.crdt/VersionVector // us.tractat.kuilt.quilter/CutFrontier.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.crdt/VersionVector // us.tractat.kuilt.quilter/CutFrontier.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.crdt/VersionVector = ..., us.tractat.kuilt.crdt/VersionVector = ...): us.tractat.kuilt.quilter/CutFrontier // us.tractat.kuilt.quilter/CutFrontier.copy|copy(us.tractat.kuilt.crdt.VersionVector;us.tractat.kuilt.crdt.VersionVector){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.quilter/CutFrontier.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.quilter/CutFrontier.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.quilter/CutFrontier.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.quilter/CutFrontier.Companion|null[0]
+        final val EMPTY // us.tractat.kuilt.quilter/CutFrontier.Companion.EMPTY|{}EMPTY[0]
+            final fun <get-EMPTY>(): us.tractat.kuilt.quilter/CutFrontier // us.tractat.kuilt.quilter/CutFrontier.Companion.EMPTY.<get-EMPTY>|<get-EMPTY>(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.quilter/QuilterConfig { // us.tractat.kuilt.quilter/QuilterConfig|null[0]
+    constructor <init>(kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Boolean = ..., kotlin/Boolean = ...) // us.tractat.kuilt.quilter/QuilterConfig.<init>|<init>(kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;kotlin.Int;kotlin.Boolean;kotlin.Boolean){}[0]
+
+    final val antiEntropyInterval // us.tractat.kuilt.quilter/QuilterConfig.antiEntropyInterval|{}antiEntropyInterval[0]
+        final fun <get-antiEntropyInterval>(): kotlin.time/Duration // us.tractat.kuilt.quilter/QuilterConfig.antiEntropyInterval.<get-antiEntropyInterval>|<get-antiEntropyInterval>(){}[0]
+    final val evictionAfter // us.tractat.kuilt.quilter/QuilterConfig.evictionAfter|{}evictionAfter[0]
+        final fun <get-evictionAfter>(): kotlin.time/Duration // us.tractat.kuilt.quilter/QuilterConfig.evictionAfter.<get-evictionAfter>|<get-evictionAfter>(){}[0]
+    final val expectVirtualTime // us.tractat.kuilt.quilter/QuilterConfig.expectVirtualTime|{}expectVirtualTime[0]
+        final fun <get-expectVirtualTime>(): kotlin/Boolean // us.tractat.kuilt.quilter/QuilterConfig.expectVirtualTime.<get-expectVirtualTime>|<get-expectVirtualTime>(){}[0]
+    final val fullStateRetryInterval // us.tractat.kuilt.quilter/QuilterConfig.fullStateRetryInterval|{}fullStateRetryInterval[0]
+        final fun <get-fullStateRetryInterval>(): kotlin.time/Duration // us.tractat.kuilt.quilter/QuilterConfig.fullStateRetryInterval.<get-fullStateRetryInterval>|<get-fullStateRetryInterval>(){}[0]
+    final val fullStateRetryLimit // us.tractat.kuilt.quilter/QuilterConfig.fullStateRetryLimit|{}fullStateRetryLimit[0]
+        final fun <get-fullStateRetryLimit>(): kotlin/Int // us.tractat.kuilt.quilter/QuilterConfig.fullStateRetryLimit.<get-fullStateRetryLimit>|<get-fullStateRetryLimit>(){}[0]
+    final val resendRetryInterval // us.tractat.kuilt.quilter/QuilterConfig.resendRetryInterval|{}resendRetryInterval[0]
+        final fun <get-resendRetryInterval>(): kotlin.time/Duration // us.tractat.kuilt.quilter/QuilterConfig.resendRetryInterval.<get-resendRetryInterval>|<get-resendRetryInterval>(){}[0]
+    final val strictTestGuard // us.tractat.kuilt.quilter/QuilterConfig.strictTestGuard|{}strictTestGuard[0]
+        final fun <get-strictTestGuard>(): kotlin/Boolean // us.tractat.kuilt.quilter/QuilterConfig.strictTestGuard.<get-strictTestGuard>|<get-strictTestGuard>(){}[0]
+
+    final fun component1(): kotlin.time/Duration // us.tractat.kuilt.quilter/QuilterConfig.component1|component1(){}[0]
+    final fun component2(): kotlin.time/Duration // us.tractat.kuilt.quilter/QuilterConfig.component2|component2(){}[0]
+    final fun component3(): kotlin.time/Duration // us.tractat.kuilt.quilter/QuilterConfig.component3|component3(){}[0]
+    final fun component4(): kotlin.time/Duration // us.tractat.kuilt.quilter/QuilterConfig.component4|component4(){}[0]
+    final fun component5(): kotlin/Int // us.tractat.kuilt.quilter/QuilterConfig.component5|component5(){}[0]
+    final fun component6(): kotlin/Boolean // us.tractat.kuilt.quilter/QuilterConfig.component6|component6(){}[0]
+    final fun component7(): kotlin/Boolean // us.tractat.kuilt.quilter/QuilterConfig.component7|component7(){}[0]
+    final fun copy(kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Boolean = ..., kotlin/Boolean = ...): us.tractat.kuilt.quilter/QuilterConfig // us.tractat.kuilt.quilter/QuilterConfig.copy|copy(kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;kotlin.Int;kotlin.Boolean;kotlin.Boolean){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.quilter/QuilterConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.quilter/QuilterConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.quilter/QuilterConfig.toString|toString(){}[0]
+}
+
+sealed class <#A: kotlin/Any?> us.tractat.kuilt.quilter/QuiltMessage { // us.tractat.kuilt.quilter/QuiltMessage|null[0]
+    final class <#A1: kotlin/Any?> Ack : us.tractat.kuilt.quilter/QuiltMessage<#A1> { // us.tractat.kuilt.quilter/QuiltMessage.Ack|null[0]
+        constructor <init>(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.crdt/ReplicaId, kotlin/Long) // us.tractat.kuilt.quilter/QuiltMessage.Ack.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
+
+        final val acker // us.tractat.kuilt.quilter/QuiltMessage.Ack.acker|{}acker[0]
+            final fun <get-acker>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/QuiltMessage.Ack.acker.<get-acker>|<get-acker>(){}[0]
+        final val sender // us.tractat.kuilt.quilter/QuiltMessage.Ack.sender|{}sender[0]
+            final fun <get-sender>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/QuiltMessage.Ack.sender.<get-sender>|<get-sender>(){}[0]
+        final val seq // us.tractat.kuilt.quilter/QuiltMessage.Ack.seq|{}seq[0]
+            final fun <get-seq>(): kotlin/Long // us.tractat.kuilt.quilter/QuiltMessage.Ack.seq.<get-seq>|<get-seq>(){}[0]
+
+        final class <#A2: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.quilter/QuiltMessage.Ack<#A2>> { // us.tractat.kuilt.quilter/QuiltMessage.Ack.$serializer|null[0]
+            constructor <init>(kotlinx.serialization/KSerializer<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.Ack.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>){}[0]
+
+            final val descriptor // us.tractat.kuilt.quilter/QuiltMessage.Ack.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Ack.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+            final val typeSerial0 // us.tractat.kuilt.quilter/QuiltMessage.Ack.$serializer.typeSerial0|{}typeSerial0[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.Ack.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.quilter/QuiltMessage.Ack<#A2> // us.tractat.kuilt.quilter/QuiltMessage.Ack.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.quilter/QuiltMessage.Ack<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.Ack.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.quilter.QuiltMessage.Ack<1:0>){}[0]
+            final fun typeParametersSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.Ack.$serializer.typeParametersSerializers|typeParametersSerializers(){}[0]
+        }
+
+        final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.quilter/QuiltMessage.Ack.Companion|null[0]
+            final val $cachedDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Ack.Companion.$cachedDescriptor|{}$cachedDescriptor[0]
+                final fun <get-$cachedDescriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Ack.Companion.$cachedDescriptor.<get-$cachedDescriptor>|<get-$cachedDescriptor>(){}[0]
+
+            final fun <#A3: kotlin/Any?> serializer(kotlinx.serialization/KSerializer<#A3>): kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/QuiltMessage.Ack<#A3>> // us.tractat.kuilt.quilter/QuiltMessage.Ack.Companion.serializer|serializer(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+            final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.quilter/QuiltMessage.Ack.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        }
+    }
+
+    final class <#A1: kotlin/Any?> Delivered : us.tractat.kuilt.quilter/QuiltMessage<#A1> { // us.tractat.kuilt.quilter/QuiltMessage.Delivered|null[0]
+        constructor <init>(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.crdt/VersionVector) // us.tractat.kuilt.quilter/QuiltMessage.Delivered.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.crdt.VersionVector){}[0]
+
+        final val sender // us.tractat.kuilt.quilter/QuiltMessage.Delivered.sender|{}sender[0]
+            final fun <get-sender>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/QuiltMessage.Delivered.sender.<get-sender>|<get-sender>(){}[0]
+        final val vector // us.tractat.kuilt.quilter/QuiltMessage.Delivered.vector|{}vector[0]
+            final fun <get-vector>(): us.tractat.kuilt.crdt/VersionVector // us.tractat.kuilt.quilter/QuiltMessage.Delivered.vector.<get-vector>|<get-vector>(){}[0]
+
+        final class <#A2: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.quilter/QuiltMessage.Delivered<#A2>> { // us.tractat.kuilt.quilter/QuiltMessage.Delivered.$serializer|null[0]
+            constructor <init>(kotlinx.serialization/KSerializer<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.Delivered.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>){}[0]
+
+            final val descriptor // us.tractat.kuilt.quilter/QuiltMessage.Delivered.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Delivered.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+            final val typeSerial0 // us.tractat.kuilt.quilter/QuiltMessage.Delivered.$serializer.typeSerial0|{}typeSerial0[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.Delivered.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.quilter/QuiltMessage.Delivered<#A2> // us.tractat.kuilt.quilter/QuiltMessage.Delivered.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.quilter/QuiltMessage.Delivered<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.Delivered.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.quilter.QuiltMessage.Delivered<1:0>){}[0]
+            final fun typeParametersSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.Delivered.$serializer.typeParametersSerializers|typeParametersSerializers(){}[0]
+        }
+
+        final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.quilter/QuiltMessage.Delivered.Companion|null[0]
+            final val $cachedDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Delivered.Companion.$cachedDescriptor|{}$cachedDescriptor[0]
+                final fun <get-$cachedDescriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Delivered.Companion.$cachedDescriptor.<get-$cachedDescriptor>|<get-$cachedDescriptor>(){}[0]
+
+            final fun <#A3: kotlin/Any?> serializer(kotlinx.serialization/KSerializer<#A3>): kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/QuiltMessage.Delivered<#A3>> // us.tractat.kuilt.quilter/QuiltMessage.Delivered.Companion.serializer|serializer(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+            final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.quilter/QuiltMessage.Delivered.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        }
+    }
+
+    final class <#A1: kotlin/Any?> Delta : us.tractat.kuilt.quilter/QuiltMessage<#A1> { // us.tractat.kuilt.quilter/QuiltMessage.Delta|null[0]
+        constructor <init>(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long, #A1) // us.tractat.kuilt.quilter/QuiltMessage.Delta.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long;1:0){}[0]
+
+        final val delta // us.tractat.kuilt.quilter/QuiltMessage.Delta.delta|{}delta[0]
+            final fun <get-delta>(): #A1 // us.tractat.kuilt.quilter/QuiltMessage.Delta.delta.<get-delta>|<get-delta>(){}[0]
+        final val sender // us.tractat.kuilt.quilter/QuiltMessage.Delta.sender|{}sender[0]
+            final fun <get-sender>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/QuiltMessage.Delta.sender.<get-sender>|<get-sender>(){}[0]
+        final val seq // us.tractat.kuilt.quilter/QuiltMessage.Delta.seq|{}seq[0]
+            final fun <get-seq>(): kotlin/Long // us.tractat.kuilt.quilter/QuiltMessage.Delta.seq.<get-seq>|<get-seq>(){}[0]
+
+        final class <#A2: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.quilter/QuiltMessage.Delta<#A2>> { // us.tractat.kuilt.quilter/QuiltMessage.Delta.$serializer|null[0]
+            constructor <init>(kotlinx.serialization/KSerializer<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.Delta.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>){}[0]
+
+            final val descriptor // us.tractat.kuilt.quilter/QuiltMessage.Delta.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Delta.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+            final val typeSerial0 // us.tractat.kuilt.quilter/QuiltMessage.Delta.$serializer.typeSerial0|{}typeSerial0[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.Delta.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.quilter/QuiltMessage.Delta<#A2> // us.tractat.kuilt.quilter/QuiltMessage.Delta.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.quilter/QuiltMessage.Delta<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.Delta.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.quilter.QuiltMessage.Delta<1:0>){}[0]
+            final fun typeParametersSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.Delta.$serializer.typeParametersSerializers|typeParametersSerializers(){}[0]
+        }
+
+        final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.quilter/QuiltMessage.Delta.Companion|null[0]
+            final val $cachedDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Delta.Companion.$cachedDescriptor|{}$cachedDescriptor[0]
+                final fun <get-$cachedDescriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Delta.Companion.$cachedDescriptor.<get-$cachedDescriptor>|<get-$cachedDescriptor>(){}[0]
+
+            final fun <#A3: kotlin/Any?> serializer(kotlinx.serialization/KSerializer<#A3>): kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/QuiltMessage.Delta<#A3>> // us.tractat.kuilt.quilter/QuiltMessage.Delta.Companion.serializer|serializer(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+            final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.quilter/QuiltMessage.Delta.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        }
+    }
+
+    final class <#A1: kotlin/Any?> FullState : us.tractat.kuilt.quilter/QuiltMessage<#A1> { // us.tractat.kuilt.quilter/QuiltMessage.FullState|null[0]
+        constructor <init>(us.tractat.kuilt.crdt/ReplicaId, #A1, kotlin/Long = ...) // us.tractat.kuilt.quilter/QuiltMessage.FullState.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;1:0;kotlin.Long){}[0]
+
+        final val sender // us.tractat.kuilt.quilter/QuiltMessage.FullState.sender|{}sender[0]
+            final fun <get-sender>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/QuiltMessage.FullState.sender.<get-sender>|<get-sender>(){}[0]
+        final val state // us.tractat.kuilt.quilter/QuiltMessage.FullState.state|{}state[0]
+            final fun <get-state>(): #A1 // us.tractat.kuilt.quilter/QuiltMessage.FullState.state.<get-state>|<get-state>(){}[0]
+        final val upThrough // us.tractat.kuilt.quilter/QuiltMessage.FullState.upThrough|{}upThrough[0]
+            final fun <get-upThrough>(): kotlin/Long // us.tractat.kuilt.quilter/QuiltMessage.FullState.upThrough.<get-upThrough>|<get-upThrough>(){}[0]
+
+        final class <#A2: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.quilter/QuiltMessage.FullState<#A2>> { // us.tractat.kuilt.quilter/QuiltMessage.FullState.$serializer|null[0]
+            constructor <init>(kotlinx.serialization/KSerializer<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.FullState.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>){}[0]
+
+            final val descriptor // us.tractat.kuilt.quilter/QuiltMessage.FullState.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.FullState.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+            final val typeSerial0 // us.tractat.kuilt.quilter/QuiltMessage.FullState.$serializer.typeSerial0|{}typeSerial0[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.FullState.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.quilter/QuiltMessage.FullState<#A2> // us.tractat.kuilt.quilter/QuiltMessage.FullState.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.quilter/QuiltMessage.FullState<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.FullState.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.quilter.QuiltMessage.FullState<1:0>){}[0]
+            final fun typeParametersSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.FullState.$serializer.typeParametersSerializers|typeParametersSerializers(){}[0]
+        }
+
+        final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.quilter/QuiltMessage.FullState.Companion|null[0]
+            final val $cachedDescriptor // us.tractat.kuilt.quilter/QuiltMessage.FullState.Companion.$cachedDescriptor|{}$cachedDescriptor[0]
+                final fun <get-$cachedDescriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.FullState.Companion.$cachedDescriptor.<get-$cachedDescriptor>|<get-$cachedDescriptor>(){}[0]
+
+            final fun <#A3: kotlin/Any?> serializer(kotlinx.serialization/KSerializer<#A3>): kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/QuiltMessage.FullState<#A3>> // us.tractat.kuilt.quilter/QuiltMessage.FullState.Companion.serializer|serializer(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+            final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.quilter/QuiltMessage.FullState.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        }
+    }
+
+    final class <#A1: kotlin/Any?> FullStateRequest : us.tractat.kuilt.quilter/QuiltMessage<#A1> { // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest|null[0]
+        constructor <init>(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.crdt/ReplicaId) // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.crdt.ReplicaId){}[0]
+
+        final val requester // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.requester|{}requester[0]
+            final fun <get-requester>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.requester.<get-requester>|<get-requester>(){}[0]
+        final val sender // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.sender|{}sender[0]
+            final fun <get-sender>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.sender.<get-sender>|<get-sender>(){}[0]
+
+        final class <#A2: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest<#A2>> { // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.$serializer|null[0]
+            constructor <init>(kotlinx.serialization/KSerializer<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>){}[0]
+
+            final val descriptor // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+            final val typeSerial0 // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.$serializer.typeSerial0|{}typeSerial0[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest<#A2> // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.quilter.QuiltMessage.FullStateRequest<1:0>){}[0]
+            final fun typeParametersSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.$serializer.typeParametersSerializers|typeParametersSerializers(){}[0]
+        }
+
+        final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.Companion|null[0]
+            final val $cachedDescriptor // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.Companion.$cachedDescriptor|{}$cachedDescriptor[0]
+                final fun <get-$cachedDescriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.Companion.$cachedDescriptor.<get-$cachedDescriptor>|<get-$cachedDescriptor>(){}[0]
+
+            final fun <#A3: kotlin/Any?> serializer(kotlinx.serialization/KSerializer<#A3>): kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest<#A3>> // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.Companion.serializer|serializer(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+            final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.quilter/QuiltMessage.FullStateRequest.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        }
+    }
+
+    final class <#A1: kotlin/Any?> Resend : us.tractat.kuilt.quilter/QuiltMessage<#A1> { // us.tractat.kuilt.quilter/QuiltMessage.Resend|null[0]
+        constructor <init>(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.crdt/ReplicaId, kotlin/Long, kotlin/Long) // us.tractat.kuilt.quilter/QuiltMessage.Resend.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.crdt.ReplicaId;kotlin.Long;kotlin.Long){}[0]
+
+        final val fromSeq // us.tractat.kuilt.quilter/QuiltMessage.Resend.fromSeq|{}fromSeq[0]
+            final fun <get-fromSeq>(): kotlin/Long // us.tractat.kuilt.quilter/QuiltMessage.Resend.fromSeq.<get-fromSeq>|<get-fromSeq>(){}[0]
+        final val requester // us.tractat.kuilt.quilter/QuiltMessage.Resend.requester|{}requester[0]
+            final fun <get-requester>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/QuiltMessage.Resend.requester.<get-requester>|<get-requester>(){}[0]
+        final val sender // us.tractat.kuilt.quilter/QuiltMessage.Resend.sender|{}sender[0]
+            final fun <get-sender>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/QuiltMessage.Resend.sender.<get-sender>|<get-sender>(){}[0]
+        final val toSeq // us.tractat.kuilt.quilter/QuiltMessage.Resend.toSeq|{}toSeq[0]
+            final fun <get-toSeq>(): kotlin/Long // us.tractat.kuilt.quilter/QuiltMessage.Resend.toSeq.<get-toSeq>|<get-toSeq>(){}[0]
+
+        final class <#A2: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.quilter/QuiltMessage.Resend<#A2>> { // us.tractat.kuilt.quilter/QuiltMessage.Resend.$serializer|null[0]
+            constructor <init>(kotlinx.serialization/KSerializer<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.Resend.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>){}[0]
+
+            final val descriptor // us.tractat.kuilt.quilter/QuiltMessage.Resend.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Resend.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+            final val typeSerial0 // us.tractat.kuilt.quilter/QuiltMessage.Resend.$serializer.typeSerial0|{}typeSerial0[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.Resend.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.quilter/QuiltMessage.Resend<#A2> // us.tractat.kuilt.quilter/QuiltMessage.Resend.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.quilter/QuiltMessage.Resend<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.Resend.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.quilter.QuiltMessage.Resend<1:0>){}[0]
+            final fun typeParametersSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.Resend.$serializer.typeParametersSerializers|typeParametersSerializers(){}[0]
+        }
+
+        final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.quilter/QuiltMessage.Resend.Companion|null[0]
+            final val $cachedDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Resend.Companion.$cachedDescriptor|{}$cachedDescriptor[0]
+                final fun <get-$cachedDescriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.Resend.Companion.$cachedDescriptor.<get-$cachedDescriptor>|<get-$cachedDescriptor>(){}[0]
+
+            final fun <#A3: kotlin/Any?> serializer(kotlinx.serialization/KSerializer<#A3>): kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/QuiltMessage.Resend<#A3>> // us.tractat.kuilt.quilter/QuiltMessage.Resend.Companion.serializer|serializer(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+            final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.quilter/QuiltMessage.Resend.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        }
+    }
+
+    final class <#A1: kotlin/Any?> RootDigest : us.tractat.kuilt.quilter/QuiltMessage<#A1> { // us.tractat.kuilt.quilter/QuiltMessage.RootDigest|null[0]
+        constructor <init>(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long, kotlin/Long) // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long;kotlin.Long){}[0]
+
+        final val root // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.root|{}root[0]
+            final fun <get-root>(): kotlin/Long // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.root.<get-root>|<get-root>(){}[0]
+        final val sender // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.sender|{}sender[0]
+            final fun <get-sender>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.sender.<get-sender>|<get-sender>(){}[0]
+        final val upThrough // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.upThrough|{}upThrough[0]
+            final fun <get-upThrough>(): kotlin/Long // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.upThrough.<get-upThrough>|<get-upThrough>(){}[0]
+
+        final class <#A2: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.quilter/QuiltMessage.RootDigest<#A2>> { // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.$serializer|null[0]
+            constructor <init>(kotlinx.serialization/KSerializer<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>){}[0]
+
+            final val descriptor // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+            final val typeSerial0 // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.$serializer.typeSerial0|{}typeSerial0[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.quilter/QuiltMessage.RootDigest<#A2> // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.quilter/QuiltMessage.RootDigest<#A2>) // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.quilter.QuiltMessage.RootDigest<1:0>){}[0]
+            final fun typeParametersSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.$serializer.typeParametersSerializers|typeParametersSerializers(){}[0]
+        }
+
+        final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.Companion|null[0]
+            final val $cachedDescriptor // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.Companion.$cachedDescriptor|{}$cachedDescriptor[0]
+                final fun <get-$cachedDescriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.Companion.$cachedDescriptor.<get-$cachedDescriptor>|<get-$cachedDescriptor>(){}[0]
+
+            final fun <#A3: kotlin/Any?> serializer(kotlinx.serialization/KSerializer<#A3>): kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/QuiltMessage.RootDigest<#A3>> // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.Companion.serializer|serializer(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+            final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.quilter/QuiltMessage.RootDigest.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        }
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.quilter/QuiltMessage.Companion|null[0]
+        final fun <#A2: kotlin/Any?> serializer(kotlinx.serialization/KSerializer<#A2>): kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/QuiltMessage<#A2>> // us.tractat.kuilt.quilter/QuiltMessage.Companion.serializer|serializer(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.quilter/QuiltMessage.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+sealed class us.tractat.kuilt.quilter/BoundedCounterCoordMessage { // us.tractat.kuilt.quilter/BoundedCounterCoordMessage|null[0]
+    final class TransferRequest : us.tractat.kuilt.quilter/BoundedCounterCoordMessage { // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest|null[0]
+        constructor <init>(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long) // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
+
+        final val amount // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.amount|{}amount[0]
+            final fun <get-amount>(): kotlin/Long // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.amount.<get-amount>|<get-amount>(){}[0]
+        final val requester // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.requester|{}requester[0]
+            final fun <get-requester>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.requester.<get-requester>|<get-requester>(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest> { // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest) // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.quilter.BoundedCounterCoordMessage.TransferRequest){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest> // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.TransferRequest.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.quilter/BoundedCounterCoordMessage> // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.quilter/BoundedCounterCoordMessage.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+final fun <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.quilter/Quilter(us.tractat.kuilt.core/Seam, #A, kotlinx.serialization/KSerializer<#A>, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.crdt/ReplicaId = ..., us.tractat.kuilt.quilter/QuilterConfig = ..., us.tractat.kuilt.quilter/MonotonicMillis = ..., kotlinx.serialization/BinaryFormat = ..., kotlin/Function1<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> = ..., kotlin.random/Random = ...): us.tractat.kuilt.quilter/Quilter<#A> // us.tractat.kuilt.quilter/Quilter|Quilter(us.tractat.kuilt.core.Seam;0:0;kotlinx.serialization.KSerializer<0:0>;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.quilter.QuilterConfig;us.tractat.kuilt.quilter.MonotonicMillis;kotlinx.serialization.BinaryFormat;kotlin.Function1<kotlin.collections.Set<us.tractat.kuilt.core.PeerId>,kotlin.collections.Set<us.tractat.kuilt.core.PeerId>>;kotlin.random.Random){0§<us.tractat.kuilt.crdt.Quilted<0:0>>}[0]

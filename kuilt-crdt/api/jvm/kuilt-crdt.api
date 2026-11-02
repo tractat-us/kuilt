@@ -1,0 +1,1740 @@
+public final class us/tractat/kuilt/crdt/AddNodeResult {
+	public synthetic fun <init> (Lus/tractat/kuilt/crdt/MovableTree;Ljava/lang/String;Lus/tractat/kuilt/crdt/Quilted;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/crdt/MovableTree;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3-gvAbXMU ()Lus/tractat/kuilt/crdt/Quilted;
+	public final fun copy-NBu2UFA (Lus/tractat/kuilt/crdt/MovableTree;Ljava/lang/String;Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/AddNodeResult;
+	public static synthetic fun copy-NBu2UFA$default (Lus/tractat/kuilt/crdt/AddNodeResult;Lus/tractat/kuilt/crdt/MovableTree;Ljava/lang/String;Lus/tractat/kuilt/crdt/Quilted;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/AddNodeResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getNodeId ()Ljava/lang/String;
+	public final fun getPatch-gvAbXMU ()Lus/tractat/kuilt/crdt/Quilted;
+	public final fun getTree ()Lus/tractat/kuilt/crdt/MovableTree;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/BloomFilter : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/BloomFilter$Companion;
+	public final fun add-gCgEofE (Ljava/lang/String;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBitCount ()I
+	public final fun getHashCount ()I
+	public final fun getWordCount ()I
+	public fun hashCode ()I
+	public final fun mightContain (Ljava/lang/String;)Z
+	public final fun nonZeroWordCount ()I
+	public fun piece (Lus/tractat/kuilt/crdt/BloomFilter;)Lus/tractat/kuilt/crdt/BloomFilter;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/BloomFilter$Companion {
+	public final fun create (ID)Lus/tractat/kuilt/crdt/BloomFilter;
+	public static synthetic fun create$default (Lus/tractat/kuilt/crdt/BloomFilter$Companion;IDILjava/lang/Object;)Lus/tractat/kuilt/crdt/BloomFilter;
+	public final fun fromRaw (II[J)Lus/tractat/kuilt/crdt/BloomFilter;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/BloomFilterSerializer : kotlinx/serialization/KSerializer {
+	public fun <init> ()V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/BloomFilter;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/BloomFilter;)V
+}
+
+public final class us/tractat/kuilt/crdt/BoundedCounter : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/BoundedCounter$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTotalBudget ()J
+	public final fun getTotalSpent ()J
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/BoundedCounter;)Lus/tractat/kuilt/crdt/BoundedCounter;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun quota-81S8jZI (Ljava/lang/String;)J
+	public fun toString ()Ljava/lang/String;
+	public final fun transfer-cDklQT4 (Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun trySpend-nudtHMw (Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public static synthetic fun trySpend-nudtHMw$default (Lus/tractat/kuilt/crdt/BoundedCounter;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/BoundedCounter$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/BoundedCounter$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/BoundedCounter;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/BoundedCounter;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/BoundedCounter$Companion {
+	public final fun getEMPTY ()Lus/tractat/kuilt/crdt/BoundedCounter;
+	public final fun getZERO ()Lus/tractat/kuilt/crdt/BoundedCounter;
+	public final fun init (Ljava/util/Map;)Lus/tractat/kuilt/crdt/BoundedCounter;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/CanonicalMapSerializer : kotlinx/serialization/KSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/util/Map;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/util/Map;)V
+}
+
+public final class us/tractat/kuilt/crdt/CanonicalSetSerializer : kotlinx/serialization/KSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/util/Set;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/util/Set;)V
+}
+
+public final class us/tractat/kuilt/crdt/Causal : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/Causal$Companion;
+	public fun <init> (Lus/tractat/kuilt/crdt/DotStore;Lus/tractat/kuilt/crdt/DotContext;)V
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getContext ()Lus/tractat/kuilt/crdt/DotContext;
+	public final fun getStore ()Lus/tractat/kuilt/crdt/DotStore;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/Causal;)Lus/tractat/kuilt/crdt/Causal;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/Causal$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/Causal;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/Causal;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/Causal$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/CellDelta {
+	public static final field Companion Lus/tractat/kuilt/crdt/CellDelta$Companion;
+	public fun <init> (IIJ)V
+	public final fun component1 ()I
+	public final fun component2 ()I
+	public final fun component3 ()J
+	public final fun copy (IIJ)Lus/tractat/kuilt/crdt/CellDelta;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/CellDelta;IIJILjava/lang/Object;)Lus/tractat/kuilt/crdt/CellDelta;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCol ()I
+	public final fun getRow ()I
+	public final fun getValue ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/CellDelta$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/CellDelta$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/CellDelta;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/CellDelta;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/CellDelta$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/CountMinSketch : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/CountMinSketch$Companion;
+	public final fun add-gCgEofE (Ljava/lang/String;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun add-gCgEofE ([B)Lus/tractat/kuilt/crdt/Quilted;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun estimate (Ljava/lang/String;)J
+	public final fun estimate ([B)J
+	public final fun getDepth ()I
+	public final fun getSparseCells ()Ljava/util/List;
+	public final fun getWidth ()I
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/CountMinSketch;)Lus/tractat/kuilt/crdt/CountMinSketch;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/CountMinSketch$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/CountMinSketch$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/CountMinSketch;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/CountMinSketch;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/CountMinSketch$Companion {
+	public final fun empty (II)Lus/tractat/kuilt/crdt/CountMinSketch;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/DDSketch : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/DDSketch$Companion;
+	public static final field DEFAULT_MAX_INDEXED_VALUE D
+	public static final field DEFAULT_MIN_INDEXED_VALUE D
+	public static final field DEFAULT_RELATIVE_ACCURACY D
+	public final fun add-V4bVmxY (Ljava/lang/String;D)Lus/tractat/kuilt/crdt/Quilted;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBucketCount ()I
+	public final fun getCount ()J
+	public final fun getGamma ()D
+	public final fun getMaxIndexedValue ()D
+	public final fun getMinIndexedValue ()D
+	public final fun getNegativeBuckets ()Ljava/util/Map;
+	public final fun getOverflowCount ()J
+	public final fun getPositiveBuckets ()Ljava/util/Map;
+	public final fun getRelativeAccuracy ()D
+	public final fun getZeroCount ()J
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/DDSketch;)Lus/tractat/kuilt/crdt/DDSketch;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun quantile (D)D
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/DDSketch$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/DDSketch$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/DDSketch;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/DDSketch;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/DDSketch$Companion {
+	public final fun empty (DDD)Lus/tractat/kuilt/crdt/DDSketch;
+	public static synthetic fun empty$default (Lus/tractat/kuilt/crdt/DDSketch$Companion;DDDILjava/lang/Object;)Lus/tractat/kuilt/crdt/DDSketch;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/Dot : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/crdt/Dot$Companion;
+	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/crdt/Dot;)I
+	public final fun component1-ffK6qZA ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy-8mRuq1Y (Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Dot;
+	public static synthetic fun copy-8mRuq1Y$default (Lus/tractat/kuilt/crdt/Dot;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/crdt/Dot;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReplica-ffK6qZA ()Ljava/lang/String;
+	public final fun getSeq ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/Dot$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/Dot$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/Dot;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/Dot;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/Dot$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/DotContext : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/DotContext$Companion;
+	public final fun add (Lus/tractat/kuilt/crdt/Dot;)Lus/tractat/kuilt/crdt/DotContext;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun contains (Lus/tractat/kuilt/crdt/Dot;)Z
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun nextDot-81S8jZI (Ljava/lang/String;)Lus/tractat/kuilt/crdt/Dot;
+	public fun piece (Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/DotContext;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/DotContext$Companion {
+	public final fun getEMPTY ()Lus/tractat/kuilt/crdt/DotContext;
+	public final fun of ([Lus/tractat/kuilt/crdt/Dot;)Lus/tractat/kuilt/crdt/DotContext;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/DotFun : us/tractat/kuilt/crdt/DotStore {
+	public static final field Companion Lus/tractat/kuilt/crdt/DotFun$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getDots ()Ljava/util/Set;
+	public fun getEmpty ()Lus/tractat/kuilt/crdt/DotFun;
+	public synthetic fun getEmpty ()Lus/tractat/kuilt/crdt/DotStore;
+	public final fun getValues ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun isBottom ()Z
+	public fun join (Lus/tractat/kuilt/crdt/DotFun;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/DotFun;
+	public synthetic fun join (Lus/tractat/kuilt/crdt/DotStore;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/DotStore;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/DotFun$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/DotFunSerializer : kotlinx/serialization/KSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/DotFun;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/DotFun;)V
+}
+
+public final class us/tractat/kuilt/crdt/DotMap : us/tractat/kuilt/crdt/DotStore {
+	public static final field Companion Lus/tractat/kuilt/crdt/DotMap$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getDots ()Ljava/util/Set;
+	public fun getEmpty ()Lus/tractat/kuilt/crdt/DotMap;
+	public synthetic fun getEmpty ()Lus/tractat/kuilt/crdt/DotStore;
+	public final fun getEntries ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun isBottom ()Z
+	public fun join (Lus/tractat/kuilt/crdt/DotMap;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/DotMap;
+	public synthetic fun join (Lus/tractat/kuilt/crdt/DotStore;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/DotStore;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/DotMap$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/DotMapSerializer : kotlinx/serialization/KSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/DotMap;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/DotMap;)V
+}
+
+public final class us/tractat/kuilt/crdt/DotSet : us/tractat/kuilt/crdt/DotStore {
+	public static final field Companion Lus/tractat/kuilt/crdt/DotSet$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Set;)V
+	public synthetic fun <init> (Ljava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getDots ()Ljava/util/Set;
+	public fun getEmpty ()Lus/tractat/kuilt/crdt/DotSet;
+	public synthetic fun getEmpty ()Lus/tractat/kuilt/crdt/DotStore;
+	public fun hashCode ()I
+	public fun isBottom ()Z
+	public fun join (Lus/tractat/kuilt/crdt/DotSet;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/DotSet;
+	public synthetic fun join (Lus/tractat/kuilt/crdt/DotStore;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/DotStore;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/DotSet$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/DotSetSerializer : kotlinx/serialization/KSerializer {
+	public fun <init> ()V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/DotSet;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/DotSet;)V
+}
+
+public abstract interface class us/tractat/kuilt/crdt/DotStore {
+	public abstract fun getDots ()Ljava/util/Set;
+	public abstract fun getEmpty ()Lus/tractat/kuilt/crdt/DotStore;
+	public fun isBottom ()Z
+	public abstract fun join (Lus/tractat/kuilt/crdt/DotStore;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/DotStore;
+}
+
+public final class us/tractat/kuilt/crdt/DotStore$DefaultImpls {
+	public static fun isBottom (Lus/tractat/kuilt/crdt/DotStore;)Z
+}
+
+public final class us/tractat/kuilt/crdt/EphemeralEntry {
+	public static final field Companion Lus/tractat/kuilt/crdt/EphemeralEntry$Companion;
+	public fun <init> (Ljava/lang/Object;J)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClock ()J
+	public final fun getValue ()Ljava/lang/Object;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/EphemeralEntry$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/EphemeralEntry;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/EphemeralEntry;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/EphemeralEntry$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/EphemeralMap : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/EphemeralMap$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEntries ()Ljava/util/Map;
+	public fun hashCode ()I
+	public final fun leave-8mRuq1Y (Ljava/lang/String;J)Lus/tractat/kuilt/crdt/EphemeralMap;
+	public final fun live (Ljava/util/Map;JJ)Ljava/util/Map;
+	public fun piece (Lus/tractat/kuilt/crdt/EphemeralMap;)Lus/tractat/kuilt/crdt/EphemeralMap;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun put-m9qO7Lg (Ljava/lang/String;Ljava/lang/Object;J)Lus/tractat/kuilt/crdt/EphemeralMap;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/EphemeralMap$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/EphemeralMap;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/EphemeralMap;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/EphemeralMap$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/EphemeralMap;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/EphemeralMapTracker {
+	public fun <init> (JLkotlin/jvm/functions/Function0;)V
+	public synthetic fun <init> (JLkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getTtlMs ()J
+	public final fun live ()Ljava/util/Map;
+	public final fun received (Lus/tractat/kuilt/crdt/EphemeralMap;)V
+	public final fun relayed (Lus/tractat/kuilt/crdt/EphemeralMap;)V
+	public final fun snapshot ()Lus/tractat/kuilt/crdt/EphemeralMap;
+}
+
+public final class us/tractat/kuilt/crdt/Fugue : us/tractat/kuilt/crdt/OpLogCrdt, us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/Fugue$Companion;
+	public final fun apply (Lus/tractat/kuilt/crdt/FugueOp;)Lus/tractat/kuilt/crdt/Fugue;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public synthetic fun classify (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/LogOp;
+	public fun classify (Lus/tractat/kuilt/crdt/FugueOp;)Lus/tractat/kuilt/crdt/LogOp;
+	public final fun compact (Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;)Lkotlin/Pair;
+	public synthetic fun dotOf (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Dot;
+	public fun dotOf (Lus/tractat/kuilt/crdt/FugueId;)Lus/tractat/kuilt/crdt/Dot;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCompactedIds ()Ljava/util/Set;
+	public final fun getLamport ()J
+	public final fun getSize ()I
+	public fun hashCode ()I
+	public final fun insertAt-m9qO7Lg (Ljava/lang/String;ILjava/lang/Object;)Lkotlin/Pair;
+	public fun opSerializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+	public fun operations ()Lkotlin/sequences/Sequence;
+	public fun piece (Lus/tractat/kuilt/crdt/Fugue;)Lus/tractat/kuilt/crdt/Fugue;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun removeAt (I)Lkotlin/Pair;
+	public final fun toList ()Ljava/util/List;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/Fugue$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/Fugue;
+	public final fun opSerializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+	public final fun wireSerializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/FugueId : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/crdt/FugueId$Companion;
+	public synthetic fun <init> (JLjava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/crdt/FugueId;)I
+	public final fun component1 ()J
+	public final fun component2-ffK6qZA ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun copy-G4YWYEc (JLjava/lang/String;J)Lus/tractat/kuilt/crdt/FugueId;
+	public static synthetic fun copy-G4YWYEc$default (Lus/tractat/kuilt/crdt/FugueId;JLjava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/crdt/FugueId;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDot ()Lus/tractat/kuilt/crdt/Dot;
+	public final fun getLamport ()J
+	public final fun getReplicaId-ffK6qZA ()Ljava/lang/String;
+	public final fun getSeq ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/FugueId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/FugueId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/FugueId;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/FugueId;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/FugueId$Companion {
+	public final fun getHEAD ()Lus/tractat/kuilt/crdt/FugueId;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/crdt/FugueOp {
+	public static final field Companion Lus/tractat/kuilt/crdt/FugueOp$Companion;
+	public abstract fun getId ()Lus/tractat/kuilt/crdt/FugueId;
+}
+
+public final class us/tractat/kuilt/crdt/FugueOp$Compact : us/tractat/kuilt/crdt/FugueOp {
+	public static final field Companion Lus/tractat/kuilt/crdt/FugueOp$Compact$Companion;
+	public fun <init> (Ljava/util/Map;)V
+	public final fun component1 ()Ljava/util/Map;
+	public final fun copy (Ljava/util/Map;)Lus/tractat/kuilt/crdt/FugueOp$Compact;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/FugueOp$Compact;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/FugueOp$Compact;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getId ()Lus/tractat/kuilt/crdt/FugueId;
+	public final fun getPositions ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/FugueOp$Compact$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/FugueOp$Compact$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/FugueOp$Compact;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/FugueOp$Compact;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/FugueOp$Compact$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/FugueOp$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/FugueOp$Insert : us/tractat/kuilt/crdt/FugueOp {
+	public static final field Companion Lus/tractat/kuilt/crdt/FugueOp$Insert$Companion;
+	public fun <init> (Lus/tractat/kuilt/crdt/FugueId;Ljava/lang/Object;Lus/tractat/kuilt/crdt/FugueId;Lus/tractat/kuilt/crdt/FugueSide;Lus/tractat/kuilt/crdt/FugueId;)V
+	public final fun component1 ()Lus/tractat/kuilt/crdt/FugueId;
+	public final fun component2 ()Ljava/lang/Object;
+	public final fun component3 ()Lus/tractat/kuilt/crdt/FugueId;
+	public final fun component4 ()Lus/tractat/kuilt/crdt/FugueSide;
+	public final fun component5 ()Lus/tractat/kuilt/crdt/FugueId;
+	public final fun copy (Lus/tractat/kuilt/crdt/FugueId;Ljava/lang/Object;Lus/tractat/kuilt/crdt/FugueId;Lus/tractat/kuilt/crdt/FugueSide;Lus/tractat/kuilt/crdt/FugueId;)Lus/tractat/kuilt/crdt/FugueOp$Insert;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/FugueOp$Insert;Lus/tractat/kuilt/crdt/FugueId;Ljava/lang/Object;Lus/tractat/kuilt/crdt/FugueId;Lus/tractat/kuilt/crdt/FugueSide;Lus/tractat/kuilt/crdt/FugueId;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/FugueOp$Insert;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getId ()Lus/tractat/kuilt/crdt/FugueId;
+	public final fun getParent ()Lus/tractat/kuilt/crdt/FugueId;
+	public final fun getRightOrigin ()Lus/tractat/kuilt/crdt/FugueId;
+	public final fun getSide ()Lus/tractat/kuilt/crdt/FugueSide;
+	public final fun getValue ()Ljava/lang/Object;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/FugueOp$Insert$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/FugueOp$Insert;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/FugueOp$Insert;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/FugueOp$Insert$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/FugueOp$Remove : us/tractat/kuilt/crdt/FugueOp {
+	public static final field Companion Lus/tractat/kuilt/crdt/FugueOp$Remove$Companion;
+	public fun <init> (Lus/tractat/kuilt/crdt/FugueId;)V
+	public final fun component1 ()Lus/tractat/kuilt/crdt/FugueId;
+	public final fun copy (Lus/tractat/kuilt/crdt/FugueId;)Lus/tractat/kuilt/crdt/FugueOp$Remove;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/FugueOp$Remove;Lus/tractat/kuilt/crdt/FugueId;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/FugueOp$Remove;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getId ()Lus/tractat/kuilt/crdt/FugueId;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/FugueOp$Remove$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/FugueOp$Remove;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/FugueOp$Remove;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/FugueOp$Remove$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/FugueSide : java/lang/Enum {
+	public static final field Companion Lus/tractat/kuilt/crdt/FugueSide$Companion;
+	public static final field Left Lus/tractat/kuilt/crdt/FugueSide;
+	public static final field Right Lus/tractat/kuilt/crdt/FugueSide;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/crdt/FugueSide;
+	public static fun values ()[Lus/tractat/kuilt/crdt/FugueSide;
+}
+
+public final class us/tractat/kuilt/crdt/FugueSide$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/GCounter : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/GCounter$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun count-81S8jZI (Ljava/lang/String;)J
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()J
+	public fun hashCode ()I
+	public final fun inc-V4bVmxY (Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public static synthetic fun inc-V4bVmxY$default (Lus/tractat/kuilt/crdt/GCounter;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/crdt/GCounter;)Lus/tractat/kuilt/crdt/GCounter;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun replicas ()Ljava/util/Set;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/GCounter$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/GCounter$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/GCounter;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/GCounter;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/GCounter$Companion {
+	public final fun getZERO ()Lus/tractat/kuilt/crdt/GCounter;
+	public final fun of ([Lkotlin/Pair;)Lus/tractat/kuilt/crdt/GCounter;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/GCounterDouble : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/GCounterDouble$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun count-81S8jZI (Ljava/lang/String;)D
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()D
+	public fun hashCode ()I
+	public final fun inc-V4bVmxY (Ljava/lang/String;D)Lus/tractat/kuilt/crdt/Quilted;
+	public static synthetic fun inc-V4bVmxY$default (Lus/tractat/kuilt/crdt/GCounterDouble;Ljava/lang/String;DILjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/crdt/GCounterDouble;)Lus/tractat/kuilt/crdt/GCounterDouble;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/GCounterDouble$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/GCounterDouble$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/GCounterDouble;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/GCounterDouble;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/GCounterDouble$Companion {
+	public final fun getZERO ()Lus/tractat/kuilt/crdt/GCounterDouble;
+	public final fun of ([Lkotlin/Pair;)Lus/tractat/kuilt/crdt/GCounterDouble;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/GSet : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/GSet$Companion;
+	public final fun add-gCgEofE (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun contains (Ljava/lang/Object;)Z
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getElements ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/GSet;)Lus/tractat/kuilt/crdt/GSet;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/GSet$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/GSet;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/GSet;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/GSet$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/GSet;
+	public final fun of ([Ljava/lang/Object;)Lus/tractat/kuilt/crdt/GSet;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/Gauge : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/Gauge$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTimestamp ()Ljava/lang/Long;
+	public final fun getValue ()Ljava/lang/Double;
+	public fun hashCode ()I
+	public final fun observe-m9qO7Lg (Ljava/lang/String;JD)Lus/tractat/kuilt/crdt/Gauge;
+	public fun piece (Lus/tractat/kuilt/crdt/Gauge;)Lus/tractat/kuilt/crdt/Gauge;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/Gauge$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/Gauge$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/Gauge;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/Gauge;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/Gauge$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/Gauge;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/Histogram : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/Histogram$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBoundaries ()Ljava/util/List;
+	public final fun getBucketCounts ()Ljava/util/List;
+	public final fun getCount ()J
+	public final fun getSum ()D
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/Histogram;)Lus/tractat/kuilt/crdt/Histogram;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun record-V4bVmxY (Ljava/lang/String;D)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/Histogram$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/Histogram$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/Histogram;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/Histogram;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/Histogram$Companion {
+	public final fun empty (Ljava/util/List;)Lus/tractat/kuilt/crdt/Histogram;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/HyperLogLog : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/HyperLogLog$Companion;
+	public final fun add-gCgEofE (Ljava/lang/String;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun estimate ()J
+	public final fun getM ()I
+	public final fun getPackedByteSize ()I
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/HyperLogLog;)Lus/tractat/kuilt/crdt/HyperLogLog;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/HyperLogLog$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/HyperLogLog$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/HyperLogLog;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/HyperLogLog;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/HyperLogLog$Companion {
+	public final fun empty (I)Lus/tractat/kuilt/crdt/HyperLogLog;
+	public static synthetic fun empty$default (Lus/tractat/kuilt/crdt/HyperLogLog$Companion;IILjava/lang/Object;)Lus/tractat/kuilt/crdt/HyperLogLog;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/IncarnationClock {
+	public static final field COUNTER_BITS I
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/IncarnationClock;
+	public final fun base (J)J
+	public final fun next (J)J
+}
+
+public final class us/tractat/kuilt/crdt/JsonCrdt : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/JsonCrdt$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun get (Ljava/lang/String;)Lus/tractat/kuilt/crdt/JsonNode;
+	public final fun getKeys ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/JsonCrdt;)Lus/tractat/kuilt/crdt/JsonCrdt;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun remove-gCgEofE (Ljava/lang/String;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun set-ICF1ALs (Ljava/lang/String;Lus/tractat/kuilt/crdt/JsonNode;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+	public final fun withReplica-81S8jZI (Ljava/lang/String;)Lus/tractat/kuilt/crdt/JsonCrdt;
+}
+
+public final class us/tractat/kuilt/crdt/JsonCrdt$Companion {
+	public final fun empty-81S8jZI (Ljava/lang/String;)Lus/tractat/kuilt/crdt/JsonCrdt;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract class us/tractat/kuilt/crdt/JsonNode : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/JsonNode$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+}
+
+public final class us/tractat/kuilt/crdt/JsonNode$Array : us/tractat/kuilt/crdt/JsonNode {
+	public fun <init> (Lus/tractat/kuilt/crdt/Rga;)V
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRga ()Lus/tractat/kuilt/crdt/Rga;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/JsonNode;)Lus/tractat/kuilt/crdt/JsonNode;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/JsonNode$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/JsonNode$Leaf : us/tractat/kuilt/crdt/JsonNode {
+	public fun <init> (Lus/tractat/kuilt/crdt/MVRegister;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRegister ()Lus/tractat/kuilt/crdt/MVRegister;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/JsonNode;)Lus/tractat/kuilt/crdt/JsonNode;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/JsonNode$Object : us/tractat/kuilt/crdt/JsonNode {
+	public fun <init> (Lus/tractat/kuilt/crdt/ORMap;)V
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMap ()Lus/tractat/kuilt/crdt/ORMap;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/JsonNode;)Lus/tractat/kuilt/crdt/JsonNode;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/crdt/JsonValue {
+	public static final field Companion Lus/tractat/kuilt/crdt/JsonValue$Companion;
+	public synthetic fun <init> (ILkotlinx/serialization/internal/SerializationConstructorMarker;)V
+	public static final synthetic fun write$Self (Lus/tractat/kuilt/crdt/JsonValue;Lkotlinx/serialization/encoding/CompositeEncoder;Lkotlinx/serialization/descriptors/SerialDescriptor;)V
+}
+
+public final class us/tractat/kuilt/crdt/JsonValue$Bool : us/tractat/kuilt/crdt/JsonValue {
+	public static final field Companion Lus/tractat/kuilt/crdt/JsonValue$Bool$Companion;
+	public fun <init> (Z)V
+	public final fun component1 ()Z
+	public final fun copy (Z)Lus/tractat/kuilt/crdt/JsonValue$Bool;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/JsonValue$Bool;ZILjava/lang/Object;)Lus/tractat/kuilt/crdt/JsonValue$Bool;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/JsonValue$Bool$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/JsonValue$Bool$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/JsonValue$Bool;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/JsonValue$Bool;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/JsonValue$Bool$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/JsonValue$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/JsonValue$Null : us/tractat/kuilt/crdt/JsonValue {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/JsonValue$Null;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/JsonValue$Num : us/tractat/kuilt/crdt/JsonValue {
+	public static final field Companion Lus/tractat/kuilt/crdt/JsonValue$Num$Companion;
+	public fun <init> (D)V
+	public final fun component1 ()D
+	public final fun copy (D)Lus/tractat/kuilt/crdt/JsonValue$Num;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/JsonValue$Num;DILjava/lang/Object;)Lus/tractat/kuilt/crdt/JsonValue$Num;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()D
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/JsonValue$Num$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/JsonValue$Num$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/JsonValue$Num;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/JsonValue$Num;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/JsonValue$Num$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/JsonValue$Str : us/tractat/kuilt/crdt/JsonValue {
+	public static final field Companion Lus/tractat/kuilt/crdt/JsonValue$Str$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/crdt/JsonValue$Str;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/JsonValue$Str;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/JsonValue$Str;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/JsonValue$Str$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/JsonValue$Str$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/JsonValue$Str;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/JsonValue$Str;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/JsonValue$Str$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/LWWMap : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/LWWMap$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun get (Ljava/lang/Object;)Ljava/lang/Object;
+	public final fun getEntries ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/LWWMap;)Lus/tractat/kuilt/crdt/LWWMap;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun remove-A2Ggm7A (Ljava/lang/String;JLjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun set-fjENvQQ (Ljava/lang/String;JLjava/lang/Object;Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/LWWMap$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/LWWMap;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/LWWMap;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/LWWMap$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/LWWMap;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/LWWRegister : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/LWWRegister$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTimestamp ()J
+	public final fun getValue ()Ljava/lang/Object;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/LWWRegister;)Lus/tractat/kuilt/crdt/LWWRegister;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun set-m9qO7Lg (Ljava/lang/String;JLjava/lang/Object;)Lus/tractat/kuilt/crdt/LWWRegister;
+	public fun toString ()Ljava/lang/String;
+	public final fun unset-8mRuq1Y (Ljava/lang/String;J)Lus/tractat/kuilt/crdt/LWWRegister;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/LWWRegister$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/LWWRegister;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/LWWRegister;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/LWWRegister$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/LWWRegister;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/LatticeProduct : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/LatticeProduct$Companion;
+	public fun <init> (Lus/tractat/kuilt/crdt/Quilted;Lus/tractat/kuilt/crdt/Quilted;)V
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFirst ()Lus/tractat/kuilt/crdt/Quilted;
+	public final fun getSecond ()Lus/tractat/kuilt/crdt/Quilted;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/LatticeProduct;)Lus/tractat/kuilt/crdt/LatticeProduct;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/LatticeProduct$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/LatticeProduct;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/LatticeProduct;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/LatticeProduct$Companion {
+	public final fun of (Lus/tractat/kuilt/crdt/Quilted;Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/LatticeProduct;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/crdt/LogOp {
+}
+
+public final class us/tractat/kuilt/crdt/LogOp$Compact : us/tractat/kuilt/crdt/LogOp {
+	public fun <init> (Ljava/util/Set;)V
+	public final fun component1 ()Ljava/util/Set;
+	public final fun copy (Ljava/util/Set;)Lus/tractat/kuilt/crdt/LogOp$Compact;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/LogOp$Compact;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/LogOp$Compact;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCompactedIds ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/LogOp$Insert : us/tractat/kuilt/crdt/LogOp {
+	public fun <init> (Ljava/lang/Object;)V
+	public final fun component1 ()Ljava/lang/Object;
+	public final fun copy (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/LogOp$Insert;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/LogOp$Insert;Ljava/lang/Object;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/LogOp$Insert;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Ljava/lang/Object;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/LogOp$Remove : us/tractat/kuilt/crdt/LogOp {
+	public fun <init> (Ljava/lang/Object;)V
+	public final fun component1 ()Ljava/lang/Object;
+	public final fun copy (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/LogOp$Remove;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/LogOp$Remove;Ljava/lang/Object;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/LogOp$Remove;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Ljava/lang/Object;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/MVRegister : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/MVRegister$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValues ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/MVRegister;)Lus/tractat/kuilt/crdt/MVRegister;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun set-8mRuq1Y (Ljava/lang/String;Ljava/lang/Object;)Lus/tractat/kuilt/crdt/MVRegister;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/MVRegister$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/MVRegister;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/MVRegister;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/MVRegister$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/MVRegister;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/MovableTree : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/MovableTree$Companion;
+	public static final field ROOT_ID Ljava/lang/String;
+	public final fun addNode-tmEOuCI (Ljava/lang/String;JLjava/lang/String;Ljava/lang/Object;)Lus/tractat/kuilt/crdt/AddNodeResult;
+	public final fun applyCompact (Lus/tractat/kuilt/crdt/MoveTreeCompact;)Lus/tractat/kuilt/crdt/MovableTree;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun childrenOf (Ljava/lang/String;)Ljava/util/Set;
+	public final fun compact (Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;)Lkotlin/Pair;
+	public final fun contains (Ljava/lang/String;)Z
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMoveLogSize ()I
+	public final fun hasPathToRoot (Ljava/lang/String;)Z
+	public fun hashCode ()I
+	public final fun isAncestor (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun move-tmEOuCI (Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;)Lkotlin/Pair;
+	public final fun parentOf (Ljava/lang/String;)Ljava/lang/String;
+	public fun piece (Lus/tractat/kuilt/crdt/MovableTree;)Lus/tractat/kuilt/crdt/MovableTree;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/MovableTree$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/MovableTree;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/MovableTree;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/MovableTree$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/MovableTree;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/MoveOp {
+	public static final field Companion Lus/tractat/kuilt/crdt/MoveOp$Companion;
+	public synthetic fun <init> (JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun copy-dzDm0SU (JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;J)Lus/tractat/kuilt/crdt/MoveOp;
+	public static synthetic fun copy-dzDm0SU$default (Lus/tractat/kuilt/crdt/MoveOp;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;JILjava/lang/Object;)Lus/tractat/kuilt/crdt/MoveOp;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDot ()Lus/tractat/kuilt/crdt/Dot;
+	public final fun getNewParent ()Ljava/lang/String;
+	public final fun getNode ()Ljava/lang/String;
+	public final fun getReplica-ffK6qZA ()Ljava/lang/String;
+	public final fun getSeq ()J
+	public final fun getTs ()J
+	public final fun getValue ()Ljava/lang/Object;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/MoveOp$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/MoveOp;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/MoveOp;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/MoveOp$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/MoveTreeCompact {
+	public static final field Companion Lus/tractat/kuilt/crdt/MoveTreeCompact$Companion;
+	public fun <init> (Ljava/util/Set;)V
+	public final fun component1 ()Ljava/util/Set;
+	public final fun copy (Ljava/util/Set;)Lus/tractat/kuilt/crdt/MoveTreeCompact;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/MoveTreeCompact;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/MoveTreeCompact;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDroppedDots ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/MoveTreeCompact$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/MoveTreeCompact$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/MoveTreeCompact;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/MoveTreeCompact;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/MoveTreeCompact$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/ORMap : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/ORMap$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun get (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun getKeys ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/ORMap;)Lus/tractat/kuilt/crdt/ORMap;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun put-A2Ggm7A (Ljava/lang/String;Ljava/lang/Object;Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun remove-gCgEofE (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/ORMap$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/ORMap;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/ORMap;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/ORMap$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/ORMap;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/ORMapEntry : us/tractat/kuilt/crdt/DotStore {
+	public static final field Companion Lus/tractat/kuilt/crdt/ORMapEntry$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getContributions ()Ljava/util/Map;
+	public fun getDots ()Ljava/util/Set;
+	public synthetic fun getEmpty ()Lus/tractat/kuilt/crdt/DotStore;
+	public fun getEmpty ()Lus/tractat/kuilt/crdt/ORMapEntry;
+	public final fun getValue ()Lus/tractat/kuilt/crdt/Quilted;
+	public fun hashCode ()I
+	public fun isBottom ()Z
+	public synthetic fun join (Lus/tractat/kuilt/crdt/DotStore;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/DotStore;
+	public fun join (Lus/tractat/kuilt/crdt/ORMapEntry;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/ORMapEntry;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/ORMapEntry$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/ORMapEntrySerializer : kotlinx/serialization/KSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/ORMapEntry;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/ORMapEntry;)V
+}
+
+public final class us/tractat/kuilt/crdt/ORSet : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/ORSet$Companion;
+	public final fun add-V4bVmxY (Ljava/lang/String;Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun contains (Ljava/lang/Object;)Z
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getElements ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun piece (Lus/tractat/kuilt/crdt/ORSet;)Lus/tractat/kuilt/crdt/ORSet;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun remove-gCgEofE (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun removeAll-gCgEofE (Ljava/util/Set;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/ORSet$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/ORSet;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/ORSet;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/ORSet$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/ORSet;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/crdt/OpLogCrdt {
+	public abstract fun classify (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/LogOp;
+	public abstract fun dotOf (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Dot;
+	public abstract fun opSerializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+	public abstract fun operations ()Lkotlin/sequences/Sequence;
+}
+
+public final class us/tractat/kuilt/crdt/PNCounter : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/PNCounter$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun decrement-V4bVmxY (Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public static synthetic fun decrement-V4bVmxY$default (Lus/tractat/kuilt/crdt/PNCounter;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTotalDecrement ()J
+	public final fun getTotalIncrement ()J
+	public final fun getValue ()J
+	public fun hashCode ()I
+	public final fun increment-V4bVmxY (Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public static synthetic fun increment-V4bVmxY$default (Lus/tractat/kuilt/crdt/PNCounter;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/crdt/PNCounter;)Lus/tractat/kuilt/crdt/PNCounter;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/PNCounter$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/PNCounter$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/PNCounter;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/PNCounter;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/PNCounter$Companion {
+	public final fun getZERO ()Lus/tractat/kuilt/crdt/PNCounter;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/Patch {
+	public static final synthetic fun box-impl (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Patch;
+	public static fun constructor-impl (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Lus/tractat/kuilt/crdt/Quilted;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Lus/tractat/kuilt/crdt/Quilted;Lus/tractat/kuilt/crdt/Quilted;)Z
+	public final fun getDelta ()Lus/tractat/kuilt/crdt/Quilted;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Lus/tractat/kuilt/crdt/Quilted;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Lus/tractat/kuilt/crdt/Quilted;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Lus/tractat/kuilt/crdt/Quilted;
+}
+
+public abstract interface class us/tractat/kuilt/crdt/Quilted {
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public abstract fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+}
+
+public final class us/tractat/kuilt/crdt/Quilted$DefaultImpls {
+	public static fun causalDots (Lus/tractat/kuilt/crdt/Quilted;)Ljava/util/Set;
+	public static fun causalFloor (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/VersionVector;
+}
+
+public final class us/tractat/kuilt/crdt/QuiltedKt {
+	public static final fun piece (Lus/tractat/kuilt/crdt/Quilted;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/crdt/Quilted;
+	public static final fun piece-Pf3ctnY (Lus/tractat/kuilt/crdt/Quilted;Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+}
+
+public final class us/tractat/kuilt/crdt/ReplicaId : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/crdt/ReplicaId$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/crdt/ReplicaId;
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo-81S8jZI (Ljava/lang/String;)I
+	public static fun compareTo-81S8jZI (Ljava/lang/String;Ljava/lang/String;)I
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/ReplicaId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/ReplicaId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-uNxSDBo (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-vyvAz2s (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/ReplicaId$Companion {
+	public final fun getBottom-ffK6qZA ()Ljava/lang/String;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/ResettableCounter : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/ResettableCounter$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()J
+	public fun hashCode ()I
+	public final fun increment-V4bVmxY (Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
+	public static synthetic fun increment-V4bVmxY$default (Lus/tractat/kuilt/crdt/ResettableCounter;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/crdt/ResettableCounter;)Lus/tractat/kuilt/crdt/ResettableCounter;
+	public final fun reset-gvAbXMU ()Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/ResettableCounter$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/ResettableCounter$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/ResettableCounter;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/ResettableCounter;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/ResettableCounter$Companion {
+	public final fun getZERO ()Lus/tractat/kuilt/crdt/ResettableCounter;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/Rga : us/tractat/kuilt/crdt/OpLogCrdt, us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/Rga$Companion;
+	public final fun apply (Lus/tractat/kuilt/crdt/RgaOp;)Lus/tractat/kuilt/crdt/Rga;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public synthetic fun classify (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/LogOp;
+	public fun classify (Lus/tractat/kuilt/crdt/RgaOp;)Lus/tractat/kuilt/crdt/LogOp;
+	public final fun compact (Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;)Lkotlin/Pair;
+	public synthetic fun dotOf (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Dot;
+	public fun dotOf (Lus/tractat/kuilt/crdt/RgaId;)Lus/tractat/kuilt/crdt/Dot;
+	public final fun dropWindow-8mRuq1Y (Ljava/lang/String;Ljava/util/Set;)Lkotlin/Pair;
+	public final fun entries ()Ljava/util/List;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCompactOpCount ()I
+	public final fun getCompactedBelow ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun getCompactedIds ()Ljava/util/Set;
+	public final fun getLamport ()J
+	public final fun getOpCount ()I
+	public final fun getSequence ()Ljava/util/List;
+	public final fun getSize ()I
+	public final fun getTombstones ()Ljava/util/Set;
+	public fun hashCode ()I
+	public final fun insertAfter-m9qO7Lg (Ljava/lang/String;Lus/tractat/kuilt/crdt/RgaId;Ljava/lang/Object;)Lkotlin/Pair;
+	public final fun insertAllAfter-m9qO7Lg (Ljava/lang/String;Lus/tractat/kuilt/crdt/RgaId;Ljava/util/List;)Lkotlin/Pair;
+	public final fun insertAt-m9qO7Lg (Ljava/lang/String;ILjava/lang/Object;)Lkotlin/Pair;
+	public fun opSerializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+	public fun operations ()Lkotlin/sequences/Sequence;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/crdt/Rga;)Lus/tractat/kuilt/crdt/Rga;
+	public final fun positionsFor (Ljava/util/Set;)Ljava/util/Map;
+	public final fun removeAt (I)Lkotlin/Pair;
+	public final fun removeFirst (I)Lkotlin/Pair;
+	public final fun toList ()Ljava/util/List;
+	public fun toString ()Ljava/lang/String;
+	public final fun valueAt (Lus/tractat/kuilt/crdt/RgaId;)Ljava/lang/Object;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/Rga$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/Rga;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/Rga;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/Rga$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/Rga;
+	public final fun opSerializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+	public final fun wireSerializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/RgaId : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/crdt/RgaId$Companion;
+	public synthetic fun <init> (JLjava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/crdt/RgaId;)I
+	public final fun component1 ()J
+	public final fun component2-ffK6qZA ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun copy-G4YWYEc (JLjava/lang/String;J)Lus/tractat/kuilt/crdt/RgaId;
+	public static synthetic fun copy-G4YWYEc$default (Lus/tractat/kuilt/crdt/RgaId;JLjava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/crdt/RgaId;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDot ()Lus/tractat/kuilt/crdt/Dot;
+	public final fun getLamport ()J
+	public final fun getReplicaId-ffK6qZA ()Ljava/lang/String;
+	public final fun getSeq ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/RgaId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/RgaId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/RgaId;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/RgaId;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/RgaId$Companion {
+	public final fun getHEAD ()Lus/tractat/kuilt/crdt/RgaId;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/crdt/RgaOp {
+	public static final field Companion Lus/tractat/kuilt/crdt/RgaOp$Companion;
+}
+
+public final class us/tractat/kuilt/crdt/RgaOp$Compact : us/tractat/kuilt/crdt/RgaOp {
+	public static final field Companion Lus/tractat/kuilt/crdt/RgaOp$Compact$Companion;
+	public fun <init> (Ljava/util/Map;)V
+	public final fun component1 ()Ljava/util/Map;
+	public final fun copy (Ljava/util/Map;)Lus/tractat/kuilt/crdt/RgaOp$Compact;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/RgaOp$Compact;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/RgaOp$Compact;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPositions ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/RgaOp$Compact$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/RgaOp$Compact$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/RgaOp$Compact;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/RgaOp$Compact;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/RgaOp$Compact$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/RgaOp$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/RgaOp$Insert : us/tractat/kuilt/crdt/RgaOp {
+	public static final field Companion Lus/tractat/kuilt/crdt/RgaOp$Insert$Companion;
+	public fun <init> (Lus/tractat/kuilt/crdt/RgaId;Ljava/lang/Object;Lus/tractat/kuilt/crdt/RgaId;)V
+	public final fun component1 ()Lus/tractat/kuilt/crdt/RgaId;
+	public final fun component2 ()Ljava/lang/Object;
+	public final fun component3 ()Lus/tractat/kuilt/crdt/RgaId;
+	public final fun copy (Lus/tractat/kuilt/crdt/RgaId;Ljava/lang/Object;Lus/tractat/kuilt/crdt/RgaId;)Lus/tractat/kuilt/crdt/RgaOp$Insert;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/RgaOp$Insert;Lus/tractat/kuilt/crdt/RgaId;Ljava/lang/Object;Lus/tractat/kuilt/crdt/RgaId;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/RgaOp$Insert;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAfter ()Lus/tractat/kuilt/crdt/RgaId;
+	public final fun getId ()Lus/tractat/kuilt/crdt/RgaId;
+	public final fun getValue ()Ljava/lang/Object;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/RgaOp$Insert$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/RgaOp$Insert;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/RgaOp$Insert;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/RgaOp$Insert$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/RgaOp$Remove : us/tractat/kuilt/crdt/RgaOp {
+	public static final field Companion Lus/tractat/kuilt/crdt/RgaOp$Remove$Companion;
+	public fun <init> (Lus/tractat/kuilt/crdt/RgaId;)V
+	public final fun component1 ()Lus/tractat/kuilt/crdt/RgaId;
+	public final fun copy (Lus/tractat/kuilt/crdt/RgaId;)Lus/tractat/kuilt/crdt/RgaOp$Remove;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/RgaOp$Remove;Lus/tractat/kuilt/crdt/RgaId;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/RgaOp$Remove;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Lus/tractat/kuilt/crdt/RgaId;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/RgaOp$Remove$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/RgaOp$Remove;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/RgaOp$Remove;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/RgaOp$Remove$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/RgaOpSerializer : kotlinx/serialization/KSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/RgaOp;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/RgaOp;)V
+}
+
+public final class us/tractat/kuilt/crdt/TwoPhaseSet : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/TwoPhaseSet$Companion;
+	public final fun add-gCgEofE (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun contains (Ljava/lang/Object;)Z
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAdded ()Ljava/util/Set;
+	public final fun getElements ()Ljava/util/Set;
+	public final fun getRemoved ()Ljava/util/Set;
+	public fun hashCode ()I
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/crdt/TwoPhaseSet;)Lus/tractat/kuilt/crdt/TwoPhaseSet;
+	public final fun remove-gCgEofE (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/TwoPhaseSet$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/TwoPhaseSet;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/TwoPhaseSet;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/TwoPhaseSet$Companion {
+	public final fun empty ()Lus/tractat/kuilt/crdt/TwoPhaseSet;
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/VersionVector {
+	public static final field Companion Lus/tractat/kuilt/crdt/VersionVector$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun ceilWith (Lus/tractat/kuilt/crdt/VersionVector;)Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun component1 ()Ljava/util/Map;
+	public final fun contains (Lus/tractat/kuilt/crdt/Dot;)Z
+	public final fun copy (Ljava/util/Map;)Lus/tractat/kuilt/crdt/VersionVector;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/crdt/VersionVector;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun dominates (Lus/tractat/kuilt/crdt/VersionVector;)Z
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun floorWith (Lus/tractat/kuilt/crdt/VersionVector;)Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun get-81S8jZI (Ljava/lang/String;)J
+	public final fun getEntries ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/VersionVector$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/VersionVector$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/VersionVector;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/VersionVector$Companion {
+	public final fun contiguous (Ljava/util/Set;Lus/tractat/kuilt/crdt/VersionVector;)Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun getEMPTY ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun of (Ljava/util/Map;)Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+

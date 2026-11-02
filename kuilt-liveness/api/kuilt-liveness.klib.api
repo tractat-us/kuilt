@@ -1,0 +1,176 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-liveness>
+abstract interface us.tractat.kuilt.liveness/PartitionDetector { // us.tractat.kuilt.liveness/PartitionDetector|null[0]
+    abstract val events // us.tractat.kuilt.liveness/PartitionDetector.events|{}events[0]
+        abstract fun <get-events>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.liveness/PartitionEvent> // us.tractat.kuilt.liveness/PartitionDetector.events.<get-events>|<get-events>(){}[0]
+
+    abstract fun observedPeer(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.liveness/PartitionDetector.observedPeer|observedPeer(us.tractat.kuilt.core.PeerId){}[0]
+    abstract fun onBackpressure(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.liveness/PartitionDetector.onBackpressure|onBackpressure(us.tractat.kuilt.core.PeerId){}[0]
+    abstract fun start(kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.liveness/PartitionDetector.start|start(kotlinx.coroutines.CoroutineScope){}[0]
+    abstract suspend fun stop() // us.tractat.kuilt.liveness/PartitionDetector.stop|stop(){}[0]
+}
+
+sealed interface us.tractat.kuilt.liveness/PartitionEvent { // us.tractat.kuilt.liveness/PartitionEvent|null[0]
+    abstract val at // us.tractat.kuilt.liveness/PartitionEvent.at|{}at[0]
+        abstract fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.liveness/PartitionEvent.at.<get-at>|<get-at>(){}[0]
+    abstract val peerId // us.tractat.kuilt.liveness/PartitionEvent.peerId|{}peerId[0]
+        abstract fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.liveness/PartitionEvent.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+    final enum class Reason : kotlin/Enum<us.tractat.kuilt.liveness/PartitionEvent.Reason> { // us.tractat.kuilt.liveness/PartitionEvent.Reason|null[0]
+        enum entry Backpressure // us.tractat.kuilt.liveness/PartitionEvent.Reason.Backpressure|null[0]
+        enum entry Timeout // us.tractat.kuilt.liveness/PartitionEvent.Reason.Timeout|null[0]
+        enum entry TransportClosed // us.tractat.kuilt.liveness/PartitionEvent.Reason.TransportClosed|null[0]
+
+        final val entries // us.tractat.kuilt.liveness/PartitionEvent.Reason.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.liveness/PartitionEvent.Reason> // us.tractat.kuilt.liveness/PartitionEvent.Reason.entries.<get-entries>|<get-entries>#static(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.liveness/PartitionEvent.Reason // us.tractat.kuilt.liveness/PartitionEvent.Reason.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.liveness/PartitionEvent.Reason> // us.tractat.kuilt.liveness/PartitionEvent.Reason.values|values#static(){}[0]
+    }
+
+    final class PeerLost : us.tractat.kuilt.liveness/PartitionEvent { // us.tractat.kuilt.liveness/PartitionEvent.PeerLost|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin.time/Instant) // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
+
+        final val at // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.at.<get-at>|<get-at>(){}[0]
+        final val peerId // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Instant // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin.time/Instant = ...): us.tractat.kuilt.liveness/PartitionEvent.PeerLost // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.liveness/PartitionEvent.PeerLost.toString|toString(){}[0]
+    }
+
+    final class PeerRecovered : us.tractat.kuilt.liveness/PartitionEvent { // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin.time/Instant) // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
+
+        final val at // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.at.<get-at>|<get-at>(){}[0]
+        final val peerId // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Instant // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin.time/Instant = ...): us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.liveness/PartitionEvent.PeerRecovered.toString|toString(){}[0]
+    }
+
+    final class PeerUnresponsive : us.tractat.kuilt.liveness/PartitionEvent { // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin.time/Instant, us.tractat.kuilt.liveness/PartitionEvent.Reason) // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.time.Instant;us.tractat.kuilt.liveness.PartitionEvent.Reason){}[0]
+
+        final val at // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.at.<get-at>|<get-at>(){}[0]
+        final val peerId // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.peerId.<get-peerId>|<get-peerId>(){}[0]
+        final val reason // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.liveness/PartitionEvent.Reason // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Instant // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.liveness/PartitionEvent.Reason // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin.time/Instant = ..., us.tractat.kuilt.liveness/PartitionEvent.Reason = ...): us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.time.Instant;us.tractat.kuilt.liveness.PartitionEvent.Reason){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.liveness/PartitionEvent.PeerUnresponsive.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.liveness/SoloDeadlineEvent { // us.tractat.kuilt.liveness/SoloDeadlineEvent|null[0]
+    abstract val at // us.tractat.kuilt.liveness/SoloDeadlineEvent.at|{}at[0]
+        abstract fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.liveness/SoloDeadlineEvent.at.<get-at>|<get-at>(){}[0]
+
+    final class NeverPaired : us.tractat.kuilt.liveness/SoloDeadlineEvent { // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired|null[0]
+        constructor <init>(kotlin/Int, kotlin/Int, kotlin.time/Instant) // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.<init>|<init>(kotlin.Int;kotlin.Int;kotlin.time.Instant){}[0]
+
+        final val at // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.at.<get-at>|<get-at>(){}[0]
+        final val observed // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.observed|{}observed[0]
+            final fun <get-observed>(): kotlin/Int // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.observed.<get-observed>|<get-observed>(){}[0]
+        final val required // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.required|{}required[0]
+            final fun <get-required>(): kotlin/Int // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.required.<get-required>|<get-required>(){}[0]
+
+        final fun component1(): kotlin/Int // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.component1|component1(){}[0]
+        final fun component2(): kotlin/Int // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.component2|component2(){}[0]
+        final fun component3(): kotlin.time/Instant // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.component3|component3(){}[0]
+        final fun copy(kotlin/Int = ..., kotlin/Int = ..., kotlin.time/Instant = ...): us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.copy|copy(kotlin.Int;kotlin.Int;kotlin.time.Instant){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.liveness/SoloDeadlineEvent.NeverPaired.toString|toString(){}[0]
+    }
+
+    final class Paired : us.tractat.kuilt.liveness/SoloDeadlineEvent { // us.tractat.kuilt.liveness/SoloDeadlineEvent.Paired|null[0]
+        constructor <init>(kotlin.time/Instant) // us.tractat.kuilt.liveness/SoloDeadlineEvent.Paired.<init>|<init>(kotlin.time.Instant){}[0]
+
+        final val at // us.tractat.kuilt.liveness/SoloDeadlineEvent.Paired.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.liveness/SoloDeadlineEvent.Paired.at.<get-at>|<get-at>(){}[0]
+
+        final fun component1(): kotlin.time/Instant // us.tractat.kuilt.liveness/SoloDeadlineEvent.Paired.component1|component1(){}[0]
+        final fun copy(kotlin.time/Instant = ...): us.tractat.kuilt.liveness/SoloDeadlineEvent.Paired // us.tractat.kuilt.liveness/SoloDeadlineEvent.Paired.copy|copy(kotlin.time.Instant){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.liveness/SoloDeadlineEvent.Paired.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.liveness/SoloDeadlineEvent.Paired.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.liveness/SoloDeadlineEvent.Paired.toString|toString(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.liveness/HeartbeatConfig { // us.tractat.kuilt.liveness/HeartbeatConfig|null[0]
+    constructor <init>(kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ...) // us.tractat.kuilt.liveness/HeartbeatConfig.<init>|<init>(kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration){}[0]
+
+    final val interval // us.tractat.kuilt.liveness/HeartbeatConfig.interval|{}interval[0]
+        final fun <get-interval>(): kotlin.time/Duration // us.tractat.kuilt.liveness/HeartbeatConfig.interval.<get-interval>|<get-interval>(){}[0]
+    final val reconnectWindow // us.tractat.kuilt.liveness/HeartbeatConfig.reconnectWindow|{}reconnectWindow[0]
+        final fun <get-reconnectWindow>(): kotlin.time/Duration // us.tractat.kuilt.liveness/HeartbeatConfig.reconnectWindow.<get-reconnectWindow>|<get-reconnectWindow>(){}[0]
+    final val resumeTimeout // us.tractat.kuilt.liveness/HeartbeatConfig.resumeTimeout|{}resumeTimeout[0]
+        final fun <get-resumeTimeout>(): kotlin.time/Duration // us.tractat.kuilt.liveness/HeartbeatConfig.resumeTimeout.<get-resumeTimeout>|<get-resumeTimeout>(){}[0]
+    final val timeout // us.tractat.kuilt.liveness/HeartbeatConfig.timeout|{}timeout[0]
+        final fun <get-timeout>(): kotlin.time/Duration // us.tractat.kuilt.liveness/HeartbeatConfig.timeout.<get-timeout>|<get-timeout>(){}[0]
+
+    final fun component1(): kotlin.time/Duration // us.tractat.kuilt.liveness/HeartbeatConfig.component1|component1(){}[0]
+    final fun component2(): kotlin.time/Duration // us.tractat.kuilt.liveness/HeartbeatConfig.component2|component2(){}[0]
+    final fun component3(): kotlin.time/Duration // us.tractat.kuilt.liveness/HeartbeatConfig.component3|component3(){}[0]
+    final fun component4(): kotlin.time/Duration // us.tractat.kuilt.liveness/HeartbeatConfig.component4|component4(){}[0]
+    final fun copy(kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ...): us.tractat.kuilt.liveness/HeartbeatConfig // us.tractat.kuilt.liveness/HeartbeatConfig.copy|copy(kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.liveness/HeartbeatConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.liveness/HeartbeatConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.liveness/HeartbeatConfig.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.liveness/HeartbeatPartitionDetector : us.tractat.kuilt.liveness/PartitionDetector { // us.tractat.kuilt.liveness/HeartbeatPartitionDetector|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/PeerId, us.tractat.kuilt.liveness/HeartbeatConfig = ..., kotlin/Function0<kotlin.time/Instant>) // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.<init>|<init>(us.tractat.kuilt.core.Seam;us.tractat.kuilt.core.PeerId;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.Function0<kotlin.time.Instant>){}[0]
+
+    final val events // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.events|{}events[0]
+        final fun <get-events>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.liveness/PartitionEvent> // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.events.<get-events>|<get-events>(){}[0]
+
+    final fun observedPeer(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.observedPeer|observedPeer(us.tractat.kuilt.core.PeerId){}[0]
+    final fun onBackpressure(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.onBackpressure|onBackpressure(us.tractat.kuilt.core.PeerId){}[0]
+    final fun start(kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.start|start(kotlinx.coroutines.CoroutineScope){}[0]
+    final suspend fun stop() // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.stop|stop(){}[0]
+
+    final object Companion { // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.Companion|null[0]
+        final const val PING_PREFIX // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.Companion.PING_PREFIX|{}PING_PREFIX[0]
+            final fun <get-PING_PREFIX>(): kotlin/String // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.Companion.PING_PREFIX.<get-PING_PREFIX>|<get-PING_PREFIX>(){}[0]
+        final const val PONG_PREFIX // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.Companion.PONG_PREFIX|{}PONG_PREFIX[0]
+            final fun <get-PONG_PREFIX>(): kotlin/String // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.Companion.PONG_PREFIX.<get-PONG_PREFIX>|<get-PONG_PREFIX>(){}[0]
+
+        final fun isHeartbeatFrame(kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.liveness/HeartbeatPartitionDetector.Companion.isHeartbeatFrame|isHeartbeatFrame(kotlin.ByteArray){}[0]
+    }
+}
+
+final class us.tractat.kuilt.liveness/SoloDeadlineDetector { // us.tractat.kuilt.liveness/SoloDeadlineDetector|null[0]
+    constructor <init>(kotlin/Int, kotlin.time/Duration, kotlin.time/Clock, kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.liveness/SoloDeadlineDetector.<init>|<init>(kotlin.Int;kotlin.time.Duration;kotlin.time.Clock;kotlinx.coroutines.CoroutineScope){}[0]
+
+    final val events // us.tractat.kuilt.liveness/SoloDeadlineDetector.events|{}events[0]
+        final fun <get-events>(): kotlinx.coroutines.flow/SharedFlow<us.tractat.kuilt.liveness/SoloDeadlineEvent> // us.tractat.kuilt.liveness/SoloDeadlineDetector.events.<get-events>|<get-events>(){}[0]
+
+    final fun observeMembership(kotlin.collections/Set<us.tractat.kuilt.core/PeerId>) // us.tractat.kuilt.liveness/SoloDeadlineDetector.observeMembership|observeMembership(kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+}
