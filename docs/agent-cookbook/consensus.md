@@ -120,7 +120,11 @@ like a brand-new command and can apply twice. `propose(command, requestId)` with
 **before** calling is the cross-crash form — the server's `ClientSessionTable` recognises the replay.
 Pair it with `ClientIdentity.Durable(clientId)`, because the identity that table keys on has to
 outlive the restart too; the default `ClientIdentity.Auto` mints a new one per incarnation, which is
-right only where at-least-once genuinely is.
+right only where at-least-once genuinely is. One trap on that pairing today: a client keeps its log
+in memory, so after a process restart its own earlier entries come back over replication and read as
+another writer, and the node fails with `ClientIdCollisionException`, tracked by #3060. Re-proposing
+your highest persisted `requestId` straight after building the client avoids it only if it gets there
+before replication does.
 
 Server side: `CoroutineScope.serverCluster(host, voterIds, raftConfig)` stands the voter mesh up and
 mounts a `RoomHost` — a `KtorRoomHost` on a WebSocket path, in practice — as the relay clients attach
