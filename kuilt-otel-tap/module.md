@@ -238,11 +238,12 @@ other, as on Multipeer, a stranger who cannot get past the phone can get the sam
 from the laptop that pulled them, and can hand that laptop forged ones. Keep the
 puller on a link only it and the device can reach, and close it when you are done.
 
-**The code is short.** It has about a trillion possible values, and anyone who
-reaches the puller can get one answer out of it to test guesses against at home.
-That answer is only useful while the code is valid, which is why a code lasts five
-minutes. A machine built for the job can still get there in time, so this keeps out a
-curious stranger, not someone who came prepared.
+**The code can be guessed, at a price.** It has about a billion billion possible
+values, and anyone who reaches the puller can get one answer out of it to test guesses
+against at home. That answer is only useful while the code is valid, which is why a
+code lasts five minutes. Trying them all in that time takes about four quadrillion
+guesses a second. No laptop gets close, but it is a price and not a wall, so this keeps
+out everyone short of an attacker with serious money to spend on you.
 
 **An attacker in the middle can still get in.** One who can sit on two connections
 at once, passing as the laptop to the phone and as the phone to the laptop, can be

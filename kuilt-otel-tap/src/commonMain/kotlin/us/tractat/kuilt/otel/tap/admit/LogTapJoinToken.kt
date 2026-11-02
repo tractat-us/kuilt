@@ -23,7 +23,7 @@ import kotlin.time.Instant
  *
  * ### Entropy ↔ TTL: why the window is short (and must stay short)
  *
- * The code carries about 2⁴⁰ of entropy (8 characters over a 32-symbol alphabet). On the
+ * The code carries 2⁶⁰ of entropy (12 characters over a 32-symbol alphabet). On the
  * plaintext (`ws://`) wire that this tap targets, the code's secrecy is bounded **in time,
  * not just in size**. Two offline-cracking paths exist within the accepted honest-seam
  * threat model:
@@ -36,12 +36,13 @@ import kotlin.time.Instant
  * ahead of time and the grind cannot start until a tag is in hand. The attacker then wins only by
  * cracking the code **before the token expires** — a recovered code is useless once [isValid]
  * returns false. The short [ttl] is therefore a load-bearing security control, not a UX knob: it
- * is what limits how much of a ~2⁴⁰ offline search can pay off.
+ * is what limits how much of a 2⁶⁰ offline search can pay off.
  *
- * It limits that search and does not rule it out. ~2⁴⁰ HMACs inside the default window is within
- * reach of a machine built for it, and a prover hands one tag to anyone who asks, so a code of this
- * size keeps out a stranger on the network and not a dedicated attacker. Keeping the code off the
- * table entirely takes a key exchange the code authenticates, which this handshake is not.
+ * It limits that search and does not rule it out. Covering 2⁶⁰ inside the default window takes
+ * about 4×10¹⁵ HMACs a second, and half that for an even chance. That is far past one
+ * general-purpose machine and not past what a funded attacker could build, and a prover hands one
+ * tag to anyone who asks. So the margin is a cost and not a proof. Keeping the code off the table
+ * entirely takes a key exchange the code authenticates, which this handshake is not.
  *
  * **WARNING — do not raise [DEFAULT_TTL].** Widening the window trades directly against the
  * code's entropy: every extra minute is extra offline-cracking budget on the plaintext wire.
@@ -63,7 +64,7 @@ public class LogTapJoinToken(
     public companion object {
         /**
          * Default pairing window: long enough to read and type the code, short enough to bound
-         * an offline crack of the ~2⁴⁰ code on the plaintext wire.
+         * an offline crack of the 2⁶⁰ code on the plaintext wire.
          *
          * **Do not raise this.** The TTL bounds the attacker's offline-cracking budget; see the
          * "Entropy ↔ TTL" note on [LogTapJoinToken]. Add entropy or encrypt the transport instead.
@@ -72,7 +73,7 @@ public class LogTapJoinToken(
 
         // Crockford base32 — omits I/L/O/U so the code is unambiguous when read aloud or typed.
         private const val ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-        private const val CODE_LENGTH = 8
+        private const val CODE_LENGTH = 12
 
         /**
          * Mint a fresh token: a [CODE_LENGTH]-character code drawn from [random], stamped with

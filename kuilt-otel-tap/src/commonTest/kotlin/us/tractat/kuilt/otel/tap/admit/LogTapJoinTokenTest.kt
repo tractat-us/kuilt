@@ -19,7 +19,7 @@ class LogTapJoinTokenTest {
         val a = LogTapJoinToken.issue(Random(42), clockAt(t0), ttl = 5.minutes)
         val b = LogTapJoinToken.issue(Random(42), clockAt(t0), ttl = 5.minutes)
         assertEquals(a.code, b.code) // seeded Random ⇒ reproducible
-        assertEquals(8, a.code.length) // 8-char code
+        assertEquals(12, a.code.length) // 12 characters over 32 symbols is 2⁶⁰, which the KDoc's sums rest on
         assertTrue(a.code.all { it in CROCKFORD_ALPHABET })
         assertEquals(t0, a.issuedAt)
     }

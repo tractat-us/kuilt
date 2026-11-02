@@ -47,6 +47,23 @@ class TapMacTest {
         assertEquals("9cc10bba38f04edcacd91b70880a6fbed5df60f5a405a51f0038f42ba3933d24", tag.toHex())
     }
 
+    /**
+     * The code is only ever a MAC key, so its length is not part of the wire format. The vector is from
+     * Python's `hmac` over the same input as the one above, with a code of the length `issue` mints.
+     */
+    @Test
+    fun theCodesLengthMovesNothingOnTheWire() {
+        val challengeNonce = ByteString(ByteArray(16) { it.toByte() })
+        val proverNonce = ByteString(ByteArray(16) { (it + 16).toByte() })
+        fun tag(code: String) = admissionTag(code, PeerId("device-é"), PeerId("puller"), challengeNonce, proverNonce)
+        fun proofFrame(code: String) =
+            TapAdmitMessage.encode(TapAdmitMessage.Proof(proverNonce, ByteString(tag(code))))
+        assertAll(
+            { assertEquals("f3fd1c7d141ebe048be20b264acf058da0a566a4fa9764a0b02b3aab825dedb2", tag("CODE12345678").toHex()) },
+            { assertEquals(proofFrame("CODE1234").size, proofFrame("CODE12345678").size, "a Proof is the same size either way") },
+        )
+    }
+
     /** Every input the tag claims to cover has to move it, or the claim is prose. */
     @Test
     fun everyPartOfTheInputMovesTheTag() {
