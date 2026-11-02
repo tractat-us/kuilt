@@ -32,9 +32,11 @@ import us.tractat.kuilt.conformance.ConnectionSendConformanceSuite
 import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -56,6 +58,7 @@ import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
  */
 abstract class WebSocketConnectionSendConformanceRig(
     private val engine: HttpClientEngineFactory<*>,
+    private val liveClientAnswer: FlushOutcome = FlushOutcome.Drained,
 ) : ConnectionSendConformanceSuite() {
 
     private val rigScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -96,11 +99,15 @@ abstract class WebSocketConnectionSendConformanceRig(
     /** Every binding here is a channel send, which has a cancellation check on its closed path. */
     override fun cancelledCaller(): CancelledCallerFixture = CancelledCallerFixture.Observes
 
+    private suspend fun openSession(): Pair<DefaultWebSocketServerSession, DefaultClientWebSocketSession> {
+        val port = server.engine.resolvedConnectors().first().port
+        val clientEnd = httpClient.webSocketSession("ws://127.0.0.1:$port$PATH")
+        return withTimeout(SESSION_BOUND) { serverSessions.receive() } to clientEnd
+    }
+
     override suspend fun deadLink(): Connection =
         rigScope.async {
-            val port = server.engine.resolvedConnectors().first().port
-            val clientEnd = httpClient.webSocketSession("ws://127.0.0.1:$port$PATH")
-            val serverEnd = withTimeout(SESSION_BOUND) { serverSessions.receive() }
+            val (serverEnd, clientEnd) = openSession()
             val dead = killOneEnd(serverEnd, clientEnd)
             withTimeout(SESSION_BOUND) {
                 while (!dead.outgoing.isClosedForSend) delay(POLL)
@@ -111,11 +118,49 @@ abstract class WebSocketConnectionSendConformanceRig(
     /**
      * A dead session cannot confirm anything. Ktor's own `flush` is no help here: on a session that has
      * closed it returns normally, having written nothing, and on OkHttp it does nothing at all.
+     *
+     * [deadLink] waits for `isClosedForSend`, so this sees only a session that already says it is dead.
+     * The two tests below are the ones that see a session that does not.
      */
     @Test
     fun flushOnADeadSessionReportsFailed(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             assertIs<FlushOutcome.Failed>(deadLink().flush(Duration.INFINITE))
+        }
+
+    /**
+     * With no wait for `isClosedForSend`, because an OkHttp session's queue stays open until the far end
+     * answers the close, and an answer read off that queue would be `Drained` for a closed link.
+     */
+    @Test
+    fun flushStraightAfterALocalCloseReportsFailed(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val outcomes = rigScope.async {
+                val (serverEnd, clientEnd) = openSession()
+                listOf(clientEnd, serverEnd).map { end ->
+                    val link = WebSocketConnection(end)
+                    link.close()
+                    link.flush(Duration.INFINITE)
+                }
+            }.await()
+            assertAll(
+                { assertIs<FlushOutcome.Failed>(outcomes[0], "client end") },
+                { assertIs<FlushOutcome.Failed>(outcomes[1], "server end") },
+            )
+        }
+
+    /**
+     * What a healthy session answers on each end. OkHttp's `Drained` was the defect: its session ignores
+     * what `WebSocket.send` returns, so a frame past OkHttp's 16 MiB queue is dropped with no error.
+     */
+    @Test
+    fun flushOnALiveSessionAnswersWhatItsEngineCanConfirm(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val outcomes = rigScope.async {
+                val (serverEnd, clientEnd) = openSession()
+                listOf(serverEnd, clientEnd).map { WebSocketConnection(it).flush(Duration.INFINITE) }
+            }.await()
+            assertEquals(listOf(FlushOutcome.Drained, liveClientAnswer), outcomes, "server end, then client end")
         }
 
     private companion object {
@@ -174,7 +219,8 @@ class CioClientEndAfterServerCloseSendConformanceTest : WebSocketConnectionSendC
  * this binding exists: the OkHttp engine has its own session class, whose `onClosed` closes the
  * outgoing channel with a `CancellationException` rather than cancelling it.
  */
-class OkHttpClientEndAfterServerCloseSendConformanceTest : WebSocketConnectionSendConformanceRig(OkHttp) {
+class OkHttpClientEndAfterServerCloseSendConformanceTest :
+    WebSocketConnectionSendConformanceRig(OkHttp, liveClientAnswer = FlushOutcome.Unsupported) {
     override suspend fun killOneEnd(
         serverEnd: DefaultWebSocketServerSession,
         clientEnd: DefaultClientWebSocketSession,
