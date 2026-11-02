@@ -29,7 +29,7 @@ internal class WarpStatsConvergenceTest : LatticeLawSuite<WarpStats>() {
         initial = WarpStats.empty(),
         // Mirrors `observe`, whose delta is one source's sparse fragment, at the smaller precision.
         alphabet = listOf(
-            LatticeOp<WarpStats>("observe", OpKind.ASSERT) { state, _, random ->
+            LatticeOp("observe", OpKind.ASSERT) { state, _, random ->
                 val source = SOURCES.random(random)
                 val sketch = state.sketches()[source] ?: HyperLogLog.empty(precision = 4)
                 state.piece(WarpStats.of(mapOf(source to sketch.piece(sketch.add("e${random.nextLong()}")))))

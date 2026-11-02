@@ -40,6 +40,7 @@ private fun replica(replicaIndex: Int): ReplicaId = ReplicaId("R$replicaIndex")
 internal class MetricCatalogConvergenceTest : LatticeLawSuite<MetricCatalog>() {
     override fun newHarness(): LatticeLawHarness<MetricCatalog> = LatticeLawHarness(
         initial = MetricCatalog(),
+        // Each op states its type argument: inferring them cost about 80 s per native target (#2191).
         alphabet = listOf(
             LatticeOp<MetricCatalog>("sum", OpKind.ASSERT) { state, replicaIndex, random ->
                 val key = random.key(MetricKind.SUM)

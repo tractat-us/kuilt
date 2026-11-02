@@ -43,6 +43,7 @@ private fun Random.counter(replicaIndex: Int): GCounter =
 internal class EntitlementLedgerConvergenceTest : LatticeLawSuite<EntitlementLedger>() {
     override fun newHarness(): LatticeLawHarness<EntitlementLedger> = LatticeLawHarness(
         initial = EntitlementLedger.ZERO,
+        // Each op states its type argument: inferring them cost about 80 s per native target (#2191).
         alphabet = listOf(
             LatticeOp<EntitlementLedger>("record", OpKind.ASSERT) { state, replicaIndex, random ->
                 val edge = random.edge()
