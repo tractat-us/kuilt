@@ -58,7 +58,7 @@ class W3083ScratchTcpProbeTest {
         report.appendText("$label cancelled-caller -> $outcome\n")
     }
 
-    private fun rig(block: suspend (Connection, Connection, io.ktor.network.sockets.Socket, io.ktor.network.sockets.Socket) -> Unit) = runBlocking {
+    private fun rig(block: suspend kotlinx.coroutines.CoroutineScope.(Connection, Connection, io.ktor.network.sockets.Socket, io.ktor.network.sockets.Socket) -> Unit) = runBlocking {
         val selector = SelectorManager(Dispatchers.IO)
         val server = aSocket(selector).tcp().bind("127.0.0.1", 0)
         val port = (server.localAddress as InetSocketAddress).port
