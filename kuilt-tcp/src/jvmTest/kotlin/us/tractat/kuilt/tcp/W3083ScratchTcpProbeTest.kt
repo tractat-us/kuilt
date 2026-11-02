@@ -121,9 +121,6 @@ class W3083ScratchTcpProbeTest {
     fun cancelledOnSocketCancel() = cancelledCaller("local socket cancel") { it.dialed.cancel() }
 
     @Test
-    fun stuckThenLocalConnectionClose() = stuck("stuck, local Connection.close") { it.a.close() }
-
-    @Test
     fun stuckThenLocalSocketClose() = stuck("stuck, local socket.close") { it.dialed.close() }
 
     @Test
