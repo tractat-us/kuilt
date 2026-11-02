@@ -984,15 +984,13 @@ class HeddleControlPlaneTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // #1717, narrowed by #1738: an entry no version of heddle wrote is SKIPPED — no outcome,
-    // no projection change — while the roster's applied index still advances over it, so
-    // the prefix marker `enrolledAt` answers against keeps tracking the DELIVERED log.
-    // Both halves are load-bearing and pinned here. The skip is also logged at `warn`
-    // with the entry index; the log line itself has no assertable sink in commonTest, so
-    // only the behavioural half is asserted.
+    // #1717, reversed by #1738: an entry no version of heddle wrote is no longer skipped. It
+    // LATCHES, with no outcome and no projection change, and the roster's applied index stays
+    // below it, so the prefix marker `enrolledAt` answers against never covers an entry whose
+    // effect is missing.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
-    fun nonHeddleEntryIsSkippedAndStillAdvancesTheAppliedIndex() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+    fun nonHeddleEntryLatchesAndHoldsTheAppliedIndexBelowIt() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val fake = FakeRaftNode(selfId = NodeId("solo"), initialRole = RaftRole.Leader)
         val sink = RecordingSink()
         val plane = HeddleControlPlane(
@@ -1002,15 +1000,12 @@ class HeddleControlPlaneTest {
         assertIs<ControlOutcome.Applied>(plane.submit(ControlCommand.Mint(root, ReplicaId("acme"), 100L)))
         val projectionBefore = plane.projectionSnapshot()
         val indexBefore = plane.rosterSnapshot().appliedIndex
+        assertEquals(GateClosed.Reason.AwaitingEnrollment, plane.writeGateClosedBecause, "rig: no latch yet")
 
         // Bytes no version of heddle wrote. `0xFF` is CBOR's break byte, so it can never open a valid
-        // encoding. An act heddle cannot read halts the node instead: HeddleControlLogFailClosedTest.
+        // encoding.
         val bytes = byteArrayOf(0xFF.toByte(), 0x00, 0x42)
-        assertEquals(
-            ControlEntry.NotHeddle,
-            ControlLogCodec.decode(bytes),
-            "fixture non-vacuity: the bytes must be positively not heddle's",
-        )
+        assertIs<ControlEntry.Unreadable>(ControlLogCodec.decode(bytes), "fixture non-vacuity: the codec must not read it")
         val undecodable = fake.pushCommitted(bytes)
         runCurrent()
 
@@ -1020,9 +1015,16 @@ class HeddleControlPlaneTest {
             { assertEquals(100L, sink.snapshot().mintedTotal(), "no patch may be published to the data plane") },
             {
                 assertEquals(
-                    undecodable.index,
+                    indexBefore,
                     plane.rosterSnapshot().appliedIndex,
-                    "the applied index must advance over a skipped entry — it marks the delivered prefix",
+                    "the applied index must stay below the entry: its effect is missing from this peer",
+                )
+            },
+            {
+                assertEquals(
+                    GateClosed.Reason.UnreadableControlEntry(undecodable.index, ControlLogCodec.UNTAGGED_VERSION),
+                    plane.writeGateClosedBecause,
+                    "the latch names the entry",
                 )
             },
         )
