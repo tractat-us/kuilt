@@ -185,6 +185,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.warp.WarpNode")
  *   stranded queue entries — exactly-once under leadership failover and warp-roster churn
  *   (see the class-level guarantee note for the one mid-execution-deposition residual).
  *
+ *   It must use `ClientIdentity.Auto`, the default. This path draws auto serials on purpose (see
+ *   [executeViaRaft]), and a node under `ClientIdentity.Durable` refuses every such propose. This node
+ *   catches that as it would any failed propose, so a coordinated task would stay queued and never run.
+ *
  *   **Required for coordinated tasks.** If `null`, calling [enqueue] with
  *   [CoordinationKind.Coordinated] throws [IllegalStateException] immediately — fail-loud,
  *   never a silent downgrade to the ring path. Pass a [us.tractat.kuilt.raft.test.FakeRaftNode]
