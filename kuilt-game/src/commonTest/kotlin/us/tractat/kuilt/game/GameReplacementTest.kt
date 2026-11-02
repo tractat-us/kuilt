@@ -21,6 +21,8 @@ import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
+import us.tractat.kuilt.test.Direction
+import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -45,7 +47,7 @@ import kotlin.time.Instant
 class GameReplacementTest {
 
     /**
-     * A 3-voter game where one voter disconnects permanently (its [GameSession.close] is called).
+     * A 3-voter game where one voter goes permanently silent (its outbound link is partitioned and it stays on the roster).
      *
      * Virtual time is advanced past the [HeartbeatConfig.reconnectWindow]. The leader must:
      * 1. Detect [PeerLost] and evict the dead voter (roster 3 → 2).
@@ -71,7 +73,8 @@ class GameReplacementTest {
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Raw, raftConfig = fastRaftConfig(seed = 2L)) }
-        val deadDeferred = async { backgroundScope.gameJoin(deadRaw, raftConfig = fastRaftConfig(seed = 3L)) }
+        val dead = FaultySeam(deadRaw, backgroundScope)
+        val deadDeferred = async { backgroundScope.gameJoin(dead, raftConfig = fastRaftConfig(seed = 3L)) }
 
         val host = hostDeferred.await()
         j1Deferred.await()
@@ -80,10 +83,9 @@ class GameReplacementTest {
         // Commit an action at full quorum before the peer departs.
         TurnSequencer(host.node, Int.serializer()).propose(1)
 
-        // Simulate permanent departure: advance virtual clock so the HeartbeatPartitionDetector
-        // observes silence >= timeout + reconnectWindow and emits PeerLost.
-        // The dead peer's session stays open so the Raft transport still reaches it — only
-        // heartbeat channel 4 pings go unanswered (the peer doesn't subscribe to that channel).
+        // Simulate permanent departure: the peer stays on the roster and sends nothing, so the
+        // HeartbeatPartitionDetector observes silence >= timeout + reconnectWindow and emits PeerLost.
+        dead.partition(Direction.Outbound)
         val windowMs = livenessConfig.timeout.inWholeMilliseconds +
             livenessConfig.reconnectWindow.inWholeMilliseconds +
             livenessConfig.interval.inWholeMilliseconds * 4
@@ -164,17 +166,12 @@ class GameReplacementTest {
     }
 
     /**
-     * Transient blip: advancing time INSIDE the reconnect window (past timeout but not past
-     * the full window) must NOT evict the voter.
+     * Transient blip: a voter that goes quiet past its timeout and comes back inside the reconnect
+     * window must NOT be evicted.
      *
-     * We simulate the blip by closing the third peer's session (which triggers
-     * [PeerUnresponsive] via TransportClosed immediately) and then advance only to a
-     * point inside the reconnect window. No [PeerLost] fires, so no eviction occurs, so
-     * no Simple-2-voter config entry should appear in the committed log.
-     *
-     * We verify indirectly: after advancing inside the window, the host's leader can still
-     * propose via the remaining quorum (host + j1), and no 2-voter Simple config entry
-     * exists in the log yet (a collect with timeout would find nothing).
+     * The blip is a partition of the voter's outbound frames, on a clock that follows the scheduler.
+     * Once it heals, time runs on past where the window would have ended: an eviction is not reverted
+     * by anything here, so three voters at the end means there never was one.
      */
     @Test
     fun transientBlipDoesNotEvict() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
@@ -182,8 +179,7 @@ class GameReplacementTest {
         val (hostRaw, j1Raw, blipRaw) = seats(loom, 3)
 
         val livenessConfig = fastLivenessConfig()
-        var nowMs = 0L
-        val clock = { Instant.fromEpochMilliseconds(nowMs) }
+        val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
 
         val hostDeferred = async {
             backgroundScope.gameHost(
@@ -195,29 +191,32 @@ class GameReplacementTest {
             )
         }
         val j1Deferred = async { backgroundScope.gameJoin(j1Raw, raftConfig = fastRaftConfig(seed = 2L)) }
-        val blipDeferred = async { backgroundScope.gameJoin(blipRaw, raftConfig = fastRaftConfig(seed = 3L)) }
+        val blip = FaultySeam(blipRaw, backgroundScope)
+        val blipDeferred = async { backgroundScope.gameJoin(blip, raftConfig = fastRaftConfig(seed = 3L)) }
 
         val host = hostDeferred.await()
         j1Deferred.await()
         blipDeferred.await()
 
-        // Simulate a transient blip: advance the clock past the timeout so PeerUnresponsive fires
-        // but not past the full reconnect window — the peer's session stays open so the Raft
-        // transport still reaches it; only heartbeat channel 4 pings go unanswered.
+        // Quiet past the timeout, so PeerUnresponsive fires, but heard again inside the window.
         val insideWindowMs = livenessConfig.reconnectWindow.inWholeMilliseconds / 2
         check(insideWindowMs > livenessConfig.timeout.inWholeMilliseconds) {
             "insideWindowMs must be past timeout so PeerUnresponsive fired but PeerLost has not"
         }
-        nowMs = insideWindowMs
+        blip.partition(Direction.Outbound)
         advanceTimeBy(insideWindowMs)
         runCurrent()
+        val droppedDuringBlip = blip.framesDropped
+        blip.heal()
 
-        // A proposal with the host + j1 quorum commits normally — membership unchanged.
-        // If eviction HAD fired, the changeMembership would also commit fine (2 of 2 quorum),
-        // but the roster would be 2, not 3. We accept this test validates the timing bound
-        // rather than the exact voter count to avoid flow-race complexity.
-        val entry = TurnSequencer(host.node, Int.serializer()).propose(99)
-        assertEquals(99, entry.action, "quorum holds inside the reconnect window — propose must commit")
+        val pastTheWindowMs = (livenessConfig.timeout + livenessConfig.reconnectWindow).inWholeMilliseconds * 2
+        advanceTimeBy(pastTheWindowMs)
+        runCurrent()
+
+        assertAll(
+            { assertTrue(droppedDuringBlip > 0, "precondition: the blip must have cost the voter some frames") },
+            { assertEquals(3, host.node.membership.value.voters.size, "a voter back inside its window keeps its seat") },
+        )
     }
 
     /**

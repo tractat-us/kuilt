@@ -74,9 +74,6 @@ private const val BROADCAST_CHANNEL: Byte = 0
 
 /**
  * MuxSeam channel tag for the lobby presence traffic in [gameHost].
- *
- * [gameJoin] does not subscribe to this channel — presence frames destined for a joiner's
- * presence channel are silently discarded by the unsubscribed [MuxSeam] view.
  */
 private const val PRESENCE_CHANNEL: Byte = 2
 
@@ -98,7 +95,8 @@ private const val APP_ENVELOPE_CHANNEL: Byte = 3
  * One [HeartbeatPartitionDetector] per remote voter shares this channel (distinguishing peers
  * by [PeerId] in its internal filtering). Heartbeat frames never reach the application layer —
  * they are consumed by the detectors' inner collection loops, which subscribe to the per-peer
- * [GamePerPeerSeam] views that filter the channel's shared incoming flow.
+ * [GamePerPeerSeam] views that filter the channel's shared incoming flow. A joiner runs no detector
+ * and answers these pings through [answerHeartbeatPings].
  */
 internal const val HEARTBEAT_CHANNEL: Byte = 4
 
@@ -536,10 +534,10 @@ public suspend fun CoroutineScope.gameHost(
  * the structural signal is the primary path. Under virtual time the backstop fires promptly.
  *
  * **Internal multiplexing.** [gameJoin] wraps [seam] in a [MuxSeam] and routes Raft traffic
- * on channel tag 1, lobby presence on channel tag 2, and the application-envelope [NamedMux]
- * on channel tag 3 — matching [gameHost]'s channels — so both sides communicate on compatible
- * frames. The caller passes a plain [Seam]; muxing is internal. Ride extra application traffic
- * over [GameSession.appChannel].
+ * on channel tag 1, lobby presence on channel tag 2, the application-envelope [NamedMux]
+ * on channel tag 3, and heartbeat answers on channel tag 4 — matching [gameHost]'s channels — so
+ * both sides communicate on compatible frames. The caller passes a plain [Seam]; muxing is
+ * internal. Ride extra application traffic over [GameSession.appChannel].
  *
  * **Presence announcement.** Before awaiting admission, this peer announces itself as a
  * non-host participant on the presence channel. This is what lets [gameHost]'s
@@ -594,6 +592,7 @@ public suspend fun CoroutineScope.gameJoin(
 
     // Announce presence (non-host) so the host's convergence wait sees us promptly.
     val presence = GamePresence(presenceSeam, this, raftConfig.expectVirtualTime)
+    answerHeartbeatPings(mux.channel(HEARTBEAT_CHANNEL), presence)
     presence.declarePresent()
 
     // Start as a learner with no known voters. The host's changeMembership will commit a
