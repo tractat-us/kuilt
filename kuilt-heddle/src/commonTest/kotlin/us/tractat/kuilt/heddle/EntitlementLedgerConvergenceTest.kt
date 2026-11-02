@@ -43,17 +43,18 @@ private fun Random.counter(replicaIndex: Int): GCounter =
 internal class EntitlementLedgerConvergenceTest : LatticeLawSuite<EntitlementLedger>() {
     override fun newHarness(): LatticeLawHarness<EntitlementLedger> = LatticeLawHarness(
         initial = EntitlementLedger.ZERO,
+        // Each op states its type argument: inferring them cost about 80 s per native target (#2191).
         alphabet = listOf(
-            LatticeOp("record", OpKind.ASSERT) { state, replicaIndex, random ->
+            LatticeOp<EntitlementLedger>("record", OpKind.ASSERT) { state, replicaIndex, random ->
                 val edge = random.edge()
                 val record = AttachmentRecord(edge, GroupId("root"), GroupId("c$replicaIndex"), Weight.of(1L))
                 state.piece(EntitlementLedger.of(records = mapOf(edge to setOf(record))))
             },
-            LatticeOp("mint", OpKind.ASSERT) { state, replicaIndex, random ->
+            LatticeOp<EntitlementLedger>("mint", OpKind.ASSERT) { state, replicaIndex, random ->
                 val record = MintRecord(GroupId("root"), ReplicaId("R$replicaIndex"), random.nextLong(1L, 1L shl 40))
                 state.piece(EntitlementLedger.of(minted = mapOf(MintId(IDS.random(random)) to record)))
             },
-            LatticeOp("counter", OpKind.ASSERT) { state, replicaIndex, random ->
+            LatticeOp<EntitlementLedger>("counter", OpKind.ASSERT) { state, replicaIndex, random ->
                 val cell = mapOf(random.edge() to random.counter(replicaIndex))
                 state.piece(
                     when (random.nextInt(9)) {
@@ -69,7 +70,7 @@ internal class EntitlementLedgerConvergenceTest : LatticeLawSuite<EntitlementLed
                     },
                 )
             },
-            LatticeOp("transfer", OpKind.ASSERT) { state, replicaIndex, random ->
+            LatticeOp<EntitlementLedger>("transfer", OpKind.ASSERT) { state, replicaIndex, random ->
                 val row = mapOf(random.path() to mapOf(ReplicaId(IDS[replicaIndex]) to random.counter(replicaIndex)))
                 state.piece(
                     when (random.nextInt(3)) {
@@ -79,12 +80,12 @@ internal class EntitlementLedgerConvergenceTest : LatticeLawSuite<EntitlementLed
                     },
                 )
             },
-            LatticeOp("lifecycle", OpKind.ASSERT) { state, _, random ->
+            LatticeOp<EntitlementLedger>("lifecycle", OpKind.ASSERT) { state, _, random ->
                 // ALLOW-hashOrderedDraw: an enum's `entries` is a declared-order list, not a Map view.
                 val stage = Lifecycle.entries.random(random)
                 state.piece(EntitlementLedger.of(lifecycle = mapOf(random.edge() to stage)))
             },
-            LatticeOp("gauge", OpKind.ASSERT) { state, _, random ->
+            LatticeOp<EntitlementLedger>("gauge", OpKind.ASSERT) { state, _, random ->
                 val gauge = Gauge(Rational.of(random.nextLong(1L, 1L shl 20)), random.nextLong(1L, 1L shl 20))
                 state.piece(EntitlementLedger.of(gauges = mapOf(random.edge() to gauge)))
             },
