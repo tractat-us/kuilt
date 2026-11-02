@@ -33,6 +33,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
@@ -138,7 +139,7 @@ import kotlin.time.Instant
  * | # | Mutation | Kind | after | before |
  * |---|----------|------|-------|--------|
  * | M1 | `SeamRoom.resumeToken` returns `null` — a room opting out of resume entirely | real | RED: [resumeWithinWindowFiresResumed] and [aTokenMintedForAnotherRoomIsRefused] on the loud precondition, naming `role=Joiner … roster=1 member(s)` | [joinerLearnsHostRoomIdOnAdmission] RED — but [resumeWithinWindowFiresResumed] **green by absence** |
- * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` **as measured — the set is seven since #2501** | all green; the four gated obligations passed under a gap declaring nothing |
+ * | M2 | [injectorOrDeclaredGap] drops its assertion — i.e. the pre-#2306 silent `?: return@runTest`, exactly | rig | RED: all four `blankTrackingUrl*` **as measured — the set is seven since #2501, eight since #2670** | all green; the four gated obligations passed under a gap declaring nothing |
  * | M3 | delete the `token.roomId != roomId` guard in `DefaultJoinerReconnectController.tryResume` | real | RED: [aTokenMintedForAnotherRoomIsRefused], all 4 assertions — `got Success`, then a refusal for the genuine token | every pre-existing test of this suite **green** |
  * | M4 | the host drops a foreign token silently instead of refusing it | synthetic | RED: [aTokenMintedForAnotherRoomIsRefused], 2 of 3 — `Got TimedOut` | all green |
  *
@@ -1468,6 +1469,89 @@ public abstract class RoomConformanceSuite {
             // than a throw or a wedge — but it goes through [applicationPayload] like every other payload
             // in this suite, so the fixture also works on a live room, which refuses reserved payloads at send.
             joinerRoom.broadcast(applicationPayload("post-host-lost"))
+        }
+
+    // ── (9a) A host that leaves on purpose says so (#2670) ───────────────────
+
+    /**
+     * A host's clean [Room.leave] reaches an admitted joiner as [FailureReason.HostLeft], with no
+     * reconnect window opened on the way. Ungated, because no fabric excuses it: a room that cannot
+     * tell its joiners it is leaving holds them on a live-looking room until the window runs out.
+     *
+     * **How much the reference can show.** It delivers before `sendTo` returns, so a seam here cannot
+     * lose the frame in flight. What it can lose is a frame that was only ever queued when the seam
+     * closed, which is the half this catches on a `leave` that skips the wait (receipt in the PR for
+     * #2670). In-flight loss on a real radio is out of its reach, and a harness over a real fabric is
+     * what proves that; `NwHostDepartureRoomTest` holds the kuilt-nw send path to it directly.
+     */
+    @Test
+    public fun aHostsLeaveEndsTheJoinersRoomWithoutOpeningAWindow(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val observed = mutableListOf<MembershipEvent>()
+            backgroundScope.launch { joinerRoom.events.collect { observed += it } }
+            val hostLost = async {
+                joinerRoom.awaitEvent("MembershipEvent.HostLost") { it as? MembershipEvent.HostLost }
+            }
+            testScheduler.runCurrent()
+
+            hostRoom.leave(LeaveReason.Normal)
+
+            val lost = hostLost.await()
+            assertAll(
+                { assertEquals<FailureReason>(FailureReason.HostLeft, lost.reason, "events: $observed") },
+                {
+                    assertTrue(
+                        observed.none { it is MembershipEvent.WindowOpened },
+                        "a deliberate departure must not open a reconnect window: $observed",
+                    )
+                },
+            )
+        }
+
+    /**
+     * The other half, gated because only a harness that can break a link can reach it: when the frame
+     * does not arrive, the joiner falls back to the reconnect window, ending in some reason other than
+     * [FailureReason.HostLeft]. So `HostLeft` is proof of a deliberate departure and its absence is not
+     * proof of the opposite.
+     */
+    @Test
+    public fun aHostsLostFarewellFallsBackToTheWindow(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val faultyLoom = h.faults.injectorOrDeclaredGap("a lost host Farewell falls back to the window")
+                ?: return@runTest
+
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val observed = mutableListOf<MembershipEvent>()
+            backgroundScope.launch { joinerRoom.events.collect { observed += it } }
+            val hostLost = async {
+                joinerRoom.awaitEvent("MembershipEvent.HostLost") { it as? MembershipEvent.HostLost }
+            }
+            testScheduler.runCurrent()
+
+            // Everything the host writes from here is dropped, so the Farewell is too.
+            val hostLink = faultyLoom.links[0]
+            val droppedBefore = hostLink.framesDropped
+            hostLink.setFaultProfile(FaultProfile.DropAll(Direction.Outbound))
+            hostRoom.leave(LeaveReason.Normal)
+
+            val lost = hostLost.await()
+            assertAll(
+                // Rig receipt: a leave that sent nothing would reach this same window, and prove nothing.
+                { assertTrue(hostLink.framesDropped > droppedBefore, "the Farewell must have been dropped") },
+                { assertTrue(observed.any { it is MembershipEvent.WindowOpened }, "today's window: $observed") },
+                { assertTrue(lost.reason != FailureReason.HostLeft, "no frame, no HostLeft: $observed") },
+            )
         }
 
     // ── (10) Left member no longer receives broadcast frames ─────────────────

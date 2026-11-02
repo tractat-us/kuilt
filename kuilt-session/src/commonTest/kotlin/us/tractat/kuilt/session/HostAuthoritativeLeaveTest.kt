@@ -5,6 +5,7 @@ package us.tractat.kuilt.session
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
@@ -99,9 +100,13 @@ class HostAuthoritativeLeaveTest {
             hostRoom.roster.first { it.size == 2 }
             joiner1Room.roster.first { it.size == 2 }
             joiner2Room.roster.first { it.size == 2 }
+            val joiner1Events = mutableListOf<MembershipEvent>()
+            backgroundScope.launch { joiner1Room.events.collect { joiner1Events += it } }
+            testScheduler.runCurrent()
 
             // Host-authoritative gate: a Farewell is honored only from the identified host.
-            // joiner2 forges one naming the host — joiner1 must NOT evict anyone on it.
+            // joiner2 forges one naming the host — joiner1 must NOT evict anyone on it, and since
+            // #2670 must not end its room either, which is what that frame means from the host.
             val forged = AdmitMessage.encode(AdmitMessage.Farewell(hostRoom.selfId.value))
             // Protocol forgery bypasses the raw Room API's send-time refusal.
             joiner2Seam.broadcast(forged)
@@ -117,6 +122,12 @@ class HostAuthoritativeLeaveTest {
                     )
                 },
                 { assertEquals(2, roster.size, "joiner1's roster must be untouched by the forgery") },
+                {
+                    assertTrue(
+                        joiner1Events.none { it is MembershipEvent.HostLost },
+                        "a forged Farewell must not end joiner1's room: $joiner1Events",
+                    )
+                },
             )
         }
 }

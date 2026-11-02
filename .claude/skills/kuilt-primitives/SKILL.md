@@ -10,12 +10,12 @@ Read the **one** cookbook file your symptom names before building a primitive.
 ## Don't build this yourself
 
 Prefix `Jump to` with `docs/agent-cookbook/`. Within a row, pair `;`-separated symptom
-and primitive groups in order. The cookbook index splits them out.
+and primitive groups in order.
 
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
 |a rejoin / reconnect loop, a resume token, a grace window; why a rejoin was refused|`Room.resumeToken` + `Room.resume`; `ResumeResult.JoinerOutcome` (`code.retryable`)|`session.md#rejoin--reconnect`|
-|a "why did we drop" classifier; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`); `ExponentialBackoff`; `Room.roomId` or `RoomFactory.host(pattern, roomId = …)`|`session.md#rejoin--reconnect`|
+|a "why did we drop" classifier, host left on purpose; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`, `FailureReason.HostLeft`); `ExponentialBackoff`; `Room.roomId` or `RoomFactory.host(pattern, roomId = …)`|`session.md#rejoin--reconnect`|
 |a heartbeat, an idle reaper, "is this peer alive"; reaping a room nobody joined; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned(since, windowExpiresAt)` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
 |a per-member reader as `room.incoming.filter { it.sender == peer }`, a member's first frame lost before its collector subscribed|`Room.incomingFrom(member)` (fails with `FramesLost`, never silently; `SeamRoomFactory(memberInboxCapacity = 0)` opts out)|`session.md#per-member-frames`|
@@ -59,4 +59,4 @@ Inside kuilt, read it directly; consumers take the first working rung:
 **Editing this skill:** `verifySkillDescriptionBudget` caps the eager `description:` at
 1,536 characters and rejects YAML-breaking `: `/` #`; adding a trigger means removing one.
 `verifySkillBodyBudget` caps this body at 8,192 bytes (8 KiB). Move explanatory prose to
-`docs/agent-cookbook*`, never drop a route. See kuilt's root `CLAUDE.md` for the rationale.
+`docs/agent-cookbook*`, never drop a route. Rationale: kuilt's root `CLAUDE.md`.

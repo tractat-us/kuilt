@@ -422,6 +422,12 @@ public interface Room {
     /**
      * Leave the room cleanly. Idempotent.
      *
+     * A host leaving with [LeaveReason.Normal] tells its members, so a joiner reports
+     * [MembershipEvent.HostLost] with [FailureReason.HostLeft] rather than waiting out its reconnect
+     * window. That message is best effort: if it is lost the joiner falls back to the window. A host
+     * with members therefore takes a moment longer to return from this call, and the wait is short and
+     * bounded whatever state its members' links are in.
+     *
      * **A room that has left has no members, on either role.** Its [roster] reads empty, each of its
      * [channel] views lists only this peer, and every [incomingFrom] flow completes. The roster empties
      * first, so a reader that sees its flow complete already reads the empty roster. That keeps one

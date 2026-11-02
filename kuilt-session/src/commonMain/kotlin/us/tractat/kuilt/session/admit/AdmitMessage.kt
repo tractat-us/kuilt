@@ -177,6 +177,11 @@ public sealed interface AdmitMessage {
      * joiner's roster (#1557). Defaulted so it is wire-safe: a frame from an older build that
      * never sends the field decodes as a clean leave, which is what that build meant.
      *
+     * **Naming the host itself, it means the host is leaving on purpose (#2670):** the recipient goes
+     * terminal with [us.tractat.kuilt.session.FailureReason.HostLeft] rather than opening a reconnect
+     * window. Only the identified host can say this. A joiner older than #2670 ignores that form and
+     * falls back to the window, so no version gate guards it.
+     *
      * Wire-compatible: an older build that doesn't know this message drops it as
      * malformed and degrades to its own heartbeat-window eviction (the prior behavior).
      */

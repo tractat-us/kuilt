@@ -57,6 +57,20 @@ public sealed interface FailureReason {
 
     /** No resume path exists: no reweave support, a non-conforming loom, or no known host. */
     public data object Unrecoverable : FailureReason
+
+    /**
+     * The host left on purpose and said so, so nobody is coming back to this room.
+     *
+     * The one reason here that is a decision rather than a failure: the host called `Room.leave`, and
+     * its `Farewell` arrived. A joiner reports it without opening a reconnect window, or cuts short one
+     * a tear had already opened. Keep the room's UI honest about it: "the host ended the game", not
+     * "lost the host".
+     *
+     * **Its absence proves nothing.** The `Farewell` is best effort, so a host that leaves on purpose
+     * can still surface as [WindowExpired] when the frame does not make it: [HostLeft] is proof of a
+     * deliberate departure, and every other reason means only that no such proof arrived.
+     */
+    public data object HostLeft : FailureReason
 }
 
 /** Lift a liveness-layer [PartitionEvent.Reason] to the session-level [ReconnectReason]. */
