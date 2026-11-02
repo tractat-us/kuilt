@@ -481,8 +481,9 @@ private class LateSpuriousDepartureSource(
  *     working one.
  *
  * A fourth is a rig assertion rather than a model: [mc_browser_start] refuses a second concurrent
- * session, because the dylib does. A rig source needing two would not be implementable in
- * production, and silently allowing it would let this file prescribe a fix that cannot be built.
+ * session, because the dylib does, though the dylib returns null where this throws. A rig source
+ * needing two would not be implementable in production, and silently allowing it would let this
+ * file prescribe a fix that cannot be built.
  *
  * Callbacks fire synchronously on the caller's thread — the real dylib fires them from Darwin GCD,
  * which is [MultipeerBrowserDispatcherTest]'s subject, not this one. Every field is atomic or
