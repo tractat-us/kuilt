@@ -64,9 +64,10 @@ public fun nw_runtime_create(
 }
 
 /**
- * Gracefully tears the runtime down (stop listening/browsing, disconnect all) and
- * disposes the StableRef. Safe to call once per handle; double-destroy is a
- * use-after-free and the caller's responsibility to avoid.
+ * Gracefully tears the runtime down (stop listening/browsing, disconnect all), waits for callbacks in
+ * flight, and disposes the StableRef. On return no callback of this runtime is running or will run,
+ * except the one making this call, if it was made from inside one. Safe to call once per handle;
+ * double-destroy is a use-after-free and the caller's responsibility to avoid.
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
 @CName("nw_runtime_destroy")

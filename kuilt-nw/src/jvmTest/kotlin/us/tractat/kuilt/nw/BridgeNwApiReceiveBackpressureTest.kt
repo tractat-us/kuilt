@@ -5,15 +5,20 @@
 
 package us.tractat.kuilt.nw
 
+import com.sun.jna.Pointer
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: the JNA callback is a FOREIGN OS thread the dylib invokes synchronously, and the property under test is what happens when it outruns the JVM-side drain — under `runTest` producer and drain are one thread, so the bug is unreachable.
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.test.assertAll
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -118,6 +123,57 @@ class BridgeNwApiReceiveBackpressureTest {
         }
     }
 
+    /**
+     * `nw_runtime_destroy` waits for every callback in flight, and the bytes callback is the one that can
+     * block: on a full staging channel it parks until the drain takes a chunk. Nothing drains here, because
+     * the dispatcher is never advanced, so [BridgeNwApi.close] has to release the callback **before** it
+     * reaches the destroy. The fake's destroy does what the native one does, and waits for it. Here the wait
+     * is bounded, which turns the wedge into this assertion.
+     */
+    @Test
+    fun closeReleasesAParkedBytesCallbackBeforeTheDestroyWaitsForIt() {
+        val lib = DestroyWaitingNativeLib()
+        val bridge = BridgeNwApi(lib, FakeNwNativeLib.HOST, StandardTestDispatcher())
+        val delivered = AtomicInteger(0)
+        val callback = thread {
+            repeat(BURST) {
+                lib.bytesCallback.invoke("c", Pointer(1L), 0)
+                delivered.incrementAndGet()
+            }
+        }
+        lib.callbackThread = callback
+        val deadline = System.nanoTime() + PARK_BOUND_NANOS
+        while (callback.state != Thread.State.WAITING && System.nanoTime() < deadline) Thread.sleep(1)
+        val deliveredBeforeClose = delivered.get()
+        val stateBeforeClose = callback.state
+
+        bridge.close()
+
+        assertAll(
+            { assertEquals(Thread.State.WAITING, stateBeforeClose, "the rig must park the callback before the close") },
+            { assertTrue(deliveredBeforeClose < BURST, "the rig's burst must outrun the staging channel") },
+            { assertEquals(1, lib.destroys, "the rig's destroy must have run") },
+            { assertEquals(false, lib.callbackAliveAtDestroyEnd, "a parked callback must be released before the destroy") },
+        )
+    }
+
+    private class DestroyWaitingNativeLib : NwNativeLib by FakeNwNativeLib() {
+        lateinit var bytesCallback: NwNativeLib.BytesReceivedCallback
+        lateinit var callbackThread: Thread
+        var destroys = 0
+        var callbackAliveAtDestroyEnd: Boolean? = null
+
+        override fun nw_set_bytes_received_callback(handle: Pointer?, cb: NwNativeLib.BytesReceivedCallback) {
+            bytesCallback = cb
+        }
+
+        override fun nw_runtime_destroy(handle: Pointer?) {
+            destroys++
+            callbackThread.join(DESTROY_WAIT_MILLIS)
+            callbackAliveAtDestroyEnd = callbackThread.isAlive
+        }
+    }
+
     private fun encodeIndex(i: Int): ByteArray = byteArrayOf((i ushr 8).toByte(), i.toByte())
 
     private fun decodeIndex(bytes: ByteArray): Int =
@@ -126,6 +182,8 @@ class BridgeNwApiReceiveBackpressureTest {
     private companion object {
         /** Several times `BridgeNwApi.BYTES_BUFFER` (64), so a lossy stage sheds most of it. */
         private const val BURST = 512
+        private const val DESTROY_WAIT_MILLIS = 30_000L
+        private const val PARK_BOUND_NANOS = 30_000_000_000L
         private const val COLLECTOR_LAG_MS = 1L
         private const val POLL_MS = 1L
 

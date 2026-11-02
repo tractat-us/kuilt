@@ -49,9 +49,15 @@ public fun mc_runtime_open(handle: COpaquePointer?): COpaquePointer? {
 }
 
 /**
- * Closes the session, cancels any data/peer-state pumps, and disposes the
- * handle. Idempotent only across `null`; passing the same non-null pointer
- * twice is a use-after-free.
+ * Cancels the data and peer-state pumps, waits for them to finish, closes the session and disposes the
+ * handle. On return no callback of this session is running or will run, so the JVM may release both.
+ *
+ * It blocks the caller for as long as a callback in flight takes. The one exception is a call from inside
+ * one of this session's callbacks, which `BridgePeerLink` can reach when a consumer's unconfined collector
+ * closes a seam it sees go `Torn`. That callback cannot be waited for, so the call waits only for the rest,
+ * and the callback's own frames are still running when it returns.
+ *
+ * Idempotent only across `null`; passing the same non-null pointer twice is a use-after-free.
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
 @CName("mc_session_close")
@@ -60,7 +66,7 @@ public fun mc_session_close(session: COpaquePointer?) {
     if (session == null) return
     val ref = session.asStableRef<BridgeSessionState>()
     val state = ref.get()
-    state.cancelPumps()
+    state.cancelAndAwaitPumps()
     runCatchingCancellable { runBlocking { state.link.close() } }
     ref.dispose()
 }

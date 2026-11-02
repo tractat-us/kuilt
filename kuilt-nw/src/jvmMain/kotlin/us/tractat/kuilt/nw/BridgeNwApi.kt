@@ -362,6 +362,8 @@ public class BridgeNwApi internal constructor(
         // [stageBytesReceived] (#2134): with the drain gone, its blocking `send` would otherwise wait for a
         // consumer that is never coming back. `cancel()` fails both the parked send and every later one, so
         // a post-close callback drops its chunk instead of hanging a dylib forwarding collector forever.
+        // Ahead of the clean() below because `nw_runtime_destroy` waits for callbacks in flight (#3071),
+        // and a callback parked here would never finish.
         bytesReceivedStaging.cancel()
         cleanable.clean()
     }

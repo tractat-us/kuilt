@@ -50,7 +50,7 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.Brid
  * The callback objects are held as fields so JNA's trampoline survives the
  * lifetime of the link. Releasing them (by setting the fields to null
  * inside [close]) is what eventually lets JNA free the trampoline; the
- * underlying `mc_session_close` cancels the K/N pump first.
+ * underlying `mc_session_close` cancels the K/N pumps and waits for them first.
  *
  * @param policy Governs the inbound [Spool]'s capacity and overflow behaviour.
  *   Defaults to [DeliveryPolicy.Reliable] (bounded, backpressured, lossless).
@@ -337,6 +337,10 @@ internal class BridgePeerLink(
      * not suspend) can share it. CAS-idempotent: exactly one caller wins the
      * latch, so `mc_session_close` runs exactly once per handle regardless of
      * how `Seam.close()` / factory close interleave.
+     *
+     * `mc_session_close` waits for callbacks in flight, so nothing a callback takes may be held across it:
+     * [peersLock] is released inside [tearDown]. A call from inside a callback is safe too, since the native
+     * side tells that case apart and does not wait for the callback making it.
      */
     internal fun closeNow(reason: CloseReason) {
         // Set closing before mc_session_close so the peer-state callback sees it

@@ -8,7 +8,7 @@
  * `COpaquePointer` — internally a `StableRef<NwBridgeRuntime>` — that roots the
  * runtime so K/N's GC won't reclaim it while the JVM still holds the pointer.
  *
- * The six `set*Callback` methods each launch ONE collector on [scope] that
+ * The six `set*Callback` methods each start ONE collector on [scope] that
  * forwards a `RealNwApi` flow to the registered JVM cdecl callback. Exactly one
  * collector per flow preserves the single-collection contract of `RealNwApi`'s
  * `MutableSharedFlow`s (a second collector would duplicate delivery); two — the
@@ -22,6 +22,7 @@
  */
 package us.tractat.kuilt.nw.bridge
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.cinterop.ByteVar
@@ -37,11 +38,15 @@ import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
+import us.tractat.kuilt.core.PumpVerdict
+import us.tractat.kuilt.core.pumpIn
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.nw.NwConnState
 import us.tractat.kuilt.nw.NwConnectionId
@@ -49,6 +54,19 @@ import us.tractat.kuilt.nw.NwEndpoint
 import us.tractat.kuilt.nw.NwLoopbackConfig
 import us.tractat.kuilt.nw.NwPskMaterial
 import us.tractat.kuilt.nw.RealNwApi
+import kotlin.native.concurrent.ThreadLocal
+
+private val log = KotlinLogging.logger("us.tractat.kuilt.nw.bridge.NwBridgeRuntime")
+
+/**
+ * The forwarder whose JVM callback this thread is inside, if any. It is what lets [NwBridgeRuntime.destroy]
+ * tell a call from inside a callback, which cannot wait for that callback. A thread-local is sound here
+ * because a callback is one synchronous call: it is set and cleared with no suspension in between.
+ */
+@ThreadLocal
+private object CallbackFrame {
+    var forwarder: Job? = null
+}
 
 /**
  * `(endpointId: char*, serviceName: char*) -> void` — the C signature of the
@@ -124,44 +142,64 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
     private val lock = reentrantLock()
     private val openConnections = mutableSetOf<NwConnectionId>()
 
-    fun setEndpointFoundCallback(cb: CPointer<EndpointFoundCb>) {
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            api.endpointFound.collect { endpoint ->
-                memScoped { cb.invoke(endpoint.id.cstr.ptr, endpoint.serviceName.cstr.ptr) }
+    /**
+     * Starts one forwarder. `UNDISPATCHED` so it subscribes before the registering call returns. A failure
+     * reaches only the log line, since no call is left to report it through; the one known to happen is a
+     * second `bytesReceived` collector being refused, and without [pumpIn] that aborts the process.
+     * [body] is not `suspend`, because it is one synchronous JVM callback: that is what [CallbackFrame] needs.
+     */
+    private fun <T> forward(name: String, items: Flow<T>, body: (T) -> Unit) {
+        items.pumpIn(
+            scope = scope,
+            onFailure = { phase, failure ->
+                log.error(failure) { "nw.bridge.forwarder.failed forwarder=$name phase=$phase" }
+                PumpVerdict.CONTINUE
+            },
+            name = "nw-bridge-$name",
+            start = CoroutineStart.UNDISPATCHED,
+        ) { item ->
+            val outer = CallbackFrame.forwarder
+            CallbackFrame.forwarder = currentCoroutineContext().job
+            try {
+                body(item)
+            } finally {
+                CallbackFrame.forwarder = outer
             }
         }
     }
 
+    fun setEndpointFoundCallback(cb: CPointer<EndpointFoundCb>) {
+        forward("endpoint-found", api.endpointFound) { endpoint ->
+            memScoped { cb.invoke(endpoint.id.cstr.ptr, endpoint.serviceName.cstr.ptr) }
+        }
+    }
+
     fun setConnectionOpenedCallback(cb: CPointer<ConnectionOpenedCb>) {
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            api.connectionOpened.collect { event ->
-                lock.withLock { openConnections.add(event.connectionId) }
-                // Empty strings for the inbound/host case (endpoint == null).
-                val endpointId = event.endpoint?.id ?: ""
-                val serviceName = event.endpoint?.serviceName ?: ""
-                memScoped {
-                    cb.invoke(event.connectionId.value.cstr.ptr, endpointId.cstr.ptr, serviceName.cstr.ptr)
-                }
+        forward("connection-opened", api.connectionOpened) { event ->
+            lock.withLock { openConnections.add(event.connectionId) }
+            // Empty strings for the inbound/host case (endpoint == null).
+            val endpointId = event.endpoint?.id ?: ""
+            val serviceName = event.endpoint?.serviceName ?: ""
+            memScoped {
+                cb.invoke(event.connectionId.value.cstr.ptr, endpointId.cstr.ptr, serviceName.cstr.ptr)
             }
         }
     }
 
     fun setBytesReceivedCallback(cb: CPointer<BytesReceivedCb>) {
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            api.bytesReceived.collect { event ->
-                val bytes = event.bytes
-                memScoped {
-                    if (bytes.isEmpty()) {
-                        val empty = ByteArray(1).pin()
-                        try {
-                            cb.invoke(event.connectionId.value.cstr.ptr, empty.addressOf(0), 0)
-                        } finally {
-                            empty.unpin()
-                        }
-                    } else {
-                        bytes.usePinned { pinned ->
-                            cb.invoke(event.connectionId.value.cstr.ptr, pinned.addressOf(0), bytes.size)
-                        }
+        forward("bytes-received", api.bytesReceived) { event ->
+            val bytes = event.bytes
+            memScoped {
+                if (bytes.isEmpty()) {
+                    val empty = ByteArray(1).pin()
+                    try {
+                        cb.invoke(event.connectionId.value.cstr.ptr, empty.addressOf(0), 0)
+                    } finally {
+                        empty.unpin()
+                    }
+                } else {
+                    bytes.usePinned { pinned ->
+                        cb.invoke(event.connectionId.value.cstr.ptr, pinned.addressOf(0), bytes.size)
                     }
                 }
             }
@@ -169,12 +207,10 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
     }
 
     fun setConnectionClosedCallback(cb: CPointer<ConnectionClosedCb>) {
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            api.connectionClosed.collect { event ->
-                lock.withLock { openConnections.remove(event.connectionId) }
-                val reason = event.reason ?: "" // empty ⇒ graceful/null on the JVM side
-                memScoped { cb.invoke(event.connectionId.value.cstr.ptr, reason.cstr.ptr) }
-            }
+        forward("connection-closed", api.connectionClosed) { event ->
+            lock.withLock { openConnections.remove(event.connectionId) }
+            val reason = event.reason ?: "" // empty ⇒ graceful/null on the JVM side
+            memScoped { cb.invoke(event.connectionId.value.cstr.ptr, reason.cstr.ptr) }
         }
     }
 
@@ -193,17 +229,15 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
      * forwards Viable/PathLost.
      */
     fun setConnectionClosedStateCallback(cb: CPointer<ConnectionClosedStateCb>) {
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            var previous = emptyMap<NwConnectionId, NwConnState>()
-            api.connectionStates.collect { current ->
-                for ((id, st) in current) {
-                    if (st is NwConnState.Closed && previous[id] !is NwConnState.Closed) {
-                        val r = st.reason ?: "" // empty ⇒ graceful/null on the JVM side
-                        memScoped { cb.invoke(id.value.cstr.ptr, r.cstr.ptr) }
-                    }
+        var previous = emptyMap<NwConnectionId, NwConnState>()
+        forward("connection-closed-state", api.connectionStates) { current ->
+            for ((id, st) in current) {
+                if (st is NwConnState.Closed && previous[id] !is NwConnState.Closed) {
+                    val r = st.reason ?: "" // empty ⇒ graceful/null on the JVM side
+                    memScoped { cb.invoke(id.value.cstr.ptr, r.cstr.ptr) }
                 }
-                previous = current
             }
+            previous = current
         }
     }
 
@@ -217,19 +251,17 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
      * [setConnectionClosedStateCallback]; the JVM learns "closed" from that drop-tolerant path.
      */
     fun setConnectionViabilityCallback(cb: CPointer<ConnectionViabilityCb>) {
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            var previous = emptyMap<NwConnectionId, NwConnState>()
-            api.connectionStates.collect { current ->
-                for ((id, st) in current) {
-                    if (previous[id] == st) continue
-                    when (st) {
-                        NwConnState.Viable -> memScoped { cb.invoke(id.value.cstr.ptr, 1) }
-                        NwConnState.PathLost -> memScoped { cb.invoke(id.value.cstr.ptr, 0) }
-                        is NwConnState.Closed -> Unit // closure is forwarded by setConnectionClosedStateCallback
-                    }
+        var previous = emptyMap<NwConnectionId, NwConnState>()
+        forward("connection-viability", api.connectionStates) { current ->
+            for ((id, st) in current) {
+                if (previous[id] == st) continue
+                when (st) {
+                    NwConnState.Viable -> memScoped { cb.invoke(id.value.cstr.ptr, 1) }
+                    NwConnState.PathLost -> memScoped { cb.invoke(id.value.cstr.ptr, 0) }
+                    is NwConnState.Closed -> Unit // closure is forwarded by setConnectionClosedStateCallback
                 }
-                previous = current
             }
+            previous = current
         }
     }
 
@@ -251,9 +283,16 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
     suspend fun send(connectionId: String, bytes: ByteArray): Unit = api.send(NwConnectionId(connectionId), bytes)
 
     /**
-     * Graceful teardown: stop advertising/browsing, disconnect every still-open connection, then
-     * cancel the forwarding scope. Runs on the caller's (JNA) thread via [runBlocking]; each step is
-     * best-effort so a single failure never leaks the rest.
+     * Graceful teardown: stop advertising/browsing, disconnect every still-open connection, cancel the
+     * forwarding scope, then wait for the forwarders. On return no callback of this runtime is running or
+     * will run, so the JVM may release them. Runs on the caller's (JNA) thread via [runBlocking]; each step
+     * is best-effort so a single failure never leaks the rest.
+     *
+     * The wait lasts as long as a callback in flight, and one can block: `BridgeNwApi`'s bytes callback
+     * parks on a full staging channel, so its `close` cancels that channel before it destroys this runtime.
+     *
+     * A call from inside one of this runtime's callbacks cannot wait for that callback, so it waits only
+     * for the rest, and the callback's own frames are still running when it returns.
      */
     fun destroy() {
         runBlocking {
@@ -264,6 +303,9 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
                 runCatchingCancellable { api.disconnect(NwConnectionId(id.value)) }
             }
         }
-        scope.cancel()
+        val forwarders = scope.coroutineContext.job
+        forwarders.cancel()
+        val own = CallbackFrame.forwarder
+        runBlocking { forwarders.children.filter { it !== own }.toList().joinAll() }
     }
 }
