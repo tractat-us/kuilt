@@ -109,8 +109,9 @@ public class ClusterClient internal constructor(
      *
      * Returns the committed [LogEntry] — guaranteed to appear in [committed].
      *
-     * @throws IllegalStateException if this client was built with [ClientIdentity.Durable], whose
-     *   floor could not cover a serial the node drew for itself. Use the overload with a `requestId`.
+     * @throws us.tractat.kuilt.raft.AutoSerialRefusedException if this client was built with
+     *   [ClientIdentity.Durable], whose floor could not cover a serial the node drew for itself. Use
+     *   the overload with a `requestId`.
      */
     public suspend fun propose(command: ByteArray): LogEntry =
         raftNode.propose(command)
@@ -122,7 +123,8 @@ public class ClusterClient internal constructor(
      * [ClientIdentity.Durable], as that identity's new `issuedThrough`. A retry with the same
      * [requestId] and the **same command bytes** coalesces to the original committed entry via
      * [us.tractat.kuilt.raft.ClientSessionTable.shouldApply]. A [requestId] names one command:
-     * never reuse it for a different one.
+     * never reuse it for a different one. Retry before issuing a higher one, which abandons this one:
+     * [ClientIdentity.Durable] says why.
      *
      * @throws us.tractat.kuilt.raft.RequestIdConflictException if the leader still holds a
      *   committed result for [requestId] and [command] differs from it. Nothing was appended; do
@@ -242,7 +244,8 @@ public data class ClusterEndpoints(
  *   persisted floor for cross-crash exactly-once. **The floor is what makes a restart survivable:**
  *   this client keeps its log in memory, so replication brings the earlier incarnation's entries
  *   back on every boot. A floor covering them makes them this id's own. One behind them fails its
- *   node with [us.tractat.kuilt.raft.ClientIdCollisionException].
+ *   node with [us.tractat.kuilt.raft.ClientIdCollisionException], unless the voters have compacted
+ *   past them: the client then boots clean, and its next serial is a reuse a consumer's table drops.
  * @param clock Injected clock for session resume-token timestamps. **Required** — no real-clock
  *   default (prevents silent virtual-time breakage per the "optional ≠ tuning" policy).
  *   Threaded into the room-layer [SeamRoomFactory], which stamps reconnect-token `issuedAt`
