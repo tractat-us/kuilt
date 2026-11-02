@@ -163,12 +163,13 @@ class BridgeSessionQuiesceTest {
     }
 
     /**
-     * Two frames, so one is already queued when the replacement starts. With no wait the next callback
-     * takes it at once, while the old one is still held: the overlap is forced rather than raced. The same
-     * frame pins that a replacement loses nothing, since a pump cancelled to make way would eat it.
+     * A second frame is already queued when the replacement starts. With no wait the next callback takes it
+     * at once, while the old one is still held: the overlap is forced rather than raced. Either callback may
+     * legally get that frame, since the replacement has not returned, so the frames are counted across both:
+     * a pump cancelled to make way would eat it, and the count would never arrive.
      */
     @Test
-    fun replacingTheDataCallbackWaitsForTheOldOne() = withLink { link, session ->
+    fun replacingTheDataCallbackWaitsForTheOldOneAndLosesNoFrame() = withLink { link, session ->
         mc_session_set_data_callback(session, SessionProbe.dataHeld)
         link.deliverFrame()
         await("the old callback is entered") { SessionProbe.entered.value == 1 }
@@ -176,15 +177,16 @@ class BridgeSessionQuiesceTest {
         val exitedBeforeReplace = SessionProbe.exited.value
 
         SessionProbe.release.value = true
-        val exitedAtReturn = replaceData(session)
-        await("the next callback delivers") { SessionProbe.nextEntries.value >= 1 }
-        val exitedAtFirstNext = SessionProbe.exitedAtFirstNext.value
+        val runningAtReturn = replaceData(session)
+        link.deliverFrame()
+        await("all three frames arrive") { SessionProbe.entered.value + SessionProbe.nextEntries.value == 3 }
+        val runningAtFirstNext = SessionProbe.oldRunningAtFirstNext.value
 
         close(session)
         assertAll(
             { assertEquals(0, exitedBeforeReplace, "the rig must hold the callback across the replacement") },
-            { assertEquals(1, exitedAtReturn, "the old callback must finish before the replacement returns") },
-            { assertEquals(1, exitedAtFirstNext, "two data callbacks must never overlap") },
+            { assertEquals(0, runningAtReturn, "the old callback must finish before the replacement returns") },
+            { assertEquals(0, runningAtFirstNext, "two data callbacks must never overlap") },
             { assertEquals(emptyList(), uncaughtSoFar()) },
         )
     }
@@ -197,15 +199,15 @@ class BridgeSessionQuiesceTest {
         val exitedBeforeReplace = SessionProbe.exited.value
 
         SessionProbe.release.value = true
-        val exitedAtReturn = replacePeerState(session)
+        val runningAtReturn = replacePeerState(session)
         await("the next callback delivers") { SessionProbe.nextEntries.value >= 1 }
-        val exitedAtFirstNext = SessionProbe.exitedAtFirstNext.value
+        val runningAtFirstNext = SessionProbe.oldRunningAtFirstNext.value
 
         close(session)
         assertAll(
             { assertEquals(0, exitedBeforeReplace, "the rig must hold the callback across the replacement") },
-            { assertEquals(1, exitedAtReturn, "the old callback must finish before the replacement returns") },
-            { assertEquals(1, exitedAtFirstNext, "two peer-state callbacks must never overlap") },
+            { assertEquals(0, runningAtReturn, "the old callback must finish before the replacement returns") },
+            { assertEquals(0, runningAtFirstNext, "two peer-state callbacks must never overlap") },
             { assertEquals(emptyList(), uncaughtSoFar()) },
         )
     }
@@ -219,11 +221,11 @@ class BridgeSessionQuiesceTest {
         link.deliverFrame()
         await("the replacement returns inside the callback") { SessionProbe.replacedInside.value == 1 }
         await("the next callback delivers") { SessionProbe.nextEntries.value >= 1 }
-        val exitedAtFirstNext = SessionProbe.exitedAtFirstNext.value
+        val runningAtFirstNext = SessionProbe.oldRunningAtFirstNext.value
 
         close(session)
         assertAll(
-            { assertEquals(1, exitedAtFirstNext, "the next callback must wait for the one that installed it") },
+            { assertEquals(0, runningAtFirstNext, "the next callback must wait for the one that installed it") },
             { assertEquals(emptyList(), uncaughtSoFar()) },
         )
     }
@@ -280,7 +282,7 @@ class BridgeSessionQuiesceTest {
     private fun replaceData(session: COpaquePointer): Int {
         val returned = caller.execute(TransferMode.SAFE, { session }) { handle ->
             mc_session_set_data_callback(handle, SessionProbe.dataNext)
-            SessionProbe.exited.value
+            SessionProbe.entered.value - SessionProbe.exited.value
         }
         await("mc_session_set_data_callback returns") { returned.state != FutureState.SCHEDULED }
         return returned.result
@@ -289,7 +291,7 @@ class BridgeSessionQuiesceTest {
     private fun replacePeerState(session: COpaquePointer): Int {
         val returned = caller.execute(TransferMode.SAFE, { session }) { handle ->
             mc_session_set_peer_state_callback(handle, SessionProbe.peerNext)
-            SessionProbe.exited.value
+            SessionProbe.entered.value - SessionProbe.exited.value
         }
         await("mc_session_set_peer_state_callback returns") { returned.state != FutureState.SCHEDULED }
         return returned.result
@@ -354,7 +356,7 @@ private object SessionProbe {
     val entered = atomic(0)
     val exited = atomic(0)
     val nextEntries = atomic(0)
-    val exitedAtFirstNext = atomic(-1)
+    val oldRunningAtFirstNext = atomic(-1)
     val closedInside = atomic(0)
     val exitedWhenClosedInside = atomic(-1)
     val replacedInside = atomic(0)
@@ -375,6 +377,7 @@ private object SessionProbe {
     val dataReplacesItself = staticCFunction { _: CPointer<ByteVar>?, _: CPointer<ByteVar>?, _: Int ->
         // The second frame of the rig lands on this callback's own pump only if the replacement lost it.
         if (replacedInside.compareAndSet(0, 1)) {
+            entered.incrementAndGet()
             mc_session_set_data_callback(session.value, dataNext)
             usleep(SESSION_HOLD_MICROS)
             exited.incrementAndGet()
@@ -392,7 +395,7 @@ private object SessionProbe {
         entered.value = 0
         exited.value = 0
         nextEntries.value = 0
-        exitedAtFirstNext.value = -1
+        oldRunningAtFirstNext.value = -1
         closedInside.value = 0
         exitedWhenClosedInside.value = -1
         replacedInside.value = 0
@@ -401,7 +404,7 @@ private object SessionProbe {
     }
 
     private fun noteNext() {
-        exitedAtFirstNext.compareAndSet(-1, exited.value)
+        oldRunningAtFirstNext.compareAndSet(-1, entered.value - exited.value)
         nextEntries.incrementAndGet()
     }
 
