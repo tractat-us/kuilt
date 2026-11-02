@@ -14,13 +14,16 @@ import io.ktor.server.netty.NettyApplicationEngine
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.CloseReason
+import io.ktor.websocket.close
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real sockets and a real client, whose dial must run while the caller's thread is held
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
@@ -71,6 +74,8 @@ import io.ktor.server.websocket.WebSockets as ServerWebSockets
  *    [HeldCallerThread] has seen the dial's result queued for it. The cancel lands then, so the caller
  *    takes the cancellation instead of a session already delivered to it, which is the one window that
  *    aborting the request cannot reach.
+ *  - **With the Close frame still on its way.** [SlowSocketWriter] keeps the socket's writer off a
+ *    thread while the session around it reports itself closed, which is when the call used to be cut.
  *
  * Time is real and bounded. [OBSERVATION] is only ever waited out on a red: a green reaches the far
  * end's verdict in well under a second, so it can be generous enough for a loaded box. Two arms wait
@@ -95,6 +100,12 @@ class WeaveCancelledMidDialTest {
 
     private fun client(engine: HttpClientEngineFactory<*> = CIO): HttpClient =
         HttpClient(engine) { install(ClientWebSockets) }.also { clients += it }
+
+    private fun clientOn(dispatcher: CoroutineDispatcher): HttpClient =
+        HttpClient(CIO) {
+            install(ClientWebSockets)
+            engine { this.dispatcher = dispatcher }
+        }.also { clients += it }
 
     private fun advertisement(url: String = server.url) =
         WebSocketAdvertisement(url = url, serverPeerId = FAR_END, sessionName = "held")
@@ -216,6 +227,7 @@ class WeaveCancelledMidDialTest {
         url: String,
         requestSeen: suspend () -> Unit,
         finishHandshake: () -> Unit,
+        beforeTheCancel: suspend () -> Unit = {},
     ): Duration {
         var woven: Seam? = null
         val weave = rigScope.launch(callerThread) { woven = loom.join(advertisement(url)) }
@@ -225,6 +237,7 @@ class WeaveCancelledMidDialTest {
 
         finishHandshake()
         callerThread.awaitDispatchPast(queuedWithTheCallerHeld)
+        beforeTheCancel()
         weave.cancel()
         val released = TimeSource.Monotonic.markNow()
         callerThread.release()
@@ -266,7 +279,7 @@ class WeaveCancelledMidDialTest {
         val netty = startHeldRoute(requestSeen, answer, heard)
         val url = "ws://127.0.0.1:${netty.engine.resolvedConnectors().first().port}$NETTY_PATH"
 
-        cancelAsTheSessionArrives(clientLoom(client()), url, requestSeen::await) { answer.complete(Unit) }
+        cancelAsTheSessionArrives(clientLoom(client()), url, requestSeen::await, { answer.complete(Unit) })
 
         val reason = withTimeoutOrNull(OBSERVATION) { heard.await() }
         assertNotNull(reason, "the route heard no close within $OBSERVATION, so the socket is open with no owner")
@@ -328,6 +341,64 @@ class WeaveCancelledMidDialTest {
             assertTrue(waited >= ABANDON_BOUND, "the weave did not wait out the close: it returned $seen")
             assertEquals(0, liveCalls, "the bound expired and the call was not cut: the weave returned $seen")
             assertTrue(silent.closeFrameSeen, "the unclaimed session's close was never sent")
+        } finally {
+            silent.close()
+        }
+    }
+
+    // ── With the Close frame still on its way ────────────────────────────────────────────────────
+
+    /**
+     * CIO's session closes its outgoing side the moment the Close frame is queued, before the socket's
+     * writer has run. Ending the call on that signal cancels the writer with the frame still in its
+     * queue, and the far end hears a dropped connection. Left to chance that is a few dials in a
+     * thousand, which is how it reached CI as one red in a class that had passed its reruns.
+     * [SlowSocketWriter] makes it the only outcome.
+     */
+    @Test
+    fun aCloseFrameStillWaitingOnItsWriterSurvivesTheCancel() = realTime {
+        val writer = SlowSocketWriter()
+        cancelAsTheSessionArrives(
+            clientLoom(clientOn(writer)),
+            server.url,
+            server::awaitRequest,
+            server::finishHandshake,
+            beforeTheCancel = writer::awaitParked,
+        )
+        assertACleanClose(server.farEnd())
+        assertTrue(writer.lateRuns > 0, "rig: the socket's writer was never delayed, so this window was not reached")
+    }
+
+    /** The same signal ends the call when the caller owns the session, so an ordinary close lost its frame too. */
+    @Test
+    fun aCloseFrameStillWaitingOnItsWriterSurvivesTheOwnersClose() = realTime {
+        val writer = SlowSocketWriter()
+        val httpClient = clientOn(writer)
+        val session = rigScope.async { httpClient.ownedWebSocketSession(server.url) }
+        server.awaitRequest()
+        server.finishHandshake()
+        val owned = session.await()
+        writer.awaitParked()
+
+        owned.close()
+
+        assertACleanClose(server.farEnd())
+        assertTrue(writer.lateRuns > 0, "rig: the socket's writer was never delayed, so this window was not reached")
+    }
+
+    /** Waiting for the far end's answer must not become waiting forever: the socket still ends without it. */
+    @Test
+    fun aFarEndThatNeverAnswersTheCloseStillLosesTheSocket() = realTime {
+        val silent = HeldHandshakeServer(OBSERVATION, answersClose = false)
+        val httpClient = client()
+        try {
+            val session = rigScope.async { httpClient.ownedWebSocketSession(silent.url) }
+            silent.awaitRequest()
+            silent.finishHandshake()
+
+            session.await().close()
+
+            assertACleanClose(silent.farEnd())
         } finally {
             silent.close()
         }
@@ -488,12 +559,58 @@ class WeaveCancelledMidDialTest {
         }
     }
 
+    /**
+     * Lets the socket's writer start on time and then runs it [WRITER_LATENESS] after it was due, with
+     * everything else on time. It has to start first: a writer woken from sleep is what a cancel can
+     * stop, whereas one that has not started yet finds the frame already queued and writes it. Ktor's
+     * writer is found by its coroutine name, which is not a promise, so an arm using this counts
+     * [lateRuns] rather than trusting that the name still matches.
+     *
+     * The lateness only decides whether the window opens. It has to stay well under the bound on the
+     * close, so that a real wait outlasts it on a slow box as well.
+     */
+    private class SlowSocketWriter : CoroutineDispatcher() {
+        private val runs = AtomicInteger()
+        private val parked = CountDownLatch(1)
+
+        val lateRuns: Int get() = (runs.get() - 1).coerceAtLeast(0)
+
+        /** Returns once the writer has started and gone to sleep on its empty queue. */
+        suspend fun awaitParked() {
+            while (parked.count > 0) {
+                currentCoroutineContext().ensureActive()
+                delay(POLL)
+            }
+        }
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            if (context[CoroutineName]?.name != SOCKET_WRITER) {
+                Dispatchers.IO.dispatch(context, block)
+                return
+            }
+            val task = if (runs.incrementAndGet() == 1) {
+                Runnable {
+                    block.run()
+                    parked.countDown()
+                }
+            } else {
+                Runnable {
+                    Thread.sleep(WRITER_LATENESS.inWholeMilliseconds)
+                    block.run()
+                }
+            }
+            Dispatchers.IO.dispatch(context, task)
+        }
+    }
+
     private companion object {
         val SELF = PeerId("self")
         val FAR_END = PeerId("far-end")
         const val NETTY_PATH = "/route"
         const val NORMAL_CLOSE = 1000
         const val INTERNAL_ERROR_CLOSE = 1011
+        const val SOCKET_WRITER = "ws-writer"
+        val WRITER_LATENESS = 250.milliseconds
         val POLL = 5.milliseconds
 
         /** How long a socket kuilt cannot reach is watched. Unlike [OBSERVATION], a green waits this out. */
