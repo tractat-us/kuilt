@@ -416,6 +416,8 @@ class HeddleControlLogFailClosedTest {
      * What the latch now rests on: raft's own no-ops and membership entries never arrive as log entries
      * to decode. If they did, every election and membership change would stop the group, because neither
      * carries bytes heddle can read. Both happen here on the real engine, and an act after them applies.
+     * Raft withholds them separately on its live and its replay paths, so a node booted afterwards covers
+     * the second: it reads the same entries from index 1.
      */
     @Test
     fun raftsOwnEntriesNeverReachTheLatch() =
@@ -445,10 +447,20 @@ class HeddleControlLogFailClosedTest {
                 kept.all { it.ledger.value.mintedTotal() == 5L }
             }
 
+            val replayed = backgroundScope.governedOn(this, newLeader, "replay", ReplicaId(successor.value))
+            sim.awaitTrue("a node booted afterwards replayed to the mint") { replayed.ledger.value.mintedTotal() == 5L }
+
             assertAll(
                 { assertTrue(commitAfterChange > commitBeforeChange, "rig: membership entries committed") },
                 { assertTrue(newLeader !== leader, "rig: a new leader took over, and appended its no-op") },
                 { assertTrue(kept.all { it.isWritable }, "neither stopped a node: removed ${removed.value}") },
+                {
+                    assertEquals(
+                        GateClosed(ReplicaId(successor.value), GateClosed.Reason.AwaitingEnrollment),
+                        replayed.reserve(ROOT, 1L),
+                        "nor stopped the replay: this one only has yet to enroll",
+                    )
+                },
             )
         }
 
