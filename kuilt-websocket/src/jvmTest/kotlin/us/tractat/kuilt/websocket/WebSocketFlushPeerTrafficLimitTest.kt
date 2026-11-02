@@ -6,6 +6,7 @@ import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real sockets on a real clock. The consumer's pace has to be real, or a burst and a close outrun nothing, and runTest's clock would skip it.
 import kotlinx.coroutines.SupervisorJob
@@ -39,17 +40,20 @@ import kotlin.time.Duration.Companion.milliseconds
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 
 /**
- * The limit of what `Drained` promises, shown over a real socket: a slow consumer that is still sending
- * loses the tail of a burst its peer flushed before closing.
+ * The limit of what `Drained` promises, over a real socket: a slow consumer that is still sending can
+ * lose the tail of a burst its peer flushed before closing.
  *
  * Its send fails on the link the close ended, that tears its seam, and a torn seam stops reading what it
- * had not got to. Nothing about the flush is wrong: it said what it says about the sender's end, and the
- * defect is on the receiving side. The control beside it is the same burst, the same consumer, and no
- * frames coming back, and every frame arrives.
+ * had not got to. Whether a given run loses anything depends on that send landing before the consumer
+ * has caught up, which is a race on a real clock, and the TCP sibling of this test has already gone the
+ * other way on a CI runner. So **this asserts the promise and reports the loss rather than requiring
+ * it.** Whatever arrives is the start of what was sent, in order, and the flush said `Drained`, because
+ * it was right about the sender's end. The `arrived` counts are in this test's output, in the results
+ * XML, so what a given machine did stays on the record.
  *
- * **When [aSlowConsumerStillSendingLosesTheTailOfAFlushedBurst] reds because everything arrived, the
- * receiver has been fixed.** That is good news, and it means the promise can be widened: `FlushOutcome`,
- * `docs/agent-cookbook/session.md` and this test all say otherwise until then.
+ * The loss itself is pinned on one clock by `LinkSeamFlushTest.aSendThatFailsThrowsAwayWhatTheSeamHadNotDelivered`,
+ * which reds when #3111 fixes the receiver. The control beside this one is the same burst, the same
+ * consumer and no frames coming back, and every frame arrives.
  */
 class WebSocketFlushPeerTrafficLimitTest {
     private val rigScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -102,7 +106,10 @@ class WebSocketFlushPeerTrafficLimitTest {
             }
             indices.toList()
         }
-        val peer = if (peerTraffic) launch { sendUntilTorn(receiver, peerFramesSent) } else null
+        // The burst waits for the peer's first frame, so a trial cannot finish before the peer got going.
+        val peerStarted = CompletableDeferred<Unit>()
+        val peer = if (peerTraffic) launch { sendUntilTorn(receiver, peerFramesSent, peerStarted) } else null
+        if (peerTraffic) peerStarted.await()
         repeat(BURST) { index ->
             val frame = ByteArray(FRAME_BYTES)
             frame[0] = (index shr 8).toByte()
@@ -117,11 +124,12 @@ class WebSocketFlushPeerTrafficLimitTest {
         Trial(outcome, result, peerFramesSent.get())
     }
 
-    private suspend fun sendUntilTorn(seam: Seam, sent: AtomicInteger) {
+    private suspend fun sendUntilTorn(seam: Seam, sent: AtomicInteger, started: CompletableDeferred<Unit>) {
         try {
             while (currentCoroutineContext().isActive) {
                 seam.broadcast(ByteArray(PEER_FRAME_BYTES))
                 sent.incrementAndGet()
+                started.complete(Unit)
                 delay(PEER_FRAME_EVERY)
             }
         } catch (_: IllegalStateException) {
@@ -144,21 +152,14 @@ class WebSocketFlushPeerTrafficLimitTest {
             listOf(true, false).flatMap { fromHost -> List(TRIALS_PER_END) { trial(peerTraffic, fromHost) } }
         }.await()
 
+    /** Asserts the promise, and reports the loss: see the class KDoc for why it does not require one. */
     @Test
-    fun aSlowConsumerStillSendingLosesTheTailOfAFlushedBurst(): TestResult =
+    fun aSlowConsumerStillSendingGetsAnInOrderPrefixOfAFlushedBurst(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val trials = trialsFromBothEnds(peerTraffic = true)
+            println("peerTraffic=true burst=$BURST arrived=${trials.map { it.arrived.size }}")
             assertEveryTrialIsHonest(trials)
-            assertAll(
-                { assertTrue(trials.all { it.peerFramesSent > 0 }, "rig: the peer sent nothing in some trial") },
-                {
-                    assertTrue(
-                        trials.any { it.arrived.size < BURST },
-                        "every frame arrived in every trial, so the receiver no longer loses them. Widen the " +
-                            "promise in FlushOutcome and session.md, and retire this test",
-                    )
-                },
-            )
+            assertTrue(trials.all { it.peerFramesSent > 0 }, "rig: the peer sent nothing in some trial")
         }
 
     /** The control: the same burst to the same slow consumer, with nothing coming back. */
@@ -166,6 +167,7 @@ class WebSocketFlushPeerTrafficLimitTest {
     fun withNothingComingBackTheSameBurstArrivesWhole(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val trials = trialsFromBothEnds(peerTraffic = false)
+            println("peerTraffic=false burst=$BURST arrived=${trials.map { it.arrived.size }}")
             assertEveryTrialIsHonest(trials)
             assertEquals(List(trials.size) { BURST }, trials.map { it.arrived.size }, "every frame in every trial")
         }

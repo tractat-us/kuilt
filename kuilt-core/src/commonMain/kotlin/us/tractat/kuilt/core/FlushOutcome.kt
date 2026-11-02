@@ -35,7 +35,8 @@ public sealed interface FlushOutcome {
      * - **A far side that is still sending can lose them after they arrive.** Its own send fails on the
      *   link your close ended, that tears its seam, and a torn seam stops reading what it had not got to.
      *   Measured with a slow consumer sending 1 frame per 100 ms: lost frames in 32 of 32 WebSocket
-     *   trials, and 0 of 24 with nothing coming back. TCP lost them 6 of 6.
+     *   trials, and 0 of 24 with nothing coming back. TCP lost them 6 of 6. That is macOS loopback, and how
+     *   often it happens depends on the machine: a Linux CI runner's TCP trials lost nothing, 3 of 3.
      */
     public data object Drained : FlushOutcome
 

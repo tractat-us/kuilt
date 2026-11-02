@@ -3,6 +3,7 @@ package us.tractat.kuilt.tcp
 import io.ktor.network.selector.SelectorManager
 import io.ktor.network.sockets.InetSocketAddress
 import io.ktor.network.sockets.aSocket
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real sockets on a real clock. The consumer's pace has to be real, or a burst and a close outrun nothing, and runTest's clock would skip it.
 import kotlinx.coroutines.SupervisorJob
@@ -34,17 +35,19 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * The limit of what `Drained` promises, shown over a real socket: a slow consumer that is still sending
- * loses the tail of a burst its peer flushed before closing.
+ * The limit of what `Drained` promises, over a real socket: a slow consumer that is still sending can
+ * lose the tail of a burst its peer flushed before closing.
  *
- * Closing a socket with the peer's bytes unread resets the connection, and the reset discards what the
- * consumer's kernel still held, so the consumer's read fails partway through a frame. Nothing about the
- * flush is wrong: it said what it says about the sender's end. The control beside it is the same burst,
- * the same consumer, and no frames coming back, and every frame arrives.
+ * On macOS it does, every time: closing a socket with the peer's bytes unread resets the connection, and
+ * the consumer's read fails partway through a frame. On a Linux CI runner the same test delivered every
+ * frame in 3 of 3 trials, on a run that passed the control too. So **this asserts the promise and reports
+ * the loss rather than requiring it.** Whatever arrives is the start of what was sent, in order, and the
+ * flush said `Drained`, because it was right about the sender's end. The `arrived` counts are in this
+ * test's output, in the results XML, so what a given machine did stays on the record.
  *
- * **When [aSlowConsumerStillSendingLosesTheTailOfAFlushedBurst] reds because everything arrived, the
- * receiver has been fixed.** That is good news, and it means the promise can be widened: `FlushOutcome`,
- * `docs/agent-cookbook/session.md` and this test all say otherwise until then.
+ * The loss itself is pinned on one clock by `LinkSeamFlushTest.aSendThatFailsThrowsAwayWhatTheSeamHadNotDelivered`,
+ * which reds when #3111 fixes the receiver. The control beside this one is the same burst, the same
+ * consumer and no frames coming back, and every frame arrives.
  */
 class TcpFlushPeerTrafficLimitTest {
     private val rigScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -56,7 +59,7 @@ class TcpFlushPeerTrafficLimitTest {
         rigScope.cancel()
     }
 
-    private class Trial(val outcome: FlushOutcome, val arrived: Int, val peerFramesSent: Int)
+    private class Trial(val outcome: FlushOutcome, val arrived: List<Int>, val peerFramesSent: Int)
 
     private suspend fun trial(peerTraffic: Boolean): Trial = coroutineScope {
         val listener = aSocket(selector).tcp().bind("127.0.0.1", 0)
@@ -67,16 +70,24 @@ class TcpFlushPeerTrafficLimitTest {
         sender.peers.first { receiver.selfId in it }
         val peerFramesSent = AtomicInteger()
         val arrived = async {
-            var count = 0
-            receiver.incoming.take(BURST).collect {
-                count++
-                if (count % CONSUMER_PAUSES_EVERY == 0) delay(CONSUMER_PAUSE)
+            val indices = mutableListOf<Int>()
+            receiver.incoming.take(BURST).collect { frame ->
+                val head = frame.toByteArray()
+                indices += ((head[0].toInt() and 0xFF) shl 8) or (head[1].toInt() and 0xFF)
+                if (indices.size % CONSUMER_PAUSES_EVERY == 0) delay(CONSUMER_PAUSE)
             }
-            count
+            indices.toList()
         }
-        val peer = if (peerTraffic) launch { sendUntilTorn(receiver, peerFramesSent) } else null
-        val frame = ByteArray(FRAME_BYTES)
-        repeat(BURST) { sender.sendTo(receiver.selfId, frame) }
+        // The burst waits for the peer's first frame, so a trial cannot finish before the peer got going.
+        val peerStarted = CompletableDeferred<Unit>()
+        val peer = if (peerTraffic) launch { sendUntilTorn(receiver, peerFramesSent, peerStarted) } else null
+        if (peerTraffic) peerStarted.await()
+        repeat(BURST) { index ->
+            val frame = ByteArray(FRAME_BYTES)
+            frame[0] = (index shr 8).toByte()
+            frame[1] = index.toByte()
+            sender.sendTo(receiver.selfId, frame)
+        }
         val outcome = sender.flush(Duration.INFINITE)
         sender.close()
         val result = arrived.await()
@@ -86,11 +97,12 @@ class TcpFlushPeerTrafficLimitTest {
         Trial(outcome, result, peerFramesSent.get())
     }
 
-    private suspend fun sendUntilTorn(seam: Seam, sent: AtomicInteger) {
+    private suspend fun sendUntilTorn(seam: Seam, sent: AtomicInteger, started: CompletableDeferred<Unit>) {
         try {
             while (currentCoroutineContext().isActive) {
                 seam.broadcast(ByteArray(PEER_FRAME_BYTES))
                 sent.incrementAndGet()
+                started.complete(Unit)
                 delay(PEER_FRAME_EVERY)
             }
         } catch (_: IllegalStateException) {
@@ -103,28 +115,22 @@ class TcpFlushPeerTrafficLimitTest {
     private suspend fun trials(peerTraffic: Boolean): List<Trial> =
         rigScope.async { List(TRIALS) { trial(peerTraffic) } }.await()
 
-    private fun assertEveryFlushSaidDrained(trials: List<Trial>) {
+    private fun assertEveryTrialIsHonest(trials: List<Trial>) {
         assertAll(
             { assertEquals(TRIALS, trials.size, "rig: every trial ran") },
             { assertEquals(TRIALS, trials.count { it.outcome == FlushOutcome.Drained }, "every flush said Drained") },
+            { assertTrue(trials.all { t -> t.arrived == t.arrived.indices.toList() }, "what arrives is an in-order prefix") },
         )
     }
 
+    /** Asserts the promise, and reports the loss: see the class KDoc for why it does not require one. */
     @Test
-    fun aSlowConsumerStillSendingLosesTheTailOfAFlushedBurst(): TestResult =
+    fun aSlowConsumerStillSendingGetsAnInOrderPrefixOfAFlushedBurst(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val trials = trials(peerTraffic = true)
-            assertEveryFlushSaidDrained(trials)
-            assertAll(
-                { assertTrue(trials.all { it.peerFramesSent > 0 }, "rig: the peer sent nothing in some trial") },
-                {
-                    assertTrue(
-                        trials.any { it.arrived < BURST },
-                        "every frame arrived in every trial, so the receiver no longer loses them. Widen the " +
-                            "promise in FlushOutcome and session.md, and retire this test",
-                    )
-                },
-            )
+            println("peerTraffic=true burst=$BURST arrived=${trials.map { it.arrived.size }}")
+            assertEveryTrialIsHonest(trials)
+            assertTrue(trials.all { it.peerFramesSent > 0 }, "rig: the peer sent nothing in some trial")
         }
 
     /** The control: the same burst to the same slow consumer, with nothing coming back. */
@@ -132,8 +138,9 @@ class TcpFlushPeerTrafficLimitTest {
     fun withNothingComingBackTheSameBurstArrivesWhole(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val trials = trials(peerTraffic = false)
-            assertEveryFlushSaidDrained(trials)
-            assertEquals(List(TRIALS) { BURST }, trials.map { it.arrived }, "every frame in every trial")
+            println("peerTraffic=false burst=$BURST arrived=${trials.map { it.arrived.size }}")
+            assertEveryTrialIsHonest(trials)
+            assertEquals(List(TRIALS) { BURST }, trials.map { it.arrived.size }, "every frame in every trial")
         }
 
     private companion object {

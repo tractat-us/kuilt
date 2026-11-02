@@ -1928,9 +1928,9 @@ public abstract class SeamConformanceSuite {
      *
      * **What this arm cannot show is the loss itself.** Everything here runs on `runTest`'s clock, so the
      * consumer's pace is real only on a virtual-time harness, and on a real socket it is not slow at all.
-     * Over real sockets the loss is measured by `WebSocketFlushPeerTrafficLimitTest` and
-     * `TcpFlushPeerTrafficLimitTest`, which go red once it stops happening, so that the promise gets
-     * widened.
+     * Over real sockets `WebSocketFlushPeerTrafficLimitTest` and `TcpFlushPeerTrafficLimitTest` report it
+     * without requiring it. `LinkSeamFlushTest.aSendThatFailsThrowsAwayWhatTheSeamHadNotDelivered` pins it
+     * on one clock, and reds when #3111 fixes the receiver, so that the promise gets widened.
      */
     @Test
     public fun hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix(): TestResult =
