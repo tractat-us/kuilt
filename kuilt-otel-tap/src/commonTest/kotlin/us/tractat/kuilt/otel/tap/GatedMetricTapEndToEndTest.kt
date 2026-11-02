@@ -3,10 +3,18 @@
 package us.tractat.kuilt.otel.tap
 
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.test.assertAll
+import kotlin.test.assertTrue
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
@@ -78,10 +86,23 @@ class GatedMetricTapEndToEndTest {
     fun aPullerHoldingACodeTakesNoMetricsFromAPeerThatNeverProvedIt() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
         host = installMetricTap(loom, exporterWith(7), backgroundScope, config, LogTapAdmission.Open)
-        val c = MetricTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config, LogTapAdmission.Present("CODE1234", Random(11)))
+        var received = 0
+        val raw = loom.join(InMemoryTag("puller"))
+        val counted = object : Seam by raw {
+            override val incoming: Flow<Swatch> = raw.incoming.onEach { received++ }
+        }
+        val c = MetricTapClient(counted, backgroundScope, config, LogTapAdmission.Present("CODE1234", Random(11)))
             .also { client = it }
+        // `pull()` parks until an admitted peer exists, so it times out whether or not forged metrics
+        // arrived. What the replicator holds is what `tail()` shows.
+        val seen = mutableListOf<MetricSnapshot>()
+        backgroundScope.launch { c.tail().collect { seen += it } }
+        delay(config.syncInterval * 3) // virtual time: several host syncs
 
-        assertFailsWith<TimeoutCancellationException> { c.pull() }
+        assertAll(
+            { assertTrue(received > 0, "rig: the stranger's frames must have reached the puller's gate") },
+            { assertEquals(emptyList(), seen.filter { it.sums.isNotEmpty() }, "the puller must hold none of the stranger's metrics") },
+        )
     }
 
     @Test

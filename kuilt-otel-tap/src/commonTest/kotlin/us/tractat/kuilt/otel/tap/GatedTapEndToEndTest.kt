@@ -241,10 +241,17 @@ class GatedTapEndToEndTest {
         val puller = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present("CODE1234", Random(11)))
             .also { client = it }
 
+        // `pull()` parks at awaitRemotePeer until an admitted peer exists, so it times out whether or not
+        // forged logs arrived. What the replicator holds is what `tail()` shows.
+        val seen = mutableListOf<String>()
+        backgroundScope.launch { puller.tail().collect { seen += it.body.orEmpty() } }
         host = installLogTapJoining(loom, exporterWith(1), backgroundScope, InMemoryTag("forged"), config, LogTapAdmission.Open)
+        delay(config.syncInterval * 3) // virtual time: several host syncs
 
-        assertFailsWith<TimeoutCancellationException> { puller.pull() }
-        assertTrue(pullerSeam.received > 0, "rig: the stranger's frames must have reached the puller's gate")
+        assertAll(
+            { assertTrue(pullerSeam.received > 0, "rig: the stranger's frames must have reached the puller's gate") },
+            { assertEquals(emptyList(), seen, "the puller must hold none of the stranger's logs") },
+        )
     }
 
     /**
