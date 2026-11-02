@@ -1,13 +1,10 @@
 package us.tractat.kuilt.test.fabric
 
 import kotlinx.atomicfu.atomic
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
-import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.fabric.Connection
-import kotlin.time.Duration
 
 /**
  * A test's grip on the point where a transport's send would block: hold it, count what is stuck
@@ -81,10 +78,6 @@ public class HoldableConnection(private val delegate: Connection) : Connection b
         check(!gate.value.closed) { "the link closed with this frame still held" }
         delegate.send(frame)
     }
-
-    override val incoming: Flow<ByteArray> get() = delegate.incoming
-
-    override suspend fun flush(timeout: Duration): FlushOutcome = delegate.flush(timeout)
 
     override suspend fun close() {
         gate.update { it.copy(closed = true) }
