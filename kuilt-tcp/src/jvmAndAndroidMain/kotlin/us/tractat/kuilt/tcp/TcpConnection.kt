@@ -11,8 +11,10 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.io.asSink
 import kotlinx.io.asSource
 import kotlinx.io.buffered
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.stream.framed
+import kotlin.time.Duration
 
 /**
  * Adapt a connected Ktor [Socket] into a message [Connection].
@@ -34,6 +36,12 @@ internal fun tcpConnection(socket: Socket, ioDispatcher: CoroutineDispatcher): C
         // Only the read side is re-dispatched; the frame ceiling is [framed]'s, unchanged (#2047).
         override val maxFrameBytes: Int? get() = framed.maxFrameBytes
         override val incoming: Flow<ByteArray> = framed.incoming.flowOn(ioDispatcher)
+
+        // `framed`'s answer stops at the socket's write channel. That is enough for what a flush
+        // promises: `Socket.close` flushes that channel and lets the socket's writer finish it before
+        // it closes the socket, so an orderly close cannot lose what got this far.
+        override suspend fun flush(timeout: Duration): FlushOutcome = framed.flush(timeout)
+
         override suspend fun close() {
             framed.close()
             socket.close()

@@ -1887,7 +1887,7 @@ public abstract class SeamConformanceSuite {
 
     private suspend fun CoroutineScope.assertBurstSurvivesFlushThenClose(sender: Seam, receiver: Seam) {
         // `take` ends early if the link ends early, so a lost tail is a short list, not a wedge.
-        val received = async { receiver.incoming.take(FLUSH_BURST).toList().map { it.payload.decodeToString() } }
+        val received = async { receiver.incoming.take(FLUSH_BURST).toList().map { it.decodeToString() } }
         sender.peers.first { receiver.selfId in it }
         val sent = List(FLUSH_BURST) { "frame-$it" }
         sent.forEach { sender.sendTo(receiver.selfId, it.encodeToByteArray()) }
@@ -1912,7 +1912,7 @@ public abstract class SeamConformanceSuite {
     public fun flushWaitsForAHeldSend(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             forEachHeldEnd { sender, receiver, hold ->
-                val received = async { receiver.incoming.first().payload.decodeToString() }
+                val received = async { receiver.incoming.first().decodeToString() }
                 hold.hold()
                 sender.sendTo(receiver.selfId, "held".encodeToByteArray())
                 val flush = async { sender.flush(Duration.INFINITE) }
@@ -1932,7 +1932,7 @@ public abstract class SeamConformanceSuite {
     public fun aHeldSendTimesOutAndIsNotDropped(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             forEachHeldEnd { sender, receiver, hold ->
-                val received = async { receiver.incoming.first().payload.decodeToString() }
+                val received = async { receiver.incoming.first().decodeToString() }
                 hold.hold()
                 sender.sendTo(receiver.selfId, "held".encodeToByteArray())
                 assertEquals(FlushOutcome.TimedOut, sender.flush(FLUSH_SETTLE))
@@ -1954,7 +1954,7 @@ public abstract class SeamConformanceSuite {
     public fun flushCoversEarlierSendsAndNotLaterOnes(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             forEachHeldEnd { sender, receiver, hold ->
-                val received = async { receiver.incoming.take(2).toList().map { it.payload.decodeToString() } }
+                val received = async { receiver.incoming.take(2).toList().map { it.decodeToString() } }
                 hold.hold()
                 sender.sendTo(receiver.selfId, "before".encodeToByteArray())
                 val flush = async { sender.flush(FLUSH_SETTLE * 10) }
@@ -1978,7 +1978,7 @@ public abstract class SeamConformanceSuite {
     public fun aCloseAfterAFlushFollowsCompletion(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             forEachHeldEnd { sender, receiver, hold ->
-                val received = async { receiver.incoming.take(1).toList().map { it.payload.decodeToString() } }
+                val received = async { receiver.incoming.take(1).toList().map { it.decodeToString() } }
                 hold.hold()
                 sender.sendTo(receiver.selfId, "last".encodeToByteArray())
                 val closer = launch {
@@ -2019,7 +2019,7 @@ public abstract class SeamConformanceSuite {
     public fun cancellingAFlushLeavesTheSeamAndItsFramesAlone(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             forEachHeldEnd { sender, receiver, hold ->
-                val received = async { receiver.incoming.first().payload.decodeToString() }
+                val received = async { receiver.incoming.first().decodeToString() }
                 hold.hold()
                 sender.sendTo(receiver.selfId, "held".encodeToByteArray())
                 val flush = launch { sender.flush(Duration.INFINITE) }

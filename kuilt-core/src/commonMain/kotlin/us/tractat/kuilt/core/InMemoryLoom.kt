@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.core.SeamState.Torn
 import us.tractat.kuilt.core.SeamState.Woven
+import kotlin.time.Duration
 
 /**
  * In-memory implementation of [Loom] for use in tests and
@@ -238,6 +239,10 @@ private class InMemorySeam(
         if (peer !in factory.peers.value) throw PeerNotConnected(peer)
         factory.dispatch(sender = selfId, payload = payload, recipient = peer)
     }
+
+    // No queue here: `sendTo` and `broadcast` return only once the frame is in the recipient's spool.
+    override suspend fun flush(timeout: Duration): FlushOutcome =
+        if (closed.value) FlushOutcome.Failed(IllegalStateException("Seam for $selfId is closed")) else FlushOutcome.Drained
 
     override suspend fun close(reason: CloseReason) {
         // Publish the roster collapse FIRST. `peers` latches the instant this flips, so a consumer

@@ -132,10 +132,11 @@ class LinkSeamFlushTest {
         release.complete(Unit)
         testScheduler.advanceUntilIdle()
 
+        val outcome = flush.await()
         assertAll(
             { assertIs<SeamState.Torn>(seam.state.value, "rig: the failed write tore the seam") },
             { assertTrue(parkedSends.any { it.isActive }, "rig: the sends ahead of the marker stay parked") },
-            { assertIs<FlushOutcome.Failed>(flush.await(), "a torn link ends the flush, which cannot say Drained") },
+            { assertIs<FlushOutcome.Failed>(outcome, "a torn link ends the flush, which cannot say Drained") },
         )
         parkedSends.forEach { it.cancelAndJoin() }
     }
@@ -174,10 +175,11 @@ class LinkSeamFlushTest {
         gate.complete(Unit)
         testScheduler.advanceUntilIdle()
 
+        val outcome = flush.await()
         assertAll(
             { assertIs<SeamState.Torn>(seam.state.value, "rig: the writer closed the seam") },
             { assertEquals(sends.value, conn.written, "rig: the writer walked the whole outbox past the close") },
-            { assertIs<FlushOutcome.Failed>(flush.await(), "those frames went nowhere, so this cannot be Drained") },
+            { assertIs<FlushOutcome.Failed>(outcome, "those frames went nowhere, so this cannot be Drained") },
         )
     }
 

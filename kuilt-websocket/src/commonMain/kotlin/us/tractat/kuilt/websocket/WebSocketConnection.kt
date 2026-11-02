@@ -9,7 +9,10 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.io.IOException
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.fabric.Connection
+import us.tractat.kuilt.core.flushWithin
+import kotlin.time.Duration
 import io.ktor.websocket.Frame as KtorFrame
 
 /**
@@ -53,6 +56,13 @@ import io.ktor.websocket.Frame as KtorFrame
  *
  * **close:** closes the underlying session. Idempotent — Ktor's
  * [io.ktor.websocket.close] is a no-op once the session is already closing.
+ *
+ * **flush:** how far the frame has got depends on the Ktor engine, and this reports only what the
+ * engine does. On a server session and the CIO client, `session.flush` waits for the socket writer. On
+ * OkHttp it returns at once, with the frame still in OkHttp's own queue. Either way
+ * [FlushOutcome.Drained] holds what it promises, because a [close] goes down the same queue behind the
+ * frames ahead of it. Nothing here can see past that queue, so nothing here says the frame reached the
+ * network.
  */
 public class WebSocketConnection(
     private val session: DefaultWebSocketSession,
@@ -63,6 +73,21 @@ public class WebSocketConnection(
         } catch (closed: CancellationException) {
             currentCoroutineContext().ensureActive()
             throw IOException("the WebSocket session is closed", closed)
+        }
+    }
+
+    override suspend fun flush(timeout: Duration): FlushOutcome = flushWithin(timeout) {
+        try {
+            session.flush()
+        } catch (closed: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            throw IOException("the WebSocket session is closed", closed)
+        }
+        // `flush` also returns normally on a session that has closed, having written nothing.
+        if (session.outgoing.isClosedForSend) {
+            FlushOutcome.Failed(IOException("the WebSocket session is closed"))
+        } else {
+            FlushOutcome.Drained
         }
     }
 
