@@ -436,7 +436,7 @@ private class FailingIncomingSeam : Seam {
 /** Only its `incoming` matters: a collection is counted, and then hands over [frames]. */
 private class CountingIncomingSeam : Seam {
     val collections = atomic(0)
-    val frames = Channel<Swatch>(Channel.UNLIMITED)
+    val frames = Channel<Swatch>(capacity = 1)
     override val selfId: PeerId = PeerId("self")
     private val roster = MutableStateFlow(setOf(selfId))
     private val lifecycle = MutableStateFlow<SeamState>(SeamState.Woven)
