@@ -430,11 +430,16 @@ class VoterLivenessMonitorSurvivalTest {
         )
     }
 
-    /** The set comes from the node whatever it says, even when it names neither outcome of this change. */
+    /**
+     * The set comes from the node whatever it says, even when it names neither outcome of this change.
+     * Here the node has dropped the other voter, so the next eviction must not put it back. That voter is
+     * still connected, so the host then admits it as the replacement, which is why only the eviction's
+     * own attempt is read.
+     */
     @Test
     fun aFailedEvictionTakesTheVoterSetFromTheNode() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val table = riggedTable(seatCount = 3)
-        val (first, second) = table.peers
+        val first = table.peers.first()
         table.node.onChange = {
             table.node.onChange = {}
             table.node.setMembership(ClusterConfig.ofVoters(setOf(table.hostId, first.id)))
@@ -448,8 +453,8 @@ class VoterLivenessMonitorSurvivalTest {
         advance(PAST_THE_WINDOW)
 
         assertAll(
-            { assertEquals(2, table.node.attempts.size, "precondition: the rewatched voter's eviction was attempted") },
-            { assertEquals(setOf(table.hostId), table.node.attempts.last().voters, "the voter the node had dropped stays out, $second") },
+            { assertTrue(table.node.attempts.size >= 2, "precondition: the rewatched voter's eviction was attempted") },
+            { assertEquals(setOf(table.hostId), table.node.attempts[1].voters, "the voter the node had dropped stays out") },
             { table.hostScope.assertSurvived() },
         )
     }
