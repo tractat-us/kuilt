@@ -38,6 +38,11 @@ import kotlin.time.TimeSource
  * a wedge bounded on a [Worker] into a named red, and an unhandled-exception hook that records what would
  * abort a shipped process. These callbacks have no JNA trampoline, so what is proven is the premise the
  * JVM relies on: once the destroy returns, no callback of that runtime is running or will run.
+ *
+ * A held callback is released by the thread making the call, immediately before the native call, so a
+ * caller that starts late cannot miss the hold. Past that signal the hold lasts [NW_HOLD_MICROS], so a
+ * caller stalled for longer between the signal and the native wait can turn a red under a mutation green.
+ * It cannot turn a green red.
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class, ObsoleteWorkersApi::class)
 class NwBridgeRuntimeQuiesceTest {
@@ -109,7 +114,6 @@ class NwBridgeRuntimeQuiesceTest {
         await("the closed callback is entered") { NwProbe.entered.value == 1 }
         val exitedBeforeDestroy = NwProbe.exited.value
 
-        NwProbe.release.value = true
         api.driveSetViabilityForTest(api.registerInertConnectionForTest(endpoint = null), viable = true)
         await("nw_runtime_destroy returns inside the callback") { NwProbe.destroyedInside.value == 1 }
 
@@ -123,6 +127,44 @@ class NwBridgeRuntimeQuiesceTest {
                     "a destroy from inside one callback must still wait for the other forwarders'",
                 )
             },
+            { assertEquals(emptyList(), uncaughtSoFar()) },
+        )
+    }
+
+    /**
+     * One state snapshot can name several connections, and each is its own call into the JVM. So a destroy
+     * from inside the first call has to end the rest: the JVM may release the callback once the destroy returns.
+     */
+    @Test
+    fun destroyFromInsideAViabilityCallbackEndsTheRestOfThatSnapshot() = withRuntime { api, handle, runtime ->
+        NwProbe.runtime.value = handle
+        api.driveSetViabilityForTest(api.registerInertConnectionForTest(endpoint = null), viable = true)
+        api.driveSetViabilityForTest(api.registerInertConnectionForTest(endpoint = null), viable = true)
+        val connectionsInOneSnapshot = api.connectionStates.value.size
+        runtime.setConnectionViabilityCallback(NwProbe.viabilityDestroysOnItsFirstCall)
+
+        assertTheDestroyEndedTheSnapshot(connectionsInOneSnapshot, runtime)
+    }
+
+    @Test
+    fun destroyFromInsideAClosedStateCallbackEndsTheRestOfThatSnapshot() = withRuntime { api, handle, runtime ->
+        NwProbe.runtime.value = handle
+        api.driveCloseForTest(api.registerInertConnectionForTest(endpoint = null), failed = false)
+        api.driveCloseForTest(api.registerInertConnectionForTest(endpoint = null), failed = false)
+        val connectionsInOneSnapshot = api.connectionStates.value.size
+        runtime.setConnectionClosedStateCallback(NwProbe.closedStateDestroysOnItsFirstCall)
+
+        assertTheDestroyEndedTheSnapshot(connectionsInOneSnapshot, runtime)
+    }
+
+    private fun assertTheDestroyEndedTheSnapshot(connectionsInOneSnapshot: Int, runtime: NwBridgeRuntime) {
+        await("nw_runtime_destroy returns inside the callback") { NwProbe.destroyedInside.value == 1 }
+        await("the forwarder ends") { runtime.scope.coroutineContext.job.children.none() }
+
+        assertAll(
+            { assertEquals(2, connectionsInOneSnapshot, "the rig must put two connections in the one snapshot") },
+            { assertEquals(1, NwProbe.calls.value, "no call may follow the destroy") },
+            { assertEquals(0, NwProbe.callsAfterDestroy.value, "no call may follow the destroy") },
             { assertEquals(emptyList(), uncaughtSoFar()) },
         )
     }
@@ -148,7 +190,6 @@ class NwBridgeRuntimeQuiesceTest {
         await("the callback is entered") { NwProbe.entered.value == 1 }
         val exitedBeforeDestroy = NwProbe.exited.value
 
-        NwProbe.release.value = true
         val exitedAtReturn = destroy(handle)
 
         await("the held callback finishes before cleanup") { NwProbe.exited.value == 1 }
@@ -162,6 +203,7 @@ class NwBridgeRuntimeQuiesceTest {
     /** `nw_runtime_destroy`, bounded from outside. Returns the exit count read on the destroying thread. */
     private fun destroy(handle: COpaquePointer): Int {
         val returned = caller.execute(TransferMode.SAFE, { handle }) { runtime ->
+            NwProbe.release.value = true
             nw_runtime_destroy(runtime)
             NwProbe.exited.value
         }
@@ -198,6 +240,8 @@ private object NwProbe {
     val exited = atomic(0)
     val destroyedInside = atomic(0)
     val exitedWhenDestroyedInside = atomic(-1)
+    val calls = atomic(0)
+    val callsAfterDestroy = atomic(0)
     val release = atomic(false)
     val runtime = atomic<COpaquePointer?>(null)
 
@@ -206,18 +250,35 @@ private object NwProbe {
     val bytesIgnored = staticCFunction { _: CPointer<ByteVar>?, _: CPointer<ByteVar>?, _: Int -> }
 
     val viabilityDestroys = staticCFunction { _: CPointer<ByteVar>?, _: Int ->
+        release.value = true
         nw_runtime_destroy(runtime.value)
         exitedWhenDestroyedInside.value = exited.value
         destroyedInside.value = 1
     }
+
+    val viabilityDestroysOnItsFirstCall = staticCFunction { _: CPointer<ByteVar>?, _: Int -> destroyOnFirstCall() }
+    val closedStateDestroysOnItsFirstCall =
+        staticCFunction { _: CPointer<ByteVar>?, _: CPointer<ByteVar>? -> destroyOnFirstCall() }
 
     fun reset() {
         entered.value = 0
         exited.value = 0
         destroyedInside.value = 0
         exitedWhenDestroyedInside.value = -1
+        calls.value = 0
+        callsAfterDestroy.value = 0
         release.value = false
         runtime.value = null
+    }
+
+    private fun destroyOnFirstCall() {
+        calls.incrementAndGet()
+        if (destroyedInside.value == 1) {
+            callsAfterDestroy.incrementAndGet()
+        } else {
+            nw_runtime_destroy(runtime.value)
+            destroyedInside.value = 1
+        }
     }
 
     private fun hold() {

@@ -26,7 +26,6 @@ import kotlin.test.assertTrue
 class NwBridgeDestroyRealDylibTest {
     private val lib: NwNativeLib? = NwNativeLib.load()
     private var rendezvous: Pointer? = null
-    private var host: Pointer? = null
     private var joiner: Pointer? = null
 
     // Strong references: JNA releases a callback's trampoline once its object is collected.
@@ -81,9 +80,10 @@ class NwBridgeDestroyRealDylibTest {
         assertTrue(entered.await(BOUND_SECONDS, TimeUnit.SECONDS), "the rig must reach the callback")
         val exitedBeforeDestroy = exited.get()
 
-        release.countDown()
         var exitedAtReturn = -1
         val destroyer = thread {
+            // Released from this thread, so a destroyer that starts late cannot miss the hold.
+            release.countDown()
             native.nw_runtime_destroy(runtime)
             exitedAtReturn = exited.get()
         }
@@ -107,7 +107,6 @@ class NwBridgeDestroyRealDylibTest {
         rendezvous = shared
         joiner = checkNotNull(native.nw_runtime_create_loopback(key.psk, key.psk.size, key.identity, key.identity.size, shared, 1))
         return checkNotNull(native.nw_runtime_create_loopback(key.psk, key.psk.size, key.identity, key.identity.size, shared, 0))
-            .also { host = it }
     }
 
     /** The joiner awaits the host's bound port, is told of one endpoint, and dials it. */
