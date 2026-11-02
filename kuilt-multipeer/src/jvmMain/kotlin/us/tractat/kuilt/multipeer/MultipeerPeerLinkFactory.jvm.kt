@@ -234,6 +234,10 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * reclaim the dropped native session. A consumer that observes [SeamState.Torn]
      * and drops the seam without calling `Seam.close()` leaks the native handle
      * until this factory `close()` runs. Always `close()` a self-dropped seam.
+     *
+     * **This call and `Seam.close()` wait, with no bound, for a peer-state callback in flight.** A collector
+     * of `Seam.state` or `Seam.peers` on an unconfined dispatcher runs inside that callback. So if such a
+     * collector takes a lock, holding that lock across either call hangs for good.
      */
     public actual fun close() {
         val lib = nativeLib ?: return

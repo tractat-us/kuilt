@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.lang.ref.Reference
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import us.tractat.kuilt.core.CloseReason
@@ -48,9 +49,8 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.Brid
  * (lossy at the JNA boundary) before reaching the spool's own policy.
  *
  * The callback objects are held as fields so JNA's trampoline survives the
- * lifetime of the link. Releasing them (by setting the fields to null
- * inside [close]) is what eventually lets JNA free the trampoline; the
- * underlying `mc_session_close` cancels the K/N pump first.
+ * lifetime of the link. Nothing releases them early: they go when the link does.
+ * `mc_session_close` waits for any callback in flight and removes both.
  *
  * @param policy Governs the inbound [Spool]'s capacity and overflow behaviour.
  *   Defaults to [DeliveryPolicy.Reliable] (bounded, backpressured, lossless).
@@ -166,7 +166,7 @@ internal class BridgePeerLink(
 
     // Strong refs so JNA trampolines aren't GC'd before the K/N side
     // finishes pumping. Held for this link's whole lifetime — they outlive
-    // mc_session_close (after which native never calls back), then fall away
+    // mc_session_close (after which native makes no further call), then fall away
     // with the link itself, so they can never be collected while still in use.
     private val dataCallback: MultipeerNativeLib.DataCallback =
         MultipeerNativeLib.DataCallback { peerId, data, len ->
@@ -337,6 +337,14 @@ internal class BridgePeerLink(
      * not suspend) can share it. CAS-idempotent: exactly one caller wins the
      * latch, so `mc_session_close` runs exactly once per handle regardless of
      * how `Seam.close()` / factory close interleave.
+     *
+     * `mc_session_close` waits for callbacks in flight, so nothing a callback takes may be held across it.
+     * On an ordinary close [peersLock] is free by then, since [tearDown] releases it. A call from inside a
+     * callback is safe too: the native side does not wait for the callback making it.
+     *
+     * The one caller that arrives holding [peersLock] is a `peers` collector on an unconfined dispatcher,
+     * which closes from inside the roster write. That is one of those calls from inside a callback, and the
+     * data callback, the only one left to wait for, takes no lock.
      */
     internal fun closeNow(reason: CloseReason) {
         // Set closing before mc_session_close so the peer-state callback sees it
@@ -349,6 +357,8 @@ internal class BridgePeerLink(
         // `closing` gates it above.
         tearDown(reason)
         nativeLib.mc_session_close(sessionHandle)
+        // JNA retains only weak callback references: keep both trampolines alive through the native call.
+        Reference.reachabilityFence(this)
     }
 
     /**

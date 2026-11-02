@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.FabricAvailability
 import java.lang.ref.Cleaner
+import java.lang.ref.Reference
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 
@@ -362,8 +363,12 @@ public class BridgeNwApi internal constructor(
         // [stageBytesReceived] (#2134): with the drain gone, its blocking `send` would otherwise wait for a
         // consumer that is never coming back. `cancel()` fails both the parked send and every later one, so
         // a post-close callback drops its chunk instead of hanging a dylib forwarding collector forever.
+        // Ahead of the clean() below because `nw_runtime_destroy` waits for callbacks in flight (#3071),
+        // and a callback parked here would never finish.
         bytesReceivedStaging.cancel()
         cleanable.clean()
+        // JNA retains only weak callback references: keep the trampolines alive through the native call.
+        Reference.reachabilityFence(this)
     }
 
     /**

@@ -47,6 +47,9 @@ internal interface NwNativeLib : Library {
     /**
      * Gracefully tears the runtime down and releases the handle. Idempotent only
      * across `null`; passing the same non-null pointer twice is a use-after-free.
+     *
+     * Blocks until no callback of this runtime is running, so nothing a callback waits for may be held
+     * across this call. Called from inside one of the runtime's callbacks, it waits only for the others.
      */
     @Suppress("ktlint:standard:function-naming")
     fun nw_runtime_destroy(handle: Pointer?)

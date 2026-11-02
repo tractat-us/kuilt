@@ -85,6 +85,9 @@ internal interface MultipeerNativeLib : Library {
     /**
      * Closes the session, stops advertising, and disposes the session
      * handle. Use-after-free if called twice with the same pointer.
+     *
+     * Blocks until no callback of this session is running, so nothing a callback waits for may be held
+     * across this call. Called from inside one of the session's callbacks, it waits only for the other.
      */
     @Suppress("ktlint:standard:function-naming")
     fun mc_session_close(session: Pointer?)
