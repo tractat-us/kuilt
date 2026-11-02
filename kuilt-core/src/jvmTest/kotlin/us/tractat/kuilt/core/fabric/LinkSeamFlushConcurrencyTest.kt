@@ -35,9 +35,10 @@ import kotlin.time.Duration
  * 3,000 local rounds kept passing: a path that lost the race to complete `torn` could close the connection
  * while `torn` still read open. A CI runner saw it at 3 in 115,223 flushes. A 16-core laptop saw 0 in
  * 24,635,342, until the JVM was held to its efficiency cores (`taskpolicy -c background`), where its own
- * threads get preempted: 26 in 6,369,578, every one with `torn` open and `Torn` already written. A flush
- * now decides by reading `state` last, and the same arms read 0 in 41,393,190. Read a green here with that
- * in mind: without that read, 3,000 rounds on those fast cores usually pass.
+ * threads get preempted: 26 in 6,369,578. Counting a `Drained` answered with `Torn` written and `torn` still
+ * open gave 15 and 9 in the two arms counted, against 15 and 9 violations. A flush now decides by reading
+ * `state` last, and the same arms read 0 in 41,393,190. Read a green here with that in mind: without that
+ * read, 3,000 rounds on those fast cores usually pass.
  *
  * So what `check` runs is `LinkSeamFlushTest`: `aFlushCannotConfirmInsideAnotherPathsTear` forces the
  * window on one thread and reds every time without the read, and `everyPathHasTornBeforeItClosesTheConnection`

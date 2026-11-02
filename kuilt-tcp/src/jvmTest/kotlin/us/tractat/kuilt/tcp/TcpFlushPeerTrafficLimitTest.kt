@@ -38,12 +38,13 @@ import kotlin.time.Duration.Companion.milliseconds
  * The limit of what `Drained` promises, over a real socket: a slow consumer that is still sending can
  * lose the tail of a burst its peer flushed before closing.
  *
- * On macOS it does, every time: closing a socket with the peer's bytes unread resets the connection, and
- * the consumer's read fails partway through a frame. On a Linux CI runner the same test delivered every
- * frame in 3 of 3 trials, on a run that passed the control too. So **this asserts the promise and reports
- * the loss rather than requiring it.** Whatever arrives is the start of what was sent, in order, and the
- * flush said `Drained`, because it was right about the sender's end. The `arrived` counts are in this
- * test's output, in the results XML, so what a given machine did stays on the record.
+ * On macOS it usually does: closing a socket with the peer's bytes unread resets the connection, and the
+ * consumer's read fails partway through a frame. Usually, not always: one full build's three trials
+ * delivered 2507, 2507 and all 3000. On a Linux CI runner the same test delivered every frame in 3 of 3
+ * trials, on a run that passed the control too. So **this asserts the promise and reports the loss rather
+ * than requiring it.** Whatever arrives is the start of what was sent, in order, and the flush said
+ * `Drained`, because it was right about the sender's end. The `arrived` counts are in this test's output,
+ * in the results XML, so what a given machine did stays on the record.
  *
  * The loss itself is pinned on one clock by `LinkSeamFlushTest.aSendThatFailsThrowsAwayWhatTheSeamHadNotDelivered`,
  * which reds when #3111 fixes the receiver. The control beside this one is the same burst, the same
