@@ -94,15 +94,15 @@ public open class GameSession internal constructor(
      * [RaftNode.changeMembership] and re-opens the seat for a replacement peer.
      *
      * **`leave()` then [close] can lose the marker, on every fabric.** This function does not suspend,
-     * so the frame is still queued when it returns, and [close] waits for nothing: it closes the fabric
-     * with the frame still queued. There is no public way yet to wait for the frame, and #2830 is
-     * tracked to add one. Until then, treat [leave] as best effort, and see [close] for what a lost
-     * marker costs.
+     * so the frame is still queued when it returns, and [close] waits for nothing, so the frame gets out
+     * only if it happens to beat the fabric's close. A caller has no way to wait for it yet: that is
+     * tracked by #2830. Until then, treat [leave] as best effort, and see [close] for what a lost marker
+     * costs.
      *
      * **The removal may need this peer.** The eviction commits only with a majority of the old
      * membership, and a two-seat table has no majority without the voter that is leaving. If this peer
-     * has gone by then, the change cannot commit and the host is left without a leader. Nothing waits
-     * for that commit, on either side.
+     * has gone by then, the change cannot commit, and the host stops leading and cannot lead again.
+     * Nothing waits for that commit, on either side.
      *
      * **Spectators and roster-given sessions.** Calling [leave] on a spectator or on a session
      * created by [gameNode] or [gameOverRoom] (no presence channel) is a no-op — those sessions are
@@ -125,11 +125,12 @@ public open class GameSession internal constructor(
      * ([RaftNode.transferLeadership]) and/or remove this peer from membership
      * ([RaftNode.changeMembership]) first.
      *
-     * **This waits for nothing, and signals nothing.** A frame still queued is dropped, the vacate
+     * **This waits for nothing, and signals nothing.** A frame still queued can be dropped, the vacate
      * marker from [leave] included, and a seam that queues what it accepts can drop a frame it has
      * already accepted. Then the host holds this seat until its liveness monitor sees the reconnect
      * window pass, the same as for a crash. That frees the seat only if the host is the leader at that
-     * moment, and a [gameHost] given no `livenessConfig` never frees it.
+     * moment. A two-seat host will not be, having lost its quorum with this peer, and a [gameHost] given
+     * no `livenessConfig` never frees it.
      *
      * **It always ends closed.** The teardown is shielded, so a cancelled caller, or a caller whose
      * timeout fires, still closes the node and the fabric, and the cancellation then goes on to the

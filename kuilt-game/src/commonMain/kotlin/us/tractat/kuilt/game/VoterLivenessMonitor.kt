@@ -41,8 +41,8 @@ import kotlin.time.Instant
  *
  * On [PartitionEvent.PeerLost] (leader only): evicts the dead voter via [changeMembershipWithRetry],
  * re-opens admission, runs [admitVotersUntil] for one replacement, then starts a fresh detector for
- * the new voter. A graceful leave ([GamePresence.vacating]) takes the same path as soon as the frame
- * arrives, without waiting the reconnect window.
+ * the new voter. A graceful leave ([GamePresence.vacating]) takes the same path as soon as its frame
+ * arrives, without waiting the reconnect window, if that frame survives the leaver's close.
  *
  * A monitor on a non-leader receives both signals and takes no action — Raft's commit-majority gate
  * means only the leader can commit the membership change.

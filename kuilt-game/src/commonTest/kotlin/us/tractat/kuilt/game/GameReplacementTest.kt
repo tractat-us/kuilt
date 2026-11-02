@@ -148,8 +148,9 @@ class GameReplacementTest {
         runCurrent()
 
         // Cluster shrinks to 2 voters within half the reconnect window. Read, not awaited: an await
-        // here lets virtual time run on past the window, where the liveness monitor evicts this peer
-        // for going silent, and the assertion then holds whether or not the vacate signal did anything.
+        // here lets virtual time run on past the window. This peer is still up, but a joiner answers no
+        // heartbeats, so the liveness monitor evicts a voter at the window whatever it has done, and the
+        // assertion would then hold whether or not the vacate signal did anything.
         assertEquals(2, host.node.membership.value.voters.size, "the vacate signal freed the seat")
 
         // Wait for the host's admissionClosed to reset to null — confirms declareAdmissionOpen()

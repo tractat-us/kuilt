@@ -139,9 +139,16 @@ correctness depends on it.
 ### Teardown
 
 `GameSession.close()` stops the node's loops, then closes the fabric (idempotent).
-This is a hard local teardown, not a graceful cluster departure. To leave cleanly,
+It waits for nothing, so a frame still on its way out can be lost.
+This is a local teardown, not a graceful cluster departure. To leave cleanly,
 hand off leadership with `RaftNode.transferLeadership()` and/or remove yourself from
 membership with `RaftNode.changeMembership()` before closing.
+
+A voter can call `GameSession.leave()` before `close()` to say goodbye. A host running
+liveness monitoring frees the seat when it hears that, without waiting the reconnect
+window. But neither call waits for the goodbye to go out, and there is no way yet to
+wait for it, so it can be lost on any fabric. The host then holds the seat until the
+reconnect window ends.
 
 ## Single-collection constraint
 
