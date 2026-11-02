@@ -121,30 +121,50 @@ class TapAdmissionAttackTest {
     // ── the harvest ────────────────────────────────────────────────────────────────────────────
 
     /**
-     * The attack as #1865 describes it: choose a nonce, build a table of `code → tag` before the token
-     * is ever minted, then look the harvested tag up. The table holds the real code, because a
-     * candidate list that omits it would pass this test against any gate.
+     * The attack as #1865 describes it: choose a nonce, build a table of `code → tag` in advance, and
+     * look a harvested tag up. The attacker knows the format, so the table is built with the real
+     * [admissionTag], and over its best guess at the one input it cannot choose: the prover nonce from
+     * the last answer it saw.
+     *
+     * The first lookup is the control, and it is the point. Against that earlier answer the table does
+     * name the code, so it is a working table and the miss on the next answer is the prover's nonce at
+     * work. A table spelled in an older format would miss for the wrong reason, under any gate at all,
+     * which is what this test used to be. The control is also the offline grind in miniature: a tag in
+     * hand can be tested against guesses, and only the token's lifetime and the size of the code limit
+     * that.
      */
     @Test
-    fun aTableBuiltBeforeTheCodeExistedDoesNotRecoverIt() = runTest(UnconfinedTestDispatcher()) {
+    fun aTableBuiltFromOneAnswerNamesTheCodeInThatAnswerAndNotInTheNext() = runTest(UnconfinedTestDispatcher()) {
         val chosenNonce = ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 0x5A }
-        val table = listOf("AAAAAAAA", "BBBBBBBB", code, "CCCCCCCC")
-            .associateBy { hmacSha256(it.encodeToByteArray(), chosenNonce).toList() }
-
         val loom = InMemoryLoom()
         val pullerGate = loom.host(Pattern("harvest")).tokenGated(prover(), backgroundScope)
         val harvester = Harvester(loom.join(InMemoryTag("attacker")), backgroundScope)
 
-        harvester.challenge(pullerGate.selfId, chosenNonce)
-        runCurrent()
+        repeat(2) {
+            harvester.challenge(pullerGate.selfId, chosenNonce)
+            runCurrent()
+        }
 
-        val harvested = assertNotNull(harvester.proofs.singleOrNull(), "rig: the puller must have answered the harvester")
-        assertNull(table[harvested.tag.toByteArray().toList()], "a table built in advance must not name the code")
+        assertEquals(2, harvester.proofs.size, "rig: the puller must have answered both challenges")
+        val (earlier, next) = harvester.proofs
+        val table = listOf("AAAAAAAA", "BBBBBBBB", code, "CCCCCCCC").associateBy { candidate ->
+            admissionTag(
+                candidate,
+                harvester.seam.selfId,
+                pullerGate.selfId,
+                ByteString(chosenNonce),
+                earlier.proverNonce,
+            ).toList()
+        }
+        assertAll(
+            { assertEquals(code, table[earlier.tag.toByteArray().toList()], "control: this table must be able to name the code") },
+            { assertNull(table[next.tag.toByteArray().toList()], "a table built in advance must not recognize the next answer") },
+        )
     }
 
     /**
-     * What actually defeats the table: the same challenge never draws the same tag twice, so the tag
-     * is not a function of anything the attacker knew when building one.
+     * The same challenge never draws the same tag twice, so the tag is not a function of anything the
+     * attacker knew when building a table.
      */
     @Test
     fun oneChallengeAnsweredTwiceDrawsTwoDifferentTags() = runTest(UnconfinedTestDispatcher()) {
