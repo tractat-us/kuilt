@@ -2823,7 +2823,14 @@ internal class SeamRoom(
                 onBufferOverflow = BufferOverflow.DROP_OLDEST,
             )
             val finished = MutableStateFlow(0L)
-            RelayLane(queue, finished, scope.launch { runRelayForwardWriter(recipient, queue, finished) })
+            val writer = scope.launch { runRelayForwardWriter(recipient, queue, finished) }
+            // However the writer ends, nothing more leaves this lane, so a flush has nothing to wait for.
+            // On the job rather than in a `finally`: a writer cancelled before its first dispatch never
+            // runs its body. That needs a flush to snapshot the lane between its creation and its discard,
+            // with no suspension between those two on a single-threaded dispatcher, so no test pins that
+            // half; `RoomFlushTest` pins the started one.
+            writer.invokeOnCompletion { finished.value = Long.MAX_VALUE }
+            RelayLane(queue, finished, writer)
         }
     }
 
@@ -2855,23 +2862,18 @@ internal class SeamRoom(
         // Writer-local: this is the only coroutine that ever dequeues this lane, so no atomic is
         // needed. Counting is per-lane; `relayDropped` aggregates across lanes.
         var expectedSeq = 1L
-        try {
-            for (forward in queue) {
-                val dropped = forward.seq - expectedSeq
-                if (dropped > 0) {
-                    val total = relayDropped.addAndGet(dropped)
-                    logger.debug {
-                        "room.relay.drop self=${selfId.value} to=${recipient.value} reason=queue-overflow " +
-                            "dropped=$dropped total=$total capacity=$RELAY_FORWARD_CAPACITY"
-                    }
+        for (forward in queue) {
+            val dropped = forward.seq - expectedSeq
+            if (dropped > 0) {
+                val total = relayDropped.addAndGet(dropped)
+                logger.debug {
+                    "room.relay.drop self=${selfId.value} to=${recipient.value} reason=queue-overflow " +
+                        "dropped=$dropped total=$total capacity=$RELAY_FORWARD_CAPACITY"
                 }
-                expectedSeq = forward.seq + 1
-                sendRelayForward(recipient, forward)
-                finished.value = forward.seq
             }
-        } finally {
-            // However this writer ends, nothing more leaves this lane, so a flush has nothing to wait for.
-            finished.value = Long.MAX_VALUE
+            expectedSeq = forward.seq + 1
+            sendRelayForward(recipient, forward)
+            finished.value = forward.seq
         }
     }
 
