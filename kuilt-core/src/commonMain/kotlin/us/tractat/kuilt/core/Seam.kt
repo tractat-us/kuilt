@@ -3,6 +3,7 @@ package us.tractat.kuilt.core
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.internal.MappedStateFlow
+import kotlin.time.Duration
 
 /**
  * One peer's view of a multi-peer session.
@@ -343,11 +344,71 @@ public interface Seam {
      * ## Every consumer-implemented suspend surface carries this
      *
      * Exhaustively, the surfaces a kuilt call site invokes under a best-effort guard are:
-     * [Loom.weave], [broadcast], [sendTo], this method, and
-     * [us.tractat.kuilt.core.fabric.Connection.send]/[us.tractat.kuilt.core.fabric.Connection.close];
-     * outside `:kuilt-core`, `Room.leave`. Each points here or at [sendTo] rather than restating it.
+     * [Loom.weave], [broadcast], [sendTo], [flush], this method, and
+     * [us.tractat.kuilt.core.fabric.Connection.send]/[us.tractat.kuilt.core.fabric.Connection.flush]/
+     * [us.tractat.kuilt.core.fabric.Connection.close]; outside `:kuilt-core`, `Room.leave` and
+     * `Room.flush`. Each points here or at [sendTo] rather than restating it.
      *
      * Asserted by `SeamConformanceSuite.closeDoesNotReportFailureAsCancellation`.
+     *
+     * ## Frames still queued are not this method's problem
+     *
+     * Closing does not wait for anything to drain, and it must not: a close is also how a caller gets
+     * out from under a writer stuck on a peer that has stopped reading. A send that returned has only
+     * been accepted, so a close straight after it can lose the frame. To wait first, call [flush].
      */
     public suspend fun close(reason: CloseReason = CloseReason.Normal)
+
+    /**
+     * Wait, up to [timeout], for every send this seam accepted before this call to be handed to the
+     * transport.
+     *
+     * The call for "send, then close": without it a frame still queued on this device is lost to the
+     * close, and a `delay` only guesses at how long the queue takes.
+     *
+     * @sample us.tractat.kuilt.core.flushThenCloseSample
+     *
+     * ## Which sends it covers
+     *
+     * It is a **barrier, not a wait for quiet.** It covers every [sendTo] and [broadcast] that returned
+     * before this call began, and it may cover one still suspended in backpressure at that moment. A
+     * send that starts after this call is not waited for, so a busy sender cannot starve a flush
+     * however long it keeps sending, and a flush that returns says nothing about the queue being empty.
+     *
+     * ## What each outcome means
+     *
+     * - [FlushOutcome.Drained]: handed to the transport, so an orderly [close] after this cannot be
+     *   what loses those frames. **Never a statement about the remote peer.** It did not necessarily
+     *   receive them, and the link can still die on the way.
+     * - [FlushOutcome.Unsupported]: this seam cannot tell. **The interface default**, so a seam written
+     *   before this method existed answers honestly rather than claiming a drain it never looked for.
+     * - [FlushOutcome.TimedOut]: not confirmed in time. A stalled writer ends up here: the seam stays up,
+     *   no frame is dropped, the writer stays where it is, and the next flush starts a new wait. Calling
+     *   [close] is what unsticks the writer.
+     * - [FlushOutcome.Failed]: the seam tore before the barrier was confirmed, or was already
+     *   [SeamState.Torn]. A [close] from another coroutine ends a pending flush this way.
+     *
+     * ## What an implementation owes
+     *
+     * An implementation that holds no queue of its own and hands a frame over before `sendTo` returns
+     * reports [FlushOutcome.Drained] straight away, or [FlushOutcome.Failed] once torn. One with a queue
+     * orders a barrier through it, then asks whatever it wrote to: `LinkSeam` is the pattern, and
+     * [flushWithin] is the timeout-and-cancellation half of it.
+     *
+     * A decorator adding **no queue of its own** delegates; class delegation (`Seam by inner`) already
+     * does. A decorator that **does** queue must not rely on that, because the delegate's answer says
+     * nothing about frames still waiting above it. Drain your own queue first, then ask the delegate,
+     * and report [FlushOutcome.Unsupported] if the delegate does. A decorator that cannot tell inherits
+     * the default rather than guessing: reporting [FlushOutcome.Drained] for a queue nobody checked is
+     * the failure this contract exists to prevent.
+     *
+     * The answer is a value. Implementations must not throw for a failure or a timeout, and the only
+     * `CancellationException` allowed out is the caller's own — the obligation on [close], and
+     * [flushWithin] discharges it.
+     *
+     * @param timeout how long to wait. [kotlin.time.Duration.INFINITE] waits as long as it takes, so it
+     *   ends only when the barrier is reached, the seam tears, or the caller is cancelled. Zero or less
+     *   does not wait.
+     */
+    public suspend fun flush(timeout: Duration): FlushOutcome = FlushOutcome.Unsupported
 }

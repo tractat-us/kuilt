@@ -3,6 +3,7 @@ package us.tractat.kuilt.session
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
@@ -11,6 +12,7 @@ import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
+import kotlin.time.Duration
 
 /**
  * A membership-aware session room built over a [us.tractat.kuilt.core.Seam].
@@ -433,8 +435,53 @@ public interface Room {
      * [us.tractat.kuilt.core.Seam.close] states in full (#1826). A host calls this from a teardown path
      * that is itself usually already cancelled, under a best-effort guard, so a callee-minted
      * `CancellationException` here costs that host the rest of its cleanup rather than failing one leave.
+     *
+     * **Leaving does not wait for anything to drain.** A frame an earlier [sendTo] or [broadcast]
+     * accepted can still be queued on this device, and the transport can close under it. To send a last
+     * frame and then leave, call [flush] first.
      */
     public suspend fun leave(reason: LeaveReason = LeaveReason.Normal)
+
+    /**
+     * Wait, up to [timeout], until what this room accepted before this call has left this device's
+     * queues: the frames it was waiting to forward or announce, then the fabric's own.
+     *
+     * Send a last frame, flush, then [leave]: without the flush the last frame can be lost to the leave,
+     * and a `delay` only guesses at how long that takes.
+     *
+     * @sample us.tractat.kuilt.session.flushThenLeaveSample
+     *
+     * [us.tractat.kuilt.core.FlushOutcome.Drained] **never means another member received anything.** It
+     * says this room handed the frames to the fabric and the fabric handed them to the transport. For
+     * receipt, have the other member answer.
+     *
+     * A barrier, as [us.tractat.kuilt.core.Seam.flush] describes: a frame sent after this call begins is
+     * not waited for, and neither is an announcement the room raises after it begins.
+     *
+     * Three things it does **not** count as a failure, because the room already gives no promise about
+     * them:
+     * - a frame the room forwarded for another member and dropped on overload (relayed traffic is
+     *   lossy, and `Quilter` anti-entropy heals it);
+     * - an announcement or forward to one member whose send failed, or outlasted its own budget, and was
+     *   dropped and logged as it always is;
+     * - anything queued for a member who has since left the roster.
+     *
+     * The outcomes:
+     * - [us.tractat.kuilt.core.FlushOutcome.TimedOut]: not confirmed in time. One member's stalled link
+     *   is enough, and it holds up the whole answer. The room stays up, and frames stay queued.
+     * - [us.tractat.kuilt.core.FlushOutcome.Unsupported]: the fabric under this room cannot tell. Its
+     *   queues have drained by then, but nothing is proven about the fabric's.
+     * - [us.tractat.kuilt.core.FlushOutcome.Failed]: the room had already left or lost its host, or the
+     *   fabric tore.
+     *
+     * The interface default is `Unsupported`, for the reason [us.tractat.kuilt.core.Seam.flush] gives.
+     *
+     * Does not cover the farewell a later [leave] sends: that frame does not exist yet.
+     *
+     * @param timeout how long to wait in all. [kotlin.time.Duration.INFINITE] waits as long as it takes;
+     *   zero or less does not wait.
+     */
+    public suspend fun flush(timeout: Duration): FlushOutcome = FlushOutcome.Unsupported
 }
 
 /**
