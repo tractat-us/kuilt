@@ -47,7 +47,7 @@ import kotlin.time.Instant
 class GameReplacementTest {
 
     /**
-     * A 3-voter game where one voter disconnects permanently (its [GameSession.close] is called).
+     * A 3-voter game where one voter goes permanently silent (its outbound link is partitioned and it stays on the roster).
      *
      * Virtual time is advanced past the [HeartbeatConfig.reconnectWindow]. The leader must:
      * 1. Detect [PeerLost] and evict the dead voter (roster 3 → 2).

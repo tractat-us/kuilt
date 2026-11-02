@@ -74,9 +74,6 @@ private const val BROADCAST_CHANNEL: Byte = 0
 
 /**
  * MuxSeam channel tag for the lobby presence traffic in [gameHost].
- *
- * [gameJoin] does not subscribe to this channel — presence frames destined for a joiner's
- * presence channel are silently discarded by the unsubscribed [MuxSeam] view.
  */
 private const val PRESENCE_CHANNEL: Byte = 2
 

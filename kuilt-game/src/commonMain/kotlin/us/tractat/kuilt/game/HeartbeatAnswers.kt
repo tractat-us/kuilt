@@ -30,7 +30,7 @@ private val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
  * a frame for a channel nobody has opened. It ends with the seam, so a closed session goes quiet and its
  * seat comes free.
  *
- * **A player who has left stops answering.** Once [presence] holds this player's vacate, a ping goes
+ * **A player who has left stops answering.** Once this player has called [GamePresence.declareVacate] (a local latch, not the replicated board, which any peer can write), a ping goes
  * unanswered, so a [GameSession.leave] with no [GameSession.close] after it still frees the seat by the
  * end of the window, even if the host never acts on the vacate itself.
  *
@@ -49,14 +49,14 @@ internal fun CoroutineScope.answerHeartbeatPings(heartbeatSeam: Seam, presence: 
     return heartbeatSeam.incoming.pumpIn(
         scope = this,
         onFailure = { failure, cause ->
-            logger.warn { "heartbeat.answers.failed self=${heartbeatSeam.selfId.value} half=$failure: $cause" }
+            logger.warn(cause) { "heartbeat.answers.failed self=${heartbeatSeam.selfId.value} half=$failure" }
             PumpVerdict.CONTINUE
         },
         name = "game-heartbeat-answers",
     ) { frame ->
         val pinger = frame.sender ?: return@pumpIn
         if (!frame.decodeToString().startsWith(HeartbeatPartitionDetector.PING_PREFIX)) return@pumpIn
-        if (presence.replica in presence.vacaters()) return@pumpIn
+        if (presence.hasLeft()) return@pumpIn
         if (pinger in pongsInFlight.getAndUpdate { it + pinger }) return@pumpIn
         launch {
             try {
