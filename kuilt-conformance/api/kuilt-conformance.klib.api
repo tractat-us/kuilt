@@ -96,6 +96,19 @@ sealed interface us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt
             final fun <get-joiner>(): us.tractat.kuilt.test.fabric/SendHold // us.tractat.kuilt.conformance/FlushFixture.Holdable.joiner.<get-joiner>|<get-joiner>(){}[0]
     }
 
+    final class HostUnsupported : us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt.conformance/FlushFixture.HostUnsupported|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/FlushFixture.HostUnsupported.<init>|<init>(kotlin.String){}[0]
+
+        final val trackingUrl // us.tractat.kuilt.conformance/FlushFixture.HostUnsupported.trackingUrl|{}trackingUrl[0]
+            final fun <get-trackingUrl>(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.HostUnsupported.trackingUrl.<get-trackingUrl>|<get-trackingUrl>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.HostUnsupported.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.conformance/FlushFixture.HostUnsupported // us.tractat.kuilt.conformance/FlushFixture.HostUnsupported.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/FlushFixture.HostUnsupported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/FlushFixture.HostUnsupported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.HostUnsupported.toString|toString(){}[0]
+    }
+
     final class Unsupported : us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt.conformance/FlushFixture.Unsupported|null[0]
         constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/FlushFixture.Unsupported.<init>|<init>(kotlin.String){}[0]
 

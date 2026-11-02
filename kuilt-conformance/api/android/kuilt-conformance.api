@@ -187,6 +187,17 @@ public final class us/tractat/kuilt/conformance/FlushFixture$Holdable : us/tract
 	public final fun getJoiner ()Lus/tractat/kuilt/test/fabric/SendHold;
 }
 
+public final class us/tractat/kuilt/conformance/FlushFixture$HostUnsupported : us/tractat/kuilt/conformance/FlushFixture {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/FlushFixture$HostUnsupported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/FlushFixture$HostUnsupported;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/FlushFixture$HostUnsupported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTrackingUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/conformance/FlushFixture$Unsupported : us/tractat/kuilt/conformance/FlushFixture {
 	public fun <init> (Ljava/lang/String;)V
 	public final fun component1 ()Ljava/lang/String;
