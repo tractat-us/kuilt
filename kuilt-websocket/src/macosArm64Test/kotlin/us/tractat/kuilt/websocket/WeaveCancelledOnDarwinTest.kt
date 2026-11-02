@@ -31,7 +31,6 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -50,10 +49,8 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.TimeSource
 
 /**
  * [ownedWebSocketSession] on the engine iOS and macOS actually use.
@@ -120,27 +117,17 @@ class WeaveCancelledOnDarwinTest {
         assertEquals<FarEndSaw>(FarEndSaw.SocketEnded, farEnd.saw.await(), "a cancel with no answer has to abort the request")
     }
 
+    /**
+     * Pins the outcome and not the two steps that protect it, the `NonCancellable` shield and the join.
+     * Removing either stays green here. URLSession does not wait for the far end's Close, so the session
+     * is over in under a millisecond and there is no wait to observe, and a lost Close is only a race:
+     * 120 of 1,120 dials with the join removed, against 0 of 1,120 with it. No rig here forces that.
+     * `WeaveCancelledMidDialTest` pins both lines on OkHttp, and they are common code.
+     */
     @Test
     fun aWeaveCancelledAsTheSessionArrivesGetsANormalClose() = realTime {
         val farEnd = HeldUpgrade(aSocket(selector).tcp().bind("127.0.0.1", 0), rigScope)
-        cancelAsTheSessionArrives(darwinClient(), farEnd)
-        assertEquals<FarEndSaw>(FarEndSaw.CloseFrame(NORMAL_CLOSE, socketEnded = true), farEnd.saw.await())
-    }
-
-    @Test
-    fun aFarEndThatNeverAnswersTheCloseCannotHoldUpTheCancel() = realTime {
-        val farEnd = HeldUpgrade(aSocket(selector).tcp().bind("127.0.0.1", 0), rigScope, answersClose = false)
         val client = darwinClient()
-
-        val waited = cancelAsTheSessionArrives(client, farEnd)
-        val liveCalls = client.coroutineContext.job.children.count { it.isActive }
-
-        println("W3105R darwin silent waited=$waited liveCalls=$liveCalls")
-        assertEquals(0, liveCalls, "the call was not cut: the weave returned after $waited")
-    }
-
-    /** Cancels with the session already handed over, and returns how long the weave then took to end. */
-    private suspend fun cancelAsTheSessionArrives(client: HttpClient, farEnd: HeldUpgrade): Duration {
         var woven: Seam? = null
         val weave = rigScope.launch(gate) { woven = loom(client).join(advertisement(farEnd)) }
         farEnd.requestSeen.await()
@@ -149,14 +136,12 @@ class WeaveCancelledOnDarwinTest {
         farEnd.answer.complete(Unit)
         gate.awaitAResumption()
         weave.cancel()
-        val released = TimeSource.Monotonic.markNow()
         gate.release()
         weave.join()
-        val waited = released.elapsedNow()
 
         assertTrue(weave.isCancelled, "rig: the weave was not cancelled")
         assertNull(woven, "rig: the caller got its seam, so it is the owner and this window was not reached")
-        return waited
+        assertEquals<FarEndSaw>(FarEndSaw.CloseFrame(NORMAL_CLOSE, socketEnded = true), farEnd.saw.await())
     }
 
     @Test
@@ -188,11 +173,7 @@ class WeaveCancelledOnDarwinTest {
     }
 
     /** One upgrade on a plain socket, answered when told, then read until the socket ends. */
-    private class HeldUpgrade(
-        private val listener: ServerSocket,
-        scope: CoroutineScope,
-        private val answersClose: Boolean = true,
-    ) {
+    private class HeldUpgrade(private val listener: ServerSocket, scope: CoroutineScope) {
         val requestSeen = CompletableDeferred<Unit>()
         val answer = CompletableDeferred<Unit>()
         val saw = CompletableDeferred<FarEndSaw>()
@@ -256,7 +237,7 @@ class WeaveCancelledOnDarwinTest {
                     if (closeCode == null) {
                         closeCode = closeCodeIn(received)
                         // What any live peer does, and what lets a client release the socket.
-                        if (closeCode != null && answersClose) output.writeByteArray(byteArrayOf(0x88.toByte(), 0x00))
+                        if (closeCode != null) output.writeByteArray(byteArrayOf(0x88.toByte(), 0x00))
                     }
                 }
             } catch (_: IOException) {
