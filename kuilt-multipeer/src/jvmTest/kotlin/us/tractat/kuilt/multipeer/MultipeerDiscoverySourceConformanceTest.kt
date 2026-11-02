@@ -1,16 +1,22 @@
 package us.tractat.kuilt.multipeer
 
 import com.sun.jna.Pointer
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: production pins discoveries() to Dispatchers.IO, so a virtual budget would expire while the browse session was still starting
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.conformance.DepartureFixture
 import us.tractat.kuilt.conformance.DiscoverySourceConformanceSuite
 import us.tractat.kuilt.core.Tag
@@ -28,6 +34,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
@@ -67,6 +74,15 @@ private val QUIESCENCE_WINDOW = 2.seconds
 
 /** How long after an arrival [LateSpuriousDepartureSource] misbehaves — well inside that window. */
 private val SPURIOUS_DEPARTURE_DELAY = 200.milliseconds
+
+/**
+ * How long a rig waits, in **real** time, for a `departures()` collection to reach its feed. Well
+ * under `runTest`'s 30 s backstop, so a producer that never subscribes fails by name.
+ */
+private val DEPARTURE_SUBSCRIBE_WAIT = 10.seconds
+
+/** How long after its release [LateDeparturesSource] subscribes — longer than firing a loss takes. */
+private val LATE_SUBSCRIBE_DELAY = 300.milliseconds
 
 /**
  * Binds the production browser to the departure contract. The JVM drives fake JNA callbacks;
@@ -223,6 +239,24 @@ class MultipeerJvmDepartureRigTest {
     }
 
     /**
+     * A `departures()` collection that has started but not yet subscribed is waited for, so the loss
+     * cannot be fired into nothing (#3075).
+     *
+     * The `discoveries()` producer opens the session while the departure feed is held, so a wait on
+     * the session alone would pass straight through. The held count and the zero subscribers are what
+     * show the test really entered that window.
+     */
+    @Test
+    fun aDepartureFeedThatSubscribesLateIsWaitedForBeforeAnyPeerIsLost() {
+        val suite = object : LateDeparturesSuite() {}
+        suite.departureKeyEqualsThePeerKeyThatWasDiscovered()
+        assertAll(
+            { assertEquals(1, suite.departureHolds, "the rig must have held the departure feed") },
+            { assertEquals(0, suite.subscribersWhenTheWaitBegan, "the feed must be unsubscribed when the wait begins") },
+        )
+    }
+
+    /**
      * The negative window is a real window: a source silent at the instant `causeArrival` returns
      * and misbehaving [SPURIOUS_DEPARTURE_DELAY] later is still caught.
      *
@@ -269,7 +303,13 @@ private fun collectDiscoveriesWhile(
  */
 private abstract class MultipeerJvmSuite : DiscoverySourceConformanceSuite() {
 
-    private val libs = ConcurrentHashMap<PeerDiscoverySource, ConformanceNativeLib>()
+    /**
+     * @param departureSubscribers the production feed's subscriber count, or `null` for a rig source
+     *   whose feeds attach on the test dispatcher and so cannot race the test body.
+     */
+    private class Binding(val lib: ConformanceNativeLib, val departureSubscribers: StateFlow<Int>?)
+
+    private val bindings = ConcurrentHashMap<PeerDiscoverySource, Binding>()
 
     /**
      * **Real time, not virtual.** `MultipeerServiceBrowser.discoveries()` ends in
@@ -287,17 +327,23 @@ private abstract class MultipeerJvmSuite : DiscoverySourceConformanceSuite() {
 
     override fun newSource(): PeerDiscoverySource {
         val lib = ConformanceNativeLib()
-        return register(lib.newBrowser(), lib)
+        val browser = lib.newBrowser()
+        return register(browser, lib, browser.departureSubscribers)
     }
 
     /**
-     * Waits — in real time — for production's browse session to reach the fake, then fires one
-     * `foundPeer`.
+     * Waits — in real time — for production's browse session to reach the fake and for its departure
+     * feed to subscribe, then fires one `foundPeer`.
      *
-     * The wait is the whole reason this is `suspend`. The source calls `mc_browser_start` from a
-     * producer coroutine dispatched to `Dispatchers.IO`, so the suite's
-     * `onStart` handshake proves the collection began — not that the session exists. Firing into an
-     * unregistered callback would look exactly like a source that ignores arrivals.
+     * The waits are the whole reason this is `suspend`. Each feed subscribes from its own producer
+     * coroutine on `Dispatchers.IO`, so the suite's `onStart` handshake proves the collection
+     * began — not that the session exists, and not that this collection is subscribed to anything.
+     * Firing into an unregistered callback would look exactly like a source that ignores arrivals.
+     *
+     * The session alone does not prove the departure feed is there, because a `discoveries()`
+     * producer can open it first. A loss fired before that feed subscribes is dropped, since the feed
+     * has no replay, and the test then hangs until `runTest` reports `UncompletedCoroutinesError`
+     * (#3075, [MultipeerJvmDepartureRigTest.aDepartureFeedThatSubscribesLateIsWaitedForBeforeAnyPeerIsLost]).
      *
      * [ConformanceNativeLib.awaitBrowseSession] throws rather than returning quietly when no session
      * ever appears, which is what turns this backend's coupling into a named failure instead of a
@@ -310,21 +356,87 @@ private abstract class MultipeerJvmSuite : DiscoverySourceConformanceSuite() {
     }
 
     /**
+     * Wait, in real time and bounded, until the production departure feed has a subscriber.
+     *
+     * Every property that reaches this has a `departures()` collection open, so the wait is never
+     * for something that is not coming.
+     */
+    protected open suspend fun awaitDepartureSubscriber(source: PeerDiscoverySource) {
+        val subscribers = departureSubscribersFor(source) ?: return
+        val subscribed =
+            withContext(Dispatchers.Default) {
+                withTimeoutOrNull(DEPARTURE_SUBSCRIBE_WAIT) { subscribers.first { count -> count > 0 } }
+            }
+        assertNotNull(subscribed, "departures() was being collected but never subscribed to its feed")
+    }
+
+    /**
      * Closes over the peer **handle** — a constant [causeArrival] itself established — and nothing
      * the arrival emitted, as [DepartureFixture.Emits] requires: in
      * `departuresEmitsWithNoConcurrentDiscoveriesCollector` no discovered [Tag] exists to reach for.
+     *
+     * The subscriber check names the failure a dropped loss would otherwise only show as a 30 s hang.
      */
     override fun departureFixture(source: PeerDiscoverySource): DepartureFixture =
-        DepartureFixture.Emits { libFor(source).fireLostPeer(ARRIVING_HANDLE) }
+        DepartureFixture.Emits {
+            departureSubscribersFor(source)?.let { subscribers ->
+                assertTrue(
+                    subscribers.value > 0,
+                    "firing peerLost with no departures() subscriber would drop it: the feed has no " +
+                        "replay, so this test would hang rather than fail",
+                )
+            }
+            libFor(source).fireLostPeer(ARRIVING_HANDLE)
+        }
 
-    protected fun libFor(source: PeerDiscoverySource): ConformanceNativeLib =
-        libs[source] ?: error("source was not built by newSource(): $source")
+    protected fun libFor(source: PeerDiscoverySource): ConformanceNativeLib = bindingFor(source).lib
+
+    protected fun departureSubscribersFor(source: PeerDiscoverySource): StateFlow<Int>? =
+        bindingFor(source).departureSubscribers
+
+    private fun bindingFor(source: PeerDiscoverySource): Binding =
+        bindings[source] ?: error("source was not built by newSource(): $source")
 
     /** Bind a source to the fake it was built against, so [libFor] resolves it. */
     protected fun register(
         source: PeerDiscoverySource,
         lib: ConformanceNativeLib,
-    ): PeerDiscoverySource = source.also { libs[it] = lib }
+        departureSubscribers: StateFlow<Int>? = null,
+    ): PeerDiscoverySource = source.also { bindings[it] = Binding(lib, departureSubscribers) }
+}
+
+/**
+ * Production's browser behind a [LateDeparturesSource], so a `departures()` collection has started
+ * while nothing is subscribed to the feed. Records what the wait found, so a green shows the window
+ * was really open when the test reached it.
+ */
+private abstract class LateDeparturesSuite : MultipeerJvmSuite() {
+    private lateinit var late: LateDeparturesSource
+
+    /** `-1` until [awaitDepartureSubscriber] runs. */
+    @Volatile
+    var subscribersWhenTheWaitBegan: Int = -1
+        private set
+
+    val departureHolds: Int get() = late.holds
+
+    override fun newSource(): PeerDiscoverySource {
+        val lib = ConformanceNativeLib()
+        val browser = lib.newBrowser()
+        late = LateDeparturesSource(browser)
+        return register(late, lib, browser.departureSubscribers)
+    }
+
+    /**
+     * The release lives here, so deleting the wait from [causeArrival] leaves the feed held and the
+     * fixture's subscriber check reds at once. [LATE_SUBSCRIBE_DELAY] then outlives the release, so
+     * a wait that returns without waiting reds the same check.
+     */
+    override suspend fun awaitDepartureSubscriber(source: PeerDiscoverySource) {
+        subscribersWhenTheWaitBegan = departureSubscribersFor(source)?.value ?: error("no subscriber count bound")
+        late.release()
+        super.awaitDepartureSubscriber(source)
+    }
 }
 
 /**
@@ -460,6 +572,38 @@ private class LateSpuriousDepartureSource(
         real.discoveries().map { tag ->
             withContext(Dispatchers.Default) { delay(SPURIOUS_DEPARTURE_DELAY) }
             tag.peerKey
+        }
+}
+
+/**
+ * Production's browser with its `departures()` subscribing late: the collection starts, and so
+ * `onStart` runs downstream, but nothing reaches the feed until [release] plus
+ * [LATE_SUBSCRIBE_DELAY]. Models a saturated `Dispatchers.IO` holding that feed's producer back while
+ * the `discoveries()` producer has already opened the session.
+ */
+private class LateDeparturesSource(
+    private val real: MultipeerServiceBrowser,
+) : PeerDiscoverySource {
+
+    private val released = CompletableDeferred<Unit>()
+    private val holdCount = AtomicInteger(0)
+
+    val holds: Int get() = holdCount.get()
+
+    override val kind: DiscoveryKind = real.kind
+
+    fun release() {
+        released.complete(Unit)
+    }
+
+    override fun discoveries(): Flow<Tag> = real.discoveries()
+
+    override fun departures(): Flow<String> =
+        flow {
+            holdCount.incrementAndGet()
+            released.await()
+            withContext(Dispatchers.Default) { delay(LATE_SUBSCRIBE_DELAY) }
+            emitAll(real.departures())
         }
 }
 

@@ -480,6 +480,11 @@ public abstract class DiscoverySourceConformanceSuite {
      * is about to cause: [onStart] runs immediately before the upstream is subscribed, with no
      * suspension between, so under the test scheduler the caller cannot resume until that
      * subscription has happened.
+     *
+     * **That holds only for a source that subscribes on the collector's own dispatcher.** A feed
+     * ending in `flowOn` subscribes from a producer on the other dispatcher, so [onStart] says
+     * nothing about it. Such a binding has to wait for the subscription itself in [causeArrival], as
+     * the JVM Multipeer binding does (#3075).
      */
     private suspend fun <T> watch(flow: Flow<T>, what: String): Watch<T> {
         val started = CompletableDeferred<Unit>()

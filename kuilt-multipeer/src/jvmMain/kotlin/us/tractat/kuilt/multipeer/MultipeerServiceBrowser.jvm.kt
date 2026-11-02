@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -65,6 +66,13 @@ public actual class MultipeerServiceBrowser actual constructor(
     private var collectors = 0
     private var session: BrowseSession? = null
     private val departuresFlow = MutableSharedFlow<String>(extraBufferCapacity = 16)
+
+    /**
+     * How many collectors [departures] has registered. It has no replay, so a loss fired at zero is gone.
+     * A collection subscribes from its `Dispatchers.IO` producer, some time after `onStart` runs
+     * downstream, and only this count shows that it has. Exposed for tests.
+     */
+    internal val departureSubscribers: StateFlow<Int> get() = departuresFlow.subscriptionCount
 
     /** Emits the dylib peer handle, also used by [MultipeerAdvertisement.peerKey]. */
     public actual override fun departures(): Flow<String> = sessionFeed(departuresFlow)
