@@ -38,8 +38,9 @@ import kotlin.time.Instant
  * a frame stamped with a given sender, and a fake stamps what it is told. `GatedTapEndToEndTest` holds
  * the same property through two real replicators.
  *
- * Every refusal has an admission beside it, in the same test and through the same rig. A timeout or an
- * absence is also what a gate that is deadlocked or missing produces (#2740).
+ * Most refusals have an admission beside them, in the same test and through the same rig, since a
+ * timeout or an absence is also what a gate that is deadlocked or missing produces (#2740). The
+ * exceptions carry a control of another kind: a different peer's frame arriving, or a roster check.
  */
 class TapPullerGateTest {
     private val t0 = Instant.fromEpochSeconds(1_700_000_000)

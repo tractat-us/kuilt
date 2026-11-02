@@ -48,6 +48,8 @@ internal sealed interface GateRole {
  * reach [incoming], and [broadcast]/[sendTo] never deliver to it. So the replicator can neither be
  * seen by nor leak log state to a peer that has not proven the join code, and it never takes one's
  * frames. Admission frames the gate itself sends use the inner seam directly, bypassing that filter.
+ * That includes a frame stamped with the gate's own id: [verified] always holds it, so it is dropped
+ * explicitly, and no fabric needs to refuse to deliver a peer its own id for the gate to hold.
  *
  * ## Each side proves the code to the other
  *
@@ -88,7 +90,8 @@ internal sealed interface GateRole {
  * The cost is that any peer reaching the prover can collect a tag to grind offline, where before it
  * had to win a race. One tag is all a grind needs and a passive listener on a plaintext wire already
  * has one, and with the prover's nonce in the input the grind cannot start until the tag is in hand,
- * so the token's TTL bounds it. See "Entropy ↔ TTL" on [LogTapJoinToken].
+ * so what bounds it is the code's entropy and the TTL on the device's token. The puller has no clock and
+ * enforces no expiry of its own. See "Entropy ↔ TTL" on [LogTapJoinToken].
  *
  * ## A proof never waits on the collector
  *
@@ -200,6 +203,9 @@ internal class TokenGatedSeam(
     // challenger, which may have gone out already. Cancelling a finished job does nothing.
     private val parkedProofs = mutableMapOf<PeerId, Job>()
 
+    // Roster peers whose dropped replication frames have been logged already; cleared when they leave.
+    private val droppedSenders = mutableSetOf<PeerId>()
+
     // Replication frames surfaced to the replicator. Buffered so the sole relay collector
     // never blocks; a fresh Seam has no subscriber for a brief construction window.
     private val relayed = MutableSharedFlow<Swatch>(extraBufferCapacity = 256)
@@ -212,8 +218,9 @@ internal class TokenGatedSeam(
         scope.launch {
             var known = setOf(inner.selfId)
             inner.peers.collect { current ->
-                // Drop admission state for peers that disconnected, so a same-PeerId
-                // reconnect must re-prove and neither nonce map can grow without bound.
+                // Drop admission state for peers that disconnected, so a same-PeerId reconnect must
+                // re-prove. `answerNonces` also keeps any sender never seen in `known`, which a stranger
+                // can add one entry at a time, so it is bounded by departures only for roster peers.
                 val departed = known - current
                 if (departed.isNotEmpty()) prune(departed)
                 if (role is GateRole.Verifier) {
@@ -233,6 +240,7 @@ internal class TokenGatedSeam(
                 pendingNonces.remove(peer)
                 answering.remove(peer)
                 answerNonces.remove(peer)
+                droppedSenders.remove(peer)
             }
             if (verified.value.any { it in departed }) verified.value = verified.value - departed
         }
@@ -284,8 +292,16 @@ internal class TokenGatedSeam(
         when (admit) {
             null -> {
                 // Replication frame — relay only if the sender is surfaced.
-                val surfaced = lock.withLock { sender in verified.value }
+                val (surfaced, firstDrop) = lock.withLock {
+                    val admitted = sender in verified.value
+                    // Once per peer per stay on the roster, so a flood of frames is one line.
+                    val first = !admitted && sender in inner.peers.value && droppedSenders.add(sender)
+                    admitted to first
+                }
                 if (surfaced) relayed.emit(swatch)
+                else if (firstDrop) {
+                    logger.warn { "dropping replication frames from $sender: on the roster but has not proved the code" }
+                }
             }
             is TapAdmitMessage.Challenge -> if (role is GateRole.Prover) respondToChallenge(sender, admit)
             is TapAdmitMessage.Proof -> when (role) {

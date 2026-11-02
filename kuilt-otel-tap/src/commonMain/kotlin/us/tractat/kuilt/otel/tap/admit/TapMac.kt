@@ -24,8 +24,9 @@ internal fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray =
  *   input in advance. That is what stops a table of tags being built before the token is minted.
  * - **The two ids, in order,** stop the answer working for anyone but the peer that asked. A relayer
  *   that forwards a device's challenge to a puller gets a tag naming the relayer as verifier, and the
- *   device is expecting one naming the device. The order is what stops a peer's own answer being
- *   reflected back at it, which a role that both challenges and answers would otherwise be open to.
+ *   device is expecting one naming the device. The order is a second line of defence against a
+ *   peer's own answer being reflected back at it. The first is that each side checks an answer against
+ *   the nonce it last sent that sender, so a reflected tag covers the wrong one.
  * - **`DOMAIN`** keeps this input from ever being the bare 16 bytes an older peer MAC'd.
  *
  * The encoding is injective: the domain and both nonces are fixed width and each id carries its
