@@ -1,0 +1,1124 @@
+public abstract interface class us/tractat/kuilt/session/AdmissionFailure {
+}
+
+public final class us/tractat/kuilt/session/AdmissionFailure$Rejected : us/tractat/kuilt/session/AdmissionFailure {
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/session/admit/RejectCode;
+	public final fun copy (Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;)Lus/tractat/kuilt/session/AdmissionFailure$Rejected;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/AdmissionFailure$Rejected;Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;ILjava/lang/Object;)Lus/tractat/kuilt/session/AdmissionFailure$Rejected;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Lus/tractat/kuilt/session/admit/RejectCode;
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/AdmissionFailure$TimedOut : us/tractat/kuilt/session/AdmissionFailure {
+	public static final field INSTANCE Lus/tractat/kuilt/session/AdmissionFailure$TimedOut;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/session/FailureReason {
+}
+
+public final class us/tractat/kuilt/session/FailureReason$Refused : us/tractat/kuilt/session/FailureReason {
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/session/admit/RejectCode;
+	public final fun copy (Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;)Lus/tractat/kuilt/session/FailureReason$Refused;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/FailureReason$Refused;Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;ILjava/lang/Object;)Lus/tractat/kuilt/session/FailureReason$Refused;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Lus/tractat/kuilt/session/admit/RejectCode;
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/FailureReason$Unrecoverable : us/tractat/kuilt/session/FailureReason {
+	public static final field INSTANCE Lus/tractat/kuilt/session/FailureReason$Unrecoverable;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/FailureReason$WindowExpired : us/tractat/kuilt/session/FailureReason {
+	public static final field INSTANCE Lus/tractat/kuilt/session/FailureReason$WindowExpired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/FramesLost : java/lang/RuntimeException {
+	public synthetic fun <init> (Ljava/lang/String;JZLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getClaimed ()Z
+	public final fun getDropped ()J
+	public final fun getMember-PaHlmAU ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/session/LeaveReason {
+}
+
+public final class us/tractat/kuilt/session/LeaveReason$Error : us/tractat/kuilt/session/LeaveReason {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/session/LeaveReason$Error;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/LeaveReason$Error;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/LeaveReason$Error;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/LeaveReason$Normal : us/tractat/kuilt/session/LeaveReason {
+	public static final field INSTANCE Lus/tractat/kuilt/session/LeaveReason$Normal;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/LeaveReason$PartitionExpired : us/tractat/kuilt/session/LeaveReason {
+	public static final field INSTANCE Lus/tractat/kuilt/session/LeaveReason$PartitionExpired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/session/Liveness {
+}
+
+public final class us/tractat/kuilt/session/Liveness$Connected : us/tractat/kuilt/session/Liveness {
+	public static final field INSTANCE Lus/tractat/kuilt/session/Liveness$Connected;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/Liveness$Partitioned : us/tractat/kuilt/session/Liveness {
+	public fun <init> (Lkotlin/time/Instant;Lkotlin/time/Instant;)V
+	public final fun component1 ()Lkotlin/time/Instant;
+	public final fun component2 ()Lkotlin/time/Instant;
+	public final fun copy (Lkotlin/time/Instant;Lkotlin/time/Instant;)Lus/tractat/kuilt/session/Liveness$Partitioned;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/Liveness$Partitioned;Lkotlin/time/Instant;Lkotlin/time/Instant;ILjava/lang/Object;)Lus/tractat/kuilt/session/Liveness$Partitioned;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSince ()Lkotlin/time/Instant;
+	public final fun getWindowExpiresAt ()Lkotlin/time/Instant;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/LoomRoomHost : us/tractat/kuilt/session/RoomHost {
+	public fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun close ()V
+	public fun start (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/Member {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/MemberIdentity;Lus/tractat/kuilt/session/Liveness;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/MemberIdentity;Lus/tractat/kuilt/session/Liveness;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/session/MemberIdentity;
+	public final fun component3 ()Lus/tractat/kuilt/session/Liveness;
+	public final fun component4-ZHFmWLQ ()Ljava/lang/String;
+	public final fun copy-WvCJmoM (Ljava/lang/String;Lus/tractat/kuilt/session/MemberIdentity;Lus/tractat/kuilt/session/Liveness;Ljava/lang/String;)Lus/tractat/kuilt/session/Member;
+	public static synthetic fun copy-WvCJmoM$default (Lus/tractat/kuilt/session/Member;Ljava/lang/String;Lus/tractat/kuilt/session/MemberIdentity;Lus/tractat/kuilt/session/Liveness;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/Member;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId-PaHlmAU ()Ljava/lang/String;
+	public final fun getIdentity ()Lus/tractat/kuilt/session/MemberIdentity;
+	public final fun getLiveness ()Lus/tractat/kuilt/session/Liveness;
+	public final fun getPrincipal-ZHFmWLQ ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MemberIdentity {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/session/MemberIdentity;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/MemberIdentity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/MemberIdentity;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDedupKey ()Ljava/lang/String;
+	public final fun getDeviceId ()Ljava/lang/String;
+	public final fun getDisplayName ()Ljava/lang/String;
+	public final fun getSessionId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MemberMetadata {
+	public static final field Companion Lus/tractat/kuilt/session/MemberMetadata$Companion;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getNames ()Ljava/util/Map;
+	public fun hashCode ()I
+	public final fun merge (Lus/tractat/kuilt/session/MemberMetadata;)Lus/tractat/kuilt/session/MemberMetadata;
+	public final fun set-qFHMSPA (Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)Lus/tractat/kuilt/session/MemberMetadata;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MemberMetadata$Companion {
+	public final fun empty ()Lus/tractat/kuilt/session/MemberMetadata;
+}
+
+public abstract interface class us/tractat/kuilt/session/MembershipEvent {
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$AdmissionFailed : us/tractat/kuilt/session/MembershipEvent {
+	public fun <init> (Lus/tractat/kuilt/session/AdmissionFailure;Lkotlin/time/Instant;)V
+	public final fun component1 ()Lus/tractat/kuilt/session/AdmissionFailure;
+	public final fun component2 ()Lkotlin/time/Instant;
+	public final fun copy (Lus/tractat/kuilt/session/AdmissionFailure;Lkotlin/time/Instant;)Lus/tractat/kuilt/session/MembershipEvent$AdmissionFailed;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/MembershipEvent$AdmissionFailed;Lus/tractat/kuilt/session/AdmissionFailure;Lkotlin/time/Instant;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$AdmissionFailed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAt ()Lkotlin/time/Instant;
+	public final fun getReason ()Lus/tractat/kuilt/session/AdmissionFailure;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$HostLost : us/tractat/kuilt/session/MembershipEvent {
+	public fun <init> (Lkotlin/time/Instant;Lus/tractat/kuilt/session/FailureReason;Lus/tractat/kuilt/core/FabricAvailability;)V
+	public final fun component1 ()Lkotlin/time/Instant;
+	public final fun component2 ()Lus/tractat/kuilt/session/FailureReason;
+	public final fun component3 ()Lus/tractat/kuilt/core/FabricAvailability;
+	public final fun copy (Lkotlin/time/Instant;Lus/tractat/kuilt/session/FailureReason;Lus/tractat/kuilt/core/FabricAvailability;)Lus/tractat/kuilt/session/MembershipEvent$HostLost;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/MembershipEvent$HostLost;Lkotlin/time/Instant;Lus/tractat/kuilt/session/FailureReason;Lus/tractat/kuilt/core/FabricAvailability;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$HostLost;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAt ()Lkotlin/time/Instant;
+	public final fun getLocalFabric ()Lus/tractat/kuilt/core/FabricAvailability;
+	public final fun getReason ()Lus/tractat/kuilt/session/FailureReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$Joined : us/tractat/kuilt/session/MembershipEvent {
+	public fun <init> (Lus/tractat/kuilt/session/Member;)V
+	public final fun component1 ()Lus/tractat/kuilt/session/Member;
+	public final fun copy (Lus/tractat/kuilt/session/Member;)Lus/tractat/kuilt/session/MembershipEvent$Joined;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/MembershipEvent$Joined;Lus/tractat/kuilt/session/Member;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$Joined;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMember ()Lus/tractat/kuilt/session/Member;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$Left : us/tractat/kuilt/session/MembershipEvent {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/LeaveReason;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/session/LeaveReason;
+	public final fun copy-t5-yf_A (Ljava/lang/String;Lus/tractat/kuilt/session/LeaveReason;)Lus/tractat/kuilt/session/MembershipEvent$Left;
+	public static synthetic fun copy-t5-yf_A$default (Lus/tractat/kuilt/session/MembershipEvent$Left;Ljava/lang/String;Lus/tractat/kuilt/session/LeaveReason;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$Left;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public final fun getReason ()Lus/tractat/kuilt/session/LeaveReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$LocalFabricLost : us/tractat/kuilt/session/MembershipEvent {
+	public fun <init> (Lkotlin/time/Instant;Ljava/lang/String;)V
+	public final fun component1 ()Lkotlin/time/Instant;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Lkotlin/time/Instant;Ljava/lang/String;)Lus/tractat/kuilt/session/MembershipEvent$LocalFabricLost;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/MembershipEvent$LocalFabricLost;Lkotlin/time/Instant;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$LocalFabricLost;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAt ()Lkotlin/time/Instant;
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$LocalFabricRestored : us/tractat/kuilt/session/MembershipEvent {
+	public fun <init> (Lkotlin/time/Instant;)V
+	public final fun component1 ()Lkotlin/time/Instant;
+	public final fun copy (Lkotlin/time/Instant;)Lus/tractat/kuilt/session/MembershipEvent$LocalFabricRestored;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/MembershipEvent$LocalFabricRestored;Lkotlin/time/Instant;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$LocalFabricRestored;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAt ()Lkotlin/time/Instant;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$Partitioned : us/tractat/kuilt/session/MembershipEvent {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/time/Instant;Lus/tractat/kuilt/session/ReconnectReason;Lus/tractat/kuilt/core/FabricAvailability;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()Lkotlin/time/Instant;
+	public final fun component3 ()Lus/tractat/kuilt/session/ReconnectReason;
+	public final fun component4 ()Lus/tractat/kuilt/core/FabricAvailability;
+	public final fun copy-yd06jn4 (Ljava/lang/String;Lkotlin/time/Instant;Lus/tractat/kuilt/session/ReconnectReason;Lus/tractat/kuilt/core/FabricAvailability;)Lus/tractat/kuilt/session/MembershipEvent$Partitioned;
+	public static synthetic fun copy-yd06jn4$default (Lus/tractat/kuilt/session/MembershipEvent$Partitioned;Ljava/lang/String;Lkotlin/time/Instant;Lus/tractat/kuilt/session/ReconnectReason;Lus/tractat/kuilt/core/FabricAvailability;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$Partitioned;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAt ()Lkotlin/time/Instant;
+	public final fun getLocalFabric ()Lus/tractat/kuilt/core/FabricAvailability;
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public final fun getReason ()Lus/tractat/kuilt/session/ReconnectReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$Recovered : us/tractat/kuilt/session/MembershipEvent {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/time/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()Lkotlin/time/Instant;
+	public final fun copy-t5-yf_A (Ljava/lang/String;Lkotlin/time/Instant;)Lus/tractat/kuilt/session/MembershipEvent$Recovered;
+	public static synthetic fun copy-t5-yf_A$default (Lus/tractat/kuilt/session/MembershipEvent$Recovered;Ljava/lang/String;Lkotlin/time/Instant;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$Recovered;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAt ()Lkotlin/time/Instant;
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$Resumed : us/tractat/kuilt/session/MembershipEvent {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun copy-ngToHgY (Ljava/lang/String;)Lus/tractat/kuilt/session/MembershipEvent$Resumed;
+	public static synthetic fun copy-ngToHgY$default (Lus/tractat/kuilt/session/MembershipEvent$Resumed;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$Resumed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/MembershipEvent$WindowOpened : us/tractat/kuilt/session/MembershipEvent {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/time/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()Lkotlin/time/Instant;
+	public final fun copy-t5-yf_A (Ljava/lang/String;Lkotlin/time/Instant;)Lus/tractat/kuilt/session/MembershipEvent$WindowOpened;
+	public static synthetic fun copy-t5-yf_A$default (Lus/tractat/kuilt/session/MembershipEvent$WindowOpened;Ljava/lang/String;Lkotlin/time/Instant;ILjava/lang/Object;)Lus/tractat/kuilt/session/MembershipEvent$WindowOpened;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getExpiresAt ()Lkotlin/time/Instant;
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/PrincipalKt {
+	public static final fun withPrincipal-X0F_m3s (Lus/tractat/kuilt/core/Seam;Ljava/lang/String;)Lus/tractat/kuilt/core/Seam;
+}
+
+public abstract interface class us/tractat/kuilt/session/ReconnectReason {
+}
+
+public final class us/tractat/kuilt/session/ReconnectReason$Backpressure : us/tractat/kuilt/session/ReconnectReason {
+	public static final field INSTANCE Lus/tractat/kuilt/session/ReconnectReason$Backpressure;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/ReconnectReason$LinkTimeout : us/tractat/kuilt/session/ReconnectReason {
+	public static final field INSTANCE Lus/tractat/kuilt/session/ReconnectReason$LinkTimeout;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/ReconnectReason$TransportClosed : us/tractat/kuilt/session/ReconnectReason {
+	public static final field INSTANCE Lus/tractat/kuilt/session/ReconnectReason$TransportClosed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/ReservedRoomPrefix : java/lang/IllegalArgumentException {
+	public fun <init> (Lus/tractat/kuilt/session/RoomFramePrefix;)V
+	public final fun getPrefix ()Lus/tractat/kuilt/session/RoomFramePrefix;
+}
+
+public abstract interface class us/tractat/kuilt/session/Room {
+	public abstract fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun channel (Ljava/lang/String;)Lus/tractat/kuilt/core/Seam;
+	public abstract fun getAttestedPrincipals ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun getLocalFabric ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public abstract fun getResumeToken ()Lus/tractat/kuilt/session/partition/ResumeToken;
+	public abstract fun getRole ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getRoomId ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getRoster ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public abstract fun incomingFrom-ngToHgY (Ljava/lang/String;)Lkotlinx/coroutines/flow/Flow;
+	public abstract fun leave (Lus/tractat/kuilt/session/LeaveReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun leave$default (Lus/tractat/kuilt/session/Room;Lus/tractat/kuilt/session/LeaveReason;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun resume (Lus/tractat/kuilt/session/partition/ResumeToken;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun sendTo-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/Room$DefaultImpls {
+	public static fun getMaxPayloadBytes (Lus/tractat/kuilt/session/Room;)Ljava/lang/Integer;
+	public static synthetic fun leave$default (Lus/tractat/kuilt/session/Room;Lus/tractat/kuilt/session/LeaveReason;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/RoomChannel {
+	public static final field INSTANCE Lus/tractat/kuilt/session/RoomChannel;
+	public final fun channelSubId (Ljava/lang/String;)S
+	public final fun getCHANNEL_PREFIX ()B
+}
+
+public abstract interface class us/tractat/kuilt/session/RoomFactory {
+	public abstract fun host-_oCq2W8 (Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun host-_oCq2W8$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun join$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/RoomFactory$DefaultImpls {
+	public static synthetic fun host-_oCq2W8$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun join$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/RoomFrame {
+	public synthetic fun <init> (Ljava/lang/String;[BLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()[B
+	public final fun copy-t5-yf_A (Ljava/lang/String;[B)Lus/tractat/kuilt/session/RoomFrame;
+	public static synthetic fun copy-t5-yf_A$default (Lus/tractat/kuilt/session/RoomFrame;Ljava/lang/String;[BILjava/lang/Object;)Lus/tractat/kuilt/session/RoomFrame;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPayload ()[B
+	public final fun getSender-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public class us/tractat/kuilt/session/RoomFramePrefix : java/lang/Enum {
+	public static final field Admit Lus/tractat/kuilt/session/RoomFramePrefix;
+	public static final field Channel Lus/tractat/kuilt/session/RoomFramePrefix;
+	public static final field Heartbeat Lus/tractat/kuilt/session/RoomFramePrefix;
+	public static final field Lobby Lus/tractat/kuilt/session/RoomFramePrefix;
+	public static final field Relay Lus/tractat/kuilt/session/RoomFramePrefix;
+	public fun classifies ([B)Z
+	public final fun getByte ()B
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun matches ([B)Z
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/session/RoomFramePrefix;
+	public static fun values ()[Lus/tractat/kuilt/session/RoomFramePrefix;
+}
+
+public abstract interface class us/tractat/kuilt/session/RoomHost : java/lang/AutoCloseable {
+	public abstract fun start (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/RoomReplicatorKt {
+	public static final fun RoomReplicator (Lus/tractat/kuilt/session/Room;Ljava/lang/String;Lus/tractat/kuilt/crdt/Quilted;Lkotlinx/serialization/KSerializer;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;)Lus/tractat/kuilt/quilter/Quilter;
+	public static synthetic fun RoomReplicator$default (Lus/tractat/kuilt/session/Room;Ljava/lang/String;Lus/tractat/kuilt/crdt/Quilted;Lkotlinx/serialization/KSerializer;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;ILjava/lang/Object;)Lus/tractat/kuilt/quilter/Quilter;
+}
+
+public final class us/tractat/kuilt/session/SeamRoomFactory : us/tractat/kuilt/session/RoomFactory {
+	public static final field Companion Lus/tractat/kuilt/session/SeamRoomFactory$Companion;
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun adopt-gmi5Iy8 (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/session/SessionRole;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun adopt-gmi5Iy8$default (Lus/tractat/kuilt/session/SeamRoomFactory;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/session/SessionRole;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun electLobby (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun host-_oCq2W8 (Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/SeamRoomFactory$Companion {
+	public final fun systemClock-gwCluXo (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;)Lus/tractat/kuilt/session/SeamRoomFactory;
+	public static synthetic fun systemClock-gwCluXo$default (Lus/tractat/kuilt/session/SeamRoomFactory$Companion;Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;ILjava/lang/Object;)Lus/tractat/kuilt/session/SeamRoomFactory;
+}
+
+public final class us/tractat/kuilt/session/SessionRole : java/lang/Enum {
+	public static final field Host Lus/tractat/kuilt/session/SessionRole;
+	public static final field Joiner Lus/tractat/kuilt/session/SessionRole;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/session/SessionRole;
+	public static fun values ()[Lus/tractat/kuilt/session/SessionRole;
+}
+
+public abstract interface class us/tractat/kuilt/session/admit/AdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/session/admit/AdmitMessage$Companion;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Companion {
+	public final fun decode ([B)Lus/tractat/kuilt/session/admit/AdmitMessage;
+	public final fun encode (Lus/tractat/kuilt/session/admit/AdmitMessage;)[B
+	public final fun getPREFIX_BYTE ()B
+	public final fun isAdmitFrame ([B)Z
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Farewell : us/tractat/kuilt/session/admit/AdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell$Companion;
+	public fun <init> (Ljava/lang/String;Z)V
+	public synthetic fun <init> (Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Z
+	public final fun copy (Ljava/lang/String;Z)Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;Ljava/lang/String;ZILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getExpired ()Z
+	public final fun getPeerId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/admit/AdmitMessage$Farewell$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/admit/AdmitMessage$Farewell;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Farewell$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Goodbye : us/tractat/kuilt/session/admit/AdmitMessage {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/AdmitMessage$Goodbye;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Hello : us/tractat/kuilt/session/admit/AdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/session/admit/AdmitMessage$Hello$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/Integer;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;)Lus/tractat/kuilt/session/admit/AdmitMessage$Hello;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Hello;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;ILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Hello;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDeviceId ()Ljava/lang/String;
+	public final fun getDisplayName ()Ljava/lang/String;
+	public final fun getProtocolVersion ()Ljava/lang/Integer;
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun getTargetRoom ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/admit/AdmitMessage$Hello$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/AdmitMessage$Hello$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/admit/AdmitMessage$Hello;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/admit/AdmitMessage$Hello;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Hello$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Paused : us/tractat/kuilt/session/admit/AdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/session/admit/AdmitMessage$Paused$Companion;
+	public fun <init> (Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy (Ljava/lang/String;J)Lus/tractat/kuilt/session/admit/AdmitMessage$Paused;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Paused;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Paused;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getExpiresAt ()J
+	public final fun getPeerId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/admit/AdmitMessage$Paused$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/AdmitMessage$Paused$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/admit/AdmitMessage$Paused;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/admit/AdmitMessage$Paused;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Paused$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Reject : us/tractat/kuilt/session/admit/AdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/session/admit/AdmitMessage$Reject$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Lus/tractat/kuilt/session/admit/RejectCode;
+	public final fun getCodeId ()Ljava/lang/String;
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/admit/AdmitMessage$Reject$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/AdmitMessage$Reject$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/admit/AdmitMessage$Reject;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Reject$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Resume : us/tractat/kuilt/session/admit/AdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/session/admit/AdmitMessage$Resume$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/session/admit/AdmitMessage$Resume;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Resume;Ljava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Resume;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIssuedAt ()J
+	public final fun getTokenPeerId ()Ljava/lang/String;
+	public final fun getTokenRoomId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/admit/AdmitMessage$Resume$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/AdmitMessage$Resume$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/admit/AdmitMessage$Resume;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/admit/AdmitMessage$Resume;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Resume$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$ResumeAck : us/tractat/kuilt/session/admit/AdmitMessage {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/AdmitMessage$ResumeAck;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Unpaused : us/tractat/kuilt/session/admit/AdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/session/admit/AdmitMessage$Unpaused$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/session/admit/AdmitMessage$Unpaused;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Unpaused;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Unpaused;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPeerId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/admit/AdmitMessage$Unpaused$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/AdmitMessage$Unpaused$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/admit/AdmitMessage$Unpaused;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/admit/AdmitMessage$Unpaused;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Unpaused$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Welcome : us/tractat/kuilt/session/admit/AdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/session/admit/AdmitMessage$Welcome$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/session/admit/AdmitMessage$Welcome;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/AdmitMessage$Welcome;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmitMessage$Welcome;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAssignedPeerId ()Ljava/lang/String;
+	public final fun getDeviceId ()Ljava/lang/String;
+	public final fun getDisplayName ()Ljava/lang/String;
+	public final fun getRoomId ()Ljava/lang/String;
+	public final fun getSessionId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/admit/AdmitMessage$Welcome$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/AdmitMessage$Welcome$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/admit/AdmitMessage$Welcome;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/admit/AdmitMessage$Welcome;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/AdmitMessage$Welcome$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/admit/ProtocolVersion {
+	public static final field CURRENT I
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/ProtocolVersion;
+	public static final field MAX_SUPPORTED I
+	public static final field MIN_SUPPORTED I
+	public final fun isSupported (Ljava/lang/Integer;)Z
+}
+
+public abstract interface class us/tractat/kuilt/session/admit/RejectCode {
+	public static final field Companion Lus/tractat/kuilt/session/admit/RejectCode$Companion;
+	public abstract fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$Companion {
+	public final fun fromId (Ljava/lang/String;)Lus/tractat/kuilt/session/admit/RejectCode;
+	public final fun getUnspecified ()Lus/tractat/kuilt/session/admit/RejectCode$Unknown;
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$DefaultImpls {
+	public static fun getRetryable (Lus/tractat/kuilt/session/admit/RejectCode;)Z
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$ProtocolMismatch : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$ProtocolMismatch;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$ResumeTokenInvalid : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$ResumeTokenInvalid;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$ResumeWindowExpired : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$ResumeWindowExpired;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$ResumeWindowNotYetOpen : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$ResumeWindowNotYetOpen;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$RoomMismatch : us/tractat/kuilt/session/admit/RejectCode {
+	public static final field INSTANCE Lus/tractat/kuilt/session/admit/RejectCode$RoomMismatch;
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+}
+
+public final class us/tractat/kuilt/session/admit/RejectCode$Unknown : us/tractat/kuilt/session/admit/RejectCode {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/session/admit/RejectCode$Unknown;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/admit/RejectCode$Unknown;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/admit/RejectCode$Unknown;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getId ()Ljava/lang/String;
+	public fun getRetryable ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/session/election/ElectionLobby {
+	public abstract fun awaitRoom (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun awaitRoom$default (Lus/tractat/kuilt/session/election/ElectionLobby;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun getHost ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public abstract fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun leave (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun start (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun start$default (Lus/tractat/kuilt/session/election/ElectionLobby;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/election/ElectionLobby$DefaultImpls {
+	public static synthetic fun awaitRoom$default (Lus/tractat/kuilt/session/election/ElectionLobby;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun start$default (Lus/tractat/kuilt/session/election/ElectionLobby;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/election/ElectionLobbyKt {
+	public static final fun electHost (Ljava/util/Set;)Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/session/election/ElectionOutcome {
+}
+
+public final class us/tractat/kuilt/session/election/ElectionOutcome$Adopted : us/tractat/kuilt/session/election/ElectionOutcome {
+	public fun <init> (Lus/tractat/kuilt/session/Room;)V
+	public final fun component1 ()Lus/tractat/kuilt/session/Room;
+	public final fun copy (Lus/tractat/kuilt/session/Room;)Lus/tractat/kuilt/session/election/ElectionOutcome$Adopted;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/election/ElectionOutcome$Adopted;Lus/tractat/kuilt/session/Room;ILjava/lang/Object;)Lus/tractat/kuilt/session/election/ElectionOutcome$Adopted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRoom ()Lus/tractat/kuilt/session/Room;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/election/ElectionOutcome$BecameHost : us/tractat/kuilt/session/election/ElectionOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/session/election/ElectionOutcome$BecameHost;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/election/ElectionOutcome$Torn : us/tractat/kuilt/session/election/ElectionOutcome {
+	public fun <init> (Lus/tractat/kuilt/core/CloseReason;)V
+	public final fun component1 ()Lus/tractat/kuilt/core/CloseReason;
+	public final fun copy (Lus/tractat/kuilt/core/CloseReason;)Lus/tractat/kuilt/session/election/ElectionOutcome$Torn;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/election/ElectionOutcome$Torn;Lus/tractat/kuilt/core/CloseReason;ILjava/lang/Object;)Lus/tractat/kuilt/session/election/ElectionOutcome$Torn;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Lus/tractat/kuilt/core/CloseReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/session/election/LobbyMessage {
+	public static final field Companion Lus/tractat/kuilt/session/election/LobbyMessage$Companion;
+}
+
+public final class us/tractat/kuilt/session/election/LobbyMessage$Commit : us/tractat/kuilt/session/election/LobbyMessage {
+	public static final field Companion Lus/tractat/kuilt/session/election/LobbyMessage$Commit$Companion;
+	public fun <init> (Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy (Ljava/lang/String;J)Lus/tractat/kuilt/session/election/LobbyMessage$Commit;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/election/LobbyMessage$Commit;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/session/election/LobbyMessage$Commit;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public final fun getHostId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/election/LobbyMessage$Commit$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/election/LobbyMessage$Commit$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/election/LobbyMessage$Commit;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/election/LobbyMessage$Commit;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/election/LobbyMessage$Commit$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/election/LobbyMessage$Companion {
+	public final fun decode ([B)Lus/tractat/kuilt/session/election/LobbyMessage;
+	public final fun encode (Lus/tractat/kuilt/session/election/LobbyMessage;)[B
+	public final fun getPREFIX_BYTE ()B
+	public final fun isLobbyFrame ([B)Z
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/election/LobbyMessage$Freeze : us/tractat/kuilt/session/election/LobbyMessage {
+	public static final field Companion Lus/tractat/kuilt/session/election/LobbyMessage$Freeze$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/util/Set;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/Set;
+	public final fun component3 ()J
+	public final fun copy (Ljava/lang/String;Ljava/util/Set;J)Lus/tractat/kuilt/session/election/LobbyMessage$Freeze;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/election/LobbyMessage$Freeze;Ljava/lang/String;Ljava/util/Set;JILjava/lang/Object;)Lus/tractat/kuilt/session/election/LobbyMessage$Freeze;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public final fun getHostId ()Ljava/lang/String;
+	public final fun getRoster ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/election/LobbyMessage$Freeze$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/election/LobbyMessage$Freeze$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/election/LobbyMessage$Freeze;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/election/LobbyMessage$Freeze;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/election/LobbyMessage$Freeze$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/election/LobbyMessage$FreezeAck : us/tractat/kuilt/session/election/LobbyMessage {
+	public static final field Companion Lus/tractat/kuilt/session/election/LobbyMessage$FreezeAck$Companion;
+	public fun <init> (Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy (Ljava/lang/String;J)Lus/tractat/kuilt/session/election/LobbyMessage$FreezeAck;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/election/LobbyMessage$FreezeAck;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/session/election/LobbyMessage$FreezeAck;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public final fun getHostId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/election/LobbyMessage$FreezeAck$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/election/LobbyMessage$FreezeAck$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/election/LobbyMessage$FreezeAck;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/election/LobbyMessage$FreezeAck;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/election/LobbyMessage$FreezeAck$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/election/LobbyMessage$Reopen : us/tractat/kuilt/session/election/LobbyMessage {
+	public static final field Companion Lus/tractat/kuilt/session/election/LobbyMessage$Reopen$Companion;
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lus/tractat/kuilt/session/election/LobbyMessage$Reopen;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/election/LobbyMessage$Reopen;JILjava/lang/Object;)Lus/tractat/kuilt/session/election/LobbyMessage$Reopen;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/session/election/LobbyMessage$Reopen$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/session/election/LobbyMessage$Reopen$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/session/election/LobbyMessage$Reopen;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/session/election/LobbyMessage$Reopen;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/election/LobbyMessage$Reopen$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/session/election/LobbyTornException : java/lang/Exception {
+	public fun <init> (Lus/tractat/kuilt/core/CloseReason;)V
+	public final fun getReason ()Lus/tractat/kuilt/core/CloseReason;
+}
+
+public final class us/tractat/kuilt/session/election/NotElectedHostException : java/lang/Exception {
+	public fun <init> (Ljava/lang/String;)V
+}
+
+public final class us/tractat/kuilt/session/partition/DefaultJoinerReconnectController : us/tractat/kuilt/session/partition/JoinerReconnectController {
+	public static final field Companion Lus/tractat/kuilt/session/partition/DefaultJoinerReconnectController$Companion;
+	public static final field DEFAULT_RECONNECT_WINDOW_MS J
+	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/functions/Function0;Lkotlinx/coroutines/CoroutineScope;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/functions/Function0;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun expire-t5-yf_A (Ljava/lang/String;J)V
+	public fun getEvents ()Lkotlinx/coroutines/flow/SharedFlow;
+	public fun onPeerRecovered-t5-yf_A (Ljava/lang/String;J)V
+	public fun onPeerUnresponsive-t5-yf_A (Ljava/lang/String;J)V
+	public fun tryResume (Lus/tractat/kuilt/session/partition/ResumeToken;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/session/partition/DefaultJoinerReconnectController$Companion {
+}
+
+public abstract interface class us/tractat/kuilt/session/partition/EndpointSelector {
+	public abstract fun next (I)I
+}
+
+public abstract interface class us/tractat/kuilt/session/partition/JoinerReconnectController {
+	public abstract fun expire-t5-yf_A (Ljava/lang/String;J)V
+	public abstract fun getEvents ()Lkotlinx/coroutines/flow/SharedFlow;
+	public abstract fun onPeerRecovered-t5-yf_A (Ljava/lang/String;J)V
+	public abstract fun onPeerUnresponsive-t5-yf_A (Ljava/lang/String;J)V
+	public abstract fun tryResume (Lus/tractat/kuilt/session/partition/ResumeToken;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/session/partition/JoinerReconnectEvent {
+}
+
+public final class us/tractat/kuilt/session/partition/JoinerReconnectEvent$Resumed : us/tractat/kuilt/session/partition/JoinerReconnectEvent {
+	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy-t5-yf_A (Ljava/lang/String;J)Lus/tractat/kuilt/session/partition/JoinerReconnectEvent$Resumed;
+	public static synthetic fun copy-t5-yf_A$default (Lus/tractat/kuilt/session/partition/JoinerReconnectEvent$Resumed;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/session/partition/JoinerReconnectEvent$Resumed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAt ()J
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/partition/JoinerReconnectEvent$WindowExpired : us/tractat/kuilt/session/partition/JoinerReconnectEvent {
+	public synthetic fun <init> (Ljava/lang/String;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun copy-PW_baCY (Ljava/lang/String;JJ)Lus/tractat/kuilt/session/partition/JoinerReconnectEvent$WindowExpired;
+	public static synthetic fun copy-PW_baCY$default (Lus/tractat/kuilt/session/partition/JoinerReconnectEvent$WindowExpired;Ljava/lang/String;JJILjava/lang/Object;)Lus/tractat/kuilt/session/partition/JoinerReconnectEvent$WindowExpired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAt ()J
+	public final fun getDetectedAt ()J
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/partition/JoinerReconnectEvent$WindowOpened : us/tractat/kuilt/session/partition/JoinerReconnectEvent {
+	public synthetic fun <init> (Ljava/lang/String;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun copy-PW_baCY (Ljava/lang/String;JJ)Lus/tractat/kuilt/session/partition/JoinerReconnectEvent$WindowOpened;
+	public static synthetic fun copy-PW_baCY$default (Lus/tractat/kuilt/session/partition/JoinerReconnectEvent$WindowOpened;Ljava/lang/String;JJILjava/lang/Object;)Lus/tractat/kuilt/session/partition/JoinerReconnectEvent$WindowOpened;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetectedAt ()J
+	public final fun getExpiresAt ()J
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/session/partition/ResumeResult {
+}
+
+public abstract interface class us/tractat/kuilt/session/partition/ResumeResult$HostVerdict : us/tractat/kuilt/session/partition/ResumeResult {
+}
+
+public abstract interface class us/tractat/kuilt/session/partition/ResumeResult$JoinerOutcome : us/tractat/kuilt/session/partition/ResumeResult {
+}
+
+public final class us/tractat/kuilt/session/partition/ResumeResult$Refused : us/tractat/kuilt/session/partition/ResumeResult$JoinerOutcome {
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/session/admit/RejectCode;
+	public final fun copy (Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;)Lus/tractat/kuilt/session/partition/ResumeResult$Refused;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/partition/ResumeResult$Refused;Ljava/lang/String;Lus/tractat/kuilt/session/admit/RejectCode;ILjava/lang/Object;)Lus/tractat/kuilt/session/partition/ResumeResult$Refused;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Lus/tractat/kuilt/session/admit/RejectCode;
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/partition/ResumeResult$Success : us/tractat/kuilt/session/partition/ResumeResult$HostVerdict, us/tractat/kuilt/session/partition/ResumeResult$JoinerOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/session/partition/ResumeResult$Success;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/partition/ResumeResult$TimedOut : us/tractat/kuilt/session/partition/ResumeResult$JoinerOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/session/partition/ResumeResult$TimedOut;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/partition/ResumeResult$TokenInvalid : us/tractat/kuilt/session/partition/ResumeResult$HostVerdict {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/session/partition/ResumeResult$TokenInvalid;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/session/partition/ResumeResult$TokenInvalid;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/partition/ResumeResult$TokenInvalid;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/partition/ResumeResult$WindowClosed : us/tractat/kuilt/session/partition/ResumeResult$HostVerdict, us/tractat/kuilt/session/partition/ResumeResult$JoinerOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/session/partition/ResumeResult$WindowClosed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/partition/ResumeResult$WindowNotYetOpen : us/tractat/kuilt/session/partition/ResumeResult$HostVerdict {
+	public static final field INSTANCE Lus/tractat/kuilt/session/partition/ResumeResult$WindowNotYetOpen;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/partition/ResumeToken {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2-XMDR_v8 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun copy-MipkIqI (Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/session/partition/ResumeToken;
+	public static synthetic fun copy-MipkIqI$default (Lus/tractat/kuilt/session/partition/ResumeToken;Ljava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/session/partition/ResumeToken;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIssuedAt ()J
+	public final fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public final fun getRoomId-XMDR_v8 ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/partition/RoomId {
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/session/partition/RoomId;
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/session/partition/RoundRobinEndpointSelector : us/tractat/kuilt/session/partition/EndpointSelector {
+	public fun <init> ()V
+	public fun <init> (I)V
+	public synthetic fun <init> (IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun next (I)I
+}
+
+public final class us/tractat/kuilt/session/partition/ServerClusterReconnect {
+	public fun <init> (Ljava/util/List;Lus/tractat/kuilt/session/partition/EndpointSelector;)V
+	public synthetic fun <init> (Ljava/util/List;Lus/tractat/kuilt/session/partition/EndpointSelector;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun advanceEndpoint ()V
+	public final fun clearToken ()V
+	public final fun connect (Lus/tractat/kuilt/core/Loom;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun currentEndpoint ()Lus/tractat/kuilt/core/Tag;
+	public final fun onTransportTear ()V
+	public final fun pendingToken ()Lus/tractat/kuilt/session/partition/ResumeToken;
+	public final fun setToken (Lus/tractat/kuilt/session/partition/ResumeToken;)V
+}
+

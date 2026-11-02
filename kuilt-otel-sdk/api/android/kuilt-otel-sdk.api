@@ -1,0 +1,20 @@
+public final class us/tractat/kuilt/otel/sdk/KuiltLogRecordExporter : io/opentelemetry/sdk/logs/export/LogRecordExporter {
+	public fun <init> (Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lkotlin/random/Random;Lkotlinx/coroutines/CoroutineScope;)V
+	public fun export (Ljava/util/Collection;)Lio/opentelemetry/sdk/common/CompletableResultCode;
+	public fun flush ()Lio/opentelemetry/sdk/common/CompletableResultCode;
+	public fun shutdown ()Lio/opentelemetry/sdk/common/CompletableResultCode;
+}
+
+public final class us/tractat/kuilt/otel/sdk/KuiltMetricExporter : io/opentelemetry/sdk/metrics/export/MetricExporter {
+	public fun <init> (Lus/tractat/kuilt/otel/WarpMetricExporter;Lkotlinx/coroutines/CoroutineScope;)V
+	public fun export (Ljava/util/Collection;)Lio/opentelemetry/sdk/common/CompletableResultCode;
+	public fun flush ()Lio/opentelemetry/sdk/common/CompletableResultCode;
+	public fun getAggregationTemporality (Lio/opentelemetry/sdk/metrics/InstrumentType;)Lio/opentelemetry/sdk/metrics/data/AggregationTemporality;
+	public fun shutdown ()Lio/opentelemetry/sdk/common/CompletableResultCode;
+}
+
+public final class us/tractat/kuilt/otel/sdk/OtelSdkTraceContextProvider : us/tractat/kuilt/otel/logging/TraceContextProvider {
+	public fun <init> ()V
+	public fun current ()Lus/tractat/kuilt/otel/logging/ActiveTrace;
+}
+

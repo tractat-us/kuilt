@@ -86,12 +86,25 @@ internal fun interface OutboundSender {
  * @param selfId this server peer's own [PeerId].
  * @param authorizer required authorization policy — invoked on first frame from each
  *   connection. Use [RoomAuthorizer.AllowAll] for open-access rooms and in tests.
+ * @param onClose internal-constructor only; not part of the public API. Told this hub on every [close],
+ *   before the roster collapses. It is how the [MuxServerLoom] that owns the hub drops it from its
+ *   room table, so a [MuxServerLoom.host] of [channelName] arriving after [close] starts gets a
+ *   fresh room rather than this closed one (#3041). It must tolerate repeat calls. A hub built
+ *   through the public constructor has no owner, so nothing is told.
  */
-public class RoomHubSeam(
+public class RoomHubSeam internal constructor(
     internal val channelName: String,
     override val selfId: PeerId,
     private val authorizer: RoomAuthorizer,
+    private val onClose: (RoomHubSeam) -> Unit,
 ) : Seam, PrincipalRoster {
+
+    /** A hub no loom owns: closing it tells nobody. */
+    public constructor(
+        channelName: String,
+        selfId: PeerId,
+        authorizer: RoomAuthorizer,
+    ) : this(channelName, selfId, authorizer, onClose = {})
 
     private val lock = reentrantLock()
 
@@ -300,6 +313,18 @@ public class RoomHubSeam(
     }
 
     override suspend fun close(reason: CloseReason) {
+        // Leave the owner's room table FIRST, before `closed` is set. This guarantees only that a
+        // host of this name arriving AFTER close() starts never gets a hub already marked closed
+        // (told after the collapse instead, a host landing in between would be handed this hub,
+        // closed and still listed: #3041 in a narrower window). It does not stop a host that landed
+        // BEFORE the owner's close reached here: the room table is idempotent and drops the entry
+        // only through this hook, so that host got this hub, which then closes. Callers must
+        // finish closing the old room before re-hosting its name (see [MuxServerLoom]).
+        // A frame already past the loom's room lookup can likewise still reach this hub, because
+        // the lookup and the [deliver] are not atomic; the roster collapse plus the [closed]
+        // re-check in [deliver] contain it. Outside [lock], so the owner's own lock is never
+        // taken inside this hub's.
+        onClose(this)
         // Collapse the roster to { selfId } BEFORE latching Torn. [Seam.peers] makes that an ORDERED
         // obligation — a consumer woken by the terminal state must already observe the collapse — and
         // it is `{ selfId }`, not `emptySet()`: the hub is a peer in its own room roster, so an empty

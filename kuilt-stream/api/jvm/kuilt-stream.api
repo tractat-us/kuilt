@@ -1,0 +1,10 @@
+public final class us/tractat/kuilt/stream/FrameTooLargeException : java/lang/Exception {
+	public fun <init> (II)V
+}
+
+public final class us/tractat/kuilt/stream/FramedKt {
+	public static final field DEFAULT_MAX_FRAME_SIZE I
+	public static final fun framed (Lkotlinx/io/Source;Lkotlinx/io/Sink;I)Lus/tractat/kuilt/core/fabric/Connection;
+	public static synthetic fun framed$default (Lkotlinx/io/Source;Lkotlinx/io/Sink;IILjava/lang/Object;)Lus/tractat/kuilt/core/fabric/Connection;
+}
+

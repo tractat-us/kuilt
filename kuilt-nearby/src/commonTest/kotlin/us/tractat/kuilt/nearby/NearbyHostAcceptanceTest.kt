@@ -1,0 +1,969 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
+package us.tractat.kuilt.nearby
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
+import kotlin.test.fail
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+
+/**
+ * A host keeps accepting for as long as it advertises, and no exit from that leaves a `join` waiting
+ * on it (#2811).
+ *
+ * Two rigs, for two different questions:
+ *
+ *  - [FakeNearbyRadio] plays both ends on one loom, so its handshake cannot complete unless the
+ *    host's machine is alive and accepts. That is what "a joiner was accepted" needs, and it is
+ *    **blind to the `join` hang**: with the host's machine dead the fake's second accept never
+ *    arrives, so the joiner fails on its own clock and never reaches the wait after its handshake.
+ *  - [ScriptedNearbyApi] plays a **different device**, which completes a dial with no help from this
+ *    loom's host. Only that reaches the wait a `join` used to do on the loom's own host.
+ *
+ * The bound in [bounded] is the failure signal for a hang: it reds with a message naming the wait,
+ * rather than running into the [TEST_WEDGE_BACKSTOP] that would report a wedge and nothing else.
+ */
+class NearbyHostAcceptanceTest {
+
+    /** What the remote device does when this loom dials it. */
+    private enum class FarDevice {
+        /** Connects, and answers this peer's identity with its own. */
+        COMPLETES,
+
+        /** Reports the connection as refused once this side accepts. */
+        REFUSES,
+
+        /** Takes the connection and then says nothing. */
+        STALLS,
+    }
+
+    /** How the radio turns a call down. The real binding throws the failed Task's `ApiException`. */
+    private class RadioRefusal(status: String) : Exception(status)
+
+    /**
+     * A [NearbyApi] with no second loom behind it: the test emits the events a remote joiner would
+     * cause, and [far] scripts a remote host. It records everything, so each test below can read what
+     * the loom actually did to the radio.
+     *
+     * It holds the radio's state as well as its call counts, because that state is one thing shared by
+     * everyone on it: a second start is refused (`STATUS_ALREADY_ADVERTISING`,
+     * `STATUS_ALREADY_DISCOVERING`), a stop stops whoever is running, and a dial to a connected endpoint
+     * is refused (`STATUS_ALREADY_CONNECTED_TO_ENDPOINT`). A rig that refuses nothing cannot tell a seam
+     * stopping its own advertising from a seam stopping someone else's, and [radioLog]'s order is what
+     * tells a stop that followed its start from one that preceded it: a count says the same of both.
+     */
+    private class ScriptedNearbyApi(
+        private val far: FarDevice? = null,
+        private val failStartAdvertising: Throwable? = null,
+        private val failInitiatedStream: Throwable? = null,
+    ) : NearbyApi {
+        val found = MutableSharedFlow<EndpointFound>(extraBufferCapacity = 16)
+        val connInit = MutableSharedFlow<ConnectionInitiated>(extraBufferCapacity = 16)
+        val connResult = MutableSharedFlow<ConnectionResult>(extraBufferCapacity = 16)
+        val payloads = MutableSharedFlow<PayloadReceived>(extraBufferCapacity = 16)
+        val disconnects = MutableSharedFlow<EndpointDisconnected>(extraBufferCapacity = 16)
+
+        val accepted = mutableListOf<String>()
+        val disconnected = mutableListOf<String>()
+        val acceptFailures = mutableMapOf<String, Throwable>()
+        var requestFailure: suspend () -> Unit = {}
+
+        var advertisingStarts = 0
+        var advertisingStops = 0
+        var discoveryStops = 0
+
+        val radioLog = mutableListOf<String>()
+        var advertising = false
+        var discovering = false
+        val connected = mutableSetOf<String>()
+
+        /** What discovery finds as it starts. Null until the test says something has appeared. */
+        var discoverable: String? = if (far != null) FAR_ENDPOINT else null
+
+        /** When set, a start call takes effect and then parks here, the way an in-flight Task does. */
+        var startGate: CompletableDeferred<Unit>? = null
+
+        /** When set, this peer's identity send parks here until the test opens it. */
+        var identitySendGate: CompletableDeferred<Unit>? = null
+        var identitySendsFinished = 0
+
+        /** [payloads]' subscribers at the moment of the dial — the rig for "the seam was live". */
+        var payloadSubscribersDuringDial = -1
+
+        override val endpointFound: Flow<EndpointFound> = found
+        override val connectionInitiated: Flow<ConnectionInitiated> =
+            if (failInitiatedStream == null) connInit else flow { throw failInitiatedStream }
+        override val connectionResult: Flow<ConnectionResult> = connResult
+        override val payloadReceived: Flow<PayloadReceived> = payloads
+        override val endpointDisconnected: Flow<EndpointDisconnected> = disconnects
+
+        override fun availability(): FabricAvailability = FabricAvailability.Available
+
+        override suspend fun startAdvertising(displayName: String, serviceId: String) {
+            advertisingStarts++
+            failStartAdvertising?.let {
+                radioLog += ADVERTISING_REFUSED
+                throw it
+            }
+            if (advertising) {
+                radioLog += ADVERTISING_REFUSED
+                throw RadioRefusal("STATUS_ALREADY_ADVERTISING")
+            }
+            radioLog += ADVERTISING_STARTED
+            advertising = true
+            startGate?.await()
+        }
+
+        override suspend fun stopAdvertising() {
+            advertisingStops++
+            radioLog += ADVERTISING_STOPPED
+            advertising = false
+        }
+
+        override suspend fun startDiscovery(serviceId: String) {
+            if (discovering) {
+                radioLog += DISCOVERY_REFUSED
+                throw RadioRefusal("STATUS_ALREADY_DISCOVERING")
+            }
+            radioLog += DISCOVERY_STARTED
+            discovering = true
+            startGate?.await()
+            announceDiscoverable()
+        }
+
+        override suspend fun stopDiscovery() {
+            discoveryStops++
+            radioLog += DISCOVERY_STOPPED
+            discovering = false
+        }
+
+        /** Nobody hears of an endpoint unless something is discovering. */
+        suspend fun announceDiscoverable() {
+            val endpoint = discoverable ?: return
+            if (discovering) found.emit(EndpointFound(endpoint, "far"))
+        }
+
+        override suspend fun requestConnection(displayName: String, endpointId: String) {
+            payloadSubscribersDuringDial = payloads.subscriptionCount.value
+            requestFailure()
+            if (endpointId in connected) throw RadioRefusal("STATUS_ALREADY_CONNECTED_TO_ENDPOINT")
+            connInit.emit(ConnectionInitiated(endpointId, "far"))
+        }
+
+        override suspend fun acceptConnection(endpointId: String) {
+            accepted += endpointId
+            acceptFailures[endpointId]?.let { throw it }
+            if (endpointId != FAR_ENDPOINT) return
+            when (far) {
+                FarDevice.COMPLETES -> {
+                    connected += endpointId
+                    connResult.emit(ConnectionResult(endpointId, success = true))
+                }
+                FarDevice.REFUSES ->
+                    connResult.emit(ConnectionResult(endpointId, success = false, reason = "refused"))
+                FarDevice.STALLS, null -> Unit
+            }
+        }
+
+        override suspend fun disconnect(endpointId: String) {
+            disconnected += endpointId
+            connected -= endpointId
+        }
+
+        override suspend fun sendBytesPayload(endpointId: String, bytes: ByteArray) {
+            identitySendGate?.await()
+            identitySendsFinished++
+            if (endpointId == FAR_ENDPOINT && far == FarDevice.COMPLETES) {
+                payloads.emit(PayloadReceived(endpointId, FAR_PEER.value.encodeToByteArray()))
+            }
+        }
+    }
+
+    /** Drive one remote joiner through a whole handshake with the host, a dispatch at a time. */
+    private suspend fun TestScope.admitJoiner(api: ScriptedNearbyApi, endpoint: String, id: PeerId) {
+        api.connInit.emit(ConnectionInitiated(endpoint, "joiner"))
+        runCurrent()
+        api.connected += endpoint
+        api.connResult.emit(ConnectionResult(endpoint, success = true))
+        runCurrent()
+        api.payloads.emit(PayloadReceived(endpoint, id.value.encodeToByteArray()))
+        runCurrent()
+    }
+
+    /** Fails on the bound rather than hanging, naming what never returned. */
+    private suspend fun <T> bounded(what: String, block: suspend () -> T): T =
+        withTimeoutOrNull(HANG_BOUND) { block() }
+            ?: fail("$what did not return within $HANG_BOUND of virtual time — it is hanging")
+
+    private suspend fun NearbyLoom.joinFar(): Seam = join(NearbyTag("device", FAR_ENDPOINT))
+
+    // ── a host keeps accepting ────────────────────────────────────────────────────────────────────
+
+    /**
+     * The headline. The handshake clock used to start when the host opened, so a joiner arriving a
+     * moment after [TIMEOUT] met a host that had silently stopped listening while still advertising
+     * and still `Weaving`.
+     */
+    @Test
+    fun aJoinerArrivingLongAfterTheHandshakeTimeoutIsAccepted() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val loom = NearbyLoom(FakeNearbyApi(FakeNearbyRadio()), handshakeTimeout = TIMEOUT)
+            val host = loom.host(Pattern("device"))
+
+            advanceTimeBy(TIMEOUT * 10)
+            runCurrent()
+            val arrivedAt = currentTime
+            val joiner = bounded("join") { loom.join(NearbyTag("device", HOST_ENDPOINT)) }
+            runCurrent()
+
+            assertAll(
+                { assertEquals(TIMEOUT.inWholeMilliseconds * 10, arrivedAt, "rig: the joiner really came late") },
+                { assertTrue(joiner.selfId in host.peers.value, "the late joiner is on the host's roster") },
+                { assertIs<SeamState.Woven>(host.state.value, "and the host has woven") },
+            )
+        }
+
+    @Test
+    fun anIdleHostStaysWeavingAndAdvertising() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+
+            advanceTimeBy(TIMEOUT * 10)
+            runCurrent()
+
+            assertAll(
+                { assertIs<SeamState.Weaving>(host.state.value, "nobody came, so nothing has changed") },
+                { assertEquals(1, api.advertisingStarts, "rig: the host really did start advertising") },
+                { assertEquals(0, api.advertisingStops, "and it has not stopped: nothing ended the wait") },
+            )
+        }
+
+    // ── a failed attempt costs that attempt, and nothing else ─────────────────────────────────────
+
+    /**
+     * Every way one attempt can fail, followed by the same proof: a *different* joiner gets in. The
+     * second endpoint is what makes this more than "the host did not crash": it is accepted only if
+     * something is still listening.
+     */
+    private suspend fun TestScope.assertHostSurvives(
+        api: ScriptedNearbyApi,
+        host: Seam,
+        failedEndpoint: String,
+    ) {
+        val acceptedAfterFailure = api.accepted.toList()
+        val disconnectedAfterFailure = api.disconnected.toList()
+        val stateAfterFailure = host.state.value
+        val peersAfterFailure = host.peers.value
+        val stopsAfterFailure = api.advertisingStops
+
+        val second = PeerId("second-joiner")
+        admitJoiner(api, SECOND_ENDPOINT, second)
+
+        assertAll(
+            { assertTrue(failedEndpoint in acceptedAfterFailure, "rig: the failed attempt really reached accept") },
+            { assertEquals(listOf(failedEndpoint), disconnectedAfterFailure, "a failed attempt releases its link") },
+            { assertIs<SeamState.Weaving>(stateAfterFailure, "a failed attempt does not end the session") },
+            { assertEquals(0, stopsAfterFailure, "a failed attempt does not touch the advertiser") },
+            { assertEquals(setOf(host.selfId), peersAfterFailure, "and it never became a peer") },
+            { assertTrue(SECOND_ENDPOINT in api.accepted, "the host is still accepting after the failure") },
+            { assertTrue(second in host.peers.value, "and the next joiner gets in") },
+            { assertIs<SeamState.Woven>(host.state.value, "and the host weaves to it") },
+        )
+    }
+
+    @Test
+    fun aRefusedConnectionLeavesTheHostAccepting() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+
+            api.connInit.emit(ConnectionInitiated(FIRST_ENDPOINT, "joiner"))
+            runCurrent()
+            api.connResult.emit(ConnectionResult(FIRST_ENDPOINT, success = false, reason = "rejected"))
+            runCurrent()
+
+            assertHostSurvives(api, host, FIRST_ENDPOINT)
+        }
+
+    @Test
+    fun aRefusedIdentityLeavesTheHostAccepting() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+
+            api.connInit.emit(ConnectionInitiated(FIRST_ENDPOINT, "joiner"))
+            runCurrent()
+            api.connResult.emit(ConnectionResult(FIRST_ENDPOINT, success = true))
+            runCurrent()
+            // Not valid UTF-8, so the identity is refused — on a link that really is connected.
+            api.payloads.emit(PayloadReceived(FIRST_ENDPOINT, byteArrayOf(0xC3.toByte())))
+            runCurrent()
+
+            assertHostSurvives(api, host, FIRST_ENDPOINT)
+        }
+
+    @Test
+    fun anAcceptThatThrowsLeavesTheHostAccepting() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            api.acceptFailures[FIRST_ENDPOINT] = IllegalArgumentException("radio refused the accept")
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+
+            api.connInit.emit(ConnectionInitiated(FIRST_ENDPOINT, "joiner"))
+            runCurrent()
+
+            assertHostSurvives(api, host, FIRST_ENDPOINT)
+        }
+
+    /** The same again, with a callee-minted cancellation: it fails the attempt, not the host. */
+    @Test
+    fun anAcceptThatMintsACancellationLeavesTheHostAccepting() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            api.acceptFailures[FIRST_ENDPOINT] = mintedTimeout()
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+
+            api.connInit.emit(ConnectionInitiated(FIRST_ENDPOINT, "joiner"))
+            runCurrent()
+
+            assertHostSurvives(api, host, FIRST_ENDPOINT)
+        }
+
+    /**
+     * The id a failed attempt bound goes back with it. An identity can arrive before the result, so
+     * the attempt can hold one and still fail, and a binding left behind would refuse the same device
+     * coming back on a new endpoint, as a collision with a connection that no longer exists.
+     */
+    @Test
+    fun anIdFromAFailedAttemptIsFreeForTheNextEndpointToAnnounce() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+            val returning = PeerId("returning-device")
+
+            api.connInit.emit(ConnectionInitiated(FIRST_ENDPOINT, "joiner"))
+            runCurrent()
+            api.payloads.emit(PayloadReceived(FIRST_ENDPOINT, returning.value.encodeToByteArray()))
+            runCurrent()
+            api.connResult.emit(ConnectionResult(FIRST_ENDPOINT, success = false, reason = "dropped"))
+            runCurrent()
+            val disconnectedAfterFailure = api.disconnected.toList()
+            val peersAfterFailure = host.peers.value
+
+            admitJoiner(api, SECOND_ENDPOINT, returning)
+
+            assertAll(
+                { assertEquals(listOf(FIRST_ENDPOINT), disconnectedAfterFailure, "rig: the attempt really failed") },
+                { assertEquals(setOf(host.selfId), peersAfterFailure, "rig: and its id never reached the roster") },
+                { assertTrue(SECOND_ENDPOINT in api.accepted, "rig: the next attempt really reached accept") },
+                { assertTrue(returning in host.peers.value, "the same id is admitted on the new endpoint") },
+                { assertIs<SeamState.Woven>(host.state.value, "and the host weaves to it") },
+            )
+        }
+
+    // ── the bound did not vanish ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Moving the clock must not have removed it. The host idles for longer than the bound first, so
+     * the two possible clock starts disagree: from the open, this attempt would already be late.
+     *
+     * The idle deliberately stops **between** multiples of the bound. A clock that restarted every
+     * [TIMEOUT] from the open would, at an exact multiple, expire at the same instant as this one, and
+     * this test could not tell them apart.
+     */
+    @Test
+    fun aHandshakeThatStallsTimesOutOnItsOwnClockAndTheHostAcceptsAgain() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+
+            advanceTimeBy(TIMEOUT * 10 + TIMEOUT / 2)
+            runCurrent()
+            api.connInit.emit(ConnectionInitiated(FIRST_ENDPOINT, "joiner"))
+            runCurrent()
+            assertEquals(listOf(FIRST_ENDPOINT), api.accepted, "rig: the host took this attempt on")
+
+            advanceTimeBy(TIMEOUT - 1.milliseconds)
+            runCurrent()
+            assertEquals(emptyList(), api.disconnected, "one millisecond short of the bound, it is still pending")
+
+            advanceTimeBy(1.milliseconds)
+            runCurrent()
+
+            assertHostSurvives(api, host, FIRST_ENDPOINT)
+        }
+
+    // ── a join never waits on a host that owes it nothing ─────────────────────────────────────────
+
+    /**
+     * Reachable on one real device: host a room, leave it, join somebody else's. Closing the host
+     * cancelled the coroutine that was to complete the deferred, so the `join` completed its handshake
+     * with the other device and then waited forever.
+     */
+    @Test
+    fun aJoinAfterTheHostClosedDoesNotHang() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.COMPLETES)
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            val host = loom.host(Pattern("mine"))
+            host.close()
+            assertIs<SeamState.Torn>(host.state.value, "rig: the host really is closed")
+
+            val joiner = bounded("join after the host closed") { loom.joinFar() }
+
+            assertTrue(FAR_PEER in joiner.peers.value, "the join reached the other device")
+        }
+
+    /** The same hang, by the route the issue names: a host the old clock had already stopped. */
+    @Test
+    fun aJoinAfterTheHostOutlivedTheTimeoutDoesNotHang() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.COMPLETES)
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            loom.host(Pattern("mine"))
+            advanceTimeBy(TIMEOUT * 10)
+            runCurrent()
+
+            val joiner = bounded("join after the host's wait passed the timeout") { loom.joinFar() }
+
+            assertTrue(FAR_PEER in joiner.peers.value, "the join reached the other device")
+        }
+
+    /**
+     * A device hosting one room and dialling another: both connections report through the same
+     * callback, so the host's first-come claim used to take this loom's OWN dial as an incoming
+     * joiner and weave the host to a device that never asked to join it.
+     */
+    @Test
+    fun aHostDoesNotClaimAConnectionThisLoomIsDialling() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.COMPLETES)
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            val host = loom.host(Pattern("mine"))
+
+            val joiner = bounded("join while hosting") { loom.joinFar() }
+            runCurrent()
+
+            assertAll(
+                { assertTrue(FAR_PEER in joiner.peers.value, "rig: the dial really did complete") },
+                { assertEquals(listOf(FAR_ENDPOINT), api.accepted, "only the dial accepted it, once") },
+                { assertEquals(setOf(host.selfId), host.peers.value, "the host did not weave to it") },
+                { assertIs<SeamState.Weaving>(host.state.value, "and it is still waiting for its own joiner") },
+            )
+
+            // …and the dial did not spend the host: its own joiner still gets in.
+            val own = PeerId("own-joiner")
+            admitJoiner(api, FIRST_ENDPOINT, own)
+            assertTrue(own in host.peers.value, "the host is still accepting")
+        }
+
+    /**
+     * What the wait after the handshake is still FOR: when this loom's host is mid-handshake, a `join`
+     * returns only once that handshake has settled, which is what lets one loom play both ends and
+     * find both rosters populated. It lasts no longer than that handshake's own bound.
+     */
+    @Test
+    fun aJoinWaitsForAnInFlightHostHandshakeAndNoLonger() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.COMPLETES)
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            loom.host(Pattern("mine"))
+            api.connInit.emit(ConnectionInitiated(FIRST_ENDPOINT, "joiner"))
+            runCurrent()
+
+            val join = backgroundScope.async { loom.joinFar() }
+            runCurrent()
+            assertAll(
+                { assertTrue(FAR_ENDPOINT in api.accepted, "rig: the dial itself has finished") },
+                { assertTrue(join.isActive, "a join waits for the host's in-flight handshake") },
+            )
+
+            advanceTimeBy(TIMEOUT)
+            runCurrent()
+
+            assertTrue(join.isCompleted, "and stops waiting when that handshake reaches its bound")
+            assertTrue(FAR_PEER in join.await().peers.value)
+        }
+
+    /**
+     * Closing the host mid-handshake is an exit too: the same wait, released by a cancel rather than
+     * by the bound, and well before the bound would have released it.
+     */
+    @Test
+    fun closingAHostMidHandshakeReleasesAWaitingJoinAndItsLink() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.COMPLETES)
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            val host = loom.host(Pattern("mine"))
+            api.connInit.emit(ConnectionInitiated(FIRST_ENDPOINT, "joiner"))
+            runCurrent()
+            val join = backgroundScope.async { loom.joinFar() }
+            runCurrent()
+            assertTrue(join.isActive, "rig: the join really is waiting on the host's handshake")
+            val closedAt = currentTime
+
+            host.close()
+            runCurrent()
+
+            assertAll(
+                { assertEquals(closedAt, currentTime, "no time passed: the bound did not release it") },
+                { assertTrue(join.isCompleted, "the join is released") },
+                { assertEquals(listOf(FIRST_ENDPOINT), api.disconnected, "and the half-made link is down") },
+            )
+        }
+
+    /**
+     * The radio does not stop for a closing seam, so a handshake can finish as one closes. Nothing
+     * under virtual time can land in that window, so this drives the two ends of it directly: a seam
+     * that refuses is what tells the host the link is still its own to take down.
+     */
+    @Test
+    fun aClosedSeamRefusesALateLinkAndAnOpenOneTakesIt() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val link = ConnectedLink(FIRST_ENDPOINT, PeerId("joiner"))
+
+            // Two radios, because one refuses a second advertiser.
+            val open = assertIs<NearbySeam>(NearbyLoom(ScriptedNearbyApi()).host(Pattern("device")))
+            val closed = assertIs<NearbySeam>(NearbyLoom(ScriptedNearbyApi()).host(Pattern("device")))
+            closed.close()
+            val openAdmits = open.admitEndpoint(link)
+            val closedAdmits = closed.admitEndpoint(link)
+
+            assertAll(
+                { assertTrue(openAdmits, "rig: an open seam takes the same link") },
+                { assertTrue(link.remotePeerId in open.peers.value) },
+                { assertFalse(closedAdmits, "a closed one refuses, leaving it to the caller") },
+                { assertEquals(setOf(closed.selfId), closed.peers.value, "and its roster stays collapsed") },
+            )
+            open.close()
+        }
+
+    // ── a joiner cleans up after itself ───────────────────────────────────────────────────────────
+
+    /**
+     * The seam lives on a parentless scope, so a `join` that throws without closing it leaves its
+     * collectors subscribed for the life of the process. Nothing hands that seam back, so the only
+     * thing to read is the radio's own subscriber count, and the count taken during the dial is the
+     * proof that there was something to clean up.
+     */
+    @Test
+    fun aJoinerHandshakeFailureClosesItsSeam() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.REFUSES)
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+
+            assertFailsWith<ConnectionFailedException> { loom.joinFar() }
+            runCurrent()
+
+            assertAll(
+                { assertTrue(api.payloadSubscribersDuringDial > 0, "rig: the seam was listening during the dial") },
+                { assertEquals(0, api.payloads.subscriptionCount.value, "nothing is listening now") },
+                { assertEquals(0, api.disconnects.subscriptionCount.value, "…on any stream") },
+                { assertEquals(listOf(FAR_ENDPOINT), api.disconnected, "the half-made link is released") },
+                { assertEquals(1, api.discoveryStops, "and discovery is not left running") },
+            )
+        }
+
+    @Test
+    fun aJoinerHandshakeThatStallsFailsAndClosesItsSeam() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.STALLS)
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+
+            val startedAt = currentTime
+            assertFailsWith<ConnectionFailedException> { loom.joinFar() }
+            val elapsed = currentTime - startedAt
+            runCurrent()
+
+            assertAll(
+                { assertEquals(TIMEOUT.inWholeMilliseconds, elapsed, "it failed at the bound, not before") },
+                { assertTrue(FAR_ENDPOINT in api.accepted, "rig: the handshake really started") },
+                { assertEquals(0, api.payloads.subscriptionCount.value, "and nothing is left listening") },
+            )
+        }
+
+    /**
+     * The caller walking away is an exit too, and it arrives through the same unreturned seam. It must
+     * stay a cancellation on the way out: reported as a failure, it would fail a parent that only
+     * asked this one child to stop.
+     */
+    @Test
+    fun cancellingAJoinClosesItsSeamAndStaysACancellation() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi() // nothing is ever found, so the join waits in discovery
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            val thrown = CompletableDeferred<Throwable>()
+
+            val join = backgroundScope.launch {
+                try {
+                    loom.joinFar()
+                } catch (out: Throwable) {
+                    thrown.complete(out)
+                    throw out
+                }
+            }
+            runCurrent()
+            assertTrue(api.payloads.subscriptionCount.value > 0, "rig: the seam exists and is listening")
+
+            join.cancelAndJoin()
+            runCurrent()
+
+            assertAll(
+                { assertEquals(0, api.payloads.subscriptionCount.value, "nothing is left listening") },
+                { assertEquals(1, api.discoveryStops, "and discovery is not left running") },
+                { assertIs<CancellationException>(thrown.getCompleted(), "the caller's own cancel stays one") },
+            )
+        }
+
+    /**
+     * [us.tractat.kuilt.core.Loom.weave] may let a cancellation out only for the caller's own cancel:
+     * a callee-minted one cancels the caller rather than failing it, with no handler and no trace.
+     */
+    @Test
+    fun aMintedCancellationFromTheRadioFailsAJoinInsteadOfCancellingIt() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.STALLS)
+            api.requestFailure = { withTimeout(1.milliseconds) { delay(1.seconds) } }
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+
+            assertFailsWith<ConnectionFailedException> { loom.joinFar() }
+            runCurrent()
+
+            assertAll(
+                { assertEquals(0, api.payloads.subscriptionCount.value, "and the seam is closed behind it") },
+                { assertEquals(listOf(FAR_ENDPOINT), api.disconnected, "a cancelled dial may still be pending") },
+            )
+        }
+
+    // ── a failed dial leaves alone what it never had ──────────────────────────────────────────────
+
+    /**
+     * The radio turning a dial down means this dial has nothing to release, and the endpoint may well
+     * be up for another reason. Here it is this loom's own host's joiner: disconnecting it would take
+     * down a link the dial never owned, because the host was admitted first and the `join` then dialled
+     * the same device.
+     */
+    @Test
+    fun aDialTheRadioRefusesLeavesTheHostsLinkToThatEndpointUp() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            val host = loom.host(Pattern("mine"))
+            val guest = PeerId("guest")
+            admitJoiner(api, FIRST_ENDPOINT, guest)
+            assertTrue(guest in host.peers.value, "rig: the host really has this link")
+            api.discoverable = FIRST_ENDPOINT
+
+            assertFailsWith<RadioRefusal> { loom.join(NearbyTag("device", FIRST_ENDPOINT)) }
+            runCurrent()
+
+            assertAll(
+                { assertEquals(emptyList(), api.disconnected, "the refused dial disconnected nothing") },
+                { assertTrue(FIRST_ENDPOINT in api.connected, "the host's link is still up") },
+                { assertTrue(guest in host.peers.value, "and the host still has its guest") },
+                { assertIs<SeamState.Woven>(host.state.value) },
+                { assertEquals(1, api.payloads.subscriptionCount.value, "only the host's seam still listens") },
+            )
+        }
+
+    /**
+     * The other side of that line. A dial the bound cut off was not refused: nobody told us what the
+     * radio made of it, and the GMS call it wraps keeps running, so the attempt may be pending and this
+     * dial is the only thing that will ever take it down.
+     */
+    @Test
+    fun aDialTheBoundCutsOffStillReleasesItsEndpoint() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.STALLS)
+            api.requestFailure = { awaitCancellation() }
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+
+            val startedAt = currentTime
+            assertFailsWith<ConnectionFailedException> { loom.joinFar() }
+            val elapsed = currentTime - startedAt
+
+            assertAll(
+                { assertEquals(TIMEOUT.inWholeMilliseconds, elapsed, "rig: the bound fired, inside the dial") },
+                { assertEquals(emptyList(), api.accepted, "rig: the dial never got further than the call") },
+                { assertEquals(listOf(FAR_ENDPOINT), api.disconnected, "the attempt is released") },
+            )
+        }
+
+    /**
+     * Resolving the handshake cancels its listeners, so it must not happen with this peer's identity
+     * still in flight: the remote would then wait out its own clock for an id that was cancelled here.
+     * The remote's identity arriving first is the order that exposes it.
+     */
+    @Test
+    fun aHandshakeDoesNotResolveWhileItsOwnIdentityIsStillGoingOut() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val gate = CompletableDeferred<Unit>()
+            api.identitySendGate = gate
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+            val joiner = PeerId("joiner")
+
+            admitJoiner(api, FIRST_ENDPOINT, joiner)
+
+            assertAll(
+                { assertEquals(0, api.identitySendsFinished, "rig: our identity is still going out") },
+                { assertIs<SeamState.Weaving>(host.state.value, "so the host has not resolved") },
+            )
+
+            gate.complete(Unit)
+            runCurrent()
+
+            assertAll(
+                { assertEquals(1, api.identitySendsFinished, "the send was allowed to finish") },
+                { assertTrue(joiner in host.peers.value, "and the link resolved after it") },
+            )
+        }
+
+    // ── the advertiser's lifetime ─────────────────────────────────────────────────────────────────
+
+    /** Accepting and advertising end together, or a closed host stays visible to every joiner. */
+    @Test
+    fun closingAHostStopsItsAdvertisingBeforeCloseReturns() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+            assertEquals(0, api.advertisingStops, "rig: it was advertising up to here")
+
+            host.close()
+
+            // Deliberately no runCurrent(): `close(); host()` on one radio must not have the old
+            // host's stop land after the new host's start, where it would silence the new host.
+            assertEquals(1, api.advertisingStops)
+        }
+
+    /**
+     * This fabric admits one joiner per session, so once it has one there is nothing left to accept —
+     * and a host still advertising then would be inviting joiners it will never answer.
+     */
+    @Test
+    fun aLinkedHostStopsAdvertisingExactlyOnce() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+
+            admitJoiner(api, FIRST_ENDPOINT, PeerId("joiner"))
+            assertEquals(1, api.advertisingStops, "the session has its joiner")
+
+            host.close()
+            runCurrent()
+            assertEquals(1, api.advertisingStops, "and a later close does not stop some newer host's advertiser")
+        }
+
+    @Test
+    fun aHostThatCannotStartAdvertisingFailsAndLeavesNothingBehind() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(failStartAdvertising = IllegalArgumentException("no radio"))
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+
+            assertFailsWith<IllegalArgumentException> { loom.host(Pattern("device")) }
+            runCurrent()
+
+            assertAll(
+                { assertEquals(1, api.advertisingStarts, "rig: the start really was attempted") },
+                { assertEquals(0, api.payloads.subscriptionCount.value, "nothing is left listening") },
+                { assertEquals(0, api.connInit.subscriptionCount.value, "…including the acceptance") },
+                { assertEquals(0, api.advertisingStops, "it started nothing, so it stops nothing") },
+            )
+        }
+
+    /**
+     * `stopAdvertising` takes no argument, because the radio has one advertiser. So a host the radio
+     * refused has nothing of its own to stop, and a stop from it can only land on the host that was
+     * there first, which would go on `Weaving` while nobody could find it.
+     */
+    @Test
+    fun aHostTheRadioRefusesLeavesTheHostAlreadyAdvertisingUp() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            val first = loom.host(Pattern("first"))
+
+            assertFailsWith<RadioRefusal> { loom.host(Pattern("second")) }
+            runCurrent()
+            val logAfterRefusal = api.radioLog.toList()
+            val advertisingAfterRefusal = api.advertising
+
+            val own = PeerId("own-joiner")
+            admitJoiner(api, FIRST_ENDPOINT, own)
+
+            assertAll(
+                { assertEquals(listOf(ADVERTISING_STARTED, ADVERTISING_REFUSED), logAfterRefusal, "no stop") },
+                { assertTrue(advertisingAfterRefusal, "the first host is still advertising") },
+                { assertTrue(own in first.peers.value, "and still accepting") },
+            )
+        }
+
+    /**
+     * A start that was cancelled, unlike one that was refused, may have worked: the GMS binding awaits a
+     * Task, and cancelling the wait does not cancel the Task. So this host owes the radio a stop.
+     */
+    @Test
+    fun aHostCancelledMidStartStopsWhatMayHaveStarted() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            api.startGate = CompletableDeferred()
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+
+            val opening = backgroundScope.launch { loom.host(Pattern("device")) }
+            runCurrent()
+            assertTrue(api.advertising, "rig: the radio took the start and the call is still out")
+
+            opening.cancelAndJoin()
+            runCurrent()
+
+            assertAll(
+                { assertFalse(api.advertising, "nobody will ever hold this seam, so nothing else can stop it") },
+                { assertEquals(0, api.connInit.subscriptionCount.value, "and the acceptance is gone") },
+            )
+        }
+
+    /**
+     * The one failure that is not one attempt's: the event stream itself is gone, so no joiner can
+     * ever be seen again. Retrying would spin, and carrying on `Weaving` is the very lie this fixes,
+     * so the host tears, where a consumer can see it.
+     */
+    @Test
+    fun aHostWhoseEventStreamFailsTearsInsteadOfWeavingForever() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(failInitiatedStream = IllegalArgumentException("runtime went away"))
+            val host = NearbyLoom(api, handshakeTimeout = TIMEOUT).host(Pattern("device"))
+            runCurrent()
+
+            val state = assertIs<SeamState.Torn>(host.state.value)
+            val reason = assertIs<CloseReason.Error>(state.reason, "the consumer is told it was a failure")
+
+            assertAll(
+                { assertIs<NearbyEventStreamLostException>(reason.throwable, "and which one") },
+                {
+                    assertEquals(
+                        listOf(ADVERTISING_STARTED, ADVERTISING_STOPPED),
+                        api.radioLog,
+                        "the stream can fail before the start even runs, and the stop must still land after it",
+                    )
+                },
+                { assertFalse(api.advertising, "or a torn seam advertises for good, with close() a no-op") },
+            )
+        }
+
+    // ── a join's discovery ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Discovery is as radio-global as advertising, and the `finally` that stops it runs on every exit.
+     * So a join the radio refused, stopping nothing of its own, must not stop the join that was there
+     * first, which would then wait in discovery for a device it can no longer hear about.
+     */
+    @Test
+    fun aJoinTheRadioRefusesLeavesTheJoinAlreadyDiscoveringRunning() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi(far = FarDevice.COMPLETES)
+            api.discoverable = null
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+            val first = backgroundScope.async { loom.joinFar() }
+            runCurrent()
+            assertTrue(api.discovering, "rig: the first join really is discovering")
+
+            assertFailsWith<RadioRefusal> { loom.joinFar() }
+            runCurrent()
+            val logAfterRefusal = api.radioLog.toList()
+            val discoveringAfterRefusal = api.discovering
+
+            api.discoverable = FAR_ENDPOINT
+            api.announceDiscoverable()
+            runCurrent()
+
+            assertAll(
+                { assertEquals(listOf(DISCOVERY_STARTED, DISCOVERY_REFUSED), logAfterRefusal, "no stop") },
+                { assertTrue(discoveringAfterRefusal, "the first join is still discovering") },
+                { assertTrue(first.isCompleted, "and hears about the device") },
+                { assertFalse(api.discovering, "and stops its own discovery when it is done") },
+            )
+            assertTrue(FAR_PEER in first.await().peers.value, "the first join got there")
+        }
+
+    /** The same rule as [aHostCancelledMidStartStopsWhatMayHaveStarted], for discovery. */
+    @Test
+    fun aJoinCancelledMidStartStopsWhatMayHaveStarted() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val api = ScriptedNearbyApi()
+            api.startGate = CompletableDeferred()
+            val loom = NearbyLoom(api, handshakeTimeout = TIMEOUT)
+
+            val joining = backgroundScope.launch { loom.joinFar() }
+            runCurrent()
+            assertTrue(api.discovering, "rig: the radio took the start and the call is still out")
+
+            joining.cancelAndJoin()
+            runCurrent()
+
+            assertFalse(api.discovering, "nothing else would ever stop it")
+        }
+
+    /** A real `TimeoutCancellationException`, off this test's virtual clock, with nobody cancelled. */
+    private suspend fun mintedTimeout(): Throwable =
+        try {
+            withTimeout(1.milliseconds) { delay(1.seconds) }
+            fail("rig: the bound never fired")
+        } catch (minted: TimeoutCancellationException) {
+            minted
+        }
+
+    private companion object {
+        val TIMEOUT = 3.seconds
+
+        /** Well past any wait the fix permits; expiring it is what a hang looks like here. */
+        val HANG_BOUND = 120.seconds
+
+        /** The endpoint id [FakeNearbyRadio] hands the discoverer for the advertiser. */
+        const val HOST_ENDPOINT = "ep-advertiser"
+
+        const val FAR_ENDPOINT = "ep-far"
+        val FAR_PEER = PeerId("far-host")
+        const val FIRST_ENDPOINT = "ep-first"
+        const val SECOND_ENDPOINT = "ep-second"
+
+        const val ADVERTISING_STARTED = "advertising started"
+        const val ADVERTISING_REFUSED = "advertising refused"
+        const val ADVERTISING_STOPPED = "advertising stopped"
+        const val DISCOVERY_STARTED = "discovery started"
+        const val DISCOVERY_REFUSED = "discovery refused"
+        const val DISCOVERY_STOPPED = "discovery stopped"
+    }
+}

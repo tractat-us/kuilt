@@ -170,8 +170,12 @@ class ClusterClientTest {
             assertFalse(table.shouldApply(retryEntry.dedupKey), "retry entry must be filtered")
         }
 
+    /**
+     * Shows that `close` reaches the node, read off [FakeRaftNode], whose close completes `committed`.
+     * The real engine's never completes; `ClusterClientCloseTest` pins that.
+     */
     @Test
-    fun `close terminates the committed stream`(): TestResult =
+    fun `close reaches the node and the fake completes its committed stream`(): TestResult =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val fakeNode = FakeRaftNode()
             val client = clusterClientWithNode(fakeNode)

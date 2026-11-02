@@ -56,6 +56,9 @@ import kotlin.time.Duration.Companion.seconds
  *    neither the hub's own inbox nor the room's members ([aNonMembersFrameNeverEntersTheRoom]).
  *  - **(e) Departure** — a client whose link tears leaves every room it joined, and the room keeps
  *    working for whoever is left ([aDepartedClientLeavesEveryRoomItJoined]).
+ *  - **(f) Re-host** — a room closed and then hosted again under the same name is a live room that
+ *    admits both a fresh client and one whose link outlived the old room
+ *    ([aRoomHostedAgainUnderAClosedRoomsNameAdmitsMembers]).
  *
  * ## Why (d) and (e) were missing, and what that cost — #2307
  *
@@ -615,6 +618,101 @@ public abstract class RoomFanoutIsolationConformanceSuite {
             )
         }
 
+    // ── (f) re-host: a closed room's name hosts a live room again ─────────────
+
+    /**
+     * A room that is closed and then hosted again under the **same** name is a live room: a fresh
+     * client is admitted to it, and so is a client whose link outlived the room it first joined.
+     *
+     * (b) closes a room and asks about its *sibling*; nothing here asked about the name itself after
+     * the close. A loom that keeps a closed room keyed by its name hands that corpse back to the next
+     * `host` of the name, and every later frame on that channel is routed into a hub that refuses to
+     * register anyone. The room stays dead until the process restarts, and every other property in
+     * this suite stays green, because none of them hosts a name twice (#3041). The consumer that hit
+     * it reaps an idle table and re-hosts it on the next join by code.
+     *
+     * The returning client is the half a "drop the closed room" fix can still get wrong. Its link was
+     * registered with the old room and never tore, so it carries per-room state from before the
+     * close; its next frame on the channel must reach the **new** room and admit it there.
+     *
+     * ### What keeps each assertion from being vacuous
+     *
+     * The precondition is enforced by its own wait: the returning client really was a member of the
+     * first room. The first room really is torn ([SeamState.Torn] is asserted, so a harness whose
+     * `close()` did nothing cannot pass by re-hosting a room that never went away). The new room's
+     * admission is awaited on its observable roster and fails naming the roster it saw. A broadcast
+     * issued *after* admission must then reach both members, so a roster that names them over a
+     * fanout that does not reach them cannot pass.
+     *
+     * ### Mutation receipt
+     *
+     * Reference: on the [us.tractat.kuilt.core.MuxServerLoom] that kept a closed hub in its room
+     * table, this reds at the admission wait with the closed hub's collapsed roster,
+     * `peers (1): [server]`.
+     */
+    @Test
+    public fun aRoomHostedAgainUnderAClosedRoomsNameAdmitsMembers(): TestResult =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
+                "weave/handshake: no dispatcher (ContinuationInterceptor) in coroutine context"
+            }
+            val returning = PeerId("client-returning")
+            val fresh = PeerId("client-fresh")
+            val harness = newHarness(backgroundScope, dispatcher, RoomAuthorizer.AllowAll, Random(3041L))
+
+            val firstRoom7 = harness.serverLoom.host(Pattern("table-7"))
+            val returningRoom7 = NamedMux(harness.connectClient(returning, Random(1L)), backgroundScope)
+                .channel("table-7")
+            returningRoom7.broadcast(JOIN)
+            firstRoom7.awaitPeers("the first table-7 registers client-returning") { returning in it }
+
+            firstRoom7.close()
+
+            val secondRoom7 = harness.serverLoom.host(Pattern("table-7"))
+            val freshRoom7 = NamedMux(harness.connectClient(fresh, Random(2L)), backgroundScope)
+                .channel("table-7")
+            freshRoom7.broadcast(JOIN)
+            // The returning link never tore; it announces again on the channel it was already using.
+            returningRoom7.broadcast(JOIN)
+
+            val admitted = secondRoom7.awaitPeers("the re-hosted table-7 admits both clients") {
+                it.containsAll(setOf(returning, fresh))
+            }
+
+            secondRoom7.broadcast(AFTER_REHOST)
+            val freshSaw = freshRoom7.drainUntil(AFTER_REHOST, "client-fresh's copy of the re-hosted broadcast")
+            val returningSaw =
+                returningRoom7.drainUntil(AFTER_REHOST, "client-returning's copy of the re-hosted broadcast")
+
+            assertAll(
+                { assertIs<SeamState.Torn>(firstRoom7.state.value, "rig: the first table-7 must be closed") },
+                {
+                    assertIs<SeamState.Woven>(
+                        secondRoom7.state.value,
+                        "a re-hosted room must be live, not its closed predecessor",
+                    )
+                },
+                {
+                    assertTrue(
+                        secondRoom7.selfId in admitted,
+                        "the re-hosted hub must be in its own roster; got $admitted",
+                    )
+                },
+                {
+                    assertTrue(
+                        freshSaw.any { it.contentEquals(AFTER_REHOST) },
+                        "the re-hosted room must fan out to the fresh client; saw ${render(freshSaw)}",
+                    )
+                },
+                {
+                    assertTrue(
+                        returningSaw.any { it.contentEquals(AFTER_REHOST) },
+                        "the re-hosted room must fan out to the returning client; saw ${render(returningSaw)}",
+                    )
+                },
+            )
+        }
+
     // ── Bounded waits ─────────────────────────────────────────────────────────
 
     /**
@@ -714,6 +812,7 @@ public abstract class RoomFanoutIsolationConformanceSuite {
         val MEMBER_INGRESS = byteArrayOf(0x0C)
         val HUB_EGRESS = byteArrayOf(0x0D)
         val AFTER_DEPARTURE = byteArrayOf(0x0E)
+        val AFTER_REHOST = byteArrayOf(0x0F)
     }
 }
 

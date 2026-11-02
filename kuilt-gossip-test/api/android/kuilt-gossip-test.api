@@ -1,0 +1,12 @@
+public final class us/tractat/kuilt/test/fabric/Star {
+	public fun <init> (Lus/tractat/kuilt/core/Seam;Ljava/util/List;Lus/tractat/kuilt/test/fabric/InMemoryConnectionSource;)V
+	public final fun getClients ()Ljava/util/List;
+	public final fun getHub ()Lus/tractat/kuilt/core/Seam;
+	public final fun getSource ()Lus/tractat/kuilt/test/fabric/InMemoryConnectionSource;
+}
+
+public final class us/tractat/kuilt/test/fabric/StarHarnessKt {
+	public static final fun inMemoryStarOf-cbRa88A (Lkotlinx/coroutines/CoroutineScope;ILjava/lang/String;Lkotlin/random/Random;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun inMemoryStarOf-cbRa88A$default (Lkotlinx/coroutines/CoroutineScope;ILjava/lang/String;Lkotlin/random/Random;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+

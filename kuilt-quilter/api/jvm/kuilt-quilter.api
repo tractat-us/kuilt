@@ -1,0 +1,334 @@
+public abstract class us/tractat/kuilt/quilter/BoundedCounterCoordMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/BoundedCounterCoordMessage$Companion;
+	public synthetic fun <init> (ILkotlinx/serialization/internal/SerializationConstructorMarker;)V
+	public static final synthetic fun write$Self (Lus/tractat/kuilt/quilter/BoundedCounterCoordMessage;Lkotlinx/serialization/encoding/CompositeEncoder;Lkotlinx/serialization/descriptors/SerialDescriptor;)V
+}
+
+public final class us/tractat/kuilt/quilter/BoundedCounterCoordMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/BoundedCounterCoordMessage$TransferRequest : us/tractat/kuilt/quilter/BoundedCounterCoordMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/BoundedCounterCoordMessage$TransferRequest$Companion;
+	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getAmount ()J
+	public final fun getRequester-ffK6qZA ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/quilter/BoundedCounterCoordMessage$TransferRequest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/quilter/BoundedCounterCoordMessage$TransferRequest$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/quilter/BoundedCounterCoordMessage$TransferRequest;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/quilter/BoundedCounterCoordMessage$TransferRequest;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/BoundedCounterCoordMessage$TransferRequest$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/BoundedCounterEqualizerConfig {
+	public synthetic fun <init> (JJLkotlin/random/Random;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JJLkotlin/random/Random;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-UwyO8pc ()J
+	public final fun component2 ()J
+	public final fun component3 ()Lkotlin/random/Random;
+	public final fun copy-KLykuaI (JJLkotlin/random/Random;)Lus/tractat/kuilt/quilter/BoundedCounterEqualizerConfig;
+	public static synthetic fun copy-KLykuaI$default (Lus/tractat/kuilt/quilter/BoundedCounterEqualizerConfig;JJLkotlin/random/Random;ILjava/lang/Object;)Lus/tractat/kuilt/quilter/BoundedCounterEqualizerConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCadence-UwyO8pc ()J
+	public final fun getMinImbalanceThreshold ()J
+	public final fun getRandom ()Lkotlin/random/Random;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/quilter/BoundedCounterTransferConfig {
+	public fun <init> ()V
+	public synthetic fun <init> (JJJIJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JJJIJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()I
+	public final fun component5-UwyO8pc ()J
+	public final fun copy-9VgGkz4 (JJJIJ)Lus/tractat/kuilt/quilter/BoundedCounterTransferConfig;
+	public static synthetic fun copy-9VgGkz4$default (Lus/tractat/kuilt/quilter/BoundedCounterTransferConfig;JJJIJILjava/lang/Object;)Lus/tractat/kuilt/quilter/BoundedCounterTransferConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInitialRetryDelay-UwyO8pc ()J
+	public final fun getLowWaterThreshold ()J
+	public final fun getMaxRetries ()I
+	public final fun getRequestedAmount ()J
+	public final fun getSurplusFloor ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/quilter/BoundedCounterTransferCoordinator : us/tractat/kuilt/core/ScopedCloseable {
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/flow/StateFlow;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/BoundedCounterTransferConfig;Lus/tractat/kuilt/quilter/BoundedCounterEqualizerConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/flow/StateFlow;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/BoundedCounterTransferConfig;Lus/tractat/kuilt/quilter/BoundedCounterEqualizerConfig;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/quilter/CutFrontier {
+	public static final field Companion Lus/tractat/kuilt/quilter/CutFrontier$Companion;
+	public fun <init> (Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;)V
+	public final fun component1 ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun component2 ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun copy (Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;)Lus/tractat/kuilt/quilter/CutFrontier;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/quilter/CutFrontier;Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;ILjava/lang/Object;)Lus/tractat/kuilt/quilter/CutFrontier;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFrontierMax ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun getStableCut ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/quilter/CutFrontier$Companion {
+	public final fun getEMPTY ()Lus/tractat/kuilt/quilter/CutFrontier;
+}
+
+public final class us/tractat/kuilt/quilter/FugueGcCoordinator : us/tractat/kuilt/core/ScopedCloseable {
+	public fun <init> (Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/StateFlow;Lkotlin/jvm/functions/Function1;Lkotlinx/coroutines/CoroutineScope;)V
+}
+
+public abstract interface class us/tractat/kuilt/quilter/MonotonicMillis {
+	public abstract fun now ()J
+}
+
+public final class us/tractat/kuilt/quilter/MovableTreeGcCoordinator : us/tractat/kuilt/core/ScopedCloseable {
+	public fun <init> (Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/StateFlow;Lkotlin/jvm/functions/Function1;Lkotlinx/coroutines/CoroutineScope;)V
+}
+
+public abstract class us/tractat/kuilt/quilter/QuiltMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$Companion;
+	public synthetic fun <init> (ILkotlinx/serialization/internal/SerializationConstructorMarker;)V
+	public static final synthetic fun write$Self (Lus/tractat/kuilt/quilter/QuiltMessage;Lkotlinx/serialization/encoding/CompositeEncoder;Lkotlinx/serialization/descriptors/SerialDescriptor;Lkotlinx/serialization/KSerializer;)V
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$Ack : us/tractat/kuilt/quilter/QuiltMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$Ack$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getAcker-ffK6qZA ()Ljava/lang/String;
+	public final fun getSender-ffK6qZA ()Ljava/lang/String;
+	public final fun getSeq ()J
+}
+
+public final synthetic class us/tractat/kuilt/quilter/QuiltMessage$Ack$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/quilter/QuiltMessage$Ack;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/quilter/QuiltMessage$Ack;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$Ack$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$Delivered : us/tractat/kuilt/quilter/QuiltMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$Delivered$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/crdt/VersionVector;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getSender-ffK6qZA ()Ljava/lang/String;
+	public final fun getVector ()Lus/tractat/kuilt/crdt/VersionVector;
+}
+
+public final synthetic class us/tractat/kuilt/quilter/QuiltMessage$Delivered$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/quilter/QuiltMessage$Delivered;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/quilter/QuiltMessage$Delivered;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$Delivered$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$Delta : us/tractat/kuilt/quilter/QuiltMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$Delta$Companion;
+	public synthetic fun <init> (Ljava/lang/String;JLjava/lang/Object;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getDelta ()Ljava/lang/Object;
+	public final fun getSender-ffK6qZA ()Ljava/lang/String;
+	public final fun getSeq ()J
+}
+
+public final synthetic class us/tractat/kuilt/quilter/QuiltMessage$Delta$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/quilter/QuiltMessage$Delta;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/quilter/QuiltMessage$Delta;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$Delta$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$FullState : us/tractat/kuilt/quilter/QuiltMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$FullState$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Object;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Object;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getSender-ffK6qZA ()Ljava/lang/String;
+	public final fun getState ()Ljava/lang/Object;
+	public final fun getUpThrough ()J
+}
+
+public final synthetic class us/tractat/kuilt/quilter/QuiltMessage$FullState$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/quilter/QuiltMessage$FullState;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/quilter/QuiltMessage$FullState;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$FullState$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$FullStateRequest : us/tractat/kuilt/quilter/QuiltMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$FullStateRequest$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getRequester-ffK6qZA ()Ljava/lang/String;
+	public final fun getSender-ffK6qZA ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/quilter/QuiltMessage$FullStateRequest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/quilter/QuiltMessage$FullStateRequest;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/quilter/QuiltMessage$FullStateRequest;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$FullStateRequest$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$Resend : us/tractat/kuilt/quilter/QuiltMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$Resend$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getFromSeq ()J
+	public final fun getRequester-ffK6qZA ()Ljava/lang/String;
+	public final fun getSender-ffK6qZA ()Ljava/lang/String;
+	public final fun getToSeq ()J
+}
+
+public final synthetic class us/tractat/kuilt/quilter/QuiltMessage$Resend$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/quilter/QuiltMessage$Resend;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/quilter/QuiltMessage$Resend;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$Resend$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$RootDigest : us/tractat/kuilt/quilter/QuiltMessage {
+	public static final field Companion Lus/tractat/kuilt/quilter/QuiltMessage$RootDigest$Companion;
+	public synthetic fun <init> (Ljava/lang/String;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getRoot ()J
+	public final fun getSender-ffK6qZA ()Ljava/lang/String;
+	public final fun getUpThrough ()J
+}
+
+public final synthetic class us/tractat/kuilt/quilter/QuiltMessage$RootDigest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/quilter/QuiltMessage$RootDigest;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/quilter/QuiltMessage$RootDigest;)V
+	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/QuiltMessage$RootDigest$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/quilter/Quilter : us/tractat/kuilt/core/ScopedCloseable {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/crdt/Quilted;Lkotlinx/serialization/KSerializer;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/quilter/MonotonicMillis;Lkotlinx/serialization/BinaryFormat;Lkotlin/jvm/functions/Function1;Lkotlin/random/Random;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/crdt/Quilted;Lkotlinx/serialization/KSerializer;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/quilter/MonotonicMillis;Lkotlinx/serialization/BinaryFormat;Lkotlin/jvm/functions/Function1;Lkotlin/random/Random;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun apply-TbMkhKA (Lus/tractat/kuilt/crdt/Quilted;)V
+	public final fun drainAndClose (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getCutFrontier ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getDeliveredLocal ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getReplica-ffK6qZA ()Ljava/lang/String;
+	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getUniversalAckFlow ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun mutate (Lkotlin/jvm/functions/Function1;)V
+	public final fun mutateOrSkip (Lkotlin/jvm/functions/Function1;)Z
+}
+
+public final class us/tractat/kuilt/quilter/QuilterConfig {
+	public fun <init> ()V
+	public synthetic fun <init> (JJJJIZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JJJJIZZLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-UwyO8pc ()J
+	public final fun component2-UwyO8pc ()J
+	public final fun component3-UwyO8pc ()J
+	public final fun component4-UwyO8pc ()J
+	public final fun component5 ()I
+	public final fun component6 ()Z
+	public final fun component7 ()Z
+	public final fun copy-C0ewQK0 (JJJJIZZ)Lus/tractat/kuilt/quilter/QuilterConfig;
+	public static synthetic fun copy-C0ewQK0$default (Lus/tractat/kuilt/quilter/QuilterConfig;JJJJIZZILjava/lang/Object;)Lus/tractat/kuilt/quilter/QuilterConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAntiEntropyInterval-UwyO8pc ()J
+	public final fun getEvictionAfter-UwyO8pc ()J
+	public final fun getExpectVirtualTime ()Z
+	public final fun getFullStateRetryInterval-UwyO8pc ()J
+	public final fun getFullStateRetryLimit ()I
+	public final fun getResendRetryInterval-UwyO8pc ()J
+	public final fun getStrictTestGuard ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/quilter/QuilterKt {
+	public static final fun Quilter-vsEfi8Q (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/crdt/Quilted;Lkotlinx/serialization/KSerializer;Lkotlinx/coroutines/CoroutineScope;Ljava/lang/String;Lus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/quilter/MonotonicMillis;Lkotlinx/serialization/BinaryFormat;Lkotlin/jvm/functions/Function1;Lkotlin/random/Random;)Lus/tractat/kuilt/quilter/Quilter;
+	public static synthetic fun Quilter-vsEfi8Q$default (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/crdt/Quilted;Lkotlinx/serialization/KSerializer;Lkotlinx/coroutines/CoroutineScope;Ljava/lang/String;Lus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/quilter/MonotonicMillis;Lkotlinx/serialization/BinaryFormat;Lkotlin/jvm/functions/Function1;Lkotlin/random/Random;ILjava/lang/Object;)Lus/tractat/kuilt/quilter/Quilter;
+}
+
+public final class us/tractat/kuilt/quilter/RgaGcCoordinator : us/tractat/kuilt/core/ScopedCloseable {
+	public fun <init> (Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/StateFlow;Lkotlin/jvm/functions/Function1;Lus/tractat/kuilt/quilter/WindowPolicy;Lkotlinx/coroutines/CoroutineScope;)V
+	public synthetic fun <init> (Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/StateFlow;Lkotlin/jvm/functions/Function1;Lus/tractat/kuilt/quilter/WindowPolicy;Lkotlinx/coroutines/CoroutineScope;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public abstract interface class us/tractat/kuilt/quilter/WindowPolicy {
+	public static final field Companion Lus/tractat/kuilt/quilter/WindowPolicy$Companion;
+	public abstract fun idsToTruncate (Ljava/util/List;Ljava/util/Set;)Ljava/util/Set;
+}
+
+public final class us/tractat/kuilt/quilter/WindowPolicy$Companion {
+	public final fun byCount (I)Lus/tractat/kuilt/quilter/WindowPolicy;
+	public final fun never ()Lus/tractat/kuilt/quilter/WindowPolicy;
+}
+

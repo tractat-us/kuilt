@@ -82,6 +82,12 @@ import kotlin.time.Duration.Companion.seconds
  * and by the [source]/connection provider respectively. A temporary mesh that admission abandons
  * before registration is closed by the loom, including when admission is cancelled.
  *
+ * A hosted room's own `close` takes it out of this loom, so the next [host] of that name opens a
+ * fresh room (#3041). **Caller contract:** finish closing the old room before re-hosting its name.
+ * [host] is idempotent per name, so a [host] of a name whose room is still open returns that room,
+ * even one about to close; only a [host] arriving after the room's `close` has begun gets a fresh one. A connection whose link outlived the old room carries nothing into the new one:
+ * its next frame on the channel is a first frame there, authorized and admitted like any other.
+ *
  * ## Thread safety
  *
  * [connRecords], [rooms], and [launchedJobs] are guarded by [lock]. Suspend calls are always
@@ -143,7 +149,11 @@ public class MuxServerLoom(
      */
     public val connectedPeers: StateFlow<Set<PeerId>> = _connectedPeers.asStateFlow()
 
-    /** Hosted rooms: channelName → RoomHubSeam. Created on the first [host] call per name. */
+    /**
+     * Open rooms: channelName → RoomHubSeam. A hub enters on the first [host] of its name and leaves
+     * when it closes ([forget]), so every entry is a live room and a name is free again once its room
+     * closes (#3041).
+     */
     private val rooms = mutableMapOf<String, RoomHubSeam>()
 
     /**
@@ -341,9 +351,10 @@ public class MuxServerLoom(
     }
 
     /**
-     * Idempotent: the [RoomHubSeam] for [channelName], created on first request. Connections
-     * register lazily — as each demuxed frame for [channelName] arrives, [readLoop] pushes it
-     * into this room, which admits the peer on its first frame.
+     * Idempotent while the room is open: the [RoomHubSeam] for [channelName], created on first
+     * request and again on the first request after it closes. Connections register lazily — as
+     * each demuxed frame for [channelName] arrives, [readLoop] pushes it into this room, which
+     * admits the peer on its first frame.
      */
     private fun roomFor(channelName: String): RoomHubSeam = lock.withLock {
         rooms.getOrPut(channelName) {
@@ -351,7 +362,18 @@ public class MuxServerLoom(
                 channelName = channelName,
                 selfId = selfId,
                 authorizer = authorizer,
+                onClose = ::forget,
             )
+        }
+    }
+
+    /**
+     * Drop a closing [hub] from [rooms], **by identity**: a newer hub already hosted under the same
+     * name is never evicted by its predecessor's close, including a repeat one.
+     */
+    private fun forget(hub: RoomHubSeam) {
+        lock.withLock {
+            if (rooms[hub.channelName] === hub) rooms.remove(hub.channelName)
         }
     }
 }

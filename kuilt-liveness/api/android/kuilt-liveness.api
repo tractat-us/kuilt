@@ -1,0 +1,135 @@
+public final class us/tractat/kuilt/liveness/HeartbeatConfig {
+	public fun <init> ()V
+	public synthetic fun <init> (JJJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JJJJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-UwyO8pc ()J
+	public final fun component2-UwyO8pc ()J
+	public final fun component3-UwyO8pc ()J
+	public final fun component4-UwyO8pc ()J
+	public final fun copy-InTURus (JJJJ)Lus/tractat/kuilt/liveness/HeartbeatConfig;
+	public static synthetic fun copy-InTURus$default (Lus/tractat/kuilt/liveness/HeartbeatConfig;JJJJILjava/lang/Object;)Lus/tractat/kuilt/liveness/HeartbeatConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInterval-UwyO8pc ()J
+	public final fun getReconnectWindow-UwyO8pc ()J
+	public final fun getResumeTimeout-UwyO8pc ()J
+	public final fun getTimeout-UwyO8pc ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/liveness/HeartbeatPartitionDetector : us/tractat/kuilt/liveness/PartitionDetector {
+	public static final field Companion Lus/tractat/kuilt/liveness/HeartbeatPartitionDetector$Companion;
+	public static final field PING_PREFIX Ljava/lang/String;
+	public static final field PONG_PREFIX Ljava/lang/String;
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Ljava/lang/String;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Ljava/lang/String;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public fun observedPeer-ngToHgY (Ljava/lang/String;)V
+	public fun onBackpressure-ngToHgY (Ljava/lang/String;)V
+	public fun start (Lkotlinx/coroutines/CoroutineScope;)V
+	public fun stop (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/liveness/HeartbeatPartitionDetector$Companion {
+	public final fun isHeartbeatFrame ([B)Z
+}
+
+public abstract interface class us/tractat/kuilt/liveness/PartitionDetector {
+	public abstract fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun observedPeer-ngToHgY (Ljava/lang/String;)V
+	public abstract fun onBackpressure-ngToHgY (Ljava/lang/String;)V
+	public abstract fun start (Lkotlinx/coroutines/CoroutineScope;)V
+	public abstract fun stop (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/liveness/PartitionEvent {
+	public abstract fun getAt ()Lkotlin/time/Instant;
+	public abstract fun getPeerId-PaHlmAU ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/liveness/PartitionEvent$PeerLost : us/tractat/kuilt/liveness/PartitionEvent {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/time/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()Lkotlin/time/Instant;
+	public final fun copy-t5-yf_A (Ljava/lang/String;Lkotlin/time/Instant;)Lus/tractat/kuilt/liveness/PartitionEvent$PeerLost;
+	public static synthetic fun copy-t5-yf_A$default (Lus/tractat/kuilt/liveness/PartitionEvent$PeerLost;Ljava/lang/String;Lkotlin/time/Instant;ILjava/lang/Object;)Lus/tractat/kuilt/liveness/PartitionEvent$PeerLost;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getAt ()Lkotlin/time/Instant;
+	public fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/liveness/PartitionEvent$PeerRecovered : us/tractat/kuilt/liveness/PartitionEvent {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/time/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()Lkotlin/time/Instant;
+	public final fun copy-t5-yf_A (Ljava/lang/String;Lkotlin/time/Instant;)Lus/tractat/kuilt/liveness/PartitionEvent$PeerRecovered;
+	public static synthetic fun copy-t5-yf_A$default (Lus/tractat/kuilt/liveness/PartitionEvent$PeerRecovered;Ljava/lang/String;Lkotlin/time/Instant;ILjava/lang/Object;)Lus/tractat/kuilt/liveness/PartitionEvent$PeerRecovered;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getAt ()Lkotlin/time/Instant;
+	public fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/liveness/PartitionEvent$PeerUnresponsive : us/tractat/kuilt/liveness/PartitionEvent {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/time/Instant;Lus/tractat/kuilt/liveness/PartitionEvent$Reason;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()Lkotlin/time/Instant;
+	public final fun component3 ()Lus/tractat/kuilt/liveness/PartitionEvent$Reason;
+	public final fun copy-PW_baCY (Ljava/lang/String;Lkotlin/time/Instant;Lus/tractat/kuilt/liveness/PartitionEvent$Reason;)Lus/tractat/kuilt/liveness/PartitionEvent$PeerUnresponsive;
+	public static synthetic fun copy-PW_baCY$default (Lus/tractat/kuilt/liveness/PartitionEvent$PeerUnresponsive;Ljava/lang/String;Lkotlin/time/Instant;Lus/tractat/kuilt/liveness/PartitionEvent$Reason;ILjava/lang/Object;)Lus/tractat/kuilt/liveness/PartitionEvent$PeerUnresponsive;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getAt ()Lkotlin/time/Instant;
+	public fun getPeerId-PaHlmAU ()Ljava/lang/String;
+	public final fun getReason ()Lus/tractat/kuilt/liveness/PartitionEvent$Reason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/liveness/PartitionEvent$Reason : java/lang/Enum {
+	public static final field Backpressure Lus/tractat/kuilt/liveness/PartitionEvent$Reason;
+	public static final field Timeout Lus/tractat/kuilt/liveness/PartitionEvent$Reason;
+	public static final field TransportClosed Lus/tractat/kuilt/liveness/PartitionEvent$Reason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/liveness/PartitionEvent$Reason;
+	public static fun values ()[Lus/tractat/kuilt/liveness/PartitionEvent$Reason;
+}
+
+public final class us/tractat/kuilt/liveness/SoloDeadlineDetector {
+	public synthetic fun <init> (IJLkotlin/time/Clock;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getEvents ()Lkotlinx/coroutines/flow/SharedFlow;
+	public final fun observeMembership (Ljava/util/Set;)V
+}
+
+public abstract interface class us/tractat/kuilt/liveness/SoloDeadlineEvent {
+	public abstract fun getAt ()Lkotlin/time/Instant;
+}
+
+public final class us/tractat/kuilt/liveness/SoloDeadlineEvent$NeverPaired : us/tractat/kuilt/liveness/SoloDeadlineEvent {
+	public fun <init> (IILkotlin/time/Instant;)V
+	public final fun component1 ()I
+	public final fun component2 ()I
+	public final fun component3 ()Lkotlin/time/Instant;
+	public final fun copy (IILkotlin/time/Instant;)Lus/tractat/kuilt/liveness/SoloDeadlineEvent$NeverPaired;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/liveness/SoloDeadlineEvent$NeverPaired;IILkotlin/time/Instant;ILjava/lang/Object;)Lus/tractat/kuilt/liveness/SoloDeadlineEvent$NeverPaired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getAt ()Lkotlin/time/Instant;
+	public final fun getObserved ()I
+	public final fun getRequired ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/liveness/SoloDeadlineEvent$Paired : us/tractat/kuilt/liveness/SoloDeadlineEvent {
+	public fun <init> (Lkotlin/time/Instant;)V
+	public final fun component1 ()Lkotlin/time/Instant;
+	public final fun copy (Lkotlin/time/Instant;)Lus/tractat/kuilt/liveness/SoloDeadlineEvent$Paired;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/liveness/SoloDeadlineEvent$Paired;Lkotlin/time/Instant;ILjava/lang/Object;)Lus/tractat/kuilt/liveness/SoloDeadlineEvent$Paired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getAt ()Lkotlin/time/Instant;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+

@@ -1,0 +1,833 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-otel>
+final enum class us.tractat.kuilt.otel/BufferPolicy : kotlin/Enum<us.tractat.kuilt.otel/BufferPolicy> { // us.tractat.kuilt.otel/BufferPolicy|null[0]
+    enum entry DROP_NEWEST // us.tractat.kuilt.otel/BufferPolicy.DROP_NEWEST|null[0]
+    enum entry DROP_OLDEST // us.tractat.kuilt.otel/BufferPolicy.DROP_OLDEST|null[0]
+
+    final val entries // us.tractat.kuilt.otel/BufferPolicy.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.otel/BufferPolicy> // us.tractat.kuilt.otel/BufferPolicy.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.otel/BufferPolicy // us.tractat.kuilt.otel/BufferPolicy.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.otel/BufferPolicy> // us.tractat.kuilt.otel/BufferPolicy.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.otel/MetricBufferPolicy : kotlin/Enum<us.tractat.kuilt.otel/MetricBufferPolicy> { // us.tractat.kuilt.otel/MetricBufferPolicy|null[0]
+    enum entry DROP_NEWEST // us.tractat.kuilt.otel/MetricBufferPolicy.DROP_NEWEST|null[0]
+    enum entry DROP_OLDEST // us.tractat.kuilt.otel/MetricBufferPolicy.DROP_OLDEST|null[0]
+
+    final val entries // us.tractat.kuilt.otel/MetricBufferPolicy.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.otel/MetricBufferPolicy> // us.tractat.kuilt.otel/MetricBufferPolicy.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.otel/MetricBufferPolicy // us.tractat.kuilt.otel/MetricBufferPolicy.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.otel/MetricBufferPolicy> // us.tractat.kuilt.otel/MetricBufferPolicy.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.otel/MetricKind : kotlin/Enum<us.tractat.kuilt.otel/MetricKind> { // us.tractat.kuilt.otel/MetricKind|null[0]
+    enum entry CARDINALITY // us.tractat.kuilt.otel/MetricKind.CARDINALITY|null[0]
+    enum entry EXPONENTIAL_HISTOGRAM // us.tractat.kuilt.otel/MetricKind.EXPONENTIAL_HISTOGRAM|null[0]
+    enum entry GAUGE // us.tractat.kuilt.otel/MetricKind.GAUGE|null[0]
+    enum entry SUM // us.tractat.kuilt.otel/MetricKind.SUM|null[0]
+
+    final val entries // us.tractat.kuilt.otel/MetricKind.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.otel/MetricKind> // us.tractat.kuilt.otel/MetricKind.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.otel/MetricKind // us.tractat.kuilt.otel/MetricKind.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.otel/MetricKind> // us.tractat.kuilt.otel/MetricKind.values|values#static(){}[0]
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.otel/MetricKind.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/MetricKind> // us.tractat.kuilt.otel/MetricKind.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.otel/MetricKind.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+final enum class us.tractat.kuilt.otel/OtlpSignal : kotlin/Enum<us.tractat.kuilt.otel/OtlpSignal> { // us.tractat.kuilt.otel/OtlpSignal|null[0]
+    enum entry LOGS // us.tractat.kuilt.otel/OtlpSignal.LOGS|null[0]
+    enum entry METRICS // us.tractat.kuilt.otel/OtlpSignal.METRICS|null[0]
+    enum entry SPANS // us.tractat.kuilt.otel/OtlpSignal.SPANS|null[0]
+
+    final val entries // us.tractat.kuilt.otel/OtlpSignal.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.otel/OtlpSignal> // us.tractat.kuilt.otel/OtlpSignal.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.otel/OtlpSignal // us.tractat.kuilt.otel/OtlpSignal.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.otel/OtlpSignal> // us.tractat.kuilt.otel/OtlpSignal.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.otel/SpanKind : kotlin/Enum<us.tractat.kuilt.otel/SpanKind> { // us.tractat.kuilt.otel/SpanKind|null[0]
+    enum entry CLIENT // us.tractat.kuilt.otel/SpanKind.CLIENT|null[0]
+    enum entry CONSUMER // us.tractat.kuilt.otel/SpanKind.CONSUMER|null[0]
+    enum entry INTERNAL // us.tractat.kuilt.otel/SpanKind.INTERNAL|null[0]
+    enum entry PRODUCER // us.tractat.kuilt.otel/SpanKind.PRODUCER|null[0]
+    enum entry SERVER // us.tractat.kuilt.otel/SpanKind.SERVER|null[0]
+
+    final val entries // us.tractat.kuilt.otel/SpanKind.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.otel/SpanKind> // us.tractat.kuilt.otel/SpanKind.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.otel/SpanKind // us.tractat.kuilt.otel/SpanKind.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.otel/SpanKind> // us.tractat.kuilt.otel/SpanKind.values|values#static(){}[0]
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.otel/SpanKind.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/SpanKind> // us.tractat.kuilt.otel/SpanKind.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.otel/SpanKind.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+abstract fun interface us.tractat.kuilt.otel/AppliedOpSink { // us.tractat.kuilt.otel/AppliedOpSink|null[0]
+    abstract suspend fun published(kotlin.collections/List<us.tractat.kuilt.crdt/RgaOp<us.tractat.kuilt.otel/LogRecord>>) // us.tractat.kuilt.otel/AppliedOpSink.published|published(kotlin.collections.List<us.tractat.kuilt.crdt.RgaOp<us.tractat.kuilt.otel.LogRecord>>){}[0]
+
+    final object Companion { // us.tractat.kuilt.otel/AppliedOpSink.Companion|null[0]
+        final val Discarding // us.tractat.kuilt.otel/AppliedOpSink.Companion.Discarding|{}Discarding[0]
+            final fun <get-Discarding>(): us.tractat.kuilt.otel/AppliedOpSink // us.tractat.kuilt.otel/AppliedOpSink.Companion.Discarding.<get-Discarding>|<get-Discarding>(){}[0]
+    }
+}
+
+abstract interface us.tractat.kuilt.otel/OtlpEdge { // us.tractat.kuilt.otel/OtlpEdge|null[0]
+    abstract suspend fun digest(): us.tractat.kuilt.otel/SpanDigest // us.tractat.kuilt.otel/OtlpEdge.digest|digest(){}[0]
+    abstract suspend fun send(kotlin.collections/Set<us.tractat.kuilt.otel/SpanRecord>, kotlin.collections/List<us.tractat.kuilt.otel/SpanLink> = ...) // us.tractat.kuilt.otel/OtlpEdge.send|send(kotlin.collections.Set<us.tractat.kuilt.otel.SpanRecord>;kotlin.collections.List<us.tractat.kuilt.otel.SpanLink>){}[0]
+    open suspend fun logDigest(): us.tractat.kuilt.otel/LogDigest // us.tractat.kuilt.otel/OtlpEdge.logDigest|logDigest(){}[0]
+    open suspend fun metricDigest(): us.tractat.kuilt.otel/MetricDigest // us.tractat.kuilt.otel/OtlpEdge.metricDigest|metricDigest(){}[0]
+    open suspend fun sendLogs(kotlin.collections/Set<us.tractat.kuilt.otel/LogRecord>) // us.tractat.kuilt.otel/OtlpEdge.sendLogs|sendLogs(kotlin.collections.Set<us.tractat.kuilt.otel.LogRecord>){}[0]
+    open suspend fun sendMetrics(kotlin.collections/Set<us.tractat.kuilt.otel/MetricPoint>) // us.tractat.kuilt.otel/OtlpEdge.sendMetrics|sendMetrics(kotlin.collections.Set<us.tractat.kuilt.otel.MetricPoint>){}[0]
+}
+
+sealed interface us.tractat.kuilt.otel/DrainResult { // us.tractat.kuilt.otel/DrainResult|null[0]
+    final class Failure : us.tractat.kuilt.otel/DrainResult { // us.tractat.kuilt.otel/DrainResult.Failure|null[0]
+        constructor <init>(kotlin.collections/List<us.tractat.kuilt.otel/SignalFailure>) // us.tractat.kuilt.otel/DrainResult.Failure.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.otel.SignalFailure>){}[0]
+
+        final val failures // us.tractat.kuilt.otel/DrainResult.Failure.failures|{}failures[0]
+            final fun <get-failures>(): kotlin.collections/List<us.tractat.kuilt.otel/SignalFailure> // us.tractat.kuilt.otel/DrainResult.Failure.failures.<get-failures>|<get-failures>(){}[0]
+
+        final fun component1(): kotlin.collections/List<us.tractat.kuilt.otel/SignalFailure> // us.tractat.kuilt.otel/DrainResult.Failure.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<us.tractat.kuilt.otel/SignalFailure> = ...): us.tractat.kuilt.otel/DrainResult.Failure // us.tractat.kuilt.otel/DrainResult.Failure.copy|copy(kotlin.collections.List<us.tractat.kuilt.otel.SignalFailure>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/DrainResult.Failure.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Failure.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/DrainResult.Failure.toString|toString(){}[0]
+    }
+
+    final class Partial : us.tractat.kuilt.otel/DrainResult { // us.tractat.kuilt.otel/DrainResult.Partial|null[0]
+        constructor <init>(kotlin/Int, kotlin/Int, kotlin/Int, kotlin.collections/List<us.tractat.kuilt.otel/SignalFailure>) // us.tractat.kuilt.otel/DrainResult.Partial.<init>|<init>(kotlin.Int;kotlin.Int;kotlin.Int;kotlin.collections.List<us.tractat.kuilt.otel.SignalFailure>){}[0]
+
+        final val failures // us.tractat.kuilt.otel/DrainResult.Partial.failures|{}failures[0]
+            final fun <get-failures>(): kotlin.collections/List<us.tractat.kuilt.otel/SignalFailure> // us.tractat.kuilt.otel/DrainResult.Partial.failures.<get-failures>|<get-failures>(){}[0]
+        final val logsSent // us.tractat.kuilt.otel/DrainResult.Partial.logsSent|{}logsSent[0]
+            final fun <get-logsSent>(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Partial.logsSent.<get-logsSent>|<get-logsSent>(){}[0]
+        final val metricPointsSent // us.tractat.kuilt.otel/DrainResult.Partial.metricPointsSent|{}metricPointsSent[0]
+            final fun <get-metricPointsSent>(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Partial.metricPointsSent.<get-metricPointsSent>|<get-metricPointsSent>(){}[0]
+        final val spansSent // us.tractat.kuilt.otel/DrainResult.Partial.spansSent|{}spansSent[0]
+            final fun <get-spansSent>(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Partial.spansSent.<get-spansSent>|<get-spansSent>(){}[0]
+
+        final fun component1(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Partial.component1|component1(){}[0]
+        final fun component2(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Partial.component2|component2(){}[0]
+        final fun component3(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Partial.component3|component3(){}[0]
+        final fun component4(): kotlin.collections/List<us.tractat.kuilt.otel/SignalFailure> // us.tractat.kuilt.otel/DrainResult.Partial.component4|component4(){}[0]
+        final fun copy(kotlin/Int = ..., kotlin/Int = ..., kotlin/Int = ..., kotlin.collections/List<us.tractat.kuilt.otel/SignalFailure> = ...): us.tractat.kuilt.otel/DrainResult.Partial // us.tractat.kuilt.otel/DrainResult.Partial.copy|copy(kotlin.Int;kotlin.Int;kotlin.Int;kotlin.collections.List<us.tractat.kuilt.otel.SignalFailure>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/DrainResult.Partial.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Partial.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/DrainResult.Partial.toString|toString(){}[0]
+    }
+
+    final class Success : us.tractat.kuilt.otel/DrainResult { // us.tractat.kuilt.otel/DrainResult.Success|null[0]
+        constructor <init>(kotlin/Int, kotlin/Int = ..., kotlin/Int = ...) // us.tractat.kuilt.otel/DrainResult.Success.<init>|<init>(kotlin.Int;kotlin.Int;kotlin.Int){}[0]
+
+        final val logsSent // us.tractat.kuilt.otel/DrainResult.Success.logsSent|{}logsSent[0]
+            final fun <get-logsSent>(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Success.logsSent.<get-logsSent>|<get-logsSent>(){}[0]
+        final val metricPointsSent // us.tractat.kuilt.otel/DrainResult.Success.metricPointsSent|{}metricPointsSent[0]
+            final fun <get-metricPointsSent>(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Success.metricPointsSent.<get-metricPointsSent>|<get-metricPointsSent>(){}[0]
+        final val spansSent // us.tractat.kuilt.otel/DrainResult.Success.spansSent|{}spansSent[0]
+            final fun <get-spansSent>(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Success.spansSent.<get-spansSent>|<get-spansSent>(){}[0]
+
+        final fun component1(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Success.component1|component1(){}[0]
+        final fun component2(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Success.component2|component2(){}[0]
+        final fun component3(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Success.component3|component3(){}[0]
+        final fun copy(kotlin/Int = ..., kotlin/Int = ..., kotlin/Int = ...): us.tractat.kuilt.otel/DrainResult.Success // us.tractat.kuilt.otel/DrainResult.Success.copy|copy(kotlin.Int;kotlin.Int;kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/DrainResult.Success.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/DrainResult.Success.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/DrainResult.Success.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.otel/ExportResult { // us.tractat.kuilt.otel/ExportResult|null[0]
+    final class Failure : us.tractat.kuilt.otel/ExportResult { // us.tractat.kuilt.otel/ExportResult.Failure|null[0]
+        constructor <init>(kotlin/Throwable) // us.tractat.kuilt.otel/ExportResult.Failure.<init>|<init>(kotlin.Throwable){}[0]
+
+        final val cause // us.tractat.kuilt.otel/ExportResult.Failure.cause|{}cause[0]
+            final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.otel/ExportResult.Failure.cause.<get-cause>|<get-cause>(){}[0]
+
+        final fun component1(): kotlin/Throwable // us.tractat.kuilt.otel/ExportResult.Failure.component1|component1(){}[0]
+        final fun copy(kotlin/Throwable = ...): us.tractat.kuilt.otel/ExportResult.Failure // us.tractat.kuilt.otel/ExportResult.Failure.copy|copy(kotlin.Throwable){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ExportResult.Failure.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ExportResult.Failure.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/ExportResult.Failure.toString|toString(){}[0]
+    }
+
+    final object Success : us.tractat.kuilt.otel/ExportResult { // us.tractat.kuilt.otel/ExportResult.Success|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ExportResult.Success.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ExportResult.Success.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/ExportResult.Success.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.otel/MetricExportResult { // us.tractat.kuilt.otel/MetricExportResult|null[0]
+    final class Failure : us.tractat.kuilt.otel/MetricExportResult { // us.tractat.kuilt.otel/MetricExportResult.Failure|null[0]
+        constructor <init>(kotlin/Throwable) // us.tractat.kuilt.otel/MetricExportResult.Failure.<init>|<init>(kotlin.Throwable){}[0]
+
+        final val cause // us.tractat.kuilt.otel/MetricExportResult.Failure.cause|{}cause[0]
+            final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.otel/MetricExportResult.Failure.cause.<get-cause>|<get-cause>(){}[0]
+
+        final fun component1(): kotlin/Throwable // us.tractat.kuilt.otel/MetricExportResult.Failure.component1|component1(){}[0]
+        final fun copy(kotlin/Throwable = ...): us.tractat.kuilt.otel/MetricExportResult.Failure // us.tractat.kuilt.otel/MetricExportResult.Failure.copy|copy(kotlin.Throwable){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricExportResult.Failure.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricExportResult.Failure.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricExportResult.Failure.toString|toString(){}[0]
+    }
+
+    final object Success : us.tractat.kuilt.otel/MetricExportResult { // us.tractat.kuilt.otel/MetricExportResult.Success|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricExportResult.Success.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricExportResult.Success.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricExportResult.Success.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/MetricPoint|null[0]
+    abstract val key // us.tractat.kuilt.otel/MetricPoint.key|{}key[0]
+        abstract fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.key.<get-key>|<get-key>(){}[0]
+
+    abstract fun valueHash(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.valueHash|valueHash(){}[0]
+
+    final class Cardinality : us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/MetricPoint.Cardinality|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Long, kotlin/Long) // us.tractat.kuilt.otel/MetricPoint.Cardinality.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Long;kotlin.Long){}[0]
+
+        final val estimate // us.tractat.kuilt.otel/MetricPoint.Cardinality.estimate|{}estimate[0]
+            final fun <get-estimate>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Cardinality.estimate.<get-estimate>|<get-estimate>(){}[0]
+        final val key // us.tractat.kuilt.otel/MetricPoint.Cardinality.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.Cardinality.key.<get-key>|<get-key>(){}[0]
+        final val timeEpochNanos // us.tractat.kuilt.otel/MetricPoint.Cardinality.timeEpochNanos|{}timeEpochNanos[0]
+            final fun <get-timeEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Cardinality.timeEpochNanos.<get-timeEpochNanos>|<get-timeEpochNanos>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.Cardinality.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Cardinality.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Cardinality.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricPoint.Cardinality // us.tractat.kuilt.otel/MetricPoint.Cardinality.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricPoint.Cardinality.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.Cardinality.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricPoint.Cardinality.toString|toString(){}[0]
+        final fun valueHash(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Cardinality.valueHash|valueHash(){}[0]
+    }
+
+    final class DoubleSum : us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/MetricPoint.DoubleSum|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Double, kotlin/Long, kotlin/Long) // us.tractat.kuilt.otel/MetricPoint.DoubleSum.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long;kotlin.Long){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricPoint.DoubleSum.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.DoubleSum.key.<get-key>|<get-key>(){}[0]
+        final val startEpochNanos // us.tractat.kuilt.otel/MetricPoint.DoubleSum.startEpochNanos|{}startEpochNanos[0]
+            final fun <get-startEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleSum.startEpochNanos.<get-startEpochNanos>|<get-startEpochNanos>(){}[0]
+        final val timeEpochNanos // us.tractat.kuilt.otel/MetricPoint.DoubleSum.timeEpochNanos|{}timeEpochNanos[0]
+            final fun <get-timeEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleSum.timeEpochNanos.<get-timeEpochNanos>|<get-timeEpochNanos>(){}[0]
+        final val value // us.tractat.kuilt.otel/MetricPoint.DoubleSum.value|{}value[0]
+            final fun <get-value>(): kotlin/Double // us.tractat.kuilt.otel/MetricPoint.DoubleSum.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.DoubleSum.component1|component1(){}[0]
+        final fun component2(): kotlin/Double // us.tractat.kuilt.otel/MetricPoint.DoubleSum.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleSum.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleSum.component4|component4(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Double = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricPoint.DoubleSum // us.tractat.kuilt.otel/MetricPoint.DoubleSum.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricPoint.DoubleSum.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.DoubleSum.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricPoint.DoubleSum.toString|toString(){}[0]
+        final fun valueHash(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleSum.valueHash|valueHash(){}[0]
+    }
+
+    final class ExponentialHistogram : us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Int, kotlin/Long, kotlin/Long, kotlin/Double, kotlin/Int, kotlin.collections/List<kotlin/Long>, kotlin/Int, kotlin.collections/List<kotlin/Long>, kotlin/Long, kotlin/Long) // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Int;kotlin.Long;kotlin.Long;kotlin.Double;kotlin.Int;kotlin.collections.List<kotlin.Long>;kotlin.Int;kotlin.collections.List<kotlin.Long>;kotlin.Long;kotlin.Long){}[0]
+
+        final val count // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.count|{}count[0]
+            final fun <get-count>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.count.<get-count>|<get-count>(){}[0]
+        final val key // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.key.<get-key>|<get-key>(){}[0]
+        final val negativeBucketCounts // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.negativeBucketCounts|{}negativeBucketCounts[0]
+            final fun <get-negativeBucketCounts>(): kotlin.collections/List<kotlin/Long> // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.negativeBucketCounts.<get-negativeBucketCounts>|<get-negativeBucketCounts>(){}[0]
+        final val negativeOffset // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.negativeOffset|{}negativeOffset[0]
+            final fun <get-negativeOffset>(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.negativeOffset.<get-negativeOffset>|<get-negativeOffset>(){}[0]
+        final val positiveBucketCounts // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.positiveBucketCounts|{}positiveBucketCounts[0]
+            final fun <get-positiveBucketCounts>(): kotlin.collections/List<kotlin/Long> // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.positiveBucketCounts.<get-positiveBucketCounts>|<get-positiveBucketCounts>(){}[0]
+        final val positiveOffset // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.positiveOffset|{}positiveOffset[0]
+            final fun <get-positiveOffset>(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.positiveOffset.<get-positiveOffset>|<get-positiveOffset>(){}[0]
+        final val scale // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.scale|{}scale[0]
+            final fun <get-scale>(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.scale.<get-scale>|<get-scale>(){}[0]
+        final val startEpochNanos // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.startEpochNanos|{}startEpochNanos[0]
+            final fun <get-startEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.startEpochNanos.<get-startEpochNanos>|<get-startEpochNanos>(){}[0]
+        final val timeEpochNanos // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.timeEpochNanos|{}timeEpochNanos[0]
+            final fun <get-timeEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.timeEpochNanos.<get-timeEpochNanos>|<get-timeEpochNanos>(){}[0]
+        final val zeroCount // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.zeroCount|{}zeroCount[0]
+            final fun <get-zeroCount>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.zeroCount.<get-zeroCount>|<get-zeroCount>(){}[0]
+        final val zeroThreshold // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.zeroThreshold|{}zeroThreshold[0]
+            final fun <get-zeroThreshold>(): kotlin/Double // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.zeroThreshold.<get-zeroThreshold>|<get-zeroThreshold>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component1|component1(){}[0]
+        final fun component10(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component10|component10(){}[0]
+        final fun component11(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component11|component11(){}[0]
+        final fun component2(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component4|component4(){}[0]
+        final fun component5(): kotlin/Double // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component5|component5(){}[0]
+        final fun component6(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component6|component6(){}[0]
+        final fun component7(): kotlin.collections/List<kotlin/Long> // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component7|component7(){}[0]
+        final fun component8(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component8|component8(){}[0]
+        final fun component9(): kotlin.collections/List<kotlin/Long> // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.component9|component9(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Int = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Double = ..., kotlin/Int = ..., kotlin.collections/List<kotlin/Long> = ..., kotlin/Int = ..., kotlin.collections/List<kotlin/Long> = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Int;kotlin.Long;kotlin.Long;kotlin.Double;kotlin.Int;kotlin.collections.List<kotlin.Long>;kotlin.Int;kotlin.collections.List<kotlin.Long>;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.toString|toString(){}[0]
+        final fun valueHash(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.valueHash|valueHash(){}[0]
+    }
+
+    final class Gauge : us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/MetricPoint.Gauge|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Double, kotlin/Long) // us.tractat.kuilt.otel/MetricPoint.Gauge.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricPoint.Gauge.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.Gauge.key.<get-key>|<get-key>(){}[0]
+        final val timeEpochNanos // us.tractat.kuilt.otel/MetricPoint.Gauge.timeEpochNanos|{}timeEpochNanos[0]
+            final fun <get-timeEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Gauge.timeEpochNanos.<get-timeEpochNanos>|<get-timeEpochNanos>(){}[0]
+        final val value // us.tractat.kuilt.otel/MetricPoint.Gauge.value|{}value[0]
+            final fun <get-value>(): kotlin/Double // us.tractat.kuilt.otel/MetricPoint.Gauge.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.Gauge.component1|component1(){}[0]
+        final fun component2(): kotlin/Double // us.tractat.kuilt.otel/MetricPoint.Gauge.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Gauge.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Double = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricPoint.Gauge // us.tractat.kuilt.otel/MetricPoint.Gauge.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricPoint.Gauge.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.Gauge.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricPoint.Gauge.toString|toString(){}[0]
+        final fun valueHash(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Gauge.valueHash|valueHash(){}[0]
+    }
+
+    final class Sum : us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/MetricPoint.Sum|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Long, kotlin/Long, kotlin/Long) // us.tractat.kuilt.otel/MetricPoint.Sum.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricPoint.Sum.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.Sum.key.<get-key>|<get-key>(){}[0]
+        final val startEpochNanos // us.tractat.kuilt.otel/MetricPoint.Sum.startEpochNanos|{}startEpochNanos[0]
+            final fun <get-startEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Sum.startEpochNanos.<get-startEpochNanos>|<get-startEpochNanos>(){}[0]
+        final val timeEpochNanos // us.tractat.kuilt.otel/MetricPoint.Sum.timeEpochNanos|{}timeEpochNanos[0]
+            final fun <get-timeEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Sum.timeEpochNanos.<get-timeEpochNanos>|<get-timeEpochNanos>(){}[0]
+        final val value // us.tractat.kuilt.otel/MetricPoint.Sum.value|{}value[0]
+            final fun <get-value>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Sum.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.Sum.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Sum.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Sum.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Sum.component4|component4(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricPoint.Sum // us.tractat.kuilt.otel/MetricPoint.Sum.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricPoint.Sum.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.Sum.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricPoint.Sum.toString|toString(){}[0]
+        final fun valueHash(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Sum.valueHash|valueHash(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.otel/SpanStatus { // us.tractat.kuilt.otel/SpanStatus|null[0]
+    final class Error : us.tractat.kuilt.otel/SpanStatus { // us.tractat.kuilt.otel/SpanStatus.Error|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.otel/SpanStatus.Error.<init>|<init>(kotlin.String){}[0]
+
+        final val message // us.tractat.kuilt.otel/SpanStatus.Error.message|{}message[0]
+            final fun <get-message>(): kotlin/String // us.tractat.kuilt.otel/SpanStatus.Error.message.<get-message>|<get-message>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.otel/SpanStatus.Error.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.otel/SpanStatus.Error // us.tractat.kuilt.otel/SpanStatus.Error.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/SpanStatus.Error.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/SpanStatus.Error.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/SpanStatus.Error.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.otel/SpanStatus.Error> { // us.tractat.kuilt.otel/SpanStatus.Error.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.otel/SpanStatus.Error.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.otel/SpanStatus.Error.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.otel/SpanStatus.Error.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.otel/SpanStatus.Error // us.tractat.kuilt.otel/SpanStatus.Error.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.otel/SpanStatus.Error) // us.tractat.kuilt.otel/SpanStatus.Error.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.otel.SpanStatus.Error){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.otel/SpanStatus.Error.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/SpanStatus.Error> // us.tractat.kuilt.otel/SpanStatus.Error.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.otel/SpanStatus.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/SpanStatus> // us.tractat.kuilt.otel/SpanStatus.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.otel/SpanStatus.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+
+    final object Ok : kotlinx.serialization.internal/SerializerFactory, us.tractat.kuilt.otel/SpanStatus { // us.tractat.kuilt.otel/SpanStatus.Ok|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/SpanStatus.Ok.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/SpanStatus.Ok.hashCode|hashCode(){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/SpanStatus.Ok> // us.tractat.kuilt.otel/SpanStatus.Ok.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.otel/SpanStatus.Ok.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/SpanStatus.Ok.toString|toString(){}[0]
+    }
+
+    final object Unset : kotlinx.serialization.internal/SerializerFactory, us.tractat.kuilt.otel/SpanStatus { // us.tractat.kuilt.otel/SpanStatus.Unset|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/SpanStatus.Unset.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/SpanStatus.Unset.hashCode|hashCode(){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/SpanStatus.Unset> // us.tractat.kuilt.otel/SpanStatus.Unset.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.otel/SpanStatus.Unset.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/SpanStatus.Unset.toString|toString(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.otel/CausalStamp { // us.tractat.kuilt.otel/CausalStamp|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/Dot, kotlin.collections/Set<us.tractat.kuilt.crdt/Dot>) // us.tractat.kuilt.otel/CausalStamp.<init>|<init>(us.tractat.kuilt.crdt.Dot;kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>){}[0]
+
+    final val dot // us.tractat.kuilt.otel/CausalStamp.dot|{}dot[0]
+        final fun <get-dot>(): us.tractat.kuilt.crdt/Dot // us.tractat.kuilt.otel/CausalStamp.dot.<get-dot>|<get-dot>(){}[0]
+    final val predecessors // us.tractat.kuilt.otel/CausalStamp.predecessors|{}predecessors[0]
+        final fun <get-predecessors>(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.otel/CausalStamp.predecessors.<get-predecessors>|<get-predecessors>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.crdt/Dot // us.tractat.kuilt.otel/CausalStamp.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.otel/CausalStamp.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.crdt/Dot = ..., kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> = ...): us.tractat.kuilt.otel/CausalStamp // us.tractat.kuilt.otel/CausalStamp.copy|copy(us.tractat.kuilt.crdt.Dot;kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/CausalStamp.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/CausalStamp.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel/CausalStamp.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.otel/CausalStamp> { // us.tractat.kuilt.otel/CausalStamp.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.otel/CausalStamp.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.otel/CausalStamp.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.otel/CausalStamp.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.otel/CausalStamp // us.tractat.kuilt.otel/CausalStamp.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.otel/CausalStamp) // us.tractat.kuilt.otel/CausalStamp.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.otel.CausalStamp){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.otel/CausalStamp.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.otel/CausalStamp.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/CausalStamp> // us.tractat.kuilt.otel/CausalStamp.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.otel/ExporterHealth { // us.tractat.kuilt.otel/ExporterHealth|null[0]
+    constructor <init>(kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ..., kotlin/Throwable? = ..., kotlin/Boolean = ..., kotlin/Long = ..., kotlin/Long = ...) // us.tractat.kuilt.otel/ExporterHealth.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Int;kotlin.Throwable?;kotlin.Boolean;kotlin.Long;kotlin.Long){}[0]
+
+    final val accepted // us.tractat.kuilt.otel/ExporterHealth.accepted|{}accepted[0]
+        final fun <get-accepted>(): kotlin/Long // us.tractat.kuilt.otel/ExporterHealth.accepted.<get-accepted>|<get-accepted>(){}[0]
+    final val consecutiveFailures // us.tractat.kuilt.otel/ExporterHealth.consecutiveFailures|{}consecutiveFailures[0]
+        final fun <get-consecutiveFailures>(): kotlin/Int // us.tractat.kuilt.otel/ExporterHealth.consecutiveFailures.<get-consecutiveFailures>|<get-consecutiveFailures>(){}[0]
+    final val dropped // us.tractat.kuilt.otel/ExporterHealth.dropped|{}dropped[0]
+        final fun <get-dropped>(): kotlin/Long // us.tractat.kuilt.otel/ExporterHealth.dropped.<get-dropped>|<get-dropped>(){}[0]
+    final val failed // us.tractat.kuilt.otel/ExporterHealth.failed|{}failed[0]
+        final fun <get-failed>(): kotlin/Long // us.tractat.kuilt.otel/ExporterHealth.failed.<get-failed>|<get-failed>(){}[0]
+    final val isDead // us.tractat.kuilt.otel/ExporterHealth.isDead|{}isDead[0]
+        final fun <get-isDead>(): kotlin/Boolean // us.tractat.kuilt.otel/ExporterHealth.isDead.<get-isDead>|<get-isDead>(){}[0]
+    final val lastFailure // us.tractat.kuilt.otel/ExporterHealth.lastFailure|{}lastFailure[0]
+        final fun <get-lastFailure>(): kotlin/Throwable? // us.tractat.kuilt.otel/ExporterHealth.lastFailure.<get-lastFailure>|<get-lastFailure>(){}[0]
+    final val recoveryFailed // us.tractat.kuilt.otel/ExporterHealth.recoveryFailed|{}recoveryFailed[0]
+        final fun <get-recoveryFailed>(): kotlin/Boolean // us.tractat.kuilt.otel/ExporterHealth.recoveryFailed.<get-recoveryFailed>|<get-recoveryFailed>(){}[0]
+    final val refused // us.tractat.kuilt.otel/ExporterHealth.refused|{}refused[0]
+        final fun <get-refused>(): kotlin/Long // us.tractat.kuilt.otel/ExporterHealth.refused.<get-refused>|<get-refused>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.otel/ExporterHealth.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.otel/ExporterHealth.component2|component2(){}[0]
+    final fun component3(): kotlin/Int // us.tractat.kuilt.otel/ExporterHealth.component3|component3(){}[0]
+    final fun component4(): kotlin/Throwable? // us.tractat.kuilt.otel/ExporterHealth.component4|component4(){}[0]
+    final fun component5(): kotlin/Boolean // us.tractat.kuilt.otel/ExporterHealth.component5|component5(){}[0]
+    final fun component6(): kotlin/Long // us.tractat.kuilt.otel/ExporterHealth.component6|component6(){}[0]
+    final fun component7(): kotlin/Long // us.tractat.kuilt.otel/ExporterHealth.component7|component7(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ..., kotlin/Throwable? = ..., kotlin/Boolean = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.otel/ExporterHealth // us.tractat.kuilt.otel/ExporterHealth.copy|copy(kotlin.Long;kotlin.Long;kotlin.Int;kotlin.Throwable?;kotlin.Boolean;kotlin.Long;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ExporterHealth.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ExporterHealth.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel/ExporterHealth.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel/LogDigest { // us.tractat.kuilt.otel/LogDigest|null[0]
+    constructor <init>(kotlin.collections/Set<kotlinx.io.bytestring/ByteString>) // us.tractat.kuilt.otel/LogDigest.<init>|<init>(kotlin.collections.Set<kotlinx.io.bytestring.ByteString>){}[0]
+
+    final val recordIds // us.tractat.kuilt.otel/LogDigest.recordIds|{}recordIds[0]
+        final fun <get-recordIds>(): kotlin.collections/Set<kotlinx.io.bytestring/ByteString> // us.tractat.kuilt.otel/LogDigest.recordIds.<get-recordIds>|<get-recordIds>(){}[0]
+}
+
+final class us.tractat.kuilt.otel/LogRecord { // us.tractat.kuilt.otel/LogRecord|null[0]
+    constructor <init>(kotlinx.io.bytestring/ByteString, kotlin/Int? = ..., kotlin/String? = ..., kotlin/String? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ..., kotlin/Long? = ..., kotlin/Long? = ..., kotlinx.io.bytestring/ByteString? = ..., kotlinx.io.bytestring/ByteString? = ...) // us.tractat.kuilt.otel/LogRecord.<init>|<init>(kotlinx.io.bytestring.ByteString;kotlin.Int?;kotlin.String?;kotlin.String?;kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.Long?;kotlin.Long?;kotlinx.io.bytestring.ByteString?;kotlinx.io.bytestring.ByteString?){}[0]
+
+    final val attributes // us.tractat.kuilt.otel/LogRecord.attributes|{}attributes[0]
+        final fun <get-attributes>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel/LogRecord.attributes.<get-attributes>|<get-attributes>(){}[0]
+    final val body // us.tractat.kuilt.otel/LogRecord.body|{}body[0]
+        final fun <get-body>(): kotlin/String? // us.tractat.kuilt.otel/LogRecord.body.<get-body>|<get-body>(){}[0]
+    final val observedEpochNanos // us.tractat.kuilt.otel/LogRecord.observedEpochNanos|{}observedEpochNanos[0]
+        final fun <get-observedEpochNanos>(): kotlin/Long? // us.tractat.kuilt.otel/LogRecord.observedEpochNanos.<get-observedEpochNanos>|<get-observedEpochNanos>(){}[0]
+    final val recordId // us.tractat.kuilt.otel/LogRecord.recordId|{}recordId[0]
+        final fun <get-recordId>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/LogRecord.recordId.<get-recordId>|<get-recordId>(){}[0]
+    final val severityNumber // us.tractat.kuilt.otel/LogRecord.severityNumber|{}severityNumber[0]
+        final fun <get-severityNumber>(): kotlin/Int? // us.tractat.kuilt.otel/LogRecord.severityNumber.<get-severityNumber>|<get-severityNumber>(){}[0]
+    final val severityText // us.tractat.kuilt.otel/LogRecord.severityText|{}severityText[0]
+        final fun <get-severityText>(): kotlin/String? // us.tractat.kuilt.otel/LogRecord.severityText.<get-severityText>|<get-severityText>(){}[0]
+    final val spanId // us.tractat.kuilt.otel/LogRecord.spanId|{}spanId[0]
+        final fun <get-spanId>(): kotlinx.io.bytestring/ByteString? // us.tractat.kuilt.otel/LogRecord.spanId.<get-spanId>|<get-spanId>(){}[0]
+    final val timestampEpochNanos // us.tractat.kuilt.otel/LogRecord.timestampEpochNanos|{}timestampEpochNanos[0]
+        final fun <get-timestampEpochNanos>(): kotlin/Long? // us.tractat.kuilt.otel/LogRecord.timestampEpochNanos.<get-timestampEpochNanos>|<get-timestampEpochNanos>(){}[0]
+    final val traceId // us.tractat.kuilt.otel/LogRecord.traceId|{}traceId[0]
+        final fun <get-traceId>(): kotlinx.io.bytestring/ByteString? // us.tractat.kuilt.otel/LogRecord.traceId.<get-traceId>|<get-traceId>(){}[0]
+
+    final fun component1(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/LogRecord.component1|component1(){}[0]
+    final fun component2(): kotlin/Int? // us.tractat.kuilt.otel/LogRecord.component2|component2(){}[0]
+    final fun component3(): kotlin/String? // us.tractat.kuilt.otel/LogRecord.component3|component3(){}[0]
+    final fun component4(): kotlin/String? // us.tractat.kuilt.otel/LogRecord.component4|component4(){}[0]
+    final fun component5(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel/LogRecord.component5|component5(){}[0]
+    final fun component6(): kotlin/Long? // us.tractat.kuilt.otel/LogRecord.component6|component6(){}[0]
+    final fun component7(): kotlin/Long? // us.tractat.kuilt.otel/LogRecord.component7|component7(){}[0]
+    final fun component8(): kotlinx.io.bytestring/ByteString? // us.tractat.kuilt.otel/LogRecord.component8|component8(){}[0]
+    final fun component9(): kotlinx.io.bytestring/ByteString? // us.tractat.kuilt.otel/LogRecord.component9|component9(){}[0]
+    final fun copy(kotlinx.io.bytestring/ByteString = ..., kotlin/Int? = ..., kotlin/String? = ..., kotlin/String? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ..., kotlin/Long? = ..., kotlin/Long? = ..., kotlinx.io.bytestring/ByteString? = ..., kotlinx.io.bytestring/ByteString? = ...): us.tractat.kuilt.otel/LogRecord // us.tractat.kuilt.otel/LogRecord.copy|copy(kotlinx.io.bytestring.ByteString;kotlin.Int?;kotlin.String?;kotlin.String?;kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.Long?;kotlin.Long?;kotlinx.io.bytestring.ByteString?;kotlinx.io.bytestring.ByteString?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/LogRecord.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/LogRecord.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel/LogRecord.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.otel/LogRecord> { // us.tractat.kuilt.otel/LogRecord.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.otel/LogRecord.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.otel/LogRecord.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.otel/LogRecord.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.otel/LogRecord // us.tractat.kuilt.otel/LogRecord.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.otel/LogRecord) // us.tractat.kuilt.otel/LogRecord.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.otel.LogRecord){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.otel/LogRecord.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.otel/LogRecord.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/LogRecord> // us.tractat.kuilt.otel/LogRecord.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.otel/MetricCatalog : us.tractat.kuilt.crdt/Quilted<us.tractat.kuilt.otel/MetricCatalog> { // us.tractat.kuilt.otel/MetricCatalog|null[0]
+    constructor <init>(kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounter> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounterDouble> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/LWWRegister<kotlin/Double>> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/HyperLogLog> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/DDSketch> = ...) // us.tractat.kuilt.otel/MetricCatalog.<init>|<init>(kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.GCounter>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.GCounterDouble>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.LWWRegister<kotlin.Double>>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.HyperLogLog>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.DDSketch>){}[0]
+
+    final val cardinalities // us.tractat.kuilt.otel/MetricCatalog.cardinalities|{}cardinalities[0]
+        final fun <get-cardinalities>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/HyperLogLog> // us.tractat.kuilt.otel/MetricCatalog.cardinalities.<get-cardinalities>|<get-cardinalities>(){}[0]
+    final val doubleSums // us.tractat.kuilt.otel/MetricCatalog.doubleSums|{}doubleSums[0]
+        final fun <get-doubleSums>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounterDouble> // us.tractat.kuilt.otel/MetricCatalog.doubleSums.<get-doubleSums>|<get-doubleSums>(){}[0]
+    final val gauges // us.tractat.kuilt.otel/MetricCatalog.gauges|{}gauges[0]
+        final fun <get-gauges>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/LWWRegister<kotlin/Double>> // us.tractat.kuilt.otel/MetricCatalog.gauges.<get-gauges>|<get-gauges>(){}[0]
+    final val histograms // us.tractat.kuilt.otel/MetricCatalog.histograms|{}histograms[0]
+        final fun <get-histograms>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/DDSketch> // us.tractat.kuilt.otel/MetricCatalog.histograms.<get-histograms>|<get-histograms>(){}[0]
+    final val sums // us.tractat.kuilt.otel/MetricCatalog.sums|{}sums[0]
+        final fun <get-sums>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounter> // us.tractat.kuilt.otel/MetricCatalog.sums.<get-sums>|<get-sums>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricCatalog.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricCatalog.hashCode|hashCode(){}[0]
+    final fun piece(us.tractat.kuilt.otel/MetricCatalog): us.tractat.kuilt.otel/MetricCatalog // us.tractat.kuilt.otel/MetricCatalog.piece|piece(us.tractat.kuilt.otel.MetricCatalog){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricCatalog.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.otel/MetricCatalog> { // us.tractat.kuilt.otel/MetricCatalog.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.otel/MetricCatalog.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.otel/MetricCatalog.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.otel/MetricCatalog.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.otel/MetricCatalog // us.tractat.kuilt.otel/MetricCatalog.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.otel/MetricCatalog) // us.tractat.kuilt.otel/MetricCatalog.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.otel.MetricCatalog){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.otel/MetricCatalog.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.otel/MetricCatalog.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/MetricCatalog> // us.tractat.kuilt.otel/MetricCatalog.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.otel/MetricDigest { // us.tractat.kuilt.otel/MetricDigest|null[0]
+    constructor <init>(kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long>) // us.tractat.kuilt.otel/MetricDigest.<init>|<init>(kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,kotlin.Long>){}[0]
+
+    final val versions // us.tractat.kuilt.otel/MetricDigest.versions|{}versions[0]
+        final fun <get-versions>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long> // us.tractat.kuilt.otel/MetricDigest.versions.<get-versions>|<get-versions>(){}[0]
+}
+
+final class us.tractat.kuilt.otel/MetricKey { // us.tractat.kuilt.otel/MetricKey|null[0]
+    constructor <init>(kotlin/String, us.tractat.kuilt.otel/MetricKind, kotlin.collections/Map<kotlin/String, kotlin/String> = ...) // us.tractat.kuilt.otel/MetricKey.<init>|<init>(kotlin.String;us.tractat.kuilt.otel.MetricKind;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
+
+    final val attributes // us.tractat.kuilt.otel/MetricKey.attributes|{}attributes[0]
+        final fun <get-attributes>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel/MetricKey.attributes.<get-attributes>|<get-attributes>(){}[0]
+    final val kind // us.tractat.kuilt.otel/MetricKey.kind|{}kind[0]
+        final fun <get-kind>(): us.tractat.kuilt.otel/MetricKind // us.tractat.kuilt.otel/MetricKey.kind.<get-kind>|<get-kind>(){}[0]
+    final val name // us.tractat.kuilt.otel/MetricKey.name|{}name[0]
+        final fun <get-name>(): kotlin/String // us.tractat.kuilt.otel/MetricKey.name.<get-name>|<get-name>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.otel/MetricKey.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.otel/MetricKind // us.tractat.kuilt.otel/MetricKey.component2|component2(){}[0]
+    final fun component3(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel/MetricKey.component3|component3(){}[0]
+    final fun copy(kotlin/String = ..., us.tractat.kuilt.otel/MetricKind = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricKey.copy|copy(kotlin.String;us.tractat.kuilt.otel.MetricKind;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricKey.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricKey.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricKey.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.otel/MetricKey> { // us.tractat.kuilt.otel/MetricKey.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.otel/MetricKey.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.otel/MetricKey.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.otel/MetricKey.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricKey.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.otel/MetricKey) // us.tractat.kuilt.otel/MetricKey.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.otel.MetricKey){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.otel/MetricKey.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.otel/MetricKey.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/MetricKey> // us.tractat.kuilt.otel/MetricKey.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.otel/PersistenceHealth { // us.tractat.kuilt.otel/PersistenceHealth|null[0]
+    constructor <init>(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Boolean = ..., kotlin/Throwable? = ...) // us.tractat.kuilt.otel/PersistenceHealth.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Boolean;kotlin.Throwable?){}[0]
+
+    final val acknowledged // us.tractat.kuilt.otel/PersistenceHealth.acknowledged|{}acknowledged[0]
+        final fun <get-acknowledged>(): kotlin/Long // us.tractat.kuilt.otel/PersistenceHealth.acknowledged.<get-acknowledged>|<get-acknowledged>(){}[0]
+    final val failed // us.tractat.kuilt.otel/PersistenceHealth.failed|{}failed[0]
+        final fun <get-failed>(): kotlin/Long // us.tractat.kuilt.otel/PersistenceHealth.failed.<get-failed>|<get-failed>(){}[0]
+    final val lastFailure // us.tractat.kuilt.otel/PersistenceHealth.lastFailure|{}lastFailure[0]
+        final fun <get-lastFailure>(): kotlin/Throwable? // us.tractat.kuilt.otel/PersistenceHealth.lastFailure.<get-lastFailure>|<get-lastFailure>(){}[0]
+    final val outstandingFailures // us.tractat.kuilt.otel/PersistenceHealth.outstandingFailures|{}outstandingFailures[0]
+        final fun <get-outstandingFailures>(): kotlin/Long // us.tractat.kuilt.otel/PersistenceHealth.outstandingFailures.<get-outstandingFailures>|<get-outstandingFailures>(){}[0]
+    final val recoveryFailed // us.tractat.kuilt.otel/PersistenceHealth.recoveryFailed|{}recoveryFailed[0]
+        final fun <get-recoveryFailed>(): kotlin/Boolean // us.tractat.kuilt.otel/PersistenceHealth.recoveryFailed.<get-recoveryFailed>|<get-recoveryFailed>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.otel/PersistenceHealth.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.otel/PersistenceHealth.component2|component2(){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.otel/PersistenceHealth.component3|component3(){}[0]
+    final fun component4(): kotlin/Boolean // us.tractat.kuilt.otel/PersistenceHealth.component4|component4(){}[0]
+    final fun component5(): kotlin/Throwable? // us.tractat.kuilt.otel/PersistenceHealth.component5|component5(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Boolean = ..., kotlin/Throwable? = ...): us.tractat.kuilt.otel/PersistenceHealth // us.tractat.kuilt.otel/PersistenceHealth.copy|copy(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Boolean;kotlin.Throwable?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/PersistenceHealth.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/PersistenceHealth.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel/PersistenceHealth.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel/SignalFailure { // us.tractat.kuilt.otel/SignalFailure|null[0]
+    constructor <init>(us.tractat.kuilt.otel/OtlpSignal, kotlin/Throwable) // us.tractat.kuilt.otel/SignalFailure.<init>|<init>(us.tractat.kuilt.otel.OtlpSignal;kotlin.Throwable){}[0]
+
+    final val cause // us.tractat.kuilt.otel/SignalFailure.cause|{}cause[0]
+        final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.otel/SignalFailure.cause.<get-cause>|<get-cause>(){}[0]
+    final val signal // us.tractat.kuilt.otel/SignalFailure.signal|{}signal[0]
+        final fun <get-signal>(): us.tractat.kuilt.otel/OtlpSignal // us.tractat.kuilt.otel/SignalFailure.signal.<get-signal>|<get-signal>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.otel/OtlpSignal // us.tractat.kuilt.otel/SignalFailure.component1|component1(){}[0]
+    final fun component2(): kotlin/Throwable // us.tractat.kuilt.otel/SignalFailure.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.otel/OtlpSignal = ..., kotlin/Throwable = ...): us.tractat.kuilt.otel/SignalFailure // us.tractat.kuilt.otel/SignalFailure.copy|copy(us.tractat.kuilt.otel.OtlpSignal;kotlin.Throwable){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/SignalFailure.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/SignalFailure.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel/SignalFailure.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel/SpanDigest { // us.tractat.kuilt.otel/SpanDigest|null[0]
+    constructor <init>(kotlin.collections/Set<kotlinx.io.bytestring/ByteString>) // us.tractat.kuilt.otel/SpanDigest.<init>|<init>(kotlin.collections.Set<kotlinx.io.bytestring.ByteString>){}[0]
+
+    final val spanIds // us.tractat.kuilt.otel/SpanDigest.spanIds|{}spanIds[0]
+        final fun <get-spanIds>(): kotlin.collections/Set<kotlinx.io.bytestring/ByteString> // us.tractat.kuilt.otel/SpanDigest.spanIds.<get-spanIds>|<get-spanIds>(){}[0]
+}
+
+final class us.tractat.kuilt.otel/SpanLink { // us.tractat.kuilt.otel/SpanLink|null[0]
+    constructor <init>(kotlinx.io.bytestring/ByteString, kotlinx.io.bytestring/ByteString, kotlinx.io.bytestring/ByteString, kotlin.collections/Map<kotlin/String, kotlin/String> = ...) // us.tractat.kuilt.otel/SpanLink.<init>|<init>(kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
+
+    final val attributes // us.tractat.kuilt.otel/SpanLink.attributes|{}attributes[0]
+        final fun <get-attributes>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel/SpanLink.attributes.<get-attributes>|<get-attributes>(){}[0]
+    final val fromSpanId // us.tractat.kuilt.otel/SpanLink.fromSpanId|{}fromSpanId[0]
+        final fun <get-fromSpanId>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/SpanLink.fromSpanId.<get-fromSpanId>|<get-fromSpanId>(){}[0]
+    final val linkedSpanId // us.tractat.kuilt.otel/SpanLink.linkedSpanId|{}linkedSpanId[0]
+        final fun <get-linkedSpanId>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/SpanLink.linkedSpanId.<get-linkedSpanId>|<get-linkedSpanId>(){}[0]
+    final val linkedTraceId // us.tractat.kuilt.otel/SpanLink.linkedTraceId|{}linkedTraceId[0]
+        final fun <get-linkedTraceId>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/SpanLink.linkedTraceId.<get-linkedTraceId>|<get-linkedTraceId>(){}[0]
+
+    final fun component1(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/SpanLink.component1|component1(){}[0]
+    final fun component2(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/SpanLink.component2|component2(){}[0]
+    final fun component3(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/SpanLink.component3|component3(){}[0]
+    final fun component4(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel/SpanLink.component4|component4(){}[0]
+    final fun copy(kotlinx.io.bytestring/ByteString = ..., kotlinx.io.bytestring/ByteString = ..., kotlinx.io.bytestring/ByteString = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...): us.tractat.kuilt.otel/SpanLink // us.tractat.kuilt.otel/SpanLink.copy|copy(kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/SpanLink.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/SpanLink.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel/SpanLink.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel/SpanRecord { // us.tractat.kuilt.otel/SpanRecord|null[0]
+    constructor <init>(kotlinx.io.bytestring/ByteString, kotlinx.io.bytestring/ByteString, kotlinx.io.bytestring/ByteString?, kotlin/String, us.tractat.kuilt.otel/SpanKind, kotlin/Long, kotlin/Long, kotlin.collections/Map<kotlin/String, kotlin/String> = ..., us.tractat.kuilt.otel/SpanStatus = ..., us.tractat.kuilt.otel/CausalStamp? = ...) // us.tractat.kuilt.otel/SpanRecord.<init>|<init>(kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString?;kotlin.String;us.tractat.kuilt.otel.SpanKind;kotlin.Long;kotlin.Long;kotlin.collections.Map<kotlin.String,kotlin.String>;us.tractat.kuilt.otel.SpanStatus;us.tractat.kuilt.otel.CausalStamp?){}[0]
+
+    final val attributes // us.tractat.kuilt.otel/SpanRecord.attributes|{}attributes[0]
+        final fun <get-attributes>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel/SpanRecord.attributes.<get-attributes>|<get-attributes>(){}[0]
+    final val causalStamp // us.tractat.kuilt.otel/SpanRecord.causalStamp|{}causalStamp[0]
+        final fun <get-causalStamp>(): us.tractat.kuilt.otel/CausalStamp? // us.tractat.kuilt.otel/SpanRecord.causalStamp.<get-causalStamp>|<get-causalStamp>(){}[0]
+    final val endEpochNanos // us.tractat.kuilt.otel/SpanRecord.endEpochNanos|{}endEpochNanos[0]
+        final fun <get-endEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/SpanRecord.endEpochNanos.<get-endEpochNanos>|<get-endEpochNanos>(){}[0]
+    final val kind // us.tractat.kuilt.otel/SpanRecord.kind|{}kind[0]
+        final fun <get-kind>(): us.tractat.kuilt.otel/SpanKind // us.tractat.kuilt.otel/SpanRecord.kind.<get-kind>|<get-kind>(){}[0]
+    final val name // us.tractat.kuilt.otel/SpanRecord.name|{}name[0]
+        final fun <get-name>(): kotlin/String // us.tractat.kuilt.otel/SpanRecord.name.<get-name>|<get-name>(){}[0]
+    final val parentSpanId // us.tractat.kuilt.otel/SpanRecord.parentSpanId|{}parentSpanId[0]
+        final fun <get-parentSpanId>(): kotlinx.io.bytestring/ByteString? // us.tractat.kuilt.otel/SpanRecord.parentSpanId.<get-parentSpanId>|<get-parentSpanId>(){}[0]
+    final val spanId // us.tractat.kuilt.otel/SpanRecord.spanId|{}spanId[0]
+        final fun <get-spanId>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/SpanRecord.spanId.<get-spanId>|<get-spanId>(){}[0]
+    final val startEpochNanos // us.tractat.kuilt.otel/SpanRecord.startEpochNanos|{}startEpochNanos[0]
+        final fun <get-startEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/SpanRecord.startEpochNanos.<get-startEpochNanos>|<get-startEpochNanos>(){}[0]
+    final val status // us.tractat.kuilt.otel/SpanRecord.status|{}status[0]
+        final fun <get-status>(): us.tractat.kuilt.otel/SpanStatus // us.tractat.kuilt.otel/SpanRecord.status.<get-status>|<get-status>(){}[0]
+    final val traceId // us.tractat.kuilt.otel/SpanRecord.traceId|{}traceId[0]
+        final fun <get-traceId>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/SpanRecord.traceId.<get-traceId>|<get-traceId>(){}[0]
+
+    final fun component1(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/SpanRecord.component1|component1(){}[0]
+    final fun component10(): us.tractat.kuilt.otel/CausalStamp? // us.tractat.kuilt.otel/SpanRecord.component10|component10(){}[0]
+    final fun component2(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel/SpanRecord.component2|component2(){}[0]
+    final fun component3(): kotlinx.io.bytestring/ByteString? // us.tractat.kuilt.otel/SpanRecord.component3|component3(){}[0]
+    final fun component4(): kotlin/String // us.tractat.kuilt.otel/SpanRecord.component4|component4(){}[0]
+    final fun component5(): us.tractat.kuilt.otel/SpanKind // us.tractat.kuilt.otel/SpanRecord.component5|component5(){}[0]
+    final fun component6(): kotlin/Long // us.tractat.kuilt.otel/SpanRecord.component6|component6(){}[0]
+    final fun component7(): kotlin/Long // us.tractat.kuilt.otel/SpanRecord.component7|component7(){}[0]
+    final fun component8(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel/SpanRecord.component8|component8(){}[0]
+    final fun component9(): us.tractat.kuilt.otel/SpanStatus // us.tractat.kuilt.otel/SpanRecord.component9|component9(){}[0]
+    final fun copy(kotlinx.io.bytestring/ByteString = ..., kotlinx.io.bytestring/ByteString = ..., kotlinx.io.bytestring/ByteString? = ..., kotlin/String = ..., us.tractat.kuilt.otel/SpanKind = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ..., us.tractat.kuilt.otel/SpanStatus = ..., us.tractat.kuilt.otel/CausalStamp? = ...): us.tractat.kuilt.otel/SpanRecord // us.tractat.kuilt.otel/SpanRecord.copy|copy(kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString?;kotlin.String;us.tractat.kuilt.otel.SpanKind;kotlin.Long;kotlin.Long;kotlin.collections.Map<kotlin.String,kotlin.String>;us.tractat.kuilt.otel.SpanStatus;us.tractat.kuilt.otel.CausalStamp?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/SpanRecord.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/SpanRecord.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel/SpanRecord.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.otel/SpanRecord> { // us.tractat.kuilt.otel/SpanRecord.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.otel/SpanRecord.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.otel/SpanRecord.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.otel/SpanRecord.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.otel/SpanRecord // us.tractat.kuilt.otel/SpanRecord.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.otel/SpanRecord) // us.tractat.kuilt.otel/SpanRecord.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.otel.SpanRecord){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.otel/SpanRecord.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.otel/SpanRecord.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel/SpanRecord> // us.tractat.kuilt.otel/SpanRecord.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.otel/TelemetryHealth { // us.tractat.kuilt.otel/TelemetryHealth|null[0]
+    constructor <init>(us.tractat.kuilt.otel/PersistenceHealth, us.tractat.kuilt.otel/PersistenceHealth, us.tractat.kuilt.otel/ExporterHealth) // us.tractat.kuilt.otel/TelemetryHealth.<init>|<init>(us.tractat.kuilt.otel.PersistenceHealth;us.tractat.kuilt.otel.PersistenceHealth;us.tractat.kuilt.otel.ExporterHealth){}[0]
+
+    final val logs // us.tractat.kuilt.otel/TelemetryHealth.logs|{}logs[0]
+        final fun <get-logs>(): us.tractat.kuilt.otel/ExporterHealth // us.tractat.kuilt.otel/TelemetryHealth.logs.<get-logs>|<get-logs>(){}[0]
+    final val metrics // us.tractat.kuilt.otel/TelemetryHealth.metrics|{}metrics[0]
+        final fun <get-metrics>(): us.tractat.kuilt.otel/PersistenceHealth // us.tractat.kuilt.otel/TelemetryHealth.metrics.<get-metrics>|<get-metrics>(){}[0]
+    final val spans // us.tractat.kuilt.otel/TelemetryHealth.spans|{}spans[0]
+        final fun <get-spans>(): us.tractat.kuilt.otel/PersistenceHealth // us.tractat.kuilt.otel/TelemetryHealth.spans.<get-spans>|<get-spans>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.otel/PersistenceHealth // us.tractat.kuilt.otel/TelemetryHealth.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.otel/PersistenceHealth // us.tractat.kuilt.otel/TelemetryHealth.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.otel/ExporterHealth // us.tractat.kuilt.otel/TelemetryHealth.component3|component3(){}[0]
+    final fun copy(us.tractat.kuilt.otel/PersistenceHealth = ..., us.tractat.kuilt.otel/PersistenceHealth = ..., us.tractat.kuilt.otel/ExporterHealth = ...): us.tractat.kuilt.otel/TelemetryHealth // us.tractat.kuilt.otel/TelemetryHealth.copy|copy(us.tractat.kuilt.otel.PersistenceHealth;us.tractat.kuilt.otel.PersistenceHealth;us.tractat.kuilt.otel.ExporterHealth){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/TelemetryHealth.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/TelemetryHealth.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel/TelemetryHealth.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel/WarpCausalClock { // us.tractat.kuilt.otel/WarpCausalClock|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/ReplicaId) // us.tractat.kuilt.otel/WarpCausalClock.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId){}[0]
+
+    final fun frontier(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.otel/WarpCausalClock.frontier|frontier(){}[0]
+    final fun observe(kotlin.collections/Set<us.tractat.kuilt.crdt/Dot>) // us.tractat.kuilt.otel/WarpCausalClock.observe|observe(kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>){}[0]
+    final fun tick(): us.tractat.kuilt.otel/CausalStamp // us.tractat.kuilt.otel/WarpCausalClock.tick|tick(){}[0]
+    final suspend fun persist(us.tractat.kuilt.store/DurableStore) // us.tractat.kuilt.otel/WarpCausalClock.persist|persist(us.tractat.kuilt.store.DurableStore){}[0]
+    final suspend fun recover(us.tractat.kuilt.store/DurableStore) // us.tractat.kuilt.otel/WarpCausalClock.recover|recover(us.tractat.kuilt.store.DurableStore){}[0]
+}
+
+final class us.tractat.kuilt.otel/WarpLogRecordExporter { // us.tractat.kuilt.otel/WarpLogRecordExporter|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.store/DurableStore, kotlin/Int = ..., us.tractat.kuilt.otel/BufferPolicy = ..., kotlin/Int = ..., us.tractat.kuilt.otel/AppliedOpSink = ...) // us.tractat.kuilt.otel/WarpLogRecordExporter.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.store.DurableStore;kotlin.Int;us.tractat.kuilt.otel.BufferPolicy;kotlin.Int;us.tractat.kuilt.otel.AppliedOpSink){}[0]
+
+    final val health // us.tractat.kuilt.otel/WarpLogRecordExporter.health|{}health[0]
+        final fun <get-health>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.otel/ExporterHealth> // us.tractat.kuilt.otel/WarpLogRecordExporter.health.<get-health>|<get-health>(){}[0]
+
+    final fun snapshot(): us.tractat.kuilt.crdt/Rga<us.tractat.kuilt.otel/LogRecord> // us.tractat.kuilt.otel/WarpLogRecordExporter.snapshot|snapshot(){}[0]
+    final suspend fun clear(): us.tractat.kuilt.otel/ExportResult // us.tractat.kuilt.otel/WarpLogRecordExporter.clear|clear(){}[0]
+    final suspend fun export(kotlin.collections/List<us.tractat.kuilt.otel/LogRecord>): us.tractat.kuilt.otel/ExportResult // us.tractat.kuilt.otel/WarpLogRecordExporter.export|export(kotlin.collections.List<us.tractat.kuilt.otel.LogRecord>){}[0]
+    final suspend fun export(us.tractat.kuilt.otel/LogRecord): us.tractat.kuilt.otel/ExportResult // us.tractat.kuilt.otel/WarpLogRecordExporter.export|export(us.tractat.kuilt.otel.LogRecord){}[0]
+    final suspend fun merge(us.tractat.kuilt.crdt/Rga<us.tractat.kuilt.otel/LogRecord>): us.tractat.kuilt.otel/ExportResult // us.tractat.kuilt.otel/WarpLogRecordExporter.merge|merge(us.tractat.kuilt.crdt.Rga<us.tractat.kuilt.otel.LogRecord>){}[0]
+    final suspend fun recover() // us.tractat.kuilt.otel/WarpLogRecordExporter.recover|recover(){}[0]
+}
+
+final class us.tractat.kuilt.otel/WarpMetricExporter { // us.tractat.kuilt.otel/WarpMetricExporter|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.store/DurableStore, kotlin/Int = ..., us.tractat.kuilt.otel/MetricBufferPolicy = ..., us.tractat.kuilt.crdt/DDSketch = ...) // us.tractat.kuilt.otel/WarpMetricExporter.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.store.DurableStore;kotlin.Int;us.tractat.kuilt.otel.MetricBufferPolicy;us.tractat.kuilt.crdt.DDSketch){}[0]
+
+    final val health // us.tractat.kuilt.otel/WarpMetricExporter.health|{}health[0]
+        final fun <get-health>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.otel/PersistenceHealth> // us.tractat.kuilt.otel/WarpMetricExporter.health.<get-health>|<get-health>(){}[0]
+
+    final fun cardinalityEstimate(us.tractat.kuilt.otel/MetricKey): kotlin/Long // us.tractat.kuilt.otel/WarpMetricExporter.cardinalityEstimate|cardinalityEstimate(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun cardinalitySnapshot(us.tractat.kuilt.otel/MetricKey): us.tractat.kuilt.crdt/HyperLogLog // us.tractat.kuilt.otel/WarpMetricExporter.cardinalitySnapshot|cardinalitySnapshot(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun doubleSumSnapshot(us.tractat.kuilt.otel/MetricKey): us.tractat.kuilt.crdt/GCounterDouble // us.tractat.kuilt.otel/WarpMetricExporter.doubleSumSnapshot|doubleSumSnapshot(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun doubleSumValue(us.tractat.kuilt.otel/MetricKey): kotlin/Double // us.tractat.kuilt.otel/WarpMetricExporter.doubleSumValue|doubleSumValue(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun gaugeSnapshot(us.tractat.kuilt.otel/MetricKey): us.tractat.kuilt.crdt/LWWRegister<kotlin/Double> // us.tractat.kuilt.otel/WarpMetricExporter.gaugeSnapshot|gaugeSnapshot(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun gaugeValue(us.tractat.kuilt.otel/MetricKey): kotlin/Double? // us.tractat.kuilt.otel/WarpMetricExporter.gaugeValue|gaugeValue(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun histogramQuantile(us.tractat.kuilt.otel/MetricKey, kotlin/Double): kotlin/Double? // us.tractat.kuilt.otel/WarpMetricExporter.histogramQuantile|histogramQuantile(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+    final fun histogramSnapshot(us.tractat.kuilt.otel/MetricKey): us.tractat.kuilt.crdt/DDSketch // us.tractat.kuilt.otel/WarpMetricExporter.histogramSnapshot|histogramSnapshot(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun metricCount(): kotlin/Int // us.tractat.kuilt.otel/WarpMetricExporter.metricCount|metricCount(){}[0]
+    final fun snapshotAll(): us.tractat.kuilt.otel/MetricCatalog // us.tractat.kuilt.otel/WarpMetricExporter.snapshotAll|snapshotAll(){}[0]
+    final fun sumSnapshot(us.tractat.kuilt.otel/MetricKey): us.tractat.kuilt.crdt/GCounter // us.tractat.kuilt.otel/WarpMetricExporter.sumSnapshot|sumSnapshot(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun sumValue(us.tractat.kuilt.otel/MetricKey): kotlin/Long // us.tractat.kuilt.otel/WarpMetricExporter.sumValue|sumValue(us.tractat.kuilt.otel.MetricKey){}[0]
+    final suspend fun addCardinality(us.tractat.kuilt.otel/MetricKey, kotlin/String): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.addCardinality|addCardinality(us.tractat.kuilt.otel.MetricKey;kotlin.String){}[0]
+    final suspend fun clear(): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.clear|clear(){}[0]
+    final suspend fun incrementSum(us.tractat.kuilt.otel/MetricKey, kotlin/Long = ...): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.incrementSum|incrementSum(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
+    final suspend fun incrementSumDouble(us.tractat.kuilt.otel/MetricKey, kotlin/Double): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.incrementSumDouble|incrementSumDouble(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+    final suspend fun mergeCardinality(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/HyperLogLog): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeCardinality|mergeCardinality(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.HyperLogLog){}[0]
+    final suspend fun mergeGauge(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/LWWRegister<kotlin/Double>): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeGauge|mergeGauge(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.LWWRegister<kotlin.Double>){}[0]
+    final suspend fun mergeHistogram(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/DDSketch): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeHistogram|mergeHistogram(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.DDSketch){}[0]
+    final suspend fun mergeSum(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounter): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeSum|mergeSum(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.GCounter){}[0]
+    final suspend fun mergeSumDouble(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounterDouble): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeSumDouble|mergeSumDouble(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.GCounterDouble){}[0]
+    final suspend fun recordHistogram(us.tractat.kuilt.otel/MetricKey, kotlin/Double): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.recordHistogram|recordHistogram(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+    final suspend fun recover() // us.tractat.kuilt.otel/WarpMetricExporter.recover|recover(){}[0]
+    final suspend fun setGauge(us.tractat.kuilt.otel/MetricKey, kotlin/Double, kotlin/Long): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.setGauge|setGauge(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long){}[0]
+}
+
+final class us.tractat.kuilt.otel/WarpOtlpBridge { // us.tractat.kuilt.otel/WarpOtlpBridge|null[0]
+    constructor <init>(us.tractat.kuilt.otel/WarpTelemetry, kotlin.time/Clock) // us.tractat.kuilt.otel/WarpOtlpBridge.<init>|<init>(us.tractat.kuilt.otel.WarpTelemetry;kotlin.time.Clock){}[0]
+
+    final suspend fun drain(us.tractat.kuilt.otel/OtlpEdge): us.tractat.kuilt.otel/DrainResult // us.tractat.kuilt.otel/WarpOtlpBridge.drain|drain(us.tractat.kuilt.otel.OtlpEdge){}[0]
+}
+
+final class us.tractat.kuilt.otel/WarpSpanExporter { // us.tractat.kuilt.otel/WarpSpanExporter|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.store/DurableStore, kotlin/Int = ..., us.tractat.kuilt.otel/BufferPolicy = ..., us.tractat.kuilt.otel/WarpCausalClock? = ...) // us.tractat.kuilt.otel/WarpSpanExporter.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.store.DurableStore;kotlin.Int;us.tractat.kuilt.otel.BufferPolicy;us.tractat.kuilt.otel.WarpCausalClock?){}[0]
+
+    final val health // us.tractat.kuilt.otel/WarpSpanExporter.health|{}health[0]
+        final fun <get-health>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.otel/PersistenceHealth> // us.tractat.kuilt.otel/WarpSpanExporter.health.<get-health>|<get-health>(){}[0]
+
+    final fun snapshot(): us.tractat.kuilt.crdt/ORSet<us.tractat.kuilt.otel/SpanRecord> // us.tractat.kuilt.otel/WarpSpanExporter.snapshot|snapshot(){}[0]
+    final suspend fun clear(): us.tractat.kuilt.otel/ExportResult // us.tractat.kuilt.otel/WarpSpanExporter.clear|clear(){}[0]
+    final suspend fun export(us.tractat.kuilt.otel/SpanRecord): us.tractat.kuilt.otel/ExportResult // us.tractat.kuilt.otel/WarpSpanExporter.export|export(us.tractat.kuilt.otel.SpanRecord){}[0]
+    final suspend fun merge(us.tractat.kuilt.crdt/ORSet<us.tractat.kuilt.otel/SpanRecord>): us.tractat.kuilt.otel/ExportResult // us.tractat.kuilt.otel/WarpSpanExporter.merge|merge(us.tractat.kuilt.crdt.ORSet<us.tractat.kuilt.otel.SpanRecord>){}[0]
+    final suspend fun recover() // us.tractat.kuilt.otel/WarpSpanExporter.recover|recover(){}[0]
+}
+
+final class us.tractat.kuilt.otel/WarpTelemetry { // us.tractat.kuilt.otel/WarpTelemetry|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.store/DurableStore, kotlin/Int = ..., kotlin/Int = ..., us.tractat.kuilt.otel/BufferPolicy = ..., kotlin/Int = ..., us.tractat.kuilt.otel/MetricBufferPolicy = ...) // us.tractat.kuilt.otel/WarpTelemetry.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.store.DurableStore;kotlin.Int;kotlin.Int;us.tractat.kuilt.otel.BufferPolicy;kotlin.Int;us.tractat.kuilt.otel.MetricBufferPolicy){}[0]
+
+    final val health // us.tractat.kuilt.otel/WarpTelemetry.health|{}health[0]
+        final fun <get-health>(): us.tractat.kuilt.otel/TelemetryHealth // us.tractat.kuilt.otel/WarpTelemetry.health.<get-health>|<get-health>(){}[0]
+    final val logs // us.tractat.kuilt.otel/WarpTelemetry.logs|{}logs[0]
+        final fun <get-logs>(): us.tractat.kuilt.otel/WarpLogRecordExporter // us.tractat.kuilt.otel/WarpTelemetry.logs.<get-logs>|<get-logs>(){}[0]
+    final val metrics // us.tractat.kuilt.otel/WarpTelemetry.metrics|{}metrics[0]
+        final fun <get-metrics>(): us.tractat.kuilt.otel/WarpMetricExporter // us.tractat.kuilt.otel/WarpTelemetry.metrics.<get-metrics>|<get-metrics>(){}[0]
+    final val spans // us.tractat.kuilt.otel/WarpTelemetry.spans|{}spans[0]
+        final fun <get-spans>(): us.tractat.kuilt.otel/WarpSpanExporter // us.tractat.kuilt.otel/WarpTelemetry.spans.<get-spans>|<get-spans>(){}[0]
+
+    final suspend fun clear(): us.tractat.kuilt.otel/ExportResult // us.tractat.kuilt.otel/WarpTelemetry.clear|clear(){}[0]
+    final suspend fun recover() // us.tractat.kuilt.otel/WarpTelemetry.recover|recover(){}[0]
+}
+
+final const val us.tractat.kuilt.otel/DEFAULT_LOG_SEGMENT_OPS // us.tractat.kuilt.otel/DEFAULT_LOG_SEGMENT_OPS|{}DEFAULT_LOG_SEGMENT_OPS[0]
+    final fun <get-DEFAULT_LOG_SEGMENT_OPS>(): kotlin/Int // us.tractat.kuilt.otel/DEFAULT_LOG_SEGMENT_OPS.<get-DEFAULT_LOG_SEGMENT_OPS>|<get-DEFAULT_LOG_SEGMENT_OPS>(){}[0]
+final const val us.tractat.kuilt.otel/DEFAULT_MAX_LOG_RECORDS // us.tractat.kuilt.otel/DEFAULT_MAX_LOG_RECORDS|{}DEFAULT_MAX_LOG_RECORDS[0]
+    final fun <get-DEFAULT_MAX_LOG_RECORDS>(): kotlin/Int // us.tractat.kuilt.otel/DEFAULT_MAX_LOG_RECORDS.<get-DEFAULT_MAX_LOG_RECORDS>|<get-DEFAULT_MAX_LOG_RECORDS>(){}[0]
+final const val us.tractat.kuilt.otel/DEFAULT_MAX_METRICS // us.tractat.kuilt.otel/DEFAULT_MAX_METRICS|{}DEFAULT_MAX_METRICS[0]
+    final fun <get-DEFAULT_MAX_METRICS>(): kotlin/Int // us.tractat.kuilt.otel/DEFAULT_MAX_METRICS.<get-DEFAULT_MAX_METRICS>|<get-DEFAULT_MAX_METRICS>(){}[0]
+final const val us.tractat.kuilt.otel/DEFAULT_MAX_SPANS // us.tractat.kuilt.otel/DEFAULT_MAX_SPANS|{}DEFAULT_MAX_SPANS[0]
+    final fun <get-DEFAULT_MAX_SPANS>(): kotlin/Int // us.tractat.kuilt.otel/DEFAULT_MAX_SPANS.<get-DEFAULT_MAX_SPANS>|<get-DEFAULT_MAX_SPANS>(){}[0]
+final const val us.tractat.kuilt.otel/DEFAULT_OTLP_HISTOGRAM_SCALE // us.tractat.kuilt.otel/DEFAULT_OTLP_HISTOGRAM_SCALE|{}DEFAULT_OTLP_HISTOGRAM_SCALE[0]
+    final fun <get-DEFAULT_OTLP_HISTOGRAM_SCALE>(): kotlin/Int // us.tractat.kuilt.otel/DEFAULT_OTLP_HISTOGRAM_SCALE.<get-DEFAULT_OTLP_HISTOGRAM_SCALE>|<get-DEFAULT_OTLP_HISTOGRAM_SCALE>(){}[0]
+final const val us.tractat.kuilt.otel/MAX_OTLP_HISTOGRAM_SCALE // us.tractat.kuilt.otel/MAX_OTLP_HISTOGRAM_SCALE|{}MAX_OTLP_HISTOGRAM_SCALE[0]
+    final fun <get-MAX_OTLP_HISTOGRAM_SCALE>(): kotlin/Int // us.tractat.kuilt.otel/MAX_OTLP_HISTOGRAM_SCALE.<get-MAX_OTLP_HISTOGRAM_SCALE>|<get-MAX_OTLP_HISTOGRAM_SCALE>(){}[0]
+final const val us.tractat.kuilt.otel/MIN_OTLP_HISTOGRAM_SCALE // us.tractat.kuilt.otel/MIN_OTLP_HISTOGRAM_SCALE|{}MIN_OTLP_HISTOGRAM_SCALE[0]
+    final fun <get-MIN_OTLP_HISTOGRAM_SCALE>(): kotlin/Int // us.tractat.kuilt.otel/MIN_OTLP_HISTOGRAM_SCALE.<get-MIN_OTLP_HISTOGRAM_SCALE>|<get-MIN_OTLP_HISTOGRAM_SCALE>(){}[0]
+
+final fun us.tractat.kuilt.otel/alphaForOtlpScale(kotlin/Int): kotlin/Double // us.tractat.kuilt.otel/alphaForOtlpScale|alphaForOtlpScale(kotlin.Int){}[0]
+final fun us.tractat.kuilt.otel/inferCausalLinks(kotlin.collections/Collection<us.tractat.kuilt.otel/SpanRecord>): kotlin.collections/List<us.tractat.kuilt.otel/SpanLink> // us.tractat.kuilt.otel/inferCausalLinks|inferCausalLinks(kotlin.collections.Collection<us.tractat.kuilt.otel.SpanRecord>){}[0]
+final fun us.tractat.kuilt.otel/otlpScaleFor(kotlin/Double): kotlin/Int // us.tractat.kuilt.otel/otlpScaleFor|otlpScaleFor(kotlin.Double){}[0]

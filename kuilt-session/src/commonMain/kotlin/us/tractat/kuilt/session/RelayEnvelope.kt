@@ -55,8 +55,9 @@ internal sealed interface RelayDest {
  *
  * 256 covers ids of about 107 bytes each. `PeerId`s are short, controlled identifiers by
  * convention (a name or a uuid), so that is generous headroom rather than a tight fit — chosen to
- * match `:kuilt-cluster`'s `RELAY_HEADER_BUDGET`, which reserves the same 256 B for the same shape
- * of wrapper over the same shape of ids. A pathologically long pair of ids could still exceed it; the
+ * match `:kuilt-cluster`'s `RELAY_HEADER_BUDGET`, which reserves the same 256 B over the same shape of
+ * ids. That wrapper's payload still encodes as an integer array, so its cost still grows with its
+ * contents, tracked by #2747. A pathologically long pair of ids could still exceed it here; the
  * arithmetic is pinned by `RelayPayloadBudgetTest` so a change to the envelope's wire shape that
  * eats the margin fails a test rather than a fabric.
  *
@@ -128,8 +129,18 @@ internal class RelayEnvelope(
          * `ignoreUnknownKeys` for the same forward-compatibility reason `AdmitMessage`'s codec has
          * it: a frame minted by a newer build carrying an extra field still decodes here instead
          * of being dropped as malformed.
+         *
+         * `alwaysUseByteString` because without it a `ByteArray` encodes as an integer array, where
+         * every byte outside `-24..23` costs 2 B. The envelope's cost then scales with its payload,
+         * so no flat [RELAY_ENVELOPE_BUDGET] can cover it, and a relayed member refused payloads
+         * well under the budget it published (#2958). It is a wire break for relayed frames: a build
+         * on either side of it drops the other's as malformed, so a room upgrades all its members
+         * together.
          */
-        private val cbor = Cbor { ignoreUnknownKeys = true }
+        private val cbor = Cbor {
+            ignoreUnknownKeys = true
+            alwaysUseByteString = true
+        }
 
         /** Encode [envelope] with the [RoomFramePrefix.Relay] framing prefix. */
         fun encode(envelope: RelayEnvelope): ByteArray {

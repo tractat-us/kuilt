@@ -1,0 +1,16 @@
+public final class us/tractat/kuilt/warp/heddle/HeddleAdmissionControl : us/tractat/kuilt/warp/AdmissionControl {
+	public static final field Companion Lus/tractat/kuilt/warp/heddle/HeddleAdmissionControl$Companion;
+	public fun <init> (Lus/tractat/kuilt/heddle/FairShareExecution;JLkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/heddle/FairShareExecution;JLkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun admit (Lus/tractat/kuilt/warp/TaskDescriptor;)Lus/tractat/kuilt/warp/AdmissionTicket;
+}
+
+public final class us/tractat/kuilt/warp/heddle/HeddleAdmissionControl$Companion {
+	public final fun defaultLeafOf-PsTAZSs (Ljava/lang/String;)Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/heddle/LaneTaggingKt {
+	public static final fun inLane (Lus/tractat/kuilt/warp/TaskDescriptor;Ljava/lang/String;)Lus/tractat/kuilt/warp/TaskDescriptor;
+	public static final fun inLane-OYEYfio (Lus/tractat/kuilt/warp/TaskDescriptor;Ljava/lang/String;)Lus/tractat/kuilt/warp/TaskDescriptor;
+}
+

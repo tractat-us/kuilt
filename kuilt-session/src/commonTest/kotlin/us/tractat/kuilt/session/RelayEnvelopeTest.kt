@@ -1,10 +1,15 @@
 package us.tractat.kuilt.session
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.cbor.Cbor
+import kotlinx.serialization.decodeFromByteArray
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -17,6 +22,7 @@ import kotlin.test.assertTrue
  * host as the sender, so without this field the far end would credit the host. It is carried
  * inside a forgeable frame and is therefore first-hop-validated by the receiver, never trusted.
  */
+@OptIn(ExperimentalSerializationApi::class, ExperimentalStdlibApi::class)
 class RelayEnvelopeTest {
 
     private val origin = PeerId("joiner-a")
@@ -138,5 +144,40 @@ class RelayEnvelopeTest {
             { assertFalse(RelayEnvelope.isRelayFrame(channelFrame)) },
             { assertNull(RelayEnvelope.decode(channelFrame)) },
         )
+    }
+
+    /**
+     * The wire break the release note declares, pinned on frozen bytes (#2958). A build on either side
+     * of `alwaysUseByteString` drops the other's relayed frames: the two framings are different CBOR
+     * major types, so the decode fails rather than misreading a payload. [wirePayload] straddles CBOR's
+     * short range, or the two framings would agree more closely and pin less.
+     *
+     * [preChangeCodec] restates the old config on purpose. It exists to prove [PRE_CHANGE_FRAME] really
+     * is a well-formed old frame, so its refusal below is about the framing and not about bad bytes.
+     */
+    @Test
+    fun `this build and a build before byte strings refuse each other's frames`() {
+        val preChange = PRE_CHANGE_FRAME.hexToByteArray()
+        val current = CURRENT_FRAME.hexToByteArray()
+        fun oldDecode(frame: ByteArray): RelayEnvelope =
+            preChangeCodec.decodeFromByteArray(frame.copyOfRange(1, frame.size))
+
+        assertAll(
+            { assertTrue(wirePayload.any { it in -24..23 } && wirePayload.any { it !in -24..23 }, "rig: straddles the short range") },
+            { assertEquals(wireEnvelope, oldDecode(preChange), "rig: the frozen frame is a real pre-change frame") },
+            { assertNull(RelayEnvelope.decode(preChange), "this build must refuse a pre-change frame") },
+            { assertEquals(CURRENT_FRAME, RelayEnvelope.encode(wireEnvelope).toHexString(), "this build's own bytes") },
+            { assertEquals(wireEnvelope, RelayEnvelope.decode(current), "and it reads them back") },
+            { assertFailsWith<SerializationException>("a pre-change build must refuse them") { oldDecode(current) } },
+        )
+    }
+
+    private val wirePayload = byteArrayOf(0x00, 0x17, 0x18, 0x62, -1, -24, -25)
+    private val wireEnvelope = RelayEnvelope(PeerId("a"), RelayDest.Everyone, wirePayload)
+    private val preChangeCodec = Cbor { ignoreUnknownKeys = true }
+
+    private companion object {
+        const val PRE_CHANGE_FRAME = "72bf666f726967696e616164646573749f63616c6cbfffff677061796c6f61649f00171818186220373818ffff"
+        const val CURRENT_FRAME = "72bf666f726967696e616164646573749f63616c6cbfffff677061796c6f61644700171862ffe8e7ff"
     }
 }

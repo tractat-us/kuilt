@@ -1,0 +1,228 @@
+public abstract interface class us/tractat/kuilt/game/AuthoritySeating {
+}
+
+public final class us/tractat/kuilt/game/AuthoritySeating$CoreVoters : us/tractat/kuilt/game/AuthoritySeating {
+	public fun <init> (Ljava/util/Set;)V
+	public final fun component1 ()Ljava/util/Set;
+	public final fun copy (Ljava/util/Set;)Lus/tractat/kuilt/game/AuthoritySeating$CoreVoters;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/game/AuthoritySeating$CoreVoters;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/game/AuthoritySeating$CoreVoters;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCore ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/game/AuthoritySeating$SessionPeers : us/tractat/kuilt/game/AuthoritySeating {
+	public static final field INSTANCE Lus/tractat/kuilt/game/AuthoritySeating$SessionPeers;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/game/ConsensusBinding {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/raft/RaftTransport;Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun channel (B)Lus/tractat/kuilt/core/Seam;
+	public final fun getIdentity ()Lus/tractat/kuilt/raft/ClientIdentity;
+	public final fun getRaftConfig ()Lus/tractat/kuilt/raft/RaftConfig;
+	public final fun getSelf-Kplb3d8 ()Ljava/lang/String;
+	public final fun getSessionMembership ()Lus/tractat/kuilt/raft/ClusterConfig;
+	public final fun getStorage ()Lus/tractat/kuilt/raft/RaftStorage;
+	public final fun getTransport ()Lus/tractat/kuilt/raft/RaftTransport;
+}
+
+public abstract interface class us/tractat/kuilt/game/ConsensusPlacement {
+	public static final field Companion Lus/tractat/kuilt/game/ConsensusPlacement$Companion;
+	public abstract fun getSeating ()Lus/tractat/kuilt/game/AuthoritySeating;
+	public fun launchAdmission (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/raft/RaftNode;Lus/tractat/kuilt/game/ConsensusBinding;Lus/tractat/kuilt/core/Seam;)V
+	public abstract fun node (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/game/ConsensusBinding;)Lus/tractat/kuilt/raft/RaftNode;
+}
+
+public final class us/tractat/kuilt/game/ConsensusPlacement$Companion {
+	public final fun federatedCore (Ljava/util/Set;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/game/ConsensusPlacement;
+	public final fun federatedPlayer (Ljava/util/Set;)Lus/tractat/kuilt/game/ConsensusPlacement;
+	public final fun getSessionOwned ()Lus/tractat/kuilt/game/ConsensusPlacement;
+	public final fun preBuilt (Lus/tractat/kuilt/raft/RaftNode;)Lus/tractat/kuilt/game/ConsensusPlacement;
+	public final fun serverCore (Ljava/util/Set;)Lus/tractat/kuilt/game/ConsensusPlacement;
+}
+
+public final class us/tractat/kuilt/game/ConsensusPlacement$DefaultImpls {
+	public static fun launchAdmission (Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/raft/RaftNode;Lus/tractat/kuilt/game/ConsensusBinding;Lus/tractat/kuilt/core/Seam;)V
+}
+
+public final class us/tractat/kuilt/game/DuplicateHostException : java/lang/IllegalStateException {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/game/GameHostedKt {
+	public static final fun gameHosted-9wF6hYc (Lkotlinx/coroutines/CoroutineScope;Ljava/lang/String;Lus/tractat/kuilt/core/fabric/ConnectionSource;ILus/tractat/kuilt/game/ReturnPolicy;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/core/fabric/LinkAdmission;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun gameHosted-9wF6hYc$default (Lkotlinx/coroutines/CoroutineScope;Ljava/lang/String;Lus/tractat/kuilt/core/fabric/ConnectionSource;ILus/tractat/kuilt/game/ReturnPolicy;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/core/fabric/LinkAdmission;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/game/GameNodeKt {
+	public static final fun gameHost-r1-jRBo (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;ILus/tractat/kuilt/game/ReturnPolicy;ZILus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/jvm/functions/Function0;JLus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun gameHost-r1-jRBo$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;ILus/tractat/kuilt/game/ReturnPolicy;ZILus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/jvm/functions/Function0;JLus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun gameJoin-efNRYWU (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;JLus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun gameJoin-efNRYWU$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;JLus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun gameNode (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Ljava/util/Set;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/jvm/functions/Function2;)Lus/tractat/kuilt/game/GameSession;
+	public static synthetic fun gameNode$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Ljava/util/Set;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Lus/tractat/kuilt/game/GameSession;
+	public static final fun gameSpectate-efNRYWU (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;JLus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun gameSpectate-efNRYWU$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;JLus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/game/GamePresence {
+	public fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Z)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun declareAdmissionClosed (Ljava/util/Set;)V
+	public final fun declareAdmissionOpen ()V
+	public final fun declareHost ()V
+	public final fun declarePresent ()V
+	public final fun declareSpectate ()V
+	public final fun declareSpectatorsClosed ()V
+	public final fun declareVacate ()V
+	public final fun declaredHosts ()Ljava/util/Set;
+	public final fun getAdmissionClosed ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getAnnounced ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getReplica-ffK6qZA ()Ljava/lang/String;
+	public final fun getSpectatorsClosed ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun spectators ()Ljava/util/Set;
+	public final fun vacaters ()Ljava/util/Set;
+}
+
+public final class us/tractat/kuilt/game/GameRoomFederatedKt {
+	public static final fun gameNodeRoomFederated (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Ljava/lang/String;Ljava/util/Set;Lus/tractat/kuilt/core/Seam;Lkotlin/jvm/functions/Function1;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun gameNodeRoomFederated$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Ljava/lang/String;Ljava/util/Set;Lus/tractat/kuilt/core/Seam;Lkotlin/jvm/functions/Function1;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/game/GameRoomKt {
+	public static final fun gameHostedRoom (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Ljava/lang/String;ILus/tractat/kuilt/game/ReturnPolicy;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun gameHostedRoom$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Ljava/lang/String;ILus/tractat/kuilt/game/ReturnPolicy;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun gameJoinRoom-Q4fo6ws (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Ljava/lang/String;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;JLkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun gameJoinRoom-Q4fo6ws$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Ljava/lang/String;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;JLkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun gameNodeRoom (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Ljava/lang/String;Ljava/util/Set;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun gameNodeRoom$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Ljava/lang/String;Ljava/util/Set;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/raft/ClientIdentity;Lus/tractat/kuilt/game/ConsensusPlacement;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public class us/tractat/kuilt/game/GameSession {
+	public final fun appChannel (Ljava/lang/String;)Lus/tractat/kuilt/core/Seam;
+	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun close$default (Lus/tractat/kuilt/game/GameSession;Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun getAttestedPrincipals ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getNode ()Lus/tractat/kuilt/raft/RaftNode;
+	public final fun leave ()V
+	public final fun principalFor-nI6NY6A (Ljava/lang/String;)Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/game/IndexedAction {
+	public fun <init> (JLjava/lang/Object;Lus/tractat/kuilt/raft/DedupKey;)V
+	public final fun component1 ()J
+	public final fun component2 ()Ljava/lang/Object;
+	public final fun component3 ()Lus/tractat/kuilt/raft/DedupKey;
+	public final fun copy (JLjava/lang/Object;Lus/tractat/kuilt/raft/DedupKey;)Lus/tractat/kuilt/game/IndexedAction;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/game/IndexedAction;JLjava/lang/Object;Lus/tractat/kuilt/raft/DedupKey;ILjava/lang/Object;)Lus/tractat/kuilt/game/IndexedAction;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAction ()Ljava/lang/Object;
+	public final fun getDedupKey ()Lus/tractat/kuilt/raft/DedupKey;
+	public final fun getIndex ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/game/JoinTimeoutException : java/lang/IllegalStateException {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/game/ReturnPolicy : java/lang/Enum {
+	public static final field FullMembership Lus/tractat/kuilt/game/ReturnPolicy;
+	public static final field Quorum Lus/tractat/kuilt/game/ReturnPolicy;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/game/ReturnPolicy;
+	public static fun values ()[Lus/tractat/kuilt/game/ReturnPolicy;
+}
+
+public final class us/tractat/kuilt/game/RoomGameSession : us/tractat/kuilt/game/GameSession {
+	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getPresence ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getRoster ()Lkotlinx/coroutines/flow/StateFlow;
+}
+
+public final class us/tractat/kuilt/game/RoomGameSessionKt {
+	public static final fun gameOverRoom (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/Room;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function2;)Lus/tractat/kuilt/game/RoomGameSession;
+	public static synthetic fun gameOverRoom$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/Room;Lus/tractat/kuilt/raft/RaftStorage;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Lus/tractat/kuilt/game/RoomGameSession;
+}
+
+public final class us/tractat/kuilt/game/RosterFullException : java/lang/IllegalStateException {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/game/SpectateTimeoutException : java/lang/IllegalStateException {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/game/SpectatorsClosedException : java/lang/IllegalStateException {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public abstract interface class us/tractat/kuilt/game/SpeculativeGame {
+	public abstract fun apply (Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+	public fun fromSnapshot ([B)Ljava/lang/Object;
+	public abstract fun restore (Ljava/lang/Object;)Ljava/lang/Object;
+	public abstract fun snapshot (Ljava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/game/SpeculativeGame$DefaultImpls {
+	public static fun fromSnapshot (Lus/tractat/kuilt/game/SpeculativeGame;[B)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/game/SpeculativeSequencer {
+	public fun <init> (Lus/tractat/kuilt/game/TurnSequencer;Lus/tractat/kuilt/game/SpeculativeGame;Ljava/lang/Object;Lkotlinx/coroutines/CoroutineScope;)V
+	public final fun awaitConfirmedCount (ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getConfirmedCount ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getPendingCount ()I
+	public final fun getSpeculativeState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun propose (Ljava/lang/Object;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun propose (Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/game/TurnEvent {
+}
+
+public final class us/tractat/kuilt/game/TurnEvent$Committed : us/tractat/kuilt/game/TurnEvent {
+	public fun <init> (Lus/tractat/kuilt/game/IndexedAction;)V
+	public final fun component1 ()Lus/tractat/kuilt/game/IndexedAction;
+	public final fun copy (Lus/tractat/kuilt/game/IndexedAction;)Lus/tractat/kuilt/game/TurnEvent$Committed;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/game/TurnEvent$Committed;Lus/tractat/kuilt/game/IndexedAction;ILjava/lang/Object;)Lus/tractat/kuilt/game/TurnEvent$Committed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIndexed ()Lus/tractat/kuilt/game/IndexedAction;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/game/TurnEvent$Reset : us/tractat/kuilt/game/TurnEvent {
+	public fun <init> (Lus/tractat/kuilt/raft/Snapshot;)V
+	public final fun component1 ()Lus/tractat/kuilt/raft/Snapshot;
+	public final fun copy (Lus/tractat/kuilt/raft/Snapshot;)Lus/tractat/kuilt/game/TurnEvent$Reset;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/game/TurnEvent$Reset;Lus/tractat/kuilt/raft/Snapshot;ILjava/lang/Object;)Lus/tractat/kuilt/game/TurnEvent$Reset;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSnapshot ()Lus/tractat/kuilt/raft/Snapshot;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/game/TurnSequencer {
+	public fun <init> (Lus/tractat/kuilt/raft/RaftNode;Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/BinaryFormat;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/raft/RaftNode;Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/BinaryFormat;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public final fun propose (Ljava/lang/Object;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun propose (Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+

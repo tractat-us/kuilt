@@ -1,0 +1,20 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-gossip-test>
+final class us.tractat.kuilt.test.fabric/Star { // us.tractat.kuilt.test.fabric/Star|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, kotlin.collections/List<us.tractat.kuilt.gossip/GossipSeam>, us.tractat.kuilt.test.fabric/InMemoryConnectionSource) // us.tractat.kuilt.test.fabric/Star.<init>|<init>(us.tractat.kuilt.core.Seam;kotlin.collections.List<us.tractat.kuilt.gossip.GossipSeam>;us.tractat.kuilt.test.fabric.InMemoryConnectionSource){}[0]
+
+    final val clients // us.tractat.kuilt.test.fabric/Star.clients|{}clients[0]
+        final fun <get-clients>(): kotlin.collections/List<us.tractat.kuilt.gossip/GossipSeam> // us.tractat.kuilt.test.fabric/Star.clients.<get-clients>|<get-clients>(){}[0]
+    final val hub // us.tractat.kuilt.test.fabric/Star.hub|{}hub[0]
+        final fun <get-hub>(): us.tractat.kuilt.core/Seam // us.tractat.kuilt.test.fabric/Star.hub.<get-hub>|<get-hub>(){}[0]
+    final val source // us.tractat.kuilt.test.fabric/Star.source|{}source[0]
+        final fun <get-source>(): us.tractat.kuilt.test.fabric/InMemoryConnectionSource // us.tractat.kuilt.test.fabric/Star.source.<get-source>|<get-source>(){}[0]
+}
+
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.test.fabric/inMemoryStarOf(kotlin/Int, us.tractat.kuilt.core/PeerId = ..., kotlin.random/Random = ...): us.tractat.kuilt.test.fabric/Star // us.tractat.kuilt.test.fabric/inMemoryStarOf|inMemoryStarOf@kotlinx.coroutines.CoroutineScope(kotlin.Int;us.tractat.kuilt.core.PeerId;kotlin.random.Random){}[0]

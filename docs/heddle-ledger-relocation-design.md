@@ -920,7 +920,10 @@ section documented as safe turns out to be a real conservation break in one shap
    restored, and every later one arrives in order. It works on a follower, it cannot be wedged by
    a withheld entry, and it makes §13.2's enrollment precondition *the same act*, closing both
    holes with one gate. `GovernedHeddleNode.isWritable`; `reserve`/`schedule` are the two entry
-   points that author a slot.
+   points that author a slot. The apply loop moves the gate, in the same step that applies the
+   entry, because a caller that was cancelled or timed out after its entry applied never resumes
+   to do it (#2921). It recognises this run's acts from an in-memory set plus a per-run nonce in
+   their keys, so replay cannot open it even under a reused `incarnation`.
 
    **`complete` carries no gate, and its transitivity is exact only for the boot window.** There the
    gate has never been open, so `reserve` has handed out no `ReservationId` and nothing is
