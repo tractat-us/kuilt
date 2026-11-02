@@ -135,7 +135,7 @@ public class TurnSequencer<A>(
      * Use the [propose] (action, requestId) overload instead when the caller is a **durable** client
      * that needs cross-crash exactly-once (replay the same `requestId` on a post-crash retry).
      *
-     * @throws [IllegalStateException] if the backing node has a
+     * @throws [us.tractat.kuilt.raft.AutoSerialRefusedException] if the backing node has a
      *   [us.tractat.kuilt.raft.ClientIdentity.Durable] id, which refuses this form.
      * @throws [LeadershipLostException] if a forwarded proposal is rejected because
      *   the leader stepped down mid-flight. The caller may retry.
