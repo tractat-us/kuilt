@@ -5,10 +5,13 @@ package us.tractat.kuilt.game
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -29,6 +32,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -54,6 +58,19 @@ private class HostScope(testScope: TestScope) {
     val scope = CoroutineScope(
         testScope.backgroundScope.coroutineContext + Job() + CoroutineExceptionHandler { _, e -> crashes += e },
     )
+
+    init {
+        // Parentless, so nothing else ends it, and `runTest`'s cleanup runs the scheduler until no event
+        // is left: one re-arming timer here spins it for ever, past the wedge backstop. Tied to the
+        // background scope so that holds on every path out of a test, a failed precondition included.
+        testScope.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
 
     fun assertSurvived() {
         assertAll(
@@ -132,6 +149,7 @@ private suspend fun TestScope.realTable(seatCount: Int): RealTable {
     runCurrent()
     val node = watched ?: error("the placement built no node")
     check(host.node.membership.value.voters.size == seatCount) { "precondition: every seat is taken" }
+    node.attempts.clear()
     return RealTable(hostScope, host, node, joiners, rawSeats.drop(1).map { NodeId(it.selfId.value) })
 }
 
@@ -144,6 +162,7 @@ private suspend fun TestScope.realTable(seatCount: Int): RealTable {
 private class RiggedNode(private val fake: FakeRaftNode) : RaftNode by fake {
     val attempts = mutableListOf<ClusterConfig>()
     var onChange: suspend (ClusterConfig) -> Unit = {}
+    var onClose: () -> Unit = {}
 
     fun setRole(role: RaftRole) = fake.setRole(role)
 
@@ -154,6 +173,11 @@ private class RiggedNode(private val fake: FakeRaftNode) : RaftNode by fake {
         onChange(target)
         fake.setMembership(target)
         return target
+    }
+
+    override suspend fun close() {
+        onClose()
+        fake.close()
     }
 }
 
@@ -206,12 +230,11 @@ class VoterLivenessMonitorSurvivalTest {
     // ── Real consensus: the shapes that reach the failure on their own ──────────────────────────
 
     /**
-     * Two seats, and the only other voter goes. Taking it out of the membership needs a majority of
-     * the old config, which is two of two, and one of them has gone. So the change cannot commit, the
-     * leader loses its quorum, and the change fails with the node's leadership.
+     * The control for the arms below. Two seats, and the vacate lands while the leaver is still up to
+     * acknowledge its own removal, so the change commits and nothing fails.
      */
     @Test
-    fun aTwoSeatTableLosingItsOtherVoterLeavesTheHostScopeActive() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+    fun aVacateHeardWhileTheLeaverIsStillUpCommits() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val table = realTable(seatCount = 2)
 
         table.joiners.single().leave()
@@ -219,35 +242,34 @@ class VoterLivenessMonitorSurvivalTest {
         table.joiners.single().close()
         advance(PAST_THE_WINDOW)
 
-        try {
-            assertAll(
-                { assertEquals(1, table.watched.attempts.size, "precondition: the host tried to evict, ${table.watched.attempts}") },
-                { assertEquals(1, table.watched.failures.size, "precondition: and that change failed, ${table.watched.failures}") },
-                { table.hostScope.assertSurvived() },
-            )
-        } finally {
-            table.hostScope.scope.cancel()
-        }
+        assertAll(
+            { assertEquals(1, table.watched.attempts.size, "precondition: the host evicted, ${table.watched.attempts}") },
+            { assertEquals(emptyList(), table.watched.failures, "and the change did not fail") },
+            { assertIs<RaftRole.Leader>(table.host.node.role.value, "and the host still leads") },
+            { table.hostScope.assertSurvived() },
+        )
     }
 
-    /** The same table with `leave()` and `close()` back to back, where the eviction comes off the detector. */
+    /**
+     * Two seats, `leave()` and `close()` back to back. The eviction needs a majority of the old config,
+     * two of two, and one of them has gone. So the change cannot commit, the leader loses its quorum, and
+     * the change fails with the leadership. The host outlives that, but it is left leading nothing, and
+     * no wait in `close` is on offer to change it: a rejected shape, whose cost this arm states.
+     */
     @Test
-    fun aTwoSeatLeaveThenCloseLeavesTheHostScopeActive() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+    fun aTwoSeatLeaveThenCloseLeavesTheHostScopeActiveAndLeaderless() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val table = realTable(seatCount = 2)
 
         table.joiners.single().leave()
         table.joiners.single().close()
         advance(PAST_THE_WINDOW)
 
-        try {
-            assertAll(
-                { assertEquals(1, table.watched.attempts.size, "precondition: the host tried to evict, ${table.watched.attempts}") },
-                { assertEquals(1, table.watched.failures.size, "precondition: and that change failed, ${table.watched.failures}") },
-                { table.hostScope.assertSurvived() },
-            )
-        } finally {
-            table.hostScope.scope.cancel()
-        }
+        assertAll(
+            { assertEquals(1, table.watched.attempts.size, "precondition: the host tried to evict, ${table.watched.attempts}") },
+            { assertEquals(1, table.watched.failures.size, "precondition: and that change failed, ${table.watched.failures}") },
+            { assertFalse(table.host.node.role.value is RaftRole.Leader, "the host cannot lead with its old voter gone") },
+            { table.hostScope.assertSurvived() },
+        )
     }
 
     /** Three seats, and both of the others go: the first eviction has nobody left to commit with. */
@@ -255,20 +277,17 @@ class VoterLivenessMonitorSurvivalTest {
     fun aTableWhereEveryoneElseLeavesLeavesTheHostScopeActive() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val table = realTable(seatCount = 3)
 
-        table.joiners.forEach { it.leave() }
-        advance(FRAME_TIME)
-        table.joiners.forEach { it.close() }
+        table.joiners.forEach { joiner ->
+            joiner.leave()
+            joiner.close()
+        }
         advance(PAST_THE_WINDOW)
 
-        try {
-            assertAll(
-                { assertTrue(table.watched.attempts.isNotEmpty(), "precondition: the host tried to evict") },
-                { assertTrue(table.watched.failures.isNotEmpty(), "precondition: and a change failed, ${table.watched.attempts}") },
-                { table.hostScope.assertSurvived() },
-            )
-        } finally {
-            table.hostScope.scope.cancel()
-        }
+        assertAll(
+            { assertTrue(table.watched.attempts.isNotEmpty(), "precondition: the host tried to evict") },
+            { assertTrue(table.watched.failures.isNotEmpty(), "precondition: and a change failed, ${table.watched.attempts}") },
+            { table.hostScope.assertSurvived() },
+        )
     }
 
     /** The host closes with an eviction in flight, and closing fails that change under the monitor. */
@@ -277,22 +296,18 @@ class VoterLivenessMonitorSurvivalTest {
         val table = realTable(seatCount = 2)
 
         table.joiners.single().leave()
-        advance(FRAME_TIME)
         table.joiners.single().close()
-        advance(FRAME_TIME)
+        val deadline = testScheduler.currentTime + PAST_THE_WINDOW.inWholeMilliseconds
+        while (table.watched.inFlight == 0 && testScheduler.currentTime < deadline) advance(FRAME_TIME)
         assertEquals(1, table.watched.inFlight, "precondition: the eviction is in flight as the host closes")
 
         table.host.close()
         advance(PAST_THE_WINDOW)
 
-        try {
-            assertAll(
-                { assertEquals(0, table.watched.inFlight, "the in-flight change ended") },
-                { table.hostScope.assertSurvived() },
-            )
-        } finally {
-            table.hostScope.scope.cancel()
-        }
+        assertAll(
+            { assertEquals(0, table.watched.inFlight, "the in-flight change ended") },
+            { table.hostScope.assertSurvived() },
+        )
     }
 
     // ── A rigged node: exact failures, and what the monitor does after them ─────────────────────
@@ -308,14 +323,10 @@ class VoterLivenessMonitorSurvivalTest {
         table.peers.first().presence.declareVacate()
         advance(FRAME_TIME)
 
-        try {
-            assertAll(
-                { assertEquals(1, fired, "precondition: the failure was thrown") },
-                { table.hostScope.assertSurvived() },
-            )
-        } finally {
-            table.hostScope.scope.cancel()
-        }
+        assertAll(
+            { assertEquals(1, fired, "precondition: the failure was thrown") },
+            { table.hostScope.assertSurvived() },
+        )
     }
 
     @Test
@@ -344,15 +355,11 @@ class VoterLivenessMonitorSurvivalTest {
         second.presence.declareVacate()
         advance(FRAME_TIME)
 
-        try {
-            assertAll(
-                { assertEquals(2, table.node.attempts.size, "precondition: the second eviction was attempted") },
-                { assertEquals(setOf(table.hostId, first.id), table.node.attempts.last().voters, "the first leaver is still a voter") },
-                { table.hostScope.assertSurvived() },
-            )
-        } finally {
-            table.hostScope.scope.cancel()
-        }
+        assertAll(
+            { assertEquals(2, table.node.attempts.size, "precondition: the second eviction was attempted") },
+            { assertEquals(setOf(table.hostId, first.id), table.node.attempts.last().voters, "the first leaver is still a voter") },
+            { table.hostScope.assertSurvived() },
+        )
     }
 
     /** The other half of an unknown outcome: the change landed and the call still failed. */
@@ -373,15 +380,11 @@ class VoterLivenessMonitorSurvivalTest {
         second.presence.declareVacate()
         advance(FRAME_TIME)
 
-        try {
-            assertAll(
-                { assertEquals(2, table.node.attempts.size, "precondition: the second eviction was attempted") },
-                { assertEquals(setOf(table.hostId), table.node.attempts.last().voters, "the first leaver stays out") },
-                { table.hostScope.assertSurvived() },
-            )
-        } finally {
-            table.hostScope.scope.cancel()
-        }
+        assertAll(
+            { assertEquals(2, table.node.attempts.size, "precondition: the second eviction was attempted") },
+            { assertEquals(setOf(table.hostId), table.node.attempts.last().voters, "the first leaver stays out") },
+            { table.hostScope.assertSurvived() },
+        )
     }
 
     /** A voter a failed eviction left in the membership is watched again, so its seat is not stuck. */
@@ -400,14 +403,10 @@ class VoterLivenessMonitorSurvivalTest {
 
         advance(PAST_THE_WINDOW)
 
-        try {
-            assertAll(
-                { assertEquals(setOf(table.hostId), table.node.membership.value.voters, "the seat came free at the window") },
-                { table.hostScope.assertSurvived() },
-            )
-        } finally {
-            table.hostScope.scope.cancel()
-        }
+        assertAll(
+            { assertEquals(setOf(table.hostId), table.node.membership.value.voters, "the seat came free at the window") },
+            { table.hostScope.assertSurvived() },
+        )
     }
 
     // ── Vacating with nobody able to act on it ──────────────────────────────────────────────────
@@ -432,11 +431,7 @@ class VoterLivenessMonitorSurvivalTest {
         table.node.setRole(RaftRole.Leader)
         advance(PAST_THE_WINDOW)
 
-        try {
-            assertEquals(setOf(table.hostId), table.node.membership.value.voters, "the seat came free at the window")
-        } finally {
-            table.hostScope.scope.cancel()
-        }
+        assertEquals(setOf(table.hostId), table.node.membership.value.voters, "the seat came free at the window")
     }
 
     /**
@@ -486,14 +481,10 @@ class VoterLivenessMonitorSurvivalTest {
         heldAdmission.complete(Unit)
         advance(FRAME_TIME)
 
-        try {
-            assertAll(
-                { assertTrue(node.attempts.any { second.id in it.voters }, "precondition: it was admitted") },
-                { assertEquals(setOf(hostId), node.membership.value.voters, "and then evicted") },
-                { hostScope.assertSurvived() },
-            )
-        } finally {
-            hostScope.scope.cancel()
-        }
+        assertAll(
+            { assertTrue(node.attempts.any { second.id in it.voters }, "precondition: it was admitted") },
+            { assertEquals(setOf(hostId), node.membership.value.voters, "and then evicted") },
+            { hostScope.assertSurvived() },
+        )
     }
 }
