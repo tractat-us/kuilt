@@ -122,13 +122,18 @@ like a brand-new command and can apply twice. `propose(command, requestId)` with
 Pair it with `ClientIdentity.Durable(clientId, issuedThrough)`, because the identity that table keys
 on has to outlive the restart too; the default `ClientIdentity.Auto` mints a new one per incarnation,
 which is right only where at-least-once genuinely is. A durable identity refuses the one-argument form
-with an `IllegalStateException`, since a serial the node drew for itself could not be on disk first.
+with an `AutoSerialRefusedException`, since a serial the node drew for itself could not be on disk first.
 
 `issuedThrough` is that persisted id, handed back at boot. A client keeps its log in memory, so after
 a process restart its own earlier entries come back over replication, and the floor is what says they
 are its own and not another writer's. Commit it **before** each new proposal, because a floor behind
-the truth reads your own history as a `ClientIdCollisionException` on every boot, or, if a proposal
-gets in first, reuses a serial whose command a consumer's table then drops:
+the truth reads your own history as a `ClientIdCollisionException` on every boot that walks it. If a
+proposal gets in first, or a snapshot already covers the serial so the boot comes up clean, it reuses
+a serial whose command a consumer's table then drops.
+
+Keep one command outstanding per id. The table holds one high-water serial, so a higher serial
+abandons every lower one: a retry of the lower one after that returns success and is dropped, crash or
+no crash (#3107). Store the command's bytes with the serial, because a retry has to resend them:
 
 <!-- verbatim from kuilt-raft/src/commonSamples/kotlin/us/tractat/kuilt/raft/RaftSamples.kt#sampleDurableClientIdentity -->
 ```kotlin
