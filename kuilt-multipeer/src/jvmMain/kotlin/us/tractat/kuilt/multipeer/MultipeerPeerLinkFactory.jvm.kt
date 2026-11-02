@@ -85,6 +85,11 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     /**
      * JVM-side snapshot of visible peers. Updated reactively on both
      * `foundPeer` and `lostPeer` events forwarded from the K/N dylib bridge.
+     *
+     * Unlike the browser's feeds, this has no dispatcher boundary. A collector on an unconfined
+     * dispatcher runs on the native callback thread, inside the callback and under the lock that
+     * guards this snapshot, so it must not block: `mc_browser_stop` waits for that callback, and
+     * every other callback waits for that lock.
      */
     public actual val visiblePeers: StateFlow<Set<MultipeerAdvertisement>> = mutableVisiblePeers.asStateFlow()
 
@@ -95,10 +100,10 @@ public actual class MultipeerPeerLinkFactory actual constructor(
      * passes a non-null advertisement, `PeerLostCallback` passes `null`.
      *
      * [session] is the browse generation the calling callback was created under. `mc_browser_stop`
-     * does not wait for callbacks already in flight, so one can arrive after [clearVisiblePeers] has
-     * ended its session; it is then discarded, and `false` tells the caller not to report a departure
-     * either. The check and the update share [discoveryLock] with teardown, so no callback can slip
-     * between them.
+     * waits for callbacks already in flight, so none should arrive after [clearVisiblePeers] has ended
+     * its session. This check is the backstop if one does: it is discarded, and `false` tells the
+     * caller not to report a departure either. The check and the update share [discoveryLock] with
+     * teardown, so no callback can slip between them.
      */
     internal fun setVisiblePeer(
         session: MultipeerBrowseGeneration,

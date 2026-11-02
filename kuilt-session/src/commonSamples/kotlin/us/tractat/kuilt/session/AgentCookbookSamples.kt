@@ -295,8 +295,8 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
         is ElectionOutcome.Adopted -> outcome.room
         // The hosting peer left and this peer is now the elected host, with the co-members still
         // parked in their own awaitRoom on the SAME seam — so they ack this freeze round at once.
-        // Re-running electLobby(...) would weave a FRESH seam and strand them; calling leave() first
-        // would close the shared seam and collapse them.
+        // Re-running electLobby(...) would start a SECOND lobby beside this one, which strands them on
+        // most looms; calling leave() first would close the shared seam and collapse them.
         ElectionOutcome.BecameHost -> lobby.start(memberName = "Player 2")
         // A genuine mid-2PC collapse: the co-electors are gone. Retryable — leave this lobby, then
         // re-run electLobby(...). A lobby left open stays on the mesh and can hold a host's start().

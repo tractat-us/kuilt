@@ -102,7 +102,24 @@ sealed interface us.tractat.kuilt.heddle/ControlOutcome { // us.tractat.kuilt.he
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ControlOutcome.Conflict.toString|toString(){}[0]
     }
 
+    final class Indeterminate : us.tractat.kuilt.heddle/ControlOutcome { // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry) // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate.<init>|<init>(us.tractat.kuilt.heddle.GateClosed.Reason.UnreadableControlEntry){}[0]
+
+        final val halt // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate.halt|{}halt[0]
+            final fun <get-halt>(): us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate.halt.<get-halt>|<get-halt>(){}[0]
+        final val index // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate.index|{}index[0]
+            final fun <get-index>(): kotlin/Long // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate.index.<get-index>|<get-index>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry = ...): us.tractat.kuilt.heddle/ControlOutcome.Indeterminate // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate.copy|copy(us.tractat.kuilt.heddle.GateClosed.Reason.UnreadableControlEntry){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ControlOutcome.Indeterminate.toString|toString(){}[0]
+    }
+
     final object Companion { // us.tractat.kuilt.heddle/ControlOutcome.Companion|null[0]
+        final const val COMMIT_UNKNOWN // us.tractat.kuilt.heddle/ControlOutcome.Companion.COMMIT_UNKNOWN|{}COMMIT_UNKNOWN[0]
+            final fun <get-COMMIT_UNKNOWN>(): kotlin/Long // us.tractat.kuilt.heddle/ControlOutcome.Companion.COMMIT_UNKNOWN.<get-COMMIT_UNKNOWN>|<get-COMMIT_UNKNOWN>(){}[0]
         final const val NOT_COMMITTED // us.tractat.kuilt.heddle/ControlOutcome.Companion.NOT_COMMITTED|{}NOT_COMMITTED[0]
             final fun <get-NOT_COMMITTED>(): kotlin/Long // us.tractat.kuilt.heddle/ControlOutcome.Companion.NOT_COMMITTED.<get-NOT_COMMITTED>|<get-NOT_COMMITTED>(){}[0]
     }
@@ -570,6 +587,22 @@ final class us.tractat.kuilt.heddle/GateClosed : us.tractat.kuilt.heddle/Reserve
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/GateClosed.toString|toString(){}[0]
 
     sealed interface Reason { // us.tractat.kuilt.heddle/GateClosed.Reason|null[0]
+        final class UnreadableControlEntry : us.tractat.kuilt.heddle/GateClosed.Reason { // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry|null[0]
+            constructor <init>(kotlin/Long, kotlin/Int?) // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.<init>|<init>(kotlin.Long;kotlin.Int?){}[0]
+
+            final val index // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.index|{}index[0]
+                final fun <get-index>(): kotlin/Long // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.index.<get-index>|<get-index>(){}[0]
+            final val version // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.version|{}version[0]
+                final fun <get-version>(): kotlin/Int? // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.version.<get-version>|<get-version>(){}[0]
+
+            final fun component1(): kotlin/Long // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.component1|component1(){}[0]
+            final fun component2(): kotlin/Int? // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.component2|component2(){}[0]
+            final fun copy(kotlin/Long = ..., kotlin/Int? = ...): us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.copy|copy(kotlin.Long;kotlin.Int?){}[0]
+            final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.equals|equals(kotlin.Any?){}[0]
+            final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.hashCode|hashCode(){}[0]
+            final fun toString(): kotlin/String // us.tractat.kuilt.heddle/GateClosed.Reason.UnreadableControlEntry.toString|toString(){}[0]
+        }
+
         final object AwaitingEnrollment : us.tractat.kuilt.heddle/GateClosed.Reason { // us.tractat.kuilt.heddle/GateClosed.Reason.AwaitingEnrollment|null[0]
             final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/GateClosed.Reason.AwaitingEnrollment.equals|equals(kotlin.Any?){}[0]
             final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/GateClosed.Reason.AwaitingEnrollment.hashCode|hashCode(){}[0]

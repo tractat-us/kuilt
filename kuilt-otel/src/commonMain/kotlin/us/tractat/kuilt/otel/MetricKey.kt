@@ -1,6 +1,7 @@
 package us.tractat.kuilt.otel
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.crdt.CanonicalMapSerializer
 
 /**
  * The identity of a single metric time series.
@@ -14,12 +15,15 @@ import kotlinx.serialization.Serializable
  * @param kind The measurement kind: [MetricKind.SUM], [MetricKind.GAUGE], or
  *   [MetricKind.CARDINALITY].
  * @param attributes Key/value label set that differentiates series within the same
- *   metric name (e.g. `{"path" to "/api/v1"}`). Empty means no labels.
+ *   metric name (e.g. `{"path" to "/api/v1"}`). Empty means no labels. Two keys that differ only
+ *   in the order their attributes were written are equal, so they encode alike too, or sorting a
+ *   map of these keys could not make that map canonical.
  */
 @Serializable
 public data class MetricKey(
     public val name: String,
     public val kind: MetricKind,
+    @Serializable(with = CanonicalMapSerializer::class)
     public val attributes: Map<String, String> = emptyMap(),
 ) {
     init {

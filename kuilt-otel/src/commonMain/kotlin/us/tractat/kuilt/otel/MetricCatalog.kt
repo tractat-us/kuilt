@@ -1,6 +1,7 @@
 package us.tractat.kuilt.otel
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.crdt.CanonicalMapSerializer
 import us.tractat.kuilt.crdt.DDSketch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GCounterDouble
@@ -23,13 +24,22 @@ import us.tractat.kuilt.crdt.Quilted
  * semantics: buffer eviction is a local cap, never a replicated delete, so a plain
  * grow-merge map is sufficient (a key evicted on the device but already pulled lingers
  * on the puller — acceptable for a diagnostic snapshot).
+ *
+ * Equal catalogs encode to equal bytes, because a `Quilter` hashes this encoding for its anti-entropy
+ * root. [piece] builds its maps through a `HashMap`, so each one goes through a canonical serializer,
+ * which also leans on [MetricKey] encoding canonically in its own right.
  */
 @Serializable
 public class MetricCatalog(
+    @Serializable(with = CanonicalMapSerializer::class)
     public val sums: Map<MetricKey, GCounter> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
     public val doubleSums: Map<MetricKey, GCounterDouble> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
     public val gauges: Map<MetricKey, LWWRegister<Double>> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
     public val cardinalities: Map<MetricKey, HyperLogLog> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
     public val histograms: Map<MetricKey, DDSketch> = emptyMap(),
 ) : Quilted<MetricCatalog> {
 

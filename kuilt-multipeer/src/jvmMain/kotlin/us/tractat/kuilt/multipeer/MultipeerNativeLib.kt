@@ -124,7 +124,11 @@ internal interface MultipeerNativeLib : Library {
      * Starts an MC browse session for the given runtime, forwarding every
      * `foundPeer` event to [peerFoundCb]. Returns an opaque browser handle
      * to pair with [mc_browser_stop]. Returns `null` on invalid arguments
-     * or load failure.
+     * or load failure, or if [runtime] already has a browse session, which
+     * then carries on untouched. A refused start has nothing to stop.
+     *
+     * Blocks until the session holds the browser. [peerFoundCb] can fire on
+     * the calling thread before this returns.
      *
      * For `peerLost` forwarding call [mc_browser_set_peer_lost_callback]
      * once the browser handle is in hand.
@@ -160,8 +164,10 @@ internal interface MultipeerNativeLib : Library {
     )
 
     /**
-     * Stops the browse session and disposes the handle. Use-after-free if
-     * called twice with the same pointer.
+     * Stops the browse session and disposes the handle, blocking until no
+     * callback of this session is running or will run. Both callbacks must stay
+     * strongly reachable until it returns, and neither may call it. Use-after-free
+     * if called twice with the same pointer.
      */
     @Suppress("ktlint:standard:function-naming")
     fun mc_browser_stop(browser: Pointer?)

@@ -26,6 +26,7 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.coroutines.test)
             // TEST ONLY, and the direction is deliberate. `:kuilt-bolt` must stay ignorant of
             // telemetry — that is what lets one archiving decorator serve every op-log owner — so
