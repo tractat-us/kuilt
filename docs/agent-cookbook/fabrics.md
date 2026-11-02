@@ -200,7 +200,7 @@ to stop what it leaks, or the far end still sees you connected after you cancell
 takes the same arguments and returns the same session. `KtorClientLoom`, `KtorMeshClientLoom` and
 `voterMeshOverWebSockets` all dial through it, so reach for it only when you open a session yourself.
 
-<!-- verbatim from kuilt-cluster/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/cluster/WebSocketVoterMesh.kt#voterMeshOverWebSockets -->
+<!-- verbatim from kuilt-cluster/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/cluster/WebSocketVoterMesh.kt -->
 ```kotlin
 dial = { _, peer -> WebSocketConnection(httpClient.ownedWebSocketSession(dialUrlByPeer.getValue(peer))) },
 ```

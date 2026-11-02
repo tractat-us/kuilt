@@ -63,6 +63,11 @@ public final class us/tractat/kuilt/websocket/NetworkReachability : java/lang/En
 	public static fun values ()[Lus/tractat/kuilt/websocket/NetworkReachability;
 }
 
+public final class us/tractat/kuilt/websocket/OwnedWebSocketSessionKt {
+	public static final fun ownedWebSocketSession (Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun ownedWebSocketSession$default (Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
 public final class us/tractat/kuilt/websocket/UnobservedConnectivity : us/tractat/kuilt/websocket/ConnectivityObserver {
 	public static final field INSTANCE Lus/tractat/kuilt/websocket/UnobservedConnectivity;
 	public fun getReachability ()Lkotlinx/coroutines/flow/StateFlow;
