@@ -251,9 +251,10 @@ values, and anyone who reaches the puller can get one answer out of it to test g
 against at home. The phone stops honouring a code after five minutes, which is why an
 answer is only useful to get past the phone for that long. Trying every code in that
 time takes about four quadrillion guesses a second. No laptop gets close, but it is a
-price and not a wall, so this keeps out everyone short of an attacker with serious money
-to spend on you. The laptop has no clock, so a code found later still fools a puller
-left running.
+price and not a wall: guessing the code stays out of reach of everyone short of an
+attacker with serious money to spend on you. The laptop has no clock, so a code found
+later still fools a puller left running. The next two limits take no guessing and no
+money.
 
 **An attacker in the middle can still get in.** One who passes as the laptop to the
 phone and as the phone to the laptop can be admitted at both ends without knowing the
@@ -263,12 +264,13 @@ cannot stop one who claims both names, because nothing vouches for who a peer sa
 **Getting in once lets in anyone who borrows the name.** Each side remembers which name
 proved the code, not which connection did, and nothing on a later frame shows more than
 the name. Where a fabric will carry a second connection under that name, that connection
-is let in too, with no code at all. It can read what the phone or the laptop sends that
-name, and it can hand the laptop logs the phone never wrote. The same trick can shut a
-peer out until it reconnects. Reading the source says Multipeer and a hub with no
-attestation both allow this. Nobody has yet run it. **So Multipeer is not a private path
-today:** its encryption stops a listener, and the code stops a stranger under its own
-name, and neither stops one that borrows a name.
+is let in too, with no code at all. It can send as that name, including logs the phone
+never wrote, and it may read what the phone or the laptop sends that name, depending on
+which connection the fabric picks. The same trick can shut a peer out until it
+reconnects. Reading the source says Multipeer and a hub with no attestation both allow
+this. Nobody has yet run it. **So Multipeer is not a private path today:** its encryption
+stops a listener, and the code stops a stranger under its own name, and neither stops one
+that borrows a name.
 
 Under the surface: an answer is an HMAC under the code over a nonce from each side and
 both peers' ids. The phone answers the laptop's nonce the same way, and only once it has
