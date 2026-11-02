@@ -3,9 +3,10 @@
  *
  * Three exports:
  *  - mc_browser_start subscribes to the apple `MultipeerServiceBrowser` flow
- *    and forwards every `peerFound` emission to a JVM callback. The JVM
- *    callback is a cdecl function pointer (JNA `Callback` interface) that
- *    receives two NUL-terminated UTF-8 C strings.
+ *    and forwards every `peerFound` emission to a JVM callback, or returns null
+ *    if the runtime already has a browse session. The JVM callback is a cdecl
+ *    function pointer (JNA `Callback` interface) that receives two NUL-terminated
+ *    UTF-8 C strings.
  *  - mc_browser_set_peer_lost_callback registers a second JVM callback that
  *    receives one NUL-terminated UTF-8 handle string for every `peerLost`
  *    event the apple `BrowserDelegate` sees.
@@ -16,6 +17,10 @@
  * the JVM, so emitting from K/N's `Dispatchers.Default` is safe. A collector
  * is inside the JVM for as long as its callback runs, which cancellation
  * cannot interrupt; that is why mc_browser_stop has to wait.
+ *
+ * The found collector starts on the thread that called mc_browser_start and
+ * stays there up to its first suspension, so `startBrowsing` runs on the JNA
+ * caller's thread. Everything after that first suspension runs on `Dispatchers.Default`.
  */
 package us.tractat.kuilt.multipeer.bridge
 
@@ -32,8 +37,10 @@ import kotlinx.cinterop.invoke
 import kotlinx.cinterop.memScoped
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
@@ -94,9 +101,10 @@ internal class BrowserState(
 }
 
 /**
- * `onFailure` for a bridge pump. [PumpFailure.UPSTREAM] is the one that matters: `startBrowsing` refusing
- * a second owner of the runtime ends that owner's collector. There is no way to tell the JVM (`mc_browser_start`
- * has already returned), so the log line is the only record that this session will hear nothing.
+ * `onFailure` for a bridge pump. The log line records why. [mc_browser_start] tells the JVM about the
+ * failure that matters, `startBrowsing` refusing a second owner of the runtime, by returning null. A
+ * failure any later reaches only this line, since no call is left to report it through; nothing in these
+ * flows is known to raise one.
  */
 private fun reportPumpFailure(pump: String): (PumpFailure, Throwable) -> PumpVerdict =
     { phase, failure ->
@@ -109,7 +117,13 @@ private fun reportPumpFailure(pump: String): (PumpFailure, Throwable) -> PumpVer
  * `peerFound` event to [peerFoundCb]. Returns an opaque browser handle
  * the JVM passes to [mc_browser_set_peer_lost_callback] / [mc_browser_stop].
  *
- * Returns null if any required pointer is null.
+ * Returns null if any required pointer is null, or if the runtime already has a browse session. A
+ * refused start leaves that session running, and the caller gets no handle because nothing is left to
+ * stop: the collector has already ended. The check is what makes the refusal synchronous, so it rests
+ * on the collector starting undispatched, and on `startBrowsing` running before the flow first suspends.
+ * The flow is a `SharedFlow`, which never completes, so a collector that has already finished here failed.
+ *
+ * A callback can fire inside this call, on the caller's thread, if the flow replays a peer.
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
 @CName("mc_browser_start")
@@ -123,12 +137,21 @@ public fun mc_browser_start(
     val browser = MultipeerServiceBrowser(factory)
 
     val state = BrowserState(factory)
-    browser.discoveries().pumpIn(state.scope, reportPumpFailure("found"), "mc-browser-found") { ad ->
+    val found = browser.discoveries().pumpIn(
+        scope = state.scope,
+        onFailure = reportPumpFailure("found"),
+        name = "mc-browser-found",
+        start = CoroutineStart.UNDISPATCHED,
+    ) { ad ->
         if (ad is MultipeerAdvertisement) {
             memScoped {
                 peerFoundCb.invoke(ad.handle.cstr.ptr, ad.sessionName.cstr.ptr)
             }
         }
+    }
+    if (found.isCompleted) {
+        state.scope.cancel()
+        return null
     }
 
     return StableRef.create(state).asCPointer()
