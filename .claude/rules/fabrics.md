@@ -47,7 +47,8 @@ API and a `@Test` that reads a gate and returns early reports **passed**, not `s
   `InMemoryLoomConformanceTest`). In-process radio fabrics return the same instance
   twice; role-split fabrics return distinct host/joiner Looms wired to each other.
   Real-radio/real-network tests stay separate and `-P`-gated; the conformance suite
-  runs against an in-memory or loopback harness.
+  runs against an in-memory or loopback harness. A new `Connection` also subclasses
+  `ConnectionSendConformanceSuite`, once per way the link can die, over a real transport.
 - **A documented fixed width is enforced in the wire type's `init { require(...) }`, not in the
   decoder.** kotlinx-serialization invokes the constructor, so an invariant stated there holds on
   **every** decode path automatically — including the one a future consumer adds and forgets to

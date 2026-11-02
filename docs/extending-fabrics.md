@@ -490,6 +490,22 @@ Key points:
   `withTimeoutOrNull` and keep it **out of** the return value: it is a synchronisation
   barrier, not the verdict, so a fabric that stops tearing still reds the obligation.
 
+### If you wrote a `Connection`: `ConnectionSendConformanceSuite`
+
+A transport often reports its own closure as a cancellation, because that is what a
+cancelled channel throws. Your `send` must not pass that on: the guards in `MeshSeam` and
+`LinkSeam` rethrow any `CancellationException`, so the dead link is never evicted and the
+caller is cancelled rather than failed. Catch it, call
+`currentCoroutineContext().ensureActive()` so the caller's own cancellation still
+propagates, and throw an ordinary exception.
+
+`ConnectionSendConformanceSuite` holds a transport to this. Subclass it once for each way
+your link can die, return the dead link from `deadLink()`, and say what your `send` does
+for a cancelled caller in `cancelledCaller()`. `WebSocketConnectionSendConformanceRig` and
+`TcpConnectionSendConformanceRig` are the templates. The suite needs a real transport: an
+in-memory pair that drops a frame sent after a close cannot reach the failure, and the
+suite fails a link that never refuses one.
+
 ---
 
 ## Running the proprietary-socket example end to end
