@@ -25,12 +25,10 @@ kotlin {
     // validation is on), so `build` in ci.yml's build-jvm gates every PR. Refresh after a
     // deliberate API change with `./gradlew updateKotlinAbi` and commit the diff.
     //
-    // keepLocallyUnsupportedTargets stays at its default, true. On a Linux host, a native target
-    // that cannot be compiled there (KGP: no host support and klib cross-compilation is blocked by
-    // a cinterop, i.e. the Apple targets of :kuilt-nw, :kuilt-otel-logging, :kuilt-warp-runtime)
-    // has its declarations copied from the reference dump instead of checked. Every other module's
-    // Apple klibs cross-compile on Linux and ARE checked there. apple-nightly.yml's `abi` job runs
-    // the same check on macOS, where nothing is copied.
+    // A module whose Apple klibs cannot be built off macOS is checked on macOS only: see
+    // "ABI gate off macOS" at the end of this file. Every other module's Apple klibs
+    // cross-compile on Linux and ARE checked there. apple-nightly.yml's `abi` job runs the same
+    // check on macOS for every module.
     @OptIn(ExperimentalAbiValidation::class)
     abiValidation()
 
@@ -207,4 +205,42 @@ val browserTestSerializer =
 
 tasks.matching { it.name == "wasmJsBrowserTest" }.configureEach {
     usesService(browserTestSerializer)
+}
+
+// ABI gate off macOS (#2684). A cinterop on a native target's `main` compilation blocks klib
+// cross-compilation, so off macOS KGP cannot build this module's Apple klibs. It then INFERS
+// their dump from the targets it can build, which for these modules is wasmJs alone: a wasm-only
+// declaration (`:kuilt-warp-runtime`'s `BrowserWasmRuntime`) lands in the Apple targets and the
+// check goes red with no code change. KGP's own KDoc on keepLocallyUnsupportedTargets calls this
+// incorrect inference. So for such a module the ABI tasks run only on macOS: the PR build
+// (Linux) skips them, and apple-nightly.yml's `abi` job checks the whole module, JVM and Android
+// included. `updateKotlinAbi` is skipped too, with a warning, so a Linux refresh cannot commit
+// the inferred dump. The signal is the cinterop itself rather than a list of module paths, so a
+// new cinterop module is covered the day it lands. Today it selects :kuilt-nw,
+// :kuilt-otel-logging and :kuilt-warp-runtime.
+//
+// afterEvaluate because the module's own build script declares its cinterops after this plugin
+// runs. The host is read through a provider inside `onlyIf`, which the configuration cache
+// serializes, rather than by an eager System.getProperty.
+afterEvaluate {
+    val appleKlibNeedsMacHost = kotlin.targets
+        .withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>()
+        .any { target -> target.compilations.findByName("main")?.cinterops?.isNotEmpty() == true }
+    if (!appleKlibNeedsMacHost) return@afterEvaluate
+    val hostIsMac = providers.systemProperty("os.name").map { it.startsWith("Mac") }
+    val modulePath = path
+    tasks.matching { it.name in setOf("checkKotlinAbi", "updateKotlinAbi", "internalDumpKotlinAbi") }
+        .configureEach {
+            onlyIf("$modulePath has a cinterop, so its Apple ABI is checked on macOS only") { task ->
+                val onMac = hostIsMac.get()
+                if (!onMac && task.name == "updateKotlinAbi") {
+                    task.logger.warn(
+                        "Skipping $modulePath:updateKotlinAbi off macOS: its Apple dump would be " +
+                            "inferred from wasmJs. Run it on a Mac, or " +
+                            "`gh workflow run apple-nightly.yml --ref <branch> -f update_abi=true`.",
+                    )
+                }
+                onMac
+            }
+        }
 }
