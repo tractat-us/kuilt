@@ -85,9 +85,8 @@ class GatedMetricTapEndToEndTest {
     @Test
     fun aPullerHoldingACodeTakesNoMetricsFromAPeerThatNeverProvedIt() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
-        host = installMetricTap(loom, exporterWith(7), backgroundScope, config, LogTapAdmission.Open)
         var received = 0
-        val raw = loom.join(InMemoryTag("puller"))
+        val raw = loom.host(us.tractat.kuilt.core.Pattern("forged"))
         val counted = object : Seam by raw {
             override val incoming: Flow<Swatch> = raw.incoming.onEach { received++ }
         }
@@ -97,6 +96,9 @@ class GatedMetricTapEndToEndTest {
         // arrived. What the replicator holds is what `tail()` shows.
         val seen = mutableListOf<MetricSnapshot>()
         backgroundScope.launch { c.tail().collect { seen += it } }
+        // The device joins the puller's session after the puller is listening, so its first push is not
+        // lost to the gate's construction window.
+        host = installMetricTapJoining(loom, exporterWith(7), backgroundScope, InMemoryTag("forged"), config, LogTapAdmission.Open)
         delay(config.syncInterval * 3) // virtual time: several host syncs
 
         assertAll(
