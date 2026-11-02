@@ -36,7 +36,7 @@ internal data class PendingForward(
  * deferreds on the normal forward/response/flush path. The engine keeps every `send(...)` and
  * `deferred.complete(...)` side-effect at the call site; the machine returns *what* the engine should do
  * next ([ForwardDecision] / [FlushAction]) and *which* [PendingForward] a response resolved. The one
- * exception is [failAll] (the relinquish/actor-teardown path), which completes the residual deferreds
+ * exception is [failAll] (the actor-teardown path), which completes the residual deferreds
  * directly — exactly like the sibling machines' teardown methods.
  *
  * **Correlation + exactly-once dedup (do not regress).** [forward] assigns a monotonic [nextForwardId]
@@ -59,12 +59,15 @@ internal data class PendingForward(
  * **Deferred completion is exactly-once — every [PendingForward] deferred is completed exactly once.**
  * A forward's deferred is completed by exactly one of: the engine on the [onResponse] resolve path
  * (leader replied); the local re-propose path (a [FlushAction.ReProposeLocally] hands the deferred to the
- * engine's propose path, which completes it via its own `pending` queue); or [failAll] on
- * step-down/teardown. Cancellation is safe throughout: [proposeWithRequestId]'s `finally` cancels the
- * caller deferred, [flush] drops any entry whose deferred is already completed (never re-sending a
- * cancelled forward), and `completeExceptionally` on an already-cancelled deferred is a harmless no-op —
- * so a cancelled forwarding propose never commits later, and a follower propose cancelled while parked in
- * [waitingForLeader] is dropped rather than left to hang.
+ * engine's propose path, which completes it via its own `pending` queue); or [failAll] on actor
+ * teardown. Cancellation is safe throughout: [proposeWithRequestId]'s `finally` cancels the caller
+ * deferred and asks the actor to run [reapCancelled], [flush] drops any entry whose deferred is already
+ * completed (never re-sending a cancelled forward), and `completeExceptionally` on an already-cancelled
+ * deferred is a harmless no-op. So a follower propose cancelled while parked in [waitingForLeader] is
+ * dropped rather than left to hang, and a cancelled propose holds no bytes here. One already sent may
+ * still commit on the leader, since nothing revokes it. A retry under the same `requestId` coalesces at
+ * the leader only once the first has committed in that leader's tenure; otherwise both entries commit
+ * and the consumer's `ClientSessionTable` skips the duplicate.
  *
  * **Concurrency:** actor-confined exactly like the fields it holds — every method is called only from
  * inside the engine's single dispatch loop (or the init-restore coroutine that strictly precedes it).
@@ -72,7 +75,8 @@ internal data class PendingForward(
  * thread-safety rule sanctions as a real primitive. It holds no locks, launches no coroutines, and must
  * never be handed to a coroutine that isn't an actor message handler. In particular the caller-thread
  * `deferred.cancel()` in `proposeWithRequestId` deliberately does NOT mutate these maps — the actor loop
- * is their sole owner; cancelled entries are reaped on the actor thread by [flush] and [failAll].
+ * is their sole owner; cancelled entries are reaped on the actor thread by [reapCancelled], [flush] and
+ * [failAll].
  */
 internal class ProposalForwarder {
     /** reqId -> pending forward awaiting a ForwardResponse. */
@@ -83,6 +87,16 @@ internal class ProposalForwarder {
 
     /** Monotonic correlation nonce for outbound forwards. */
     private var nextForwardId: Long = 0L
+
+    /**
+     * How many forwards this machine holds, sent or parked, each retaining its command bytes. Confined
+     * to the actor like the maps it reads: only a test on a single-threaded dispatcher may read it from
+     * outside.
+     */
+    val heldCount: Int get() = forwardedProposals.size
+
+    /** How many of [heldCount] are parked in [waitingForLeader]. Confined the same way. */
+    val parkedCount: Int get() = waitingForLeader.size
 
     /**
      * Register a proposal this non-leader node must forward (Raft §8). Records a [PendingForward] under a
@@ -187,9 +201,34 @@ internal class ProposalForwarder {
     }
 
     /**
+     * Release every forward whose caller has gone, wherever it is parked — sent and awaiting a reply, or
+     * queued in [waitingForLeader]. The engine calls this on [EngineCommand.ReapCancelledForwards], which
+     * the caller enqueues after cancelling its deferred (#3054).
+     *
+     * A completed deferred in [forwardedProposals] can only be a caller's cancellation: every other
+     * completion path removes the entry first or, for a [FlushAction.ReProposeLocally], within the same
+     * actor step via [reProposed]. So nothing here owes a completion, and live forwards are untouched.
+     *
+     * **The exactly-once reasoning does not rest on this entry.** It rests on the [DedupKey] the leader
+     * appended under: a retry reaching that leader after the reaped forward committed coalesces there,
+     * and a retry that arrives sooner, or at a new leader, is skipped by the consumer's
+     * `ClientSessionTable`. The reaped forward's
+     * late `ForwardResponse` resolves to [ResponseResolution.NoSuchForward] and is dropped, and because
+     * [nextForwardId] never reuses an id, that reply cannot complete the retry that replaced it.
+     *
+     * Costs one pass over the held forwards per cancellation. The sweep is event-driven rather than part
+     * of [flush] so the path every other command takes stays O(1), and so release does not depend on
+     * unrelated traffic reaching the actor.
+     */
+    fun reapCancelled() {
+        forwardedProposals.values.removeAll { it.deferred.isCompleted }
+        waitingForLeader.removeAll { it !in forwardedProposals }
+    }
+
+    /**
      * Fail every forwarded proposal awaiting a leader or a `ForwardResponse` with [cause] and clear both
-     * maps — the relinquish/step-down and actor-teardown path. Each residual [PendingForward] deferred is
-     * completed exactly once (or is a harmless no-op if the caller already cancelled it).
+     * maps — the actor-teardown path. Each residual [PendingForward] deferred is completed exactly once
+     * (or is a harmless no-op if the caller already cancelled it).
      */
     fun failAll(cause: Throwable) {
         forwardedProposals.values.forEach { it.deferred.completeExceptionally(cause) }
