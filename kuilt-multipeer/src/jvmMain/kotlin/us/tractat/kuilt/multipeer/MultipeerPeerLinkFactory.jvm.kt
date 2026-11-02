@@ -85,6 +85,11 @@ public actual class MultipeerPeerLinkFactory actual constructor(
     /**
      * JVM-side snapshot of visible peers. Updated reactively on both
      * `foundPeer` and `lostPeer` events forwarded from the K/N dylib bridge.
+     *
+     * Unlike the browser's feeds, this has no dispatcher boundary. A collector on an unconfined
+     * dispatcher runs on the native callback thread, inside the callback and under the lock that
+     * guards this snapshot, so it must not block: `mc_browser_stop` waits for that callback, and
+     * every other callback waits for that lock.
      */
     public actual val visiblePeers: StateFlow<Set<MultipeerAdvertisement>> = mutableVisiblePeers.asStateFlow()
 
