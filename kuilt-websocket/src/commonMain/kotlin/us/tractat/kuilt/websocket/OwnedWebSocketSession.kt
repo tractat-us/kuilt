@@ -67,10 +67,10 @@ import kotlin.time.Duration.Companion.seconds
  * for a WebSocket request, so on CIO a 500 ms `requestTimeoutMillis` was still waiting at 13 s on a far
  * end holding its `101`, and a 500 ms `socketTimeoutMillis` killed an idle, healthy session within 3 s.
  *
- * A closed session keeps its socket until the far end answers the Close frame, because ending it sooner
- * can lose the frame, and a far end that never answers gets two seconds. So a cancelled caller waits at
- * most two seconds too. OkHttp keeps the socket waiting for that answer on a clock of its own, which was
- * still running 15 seconds later.
+ * A closed session keeps its socket until the far end answers the Close frame or hangs up, because
+ * ending it sooner can lose the frame, and a far end that does neither gets two seconds. So a cancelled
+ * caller waits at most two seconds too. OkHttp keeps the socket waiting for that answer on a clock of
+ * its own, which was still running 15 seconds later.
  *
  * Wrap the returned session in [WebSocketConnection] to build a seam on it.
  *
@@ -144,7 +144,7 @@ internal suspend fun HttpClient.ownedWebSocketSession(
  * the moment its Close frame is queued, before the socket's writer has run. A call ended on that signal
  * cancels the writer with the frame still in its queue, and the far end hears a dropped connection.
  * Nothing reports the frame reaching the socket: on CIO it crosses another coroutine after the writer.
- * The first proof is the far end's answer, or the socket ending, and either one ends the session's job.
+ * The first proof is the far end answering or hanging up, and either one ends the session's job.
  *
  * On OkHttp and in the browser the session's job is the call's own, which cannot end before this
  * returns. Waiting on it would only ever time out, and it is not needed: there the outgoing side stays

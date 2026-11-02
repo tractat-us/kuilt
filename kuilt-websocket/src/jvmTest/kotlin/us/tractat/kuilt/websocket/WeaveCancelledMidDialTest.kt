@@ -386,22 +386,35 @@ class WeaveCancelledMidDialTest {
         assertTrue(writer.lateRuns > 0, "rig: the socket's writer was never delayed, so this window was not reached")
     }
 
-    /** Waiting for the far end's answer must not become waiting forever: the socket still ends without it. */
+    /**
+     * Waiting for the far end must not become waiting forever. This one neither answers the Close frame
+     * nor hangs up, so the session never ends by itself and only the bound can end the call. The first
+     * assertion is a lower bound on a real clock, so a slow box cannot fail it: it says the call did wait.
+     */
     @Test
-    fun aFarEndThatNeverAnswersTheCloseStillLosesTheSocket() = realTime {
-        val silent = HeldHandshakeServer(OBSERVATION, answersClose = false)
+    fun aFarEndThatNeitherAnswersNorHangsUpGetsTheBoundAndNoMore() = realTime {
+        val silent = HeldHandshakeServer(OBSERVATION, answersClose = false, hangsUpAfterClose = false)
         val httpClient = client()
         try {
             val session = rigScope.async { httpClient.ownedWebSocketSession(silent.url) }
             silent.awaitRequest()
             silent.finishHandshake()
+            val owned = session.await()
+            val closing = TimeSource.Monotonic.markNow()
 
-            session.await().close()
+            owned.close()
+            val ended = withTimeoutOrNull(HANG_BOUND) { awaitNoLiveCall(httpClient) }
 
-            assertACleanClose(silent.farEnd())
+            assertNotNull(ended, "a far end that never hung up held the call open past $HANG_BOUND")
+            assertTrue(closing.elapsedNow() >= CLOSE_BOUND, "the call was cut after ${closing.elapsedNow()}, without waiting")
+            assertTrue(silent.closeFrameSeen, "the session's Close frame never reached the far end")
         } finally {
             silent.close()
         }
+    }
+
+    private suspend fun awaitNoLiveCall(httpClient: HttpClient) {
+        while (httpClient.coroutineContext.job.children.any { it.isActive }) delay(POLL)
     }
 
     /**
@@ -418,9 +431,7 @@ class WeaveCancelledMidDialTest {
         session.await().close()
 
         assertACleanClose(server.farEnd())
-        val ended = withTimeoutOrNull(HANG_BOUND) {
-            while (httpClient.coroutineContext.job.children.any { it.isActive }) delay(POLL)
-        }
+        val ended = withTimeoutOrNull(HANG_BOUND) { awaitNoLiveCall(httpClient) }
         assertNotNull(ended, "the far end answered the close and the call was still live after $HANG_BOUND")
     }
 

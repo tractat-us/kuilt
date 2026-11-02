@@ -30,6 +30,7 @@ import kotlin.time.Duration
 internal class HeldHandshakeServer(
     private val observation: Duration,
     private val answersClose: Boolean = true,
+    private val hangsUpAfterClose: Boolean = true,
 ) : AutoCloseable {
 
     /** What the far end saw once the upgrade had been answered. */
@@ -46,6 +47,7 @@ internal class HeldHandshakeServer(
 
     private val listener = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
     private val answer = CountDownLatch(1)
+    private val tornDown = CountDownLatch(1)
     private var answerLine = SWITCHING_PROTOCOLS
     private var answers = true
 
@@ -92,6 +94,7 @@ internal class HeldHandshakeServer(
 
     override fun close() {
         answer.countDown()
+        tornDown.countDown()
         listener.close()
     }
 
@@ -114,6 +117,8 @@ internal class HeldHandshakeServer(
                     // The client is already gone, and the read below will say so.
                 }
                 verdict.complete(observe(input, socket.getOutputStream()))
+                // Leaving this block hangs up, which is itself a signal the client can act on.
+                if (!hangsUpAfterClose) tornDown.await()
             }
         } catch (_: IOException) {
             // The listener closed in teardown, with nobody left to report to.
