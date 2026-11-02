@@ -446,6 +446,18 @@ about what the answer would be. Both are *declared* rather than quietly assumed,
 so that a suite which cannot reach a failure has to say so out loud instead of
 passing and looking like proof.
 
+### flush — fabrics that cannot confirm a drain
+
+A send that returned has only been accepted. The frame may still be queued on
+this device, and a close right after it can throw it away. `Seam.flush` is how a
+caller waits for that queue to pass what it already sent.
+
+A fabric that cannot tell answers `FlushOutcome.Unsupported`, which is also what
+`Seam` and `Connection` do by default. That answer proves nothing and claims
+nothing, so a caller knows to fall back on an acknowledgement of its own. A
+fabric confirms a drain by implementing `flush` and picking a `FlushFixture` arm
+in its harness, and the suite checks the arm against what the seam says.
+
 ### midSessionDeath — harnesses that cannot kill the transport
 
 A connection can end in two quite different ways: politely, because somebody

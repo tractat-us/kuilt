@@ -230,7 +230,7 @@ wrap also keeps blocking reads off the seam's scheduling dispatcher when the
 transport pins `incoming` to an IO dispatcher (see `tcpConnection`'s `flowOn` below),
 so the seam's state loop is never stalled by a slow read.
 
-### Step 3 — `TcpConnection`: the full adapter in ~11 lines
+### Step 3 — `TcpConnection`: the full adapter in ~14 lines
 
 `:kuilt-tcp`'s `tcpConnection` shows the complete pipeline for a Ktor TCP socket:
 
@@ -245,6 +245,12 @@ internal fun tcpConnection(socket: Socket, ioDispatcher: CoroutineDispatcher): C
         // Only the read side is re-dispatched; the frame ceiling is [framed]'s, unchanged (#2047).
         override val maxFrameBytes: Int? get() = framed.maxFrameBytes
         override val incoming: Flow<ByteArray> = framed.incoming.flowOn(ioDispatcher)
+
+        // `framed`'s answer stops at the socket's write channel. That is enough for what a flush
+        // promises: `Socket.close` flushes that channel and lets the socket's writer finish it before
+        // it closes the socket, so an orderly close cannot lose what got this far.
+        override suspend fun flush(timeout: Duration): FlushOutcome = framed.flush(timeout)
+
         override suspend fun close() {
             framed.close()
             socket.close()
@@ -608,6 +614,32 @@ behind that tail; only then is the loser closed. This matters when writing a fab
 a `Connection` whose `close` discards buffered input is *fine* — the mesh never
 relies on a close to deliver anything (#2474). What a transport does still owe is
 frame boundaries and per-link FIFO, exactly as `Connection`'s KDoc states.
+
+### Telling a caller the frames have left
+
+A caller who sends a last frame and closes can lose it, because `close` waits for
+nothing. It calls `flush(timeout)` in between, and your `Connection` is asked what
+a returning `send` means.
+
+The default answer is `FlushOutcome.Unsupported`. Keep it until you know better:
+it is honest, and it costs the caller nothing but a fallback. Override it this way:
+
+- `send` returns only once the frame is handed over, such as after a sink flush or
+  an awaited send completion: answer `Drained`, or `Failed` after a close.
+- `send` returns with the frame still queued in the transport: ask the transport to
+  wait, inside `flushWithin`, which handles the timeout and the cancellation rules.
+
+If the transport can drop a queued frame without saying so, keep `Unsupported`, however
+orderly its close looks. An OkHttp WebSocket session is the example.
+
+`Drained` promises one thing: a close after it goes out behind those frames, so it cannot
+be what throws them away on this device. It says nothing about the remote peer. A flush can run while the seam's
+writer is inside `send`, so a sink that is not thread-safe stays out of it, and a
+close must end a pending flush.
+
+Hold it to the contract with a `FlushFixture` arm in your `SeamConformanceSuite`
+harness. `HoldableConnection` wraps any `Connection` and stops a send where the
+transport would, which is what lets the suite prove a flush waits.
 
 ### A real TCP cluster, end-to-end
 

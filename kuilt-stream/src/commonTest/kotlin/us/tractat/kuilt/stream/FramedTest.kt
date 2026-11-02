@@ -13,6 +13,7 @@ import kotlinx.io.EOFException
 import kotlinx.io.IOException
 import kotlinx.io.RawSink
 import kotlinx.io.buffered
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -21,8 +22,23 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 
 class FramedTest {
+    /**
+     * `send` flushes the sink before it returns, so a flush has nothing to wait for, until the stream
+     * closes. Then a frame sent later goes nowhere, and it cannot claim otherwise.
+     */
+    @Test
+    fun aFlushIsDrainedUntilTheStreamCloses() = runTest {
+        val wire = Buffer()
+        val conn = framed(source = wire, sink = wire, maxFrameSize = 1024)
+        conn.send(byteArrayOf(1))
+        assertEquals(FlushOutcome.Drained, conn.flush(Duration.INFINITE))
+        conn.close()
+        assertIs<FlushOutcome.Failed>(conn.flush(Duration.INFINITE))
+    }
+
     @Test
     fun framesRoundTripThroughLengthPrefix() = runTest {
         val wire = Buffer()

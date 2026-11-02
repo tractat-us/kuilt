@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -19,12 +20,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
@@ -35,11 +38,14 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
+import us.tractat.kuilt.test.fabric.SendHold
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertIsNot
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -497,6 +503,18 @@ public abstract class SeamConformanceSuite {
      * publish — a declaration somebody has to write down.
      */
     public open fun payloadBudgetGap(): String? = CapabilityGaps.PAYLOAD_BUDGET
+
+    /**
+     * What this harness says about `Seam.flush` for the **current** pair. Called after the pair is
+     * connected, so a [FlushFixture.Holdable] can hand back the holds on the link it just wove.
+     *
+     * The default says the fabric answers `FlushOutcome.Unsupported`, and
+     * [flushDeclarationIsHonest] checks that it does. A default rather than an abstract member because
+     * it cannot go stale in the flattering direction: a fabric that starts answering `Drained` reds
+     * here until its harness picks an arm that holds it to that. The in-memory reference cannot exhibit
+     * a held send, so [FlushFixture.Holdable] is what makes the suite able to fail; see [FlushFixture].
+     */
+    public open fun flushFixture(): FlushFixture = FlushFixture.Unsupported(CapabilityGaps.FLUSH)
 
     /**
      * Drive [newLoomPair] to a connected host/joiner pair and hand both live [Seam]s to
@@ -1806,6 +1824,360 @@ public abstract class SeamConformanceSuite {
             runSendOnTornSeamThrows(this)
         }
 
+    // ── (13d-flush) a barrier over what was already accepted (#2830) ─────────
+    //
+    // Every wait below is `Duration.INFINITE` unless the property is about the timeout. A bounded wait
+    // on `runTest`'s clock would fast-forward the moment the test parks, so a real-socket harness would
+    // read TimedOut in no real time. A wedge trips the wall-clock backstop instead, and that still reds.
+
+    /**
+     * Each [FlushFixture] arm agrees with what the seam answers, on both ends of the pair.
+     *
+     * The guard against the failure this contract exists to prevent: a seam claiming `Drained` for a
+     * queue it never looked at, which then reds here unless its harness takes an arm that tests it.
+     */
+    @Test
+    public fun flushDeclarationIsHonest(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) { runFlushDeclarationIsHonest(this) }
+
+    internal suspend fun runFlushDeclarationIsHonest(scope: TestScope) {
+        scope.connectedPair { host, joiner ->
+            val outcomes = listOf(host.flush(Duration.INFINITE), joiner.flush(Duration.INFINITE))
+            when (val fixture = flushFixture()) {
+                is FlushFixture.Unsupported -> {
+                    assertTrue(fixture.trackingUrl.isNotBlank(), "a tracked gap names where it is tracked")
+                    assertEquals(
+                        listOf<FlushOutcome>(FlushOutcome.Unsupported, FlushOutcome.Unsupported),
+                        outcomes,
+                        "this harness declares FlushFixture.Unsupported, so the seam must answer that. " +
+                            "A seam that now confirms a drain needs a harness arm that tests it",
+                    )
+                }
+                is FlushFixture.HostUnsupported -> {
+                    assertTrue(fixture.trackingUrl.isNotBlank(), "a tracked gap names where it is tracked")
+                    assertEquals(
+                        listOf<FlushOutcome>(FlushOutcome.Unsupported, FlushOutcome.Drained),
+                        outcomes,
+                        "this harness declares FlushFixture.HostUnsupported: the host cannot tell, and its " +
+                            "joiner, a different seam, confirms a drain",
+                    )
+                }
+                is FlushFixture.JoinerUnsupported -> {
+                    assertTrue(fixture.reason.isNotBlank(), "JoinerUnsupported says why, for the next reader")
+                    assertEquals(
+                        listOf<FlushOutcome>(FlushOutcome.Drained, FlushOutcome.Unsupported),
+                        outcomes,
+                        "this harness declares FlushFixture.JoinerUnsupported: the host confirms a drain, and " +
+                            "its joiner, a different seam, cannot tell",
+                    )
+                }
+                is FlushFixture.CannotHold -> {
+                    assertTrue(fixture.reason.isNotBlank(), "CannotHold says why, for the next reader")
+                    assertEquals(
+                        listOf<FlushOutcome>(FlushOutcome.Drained, FlushOutcome.Drained),
+                        outcomes,
+                        "this harness declares that the fabric confirms a drain, so the seam must answer that",
+                    )
+                }
+                is FlushFixture.Holdable ->
+                    assertEquals(
+                        listOf<FlushOutcome>(FlushOutcome.Drained, FlushOutcome.Drained),
+                        outcomes,
+                        "this harness declares that the fabric confirms a drain, so the seam must answer that",
+                    )
+            }
+        }
+    }
+
+    /**
+     * Send, flush, close, and the peer has every frame, in order. The whole point of `flush`, and the
+     * one property a real socket can run.
+     *
+     * The burst outruns the outbox a `LinkSeam` keeps, so a tail is still queued when the last send
+     * returns. That tail is what a close without a wait loses.
+     *
+     * **This is the favourable case: a peer that keeps reading and sends nothing back.** It says the
+     * close cost the sender nothing. [hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix] is the case
+     * this cannot promise.
+     */
+    @Test
+    public fun hostBurstSurvivesFlushThenClose(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            connectedPair { host, joiner ->
+                if (flushFixture().hostConfirmsADrain) assertBurstSurvivesFlushThenClose(host, joiner)
+            }
+        }
+
+    /** [hostBurstSurvivesFlushThenClose] from the other end, which is different code on a role-split fabric. */
+    @Test
+    public fun joinerBurstSurvivesFlushThenClose(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            connectedPair { host, joiner ->
+                if (flushFixture().joinerConfirmsADrain) assertBurstSurvivesFlushThenClose(joiner, host)
+            }
+        }
+
+    /**
+     * The limit of what `Drained` promises: a slow consumer that is still sending can lose the tail of
+     * a burst its peer flushed before closing.
+     *
+     * Its send fails on the link the close ended, that tears its seam, and a torn seam stops reading what
+     * it had not got to yet. So this does **not** assert that every frame arrives. It asserts what
+     * survives: what does arrive is the start of what was sent, in order, and the flush still said
+     * `Drained`, because the flush was right about this end.
+     *
+     * **What this arm cannot show is the loss itself.** Everything here runs on `runTest`'s clock, so the
+     * consumer's pace is real only on a virtual-time harness, and on a real socket it is not slow at all.
+     * Over real sockets `WebSocketFlushPeerTrafficLimitTest` and `TcpFlushPeerTrafficLimitTest` report it
+     * without requiring it. `LinkSeamFlushTest.aSendThatFailsThrowsAwayWhatTheSeamHadNotDelivered` pins it
+     * on one clock, and reds when #3111 fixes the receiver, so that the promise gets widened.
+     */
+    @Test
+    public fun hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            connectedPair { host, joiner ->
+                if (flushFixture().hostConfirmsADrain) assertBurstUnderPeerTrafficIsAnInOrderPrefix(host, joiner)
+            }
+        }
+
+    /** [hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix] from the other end. */
+    @Test
+    public fun joinerBurstToASlowConsumerStillSendingIsAnInOrderPrefix(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            connectedPair { host, joiner ->
+                if (flushFixture().joinerConfirmsADrain) assertBurstUnderPeerTrafficIsAnInOrderPrefix(joiner, host)
+            }
+        }
+
+    private suspend fun CoroutineScope.assertBurstUnderPeerTrafficIsAnInOrderPrefix(sender: Seam, receiver: Seam) {
+        var peerFramesSent = 0
+        // The sender reads what the peer sends, so a bounded link cannot wedge this into a false red.
+        val senderReads = launch { sender.incoming.collect {} }
+        val received = async {
+            val frames = mutableListOf<String>()
+            receiver.incoming.take(FLUSH_BURST).collect { frame ->
+                frames += frame.decodeToString()
+                if (frames.size % FLUSH_PEER_TRAFFIC_EVERY == 0) {
+                    try {
+                        receiver.broadcast(FLUSH_PEER_TRAFFIC)
+                        peerFramesSent++
+                    } catch (_: IllegalStateException) {
+                        // A cancellation is an IllegalStateException too, and only this job's own may pass.
+                        currentCoroutineContext().ensureActive()
+                        // Otherwise this seam tore, which is the case under test: read what is left.
+                    }
+                    delay(FLUSH_SETTLE)
+                }
+            }
+            frames.toList()
+        }
+        sender.peers.first { receiver.selfId in it }
+        val sent = List(FLUSH_BURST) { "frame-$it" }
+        sent.forEach { sender.sendTo(receiver.selfId, it.encodeToByteArray()) }
+        assertEquals(FlushOutcome.Drained, sender.flush(Duration.INFINITE), "a healthy link drains")
+        sender.close()
+        val arrived = received.await()
+        senderReads.cancelAndJoin()
+        assertAll(
+            { assertTrue(peerFramesSent > 0, "rig: the peer never sent, so this was the favourable case") },
+            { assertEquals(sent.take(arrived.size), arrived, "what arrives is the start of what was sent, in order") },
+        )
+    }
+
+    private suspend fun CoroutineScope.assertBurstSurvivesFlushThenClose(sender: Seam, receiver: Seam) {
+        // `take` ends early if the link ends early, so a lost tail is a short list, not a wedge.
+        val received = async { receiver.incoming.take(FLUSH_BURST).toList().map { it.decodeToString() } }
+        sender.peers.first { receiver.selfId in it }
+        val sent = List(FLUSH_BURST) { "frame-$it" }
+        sent.forEach { sender.sendTo(receiver.selfId, it.encodeToByteArray()) }
+        assertEquals(FlushOutcome.Drained, sender.flush(Duration.INFINITE), "a healthy link drains")
+        sender.close()
+        assertEquals(
+            sent,
+            received.await(),
+            "with a peer keeping up and sending nothing back, the close after a flush costs no frame",
+        )
+    }
+
+    /** A torn seam cannot confirm anything, and does not pretend to. */
+    @Test
+    public fun flushOnATornSeamReportsFailed(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            connectedPair { host, _ ->
+                if (!flushFixture().hostConfirmsADrain) return@connectedPair
+                host.close()
+                assertIs<FlushOutcome.Failed>(host.flush(Duration.INFINITE), "a torn seam reports Failed")
+            }
+        }
+
+    /** The property the in-memory reference cannot fail: a flush does not return past a held send. */
+    @Test
+    public fun flushWaitsForAHeldSend(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) { runFlushWaitsForAHeldSend(this) }
+
+    internal suspend fun runFlushWaitsForAHeldSend(scope: TestScope) {
+        scope.forEachHeldEnd { sender, receiver, hold ->
+            val received = async { receiver.incoming.first().decodeToString() }
+            hold.hold()
+            sender.sendTo(receiver.selfId, "held".encodeToByteArray())
+            val flush = async { sender.flush(Duration.INFINITE) }
+            delay(FLUSH_SETTLE)
+            assertAll(
+                { assertEquals(1, hold.parkedSends, FLUSH_RIG_DID_NOT_FIRE) },
+                { assertFalse(flush.isCompleted, "flush returned while the frame was still held") },
+            )
+            hold.releaseAll()
+            assertEquals(FlushOutcome.Drained, flush.await())
+            assertEquals("held", received.await())
+        }
+    }
+
+    /** The timeout path cannot report `Drained`, and costs the frame nothing. */
+    @Test
+    public fun aHeldSendTimesOutAndIsNotDropped(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            forEachHeldEnd { sender, receiver, hold ->
+                val received = async { receiver.incoming.first().decodeToString() }
+                hold.hold()
+                sender.sendTo(receiver.selfId, "held".encodeToByteArray())
+                assertEquals(FlushOutcome.TimedOut, sender.flush(FLUSH_SETTLE))
+                assertAll(
+                    { assertEquals(1, hold.parkedSends, FLUSH_RIG_DID_NOT_FIRE) },
+                    { assertIsNot<SeamState.Torn>(sender.state.value, "a timed-out flush leaves the seam up") },
+                )
+                hold.releaseAll()
+                assertEquals("held", received.await(), "a timed-out flush drops nothing")
+                assertEquals(FlushOutcome.Drained, sender.flush(Duration.INFINITE), "the next flush starts afresh")
+            }
+        }
+
+    /**
+     * A barrier, not a wait for quiet. A flush returns once the sends before it have gone, with a later
+     * send still stuck, so a busy sender cannot starve it. A flush waiting for an empty queue reds here.
+     */
+    @Test
+    public fun flushCoversEarlierSendsAndNotLaterOnes(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            forEachHeldEnd { sender, receiver, hold ->
+                val received = async { receiver.incoming.take(2).toList().map { it.decodeToString() } }
+                hold.hold()
+                sender.sendTo(receiver.selfId, "before".encodeToByteArray())
+                val flush = async { sender.flush(FLUSH_SETTLE * 10) }
+                delay(FLUSH_SETTLE)
+                sender.sendTo(receiver.selfId, "after".encodeToByteArray())
+                delay(FLUSH_SETTLE)
+                assertAll(
+                    { assertEquals(1, hold.parkedSends, FLUSH_RIG_DID_NOT_FIRE) },
+                    { assertFalse(flush.isCompleted, "the earlier send is still held") },
+                )
+                hold.releaseOne()
+                assertEquals(FlushOutcome.Drained, flush.await(), "only the send before the flush had to go")
+                assertEquals(1, hold.parkedSends, "the later send is still held, so this proves the barrier")
+                hold.releaseAll()
+                assertEquals(listOf("before", "after"), received.await(), "the barrier drops and reorders nothing")
+            }
+        }
+
+    /** Flush, then close: the close follows the send's completion, so the frame survives it. */
+    @Test
+    public fun aCloseAfterAFlushFollowsCompletion(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            forEachHeldEnd { sender, receiver, hold ->
+                val received = async { receiver.incoming.take(1).toList().map { it.decodeToString() } }
+                hold.hold()
+                sender.sendTo(receiver.selfId, "last".encodeToByteArray())
+                val closer = launch {
+                    assertEquals(FlushOutcome.Drained, sender.flush(Duration.INFINITE))
+                    sender.close()
+                }
+                delay(FLUSH_SETTLE)
+                assertAll(
+                    { assertEquals(1, hold.parkedSends, FLUSH_RIG_DID_NOT_FIRE) },
+                    { assertIsNot<SeamState.Torn>(sender.state.value, "the close ran before the send finished") },
+                )
+                hold.releaseAll()
+                closer.join()
+                assertEquals(listOf("last"), received.await())
+            }
+        }
+
+    /**
+     * A close from elsewhere ends a pending flush, even an unbounded one, and that flush cannot claim
+     * success: the frame it was waiting for is gone.
+     */
+    @Test
+    public fun aCloseEndsAPendingFlushWithFailed(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            forEachHeldEnd { sender, receiver, hold ->
+                hold.hold()
+                sender.sendTo(receiver.selfId, "lost".encodeToByteArray())
+                val flush = async { sender.flush(Duration.INFINITE) }
+                delay(FLUSH_SETTLE)
+                assertEquals(1, hold.parkedSends, FLUSH_RIG_DID_NOT_FIRE)
+                sender.close()
+                assertIs<FlushOutcome.Failed>(flush.await(), "the frame was lost, so the flush cannot say Drained")
+            }
+        }
+
+    /**
+     * A close gets no wait of its own: it returns with the frame still held, and that is how a caller
+     * gets out from under a stalled writer. Reds if a drain is ever added to `close`.
+     */
+    @Test
+    public fun aCloseDoesNotWaitForAHeldSend(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            forEachHeldEnd { sender, receiver, hold ->
+                hold.hold()
+                sender.sendTo(receiver.selfId, "lost".encodeToByteArray())
+                delay(FLUSH_SETTLE)
+                assertEquals(1, hold.parkedSends, FLUSH_RIG_DID_NOT_FIRE)
+                // Nothing releases the hold, so a close that drained would wedge to the backstop here.
+                sender.close()
+                assertIs<SeamState.Torn>(sender.state.value)
+            }
+        }
+
+    /** The caller's own cancellation is a cancellation, and takes nothing with it. */
+    @Test
+    public fun cancellingAFlushLeavesTheSeamAndItsFramesAlone(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            forEachHeldEnd { sender, receiver, hold ->
+                val received = async { receiver.incoming.first().decodeToString() }
+                hold.hold()
+                sender.sendTo(receiver.selfId, "held".encodeToByteArray())
+                val flush = launch { sender.flush(Duration.INFINITE) }
+                delay(FLUSH_SETTLE)
+                assertEquals(1, hold.parkedSends, FLUSH_RIG_DID_NOT_FIRE)
+                flush.cancelAndJoin()
+                assertAll(
+                    { assertTrue(flush.isCancelled, "a cancelled flush is cancelled, not returned from") },
+                    { assertIsNot<SeamState.Torn>(sender.state.value, "cancelling a flush leaves the seam up") },
+                )
+                hold.releaseAll()
+                assertEquals("held", received.await())
+            }
+        }
+
+    /** Whether this arm says the host confirms a drain, so a delivery property can run from it. */
+    private val FlushFixture.hostConfirmsADrain: Boolean
+        get() = this is FlushFixture.CannotHold || this is FlushFixture.Holdable || this is FlushFixture.JoinerUnsupported
+
+    /** Whether this arm says the joiner confirms a drain, and a delivery property can run from it. */
+    private val FlushFixture.joinerConfirmsADrain: Boolean
+        get() = this is FlushFixture.CannotHold || this is FlushFixture.Holdable
+
+    /** Run [block] sending from each end in turn, over a fresh pair each time. No-op unless holdable. */
+    private suspend fun TestScope.forEachHeldEnd(
+        block: suspend CoroutineScope.(sender: Seam, receiver: Seam, hold: SendHold) -> Unit,
+    ) {
+        connectedPair { host, joiner ->
+            (flushFixture() as? FlushFixture.Holdable)?.let { block(host, joiner, it.host) }
+        }
+        connectedPair { host, joiner ->
+            (flushFixture() as? FlushFixture.Holdable)?.let { block(joiner, host, it.joiner) }
+        }
+    }
+
     // ── (13e) a Torn seam's peers collapses to { selfId } ────────────────────
     //
     // Contract from `Seam.peers`' KDoc (#1816): a torn fabric can reach nobody, so a `Torn` seam's
@@ -3106,6 +3478,22 @@ public abstract class SeamConformanceSuite {
          * have no refutation to pair with it. Same shape as [JoinerRosterOrigin]'s: a sentence naming
          * a mechanism a reviewer can go and read, not a conclusion asserted.
          */
+        /** More frames than `LinkSeam`'s outbox holds, so a tail is still queued when the last send returns. */
+        const val FLUSH_BURST = 600
+
+        /** Virtual time for everything runnable to run. Only a virtual-time harness feels it. */
+        val FLUSH_SETTLE = 1.seconds
+
+        /** A slow consumer sends one frame of its own for this many it reads. */
+        const val FLUSH_PEER_TRAFFIC_EVERY = 8
+
+        val FLUSH_PEER_TRAFFIC = "peer-traffic".encodeToByteArray()
+
+        /** A hold nothing reached proves nothing: "the flush waited" would pass by absence. */
+        const val FLUSH_RIG_DID_NOT_FIRE =
+            "rig: exactly one send should be stuck at the hold. If not, this harness's SendHold is not on " +
+                "the path the seam writes through, or it is not running on virtual time"
+
         const val NOT_APPLICABLE_NEEDS_A_REASON =
             "a by-design NotApplicable declaration must say WHY in non-blank prose — what the fabric " +
                 "does instead, or what makes the event unconstructible here. A bare arm is the silent " +

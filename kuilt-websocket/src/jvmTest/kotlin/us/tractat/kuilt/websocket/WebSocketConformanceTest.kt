@@ -1,6 +1,8 @@
 package us.tractat.kuilt.websocket
 
 import io.ktor.client.HttpClient
+import io.ktor.client.engine.HttpClientEngineFactory
+import io.ktor.client.engine.cio.CIO
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
@@ -8,6 +10,7 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.FlushFixture
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
@@ -23,7 +26,7 @@ import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 /**
  * Verifies that the WebSocket fabric ([KtorServerLoom] / [KtorClientLoom]) satisfies
  * every invariant in [SeamConformanceSuite] over a **real localhost connection** —
- * a real Netty server, a real OkHttp client, real sockets and frames (ADR-001).
+ * a real Netty server, a real client on [clientEngine], real sockets and frames (ADR-001).
  *
  * [newLoomPair] returns `(KtorServerLoom, KtorClientLoom)` — the actual server and
  * client looms. The suite drives `host()`/`join()` concurrently for all tests, so
@@ -37,7 +40,10 @@ import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
  * stopping the server, so the receive loop sees a graceful close rather than an
  * abrupt EOF — preventing uncaught coroutine exceptions from leaking across tests.
  */
-class WebSocketConformanceTest : SeamConformanceSuite() {
+open class WebSocketConformanceTest : SeamConformanceSuite() {
+
+    /** A property rather than a constructor parameter: JUnit wants one constructor, with no arguments. */
+    protected open val clientEngine: HttpClientEngineFactory<*> get() = OkHttp
 
     /** The current rig does not inject malformed announcements; these obligations remain unproven (#2561). */
     override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
@@ -69,7 +75,7 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
         }
         server.start(wait = false)
         port = runBlocking { server.engine.resolvedConnectors().first().port }
-        httpClient = HttpClient(OkHttp) { install(ClientWebSockets) }
+        httpClient = HttpClient(clientEngine) { install(ClientWebSockets) }
     }
 
     @AfterTest
@@ -105,6 +111,11 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
 
     override fun newLoomPair(): Pair<Loom, Loom> =
         serverLoom to KtorClientLoom(httpClient, connectivity = connectivity)
+
+    override fun flushFixture(): FlushFixture = FlushFixture.JoinerUnsupported(
+        "OkHttp's session ignores what WebSocket.send returns, so a frame past its 16 MiB queue is dropped " +
+            "with no error. The host's burst still runs; CioClientWebSocketConformanceTest is the other end.",
+    )
 
     override fun joinTag(): Tag = WebSocketAdvertisement(
         url = "ws://localhost:$port$serverPath",
@@ -182,4 +193,18 @@ class WebSocketConformanceTest : SeamConformanceSuite() {
             "the arm still implies here is that the dial succeeded, since weave() does not return without " +
             "a live socket. Triage recorded at https://github.com/tractat-us/kuilt/issues/2605.",
         )
+}
+
+/**
+ * The same suite with a CIO client: the one client engine whose `Drained` is run rather than read, so a
+ * burst from the joiner over a real socket happens here and nowhere else.
+ */
+class CioClientWebSocketConformanceTest : WebSocketConformanceTest() {
+    override val clientEngine: HttpClientEngineFactory<*> get() = CIO
+
+    override fun flushFixture(): FlushFixture = FlushFixture.CannotHold(
+        "a real Netty server and a real CIO client leave no test-side hook between the seam and the socket. " +
+            "The burst is what runs here, over the real close; IdentifiedConformanceTest holds a send on the " +
+            "same LinkSeam.",
+    )
 }

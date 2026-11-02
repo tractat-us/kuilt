@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import us.tractat.kuilt.core.CloseReason
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
@@ -32,6 +33,7 @@ import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.random.Random
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -242,6 +244,7 @@ internal class RelayStar(
 internal suspend fun TestScope.relayStar(
     coJoiners: Int = 2,
     wedge: Set<String> = emptySet(),
+    hostRoomScope: CoroutineScope = backgroundScope,
 ): RelayStar {
     require(coJoiners >= 2) { "a relay needs at least two spokes to relay between" }
     val dispatcher = requireNotNull(coroutineContext[ContinuationInterceptor]) {
@@ -251,7 +254,7 @@ internal suspend fun TestScope.relayStar(
     val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(0L))
 
     val hostWire = WireTapSeam(fabric.serverLoom.host(Pattern(ROOM)), backgroundScope)
-    val hostRoom = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock, relayHeartbeat)
+    val hostRoom = SeamRoomFactory(fabric.serverLoom, hostRoomScope, clock, relayHeartbeat)
         .adopt(hostWire, SessionRole.Host)
     val host = observe(hostRoom, hostWire)
 
@@ -482,6 +485,8 @@ internal class WireTapSeam(
     private val unreachable = MutableStateFlow<Set<PeerId>>(emptySet())
     private val silenced = MutableStateFlow<Set<PeerId>>(emptySet())
     private val wedged = MutableStateFlow<Set<PeerId>>(emptySet())
+    private val held = MutableStateFlow<Set<PeerId>>(emptySet())
+    private val broadcastsHeld = MutableStateFlow(false)
     private val frameLimit = MutableStateFlow<Int?>(null)
     /**
      * Injected inbound frames. **Bounded**, per the repo's `forbidUnboundedSwatchDelivery` guard —
@@ -533,7 +538,36 @@ internal class WireTapSeam(
     override suspend fun broadcast(payload: ByteArray) {
         record(to = null, bytes = payload)
         enforceFrameLimit(payload)
+        broadcastsHeld.first { !it }
         delegate.broadcast(payload)
+    }
+
+    /** Make every [broadcast] wait until [releaseBroadcasts]. */
+    fun holdBroadcasts() {
+        broadcastsHeld.value = true
+    }
+
+    fun releaseBroadcasts() {
+        broadcastsHeld.value = false
+    }
+
+    /** How many times the room has asked this seam to flush. See [answerFlushWith]. */
+    var flushesAsked: Int = 0
+        private set
+
+    private var flushAnswer: (suspend () -> FlushOutcome)? = null
+
+    /**
+     * Answer `flush` with [answer] rather than the delegate's. The star's hub answers `Unsupported`, so
+     * a test of what a room does before and after a fabric that confirms a drain has to supply one.
+     */
+    fun answerFlushWith(answer: suspend () -> FlushOutcome) {
+        flushAnswer = answer
+    }
+
+    override suspend fun flush(timeout: Duration): FlushOutcome {
+        flushesAsked++
+        return flushAnswer?.invoke() ?: delegate.flush(timeout)
     }
 
     override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
@@ -542,6 +576,8 @@ internal class WireTapSeam(
         record(to = peer, bytes = payload)
         enforceFrameLimit(payload)
         if (peer in wedged.value) awaitCancellation()
+        // A send stuck until the test lets it through, which unlike a wedge can then succeed.
+        held.first { peer !in it }
         // Checked after the wedge and before the delegate, so a peer that is both wedged and
         // disconnected still models the black hole (the harsher of the two).
         if (peer in unreachable.value) throw PeerNotConnected(peer)
@@ -598,6 +634,15 @@ internal class WireTapSeam(
 
     fun wedge(peer: PeerId) {
         wedged.update { it + peer }
+    }
+
+    /** Make [sendTo] to [peer] wait until [release]. Unlike [wedge], the send then goes through. */
+    fun hold(peer: PeerId) {
+        held.update { it + peer }
+    }
+
+    fun release(peer: PeerId) {
+        held.update { it - peer }
     }
 
     /**

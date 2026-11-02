@@ -6,18 +6,22 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedSendChannelException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
@@ -25,8 +29,10 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.core.flushWithin
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
+import kotlin.time.Duration
 
 /**
  * A byte-transparent 2-peer [Seam] over a [Connection] whose two identities are known.
@@ -42,6 +48,9 @@ import kotlin.coroutines.CoroutineContext
  * writer: the peer has gone or been refused, so nothing more is sent. A failed send closes [conn]
  * the same way. The close happens exactly once across every path, and a [close] that arrives while
  * another path's close is in flight waits for that one rather than closing again.
+ *
+ * **To send and then close, call [Seam.flush] in between.** A close does not drain: a frame still
+ * queued for the writer when it runs is lost.
  *
  * **Thread-safety.** This type is correct under a *multi-threaded* dispatcher — the
  * injected [dispatcher] is only the scope for the read/write loops (scheduling); it is
@@ -114,10 +123,31 @@ internal class LinkSeam(
     // Single-writer outbound queue: concurrent broadcast/sendTo enqueue here;
     // one coroutine drains in FIFO order to conn.send. Bounded with SUSPEND overflow so
     // callers are backpressured rather than producing unbounded frame accumulation.
-    private val outbox = Channel<ByteArray>(
+    private val outbox = Channel<Outbound>(
         capacity = DeliveryPolicy.DEFAULT_CAPACITY,
         onBufferOverflow = BufferOverflow.SUSPEND,
     )
+
+    /**
+     * What the writer drains: a frame, or a [flush]'s marker.
+     *
+     * A marker in the queue itself rather than counters beside it, because the queue's order is what
+     * "accepted before the flush" means. The channel send and a counter's increment are two steps, so
+     * with counters a later frame could be counted while an earlier one is still queued, and the flush
+     * would return with that earlier frame on the device.
+     */
+    private sealed interface Outbound {
+        class Frame(val bytes: ByteArray) : Outbound
+        class Barrier(val reached: CompletableDeferred<Unit>) : Outbound
+    }
+
+    // Wakes a waiting flush: completed by the path that wins the tear, and by the writer's job if the
+    // writer ends without one. Only a wake-up. Whether a flush may say `Drained` is decided by reading
+    // `state`, for the reason `flush` gives.
+    private val torn = CompletableDeferred<Unit>()
+
+    // What the writer's last send threw, so a flush can say why rather than only that the seam closed.
+    private val writeFailure = atomic<Throwable?>(null)
 
     // Confined to readLoop's single collector; not shared across threads.
     private var seq = 0L
@@ -128,7 +158,12 @@ internal class LinkSeam(
     private val connClosed = CompletableDeferred<Unit>()
 
     init {
-        scope.launch { writeLoop() }
+        // A cancellation minted by `conn.send` ends the writer with no tear, and nothing else would ever
+        // reach a marker behind it. On the job, so it covers every way the writer can end.
+        scope.launch { writeLoop() }.invokeOnCompletion { cause ->
+            writeFailure.compareAndSet(expect = null, update = cause)
+            torn.complete(Unit)
+        }
         scope.launch { readLoop() }
     }
 
@@ -162,15 +197,83 @@ internal class LinkSeam(
     // the channel between the pre-check and the send. Convert that into the same clean closed-seam
     // error the pre-check produces; never leak a raw ClosedSendChannelException.
     private suspend fun enqueue(payload: ByteArray) {
-        runCatchingCancellable { outbox.send(payload) }
+        runCatchingCancellable { outbox.send(Outbound.Frame(payload)) }
             .onFailure { if (it is ClosedSendChannelException) throw IllegalStateException(closedMessage) else throw it }
+    }
+
+    /**
+     * Pass a marker through the outbox, then ask [conn]: the writer has handed the frames ahead of the
+     * marker to [Connection.send], and only [conn] knows what a returning send means. So a connection
+     * that cannot tell makes this report [FlushOutcome.Unsupported], with the outbox drained.
+     *
+     * The timer covers both steps. [conn] gets no second bound of its own, and it is cancellable.
+     *
+     * **`Drained` is decided by reading [state] last, and by nothing else.** A connection may drop a
+     * frame after its own close and return normally, so the writer can walk past a close and reach a
+     * marker with the frames ahead of it gone. Every path calls [tearDown] before it closes [conn], and
+     * [SeamStateGate.tear] returns to a path only with `Torn` already written, whether that path won or
+     * lost. So a frame dropped that way means `Torn` is readable here, and a seam still not torn at this
+     * read has dropped nothing the marker passed. A tear after the read closes behind those frames, which
+     * is what `Drained` says.
+     *
+     * [torn] cannot carry this. A `CompletableDeferred` with two or more waiters goes through an
+     * intermediate state, and a second `complete` returns `false` while the first is still inside it, with
+     * `isCompleted` still `false` (the coroutines library's `tryMakeCompletingSlowPath`, version 1.11.0).
+     * Measured on the deferred alone: 304 of 2,000,000 races with three handlers, 0 of 2,000,000 with one.
+     * A path that lost that race would close [conn] while a flush saw [torn] open, and report `Drained` for
+     * frames it had just dropped.
+     */
+    override suspend fun flush(timeout: Duration): FlushOutcome = flushWithin(timeout) {
+        val answer = if (outboxDrained()) connectionFlushUnlessTorn() else ended()
+        if (answer == FlushOutcome.Drained && state.value is SeamState.Torn) ended() else answer
+    }
+
+    private fun ended() = FlushOutcome.Failed(writeFailure.value ?: IllegalStateException(closedMessage))
+
+    /**
+     * [conn]'s answer, or [ended] once the seam tears. A close from elsewhere ends a pending flush at
+     * this stage too, whether or not [conn] keeps its own obligation to end one.
+     */
+    private suspend fun connectionFlushUnlessTorn(): FlushOutcome = coroutineScope {
+        val answer = async { conn.flush(Duration.INFINITE) }
+        select<FlushOutcome> {
+            torn.onAwait { ended() }
+            answer.onAwait { it }
+        }.also { answer.cancel() }
+    }
+
+    /**
+     * `true` once the writer reached a marker queued now; `false` if the seam tore first. A `true` does
+     * not mean the frames ahead of the marker went anywhere: see [flush].
+     *
+     * **Both selects watch [torn], so that a tear ends the wait.** The first cannot wait on the channel
+     * alone. `Channel.close` wakes no suspended sender, so a marker parked behind a full outbox would stay
+     * parked on a torn seam, with the writer that would have made room already gone. Sends parked ahead
+     * of it stay parked (a defect of their own, tracked separately); this one does not join them. The
+     * second covers a writer stuck in [Connection.send] that a close has not yet unstuck.
+     */
+    private suspend fun outboxDrained(): Boolean {
+        val reached = CompletableDeferred<Unit>()
+        val queued = try {
+            select {
+                torn.onAwait { false }
+                outbox.onSend(Outbound.Barrier(reached)) { true }
+            }
+        } catch (_: ClosedSendChannelException) {
+            false
+        }
+        return queued && select {
+            torn.onAwait { false }
+            reached.onAwait { true }
+        }
     }
 
     override suspend fun close(reason: CloseReason) {
         tearDown(reason)
         // A local close does not drain the outbox: closing the conn now is also what unsticks a writer
-        // suspended in `conn.send` on a peer that has stopped reading. If the link already closed
-        // itself, wait for that close rather than closing twice.
+        // suspended in `conn.send` on a peer that has stopped reading. A caller that wants the frames
+        // gone first calls `flush`. If the link already closed itself, wait for that close rather than
+        // closing twice.
         if (!connCloseClaimed.compareAndSet(expect = false, update = true)) return connClosed.await()
         closeConn()?.let { throw it }
     }
@@ -198,17 +301,23 @@ internal class LinkSeam(
     }
 
     private suspend fun writeLoop() {
-        for (frame in outbox) {
-            // A frame can be enqueued moments before the wire tears (a broadcast racing a remote
-            // drop). `conn.send` then throws (e.g. "Sink is closed"); left uncaught it escapes into
-            // this seam's scope and leaks across into a later coroutine. Treat a send failure as a
-            // remote drop — tear down (single-shot) and stop — exactly as `readLoop` handles a conn
-            // error. Cancellation is rethrown by runCatchingCancellable, never swallowed.
-            val sent = runCatchingCancellable { conn.send(frame) }
-            if (sent.isFailure) {
-                tearDown(CloseReason.RemoteRequested)
-                closeConnOnce()
-                return
+        for (item in outbox) {
+            when (item) {
+                is Outbound.Barrier -> item.reached.complete(Unit)
+                is Outbound.Frame -> {
+                    // A frame can be enqueued moments before the wire tears (a broadcast racing a remote
+                    // drop). `conn.send` then throws (e.g. "Sink is closed"); left uncaught it escapes into
+                    // this seam's scope and leaks across into a later coroutine. Treat a send failure as a
+                    // remote drop — tear down (single-shot) and stop — exactly as `readLoop` handles a conn
+                    // error. Cancellation is rethrown by runCatchingCancellable, never swallowed.
+                    val sent = runCatchingCancellable { conn.send(item.bytes) }
+                    if (sent.isFailure) {
+                        writeFailure.value = sent.exceptionOrNull()
+                        tearDown(CloseReason.RemoteRequested)
+                        closeConnOnce()
+                        return
+                    }
+                }
             }
         }
     }
@@ -244,9 +353,13 @@ internal class LinkSeam(
     // already see the collapsed roster). The `_peers.update` is idempotent (always setOf(selfId)), so
     // running it on a losing caller is harmless; `stateGate.tear` is the single-shot latch that gates
     // the one-time channel closes.
+    //
+    // A path that loses the latch returns from here and closes `conn` straight away, while the winner may
+    // not have run another line. That is safe because the latch's return is what `flush` reads: see there.
     private fun tearDown(reason: CloseReason) {
         _peers.update { setOf(selfId) }
         if (!stateGate.tear(reason)) return
+        torn.complete(Unit)
         outbox.close()
         inbox.close()
     }

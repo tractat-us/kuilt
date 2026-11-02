@@ -75,6 +75,7 @@ final class us.tractat.kuilt.websocket/WebSocketConnection : us.tractat.kuilt.co
         final fun <get-incoming>(): kotlinx.coroutines.flow/Flow<kotlin/ByteArray> // us.tractat.kuilt.websocket/WebSocketConnection.incoming.<get-incoming>|<get-incoming>(){}[0]
 
     final suspend fun close() // us.tractat.kuilt.websocket/WebSocketConnection.close|close(){}[0]
+    final suspend fun flush(kotlin.time/Duration): us.tractat.kuilt.core/FlushOutcome // us.tractat.kuilt.websocket/WebSocketConnection.flush|flush(kotlin.time.Duration){}[0]
     final suspend fun send(kotlin/ByteArray) // us.tractat.kuilt.websocket/WebSocketConnection.send|send(kotlin.ByteArray){}[0]
 }
 

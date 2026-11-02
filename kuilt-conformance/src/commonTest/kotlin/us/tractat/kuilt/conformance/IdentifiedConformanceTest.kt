@@ -2,7 +2,7 @@ package us.tractat.kuilt.conformance
 
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.fabric.Connection
+import us.tractat.kuilt.test.fabric.HoldableConnection
 import us.tractat.kuilt.test.fabric.connectionPair
 import us.tractat.kuilt.test.fabric.identifiedLoomPair
 
@@ -28,10 +28,21 @@ class IdentifiedConformanceTest : SeamConformanceSuite() {
      * can drop the transport. Tests run one pair at a time, sequentially — the same capture
      * [PeerMeshConformanceTest] makes.
      */
-    private var link: Pair<Connection, Connection>? = null
+    private var link: Pair<HoldableConnection, HoldableConnection>? = null
 
-    override fun newLoomPair(): Pair<Loom, Loom> =
-        connectionPair().also { link = it }.let(::identifiedLoomPair)
+    override fun newLoomPair(): Pair<Loom, Loom> {
+        val (hostEnd, joinerEnd) = connectionPair()
+        return (HoldableConnection(hostEnd) to HoldableConnection(joinerEnd)).also { link = it }.let(::identifiedLoomPair)
+    }
+
+    /**
+     * Every held-send property runs here: this is where `LinkSeam` is held to `flush`, and the real
+     * sockets over the same seam can only run the burst.
+     */
+    override fun flushFixture(): FlushFixture {
+        val (hostEnd, joinerEnd) = requireNotNull(link) { "flushFixture is read after the pair is woven" }
+        return FlushFixture.Holdable(hostEnd, joinerEnd)
+    }
 
     /** `meshDelivery = true` is vacuous here: `identified` is a strictly 2-peer primitive, so there's no third peer to relay to. */
     override fun capabilities() =

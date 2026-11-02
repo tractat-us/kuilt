@@ -10,7 +10,10 @@ import kotlinx.io.IOException
 import kotlinx.io.Sink
 import kotlinx.io.Source
 import kotlinx.io.readByteArray
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.fabric.Connection
+import kotlin.concurrent.Volatile
+import kotlin.time.Duration
 
 /** Default maximum frame size (16 MiB). */
 public const val DEFAULT_MAX_FRAME_SIZE: Int = 16 * 1024 * 1024
@@ -60,6 +63,17 @@ private class FramedConnection(
     // leaving every caller to discover it as a FrameTooLargeException (#2047).
     override val maxFrameBytes: Int = maxFrameSize
 
+    @Volatile
+    private var closed = false
+
+    /**
+     * Nothing to wait for: [send] flushes the sink before it returns, so a frame whose send returned
+     * has already gone down the stream. Must not touch [sink] here, since it is not thread-safe and a
+     * seam's writer may be inside [send] at this moment.
+     */
+    override suspend fun flush(timeout: Duration): FlushOutcome =
+        if (closed) FlushOutcome.Failed(IOException("the stream is closed")) else FlushOutcome.Drained
+
     override suspend fun send(frame: ByteArray) {
         if (frame.size > maxFrameSize) throw FrameTooLargeException(frame.size, maxFrameSize)
         try {
@@ -87,6 +101,7 @@ private class FramedConnection(
     }
 
     override suspend fun close() {
+        closed = true
         sink.close()
         source.close()
     }

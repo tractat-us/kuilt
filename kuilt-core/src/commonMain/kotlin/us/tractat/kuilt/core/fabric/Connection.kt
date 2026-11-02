@@ -2,7 +2,9 @@ package us.tractat.kuilt.core.fabric
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.PayloadTooLarge
+import kotlin.time.Duration
 
 /**
  * A point-to-point, message-oriented duplex link between exactly two peers.
@@ -60,9 +62,39 @@ public interface Connection {
     public val maxFrameBytes: Int? get() = null
 
     /**
+     * Wait, up to [timeout], until a [close] of this link goes out behind every frame whose [send] returned
+     * before this call, so it cannot be what throws one away on this device.
+     *
+     * The link-level half of [us.tractat.kuilt.core.Seam.flush], with the same outcomes. **The default
+     * is [FlushOutcome.Unsupported]:** this interface cannot know what a returning [send] means on a
+     * transport nobody described to it. It may mean written, or queued in a library that a [close]
+     * then discards, and a seam over this link passes the answer up rather than claim a drain.
+     *
+     * What to return:
+     * - [send] does not return until the frame is handed over (a `flush` of the sink, an awaited send
+     *   completion): report [FlushOutcome.Drained], or [FlushOutcome.Failed] once the link has closed.
+     * - [send] returns with the frame still queued in the transport: ask the transport to wait, under
+     *   [us.tractat.kuilt.core.flushWithin].
+     * - The transport can drop a queued frame without saying so, as an OkHttp WebSocket session does:
+     *   keep [FlushOutcome.Unsupported], however orderly its close looks.
+     *
+     * **This may run while another coroutine is inside [send]**, because the seam's writer moves on to
+     * the next frame once it passes the barrier. A sink or stream that is not thread-safe must not be
+     * touched from here.
+     *
+     * A pending flush must end when the link closes; [close] is how a caller gets out of a stall. The
+     * only `CancellationException` allowed out is the caller's own — see
+     * [us.tractat.kuilt.core.Seam.close]. [us.tractat.kuilt.core.flushWithin] handles both that and
+     * the timeout.
+     */
+    public suspend fun flush(timeout: Duration): FlushOutcome = FlushOutcome.Unsupported
+
+    /**
      * Close the link. Idempotent. Completes [incoming].
      *
      * A close failure must **not** be reported as a cancellation — see [us.tractat.kuilt.core.Seam.close].
+     *
+     * Owes the caller no wait: to drain first, call [flush].
      */
     public suspend fun close()
 }

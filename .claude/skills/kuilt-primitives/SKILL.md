@@ -10,7 +10,7 @@ Read the **one** cookbook file your symptom names before building a primitive.
 ## Don't build this yourself
 
 Prefix `Jump to` with `docs/agent-cookbook/`. Within a row, pair `;`-separated symptom
-and primitive groups in order. The cookbook index splits them out.
+and primitive groups in order.
 
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
@@ -19,13 +19,14 @@ and primitive groups in order. The cookbook index splits them out.
 |a heartbeat, an idle reaper, "is this peer alive"; reaping a room nobody joined; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned(since, windowExpiresAt)` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
 |a per-member reader as `room.incoming.filter { it.sender == peer }`, a member's first frame lost before its collector subscribed|`Room.incomingFrom(member)` (fails with `FramesLost`, never silently; `SeamRoomFactory(memberInboxCapacity = 0)` opts out)|`session.md#per-member-frames`|
+|a `delay` between a last send and `leave`/`close`|`Room.flush`/`Seam.flush` → `FlushOutcome` (hub, mesh, NW say `Unsupported`: keep your delay or an ack until yours answers)|`session.md#a-last-frame-before-leaving`|
 |a `host == selfId` check, re-electing when the host walks out mid-lobby|`SeamRoomFactory.electLobby` → `ElectionLobby.awaitRoom` → `ElectionOutcome.BecameHost` → `start()`|`session.md#host-election--the-lobby`|
 |a propose→commit turn/session facade, host election with a term|`GameSession` + `TurnSequencer`|`consensus.md#consensus--turns`|
 |a server holding the log clients propose into, a client outliving its server|`ClusterClient` (`clusterClient`/`clusterClientWithNode`) + `ServerCluster` (`serverCluster`)|`consensus.md#when-one-of-the-peers-is-a-server`|
 |a Raft term/vote/log surviving a restart, an `expect`/`actual` `RaftStorage`|`DurableStoreRaftStorage.open(store)` + `RaftStorageConformanceSuite`|`consensus.md#durable-consensus-state`|
 |a last-write-wins register, a grow-only or add/remove set, a shared JSON document; trimming a log that only grows; wanting the *edits* not the value|`LWWRegister`/`LWWMap`, `GSet`/`GCounter`/`PNCounter`, `ORSet`/`ORMap`, `BoundedCounter`, `Causal`, `EphemeralMap`, `JsonCrdt` (`Patch`); `Rga.dropWindow` (+ `VersionVector.contiguous`); `OpLogCrdt` (`operations()`/`classify()`/`dotOf()`)|`replication.md#replicated-data`|
 |replicating a CRDT by hand; "claim it only if it's free"; a hop so two guests can see each other; averaging model updates without collecting the data; comparing two peers' state as one number; a write lost to close|`Quilter`; `Quilter.mutateOrSkip { … }` (`null` declines); `Room.channel(id)`; `FedAvg` + `TrainingUpdate`; `canonicalDigest`; `Quilter.drainAndClose`|`replication.md#replicated-data`|
-|a session too big for everyone-talks-to-everyone — N² links, memory growing with the room|`GossipSeam` + `deltaTargets = { gossip.activePeers.value }` (`recommendedActiveViewSize`, `FullFanout`, `hostedOverlay`)|`replication.md#scaling-to-many-peers`|
+|a session too big for everyone-talks-to-everyone — N² links|`GossipSeam` + `deltaTargets = { gossip.activePeers.value }` (`recommendedActiveViewSize`, `FullFanout`, `hostedOverlay`)|`replication.md#scaling-to-many-peers`|
 |dealing cards nobody can peek at — "the dealer could cheat"|`DealSession` + `SraScheme()` (a `CommutativeScheme`)|`replication.md#dealing-cards-nobody-can-peek-at`|
 |a shared random nobody could steer — a seed, a first player, a die roll|`FairRandom.roll()`|`replication.md#nobody-chose-that-number`|
 |a `seenIds` set|`GSet` / kuilt dedup|`replication.md#dedup`|
@@ -34,13 +35,13 @@ and primitive groups in order. The cookbook index splits them out.
 |a sweeper over a discovery list — peers that left still on screen|`PeerDiscoverySource.departures()` + `DiscoverySourceConformanceSuite`|`fabrics.md#peers-pile-up-and-are-never-removed`|
 |a peer-supplied id straight into a `Set<PeerId>`|`PeerIdentityRegistry`|`fabrics.md#a-peer-id-off-the-wire-straight-into-a-setpeerid`|
 |a 4-byte length prefix and a reassembly loop over a socket|`framed()` → `handshaking()`|`fabrics.md#your-own-transport`|
-|that same plumbing when the transport really is just TCP|`TcpLoom.host` / `TcpLoom.join`|`fabrics.md#plain-tcp-is-already-assembled`|
+|that plumbing over plain TCP|`TcpLoom.host` / `TcpLoom.join`|`fabrics.md#plain-tcp-is-already-assembled`|
 |a bare `webSocketSession`; a socket a cancelled dial left open|`ownedWebSocketSession`|`fabrics.md#a-cancelled-dial`|
 |looping a frame back to yourself, a `peers.forEach { sendTo(it, …) }` fan-out|`broadcast`; `peers` includes `selfId`, and `sendTo(selfId, …)` throws|`fabrics.md#sending-to-yourself`|
 |a hard-coded chunk size, a `FrameTooLargeException`|`Room.maxPayloadBytes`/`Seam.maxPayloadBytes`, then `PayloadTooLarge`|`fabrics.md#payload-limits`|
 |a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn(scope, onFailure, name) { … }` — `PumpFailure.ITEM` vs `UPSTREAM`; `onFailure` returns `PumpVerdict.CONTINUE`/`STOP`|`fabrics.md#long-lived-pumps`|
 |a `MutableStateFlow<SeamState>`, or a `closed`/`tornDown` flag beside one|`SeamStateGate`|`fabrics.md#a-seams-terminal-state`|
-|bytes outliving the process — an `fsync`-rename dance, an IndexedDB wrapper|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, `FileChannelDurableStore`, `NSFileManagerDurableStore`, `IndexedDbDurableStore`)|`fabrics.md#durable-storage`|
+|bytes outliving the process — an `fsync`-rename dance, an IndexedDB wrapper|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, one per platform)|`fabrics.md#durable-storage`|
 |encrypting to a public key, bytes only one recipient can open|`SealedBox.seal`/`open` + `SealPublicKey`/`SealPrivateKey`|`replication.md#sealed-boxes`|
 |a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane|`HeddlePolicy.pick` + `HeddleNode`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned` (`GovernedHeddleNode`); `HeddleAdmissionControl` + `TaskDescriptor.inLane`|`heddle.md#fair-share--placement`|
 |"only run on a GPU / in-region peer", a placement predicate|`Affinity` + `TaskDescriptor.where` + `CapSet`|`warp.md#where-a-task-may-run-location-eligibility`|
@@ -57,6 +58,5 @@ Inside kuilt, read it directly; consumers take the first working rung:
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
-**Editing this skill:** a trigger displaces another (`verifySkillDescriptionBudget`: 1,536
-characters, no `: `/` #`). `verifySkillBodyBudget` caps this body at 8 KiB. Prose goes in
-`docs/agent-cookbook*`; never drop a route.
+**Editing this skill:** the description caps at 1,536 characters, this body at 8,192 bytes.
+Move prose to `docs/agent-cookbook*`, never drop a route.

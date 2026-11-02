@@ -92,6 +92,7 @@ abstract interface us.tractat.kuilt.core.fabric/Connection { // us.tractat.kuilt
 
     abstract suspend fun close() // us.tractat.kuilt.core.fabric/Connection.close|close(){}[0]
     abstract suspend fun send(kotlin/ByteArray) // us.tractat.kuilt.core.fabric/Connection.send|send(kotlin.ByteArray){}[0]
+    open suspend fun flush(kotlin.time/Duration): us.tractat.kuilt.core/FlushOutcome // us.tractat.kuilt.core.fabric/Connection.flush|flush(kotlin.time.Duration){}[0]
 }
 
 abstract interface us.tractat.kuilt.core.fabric/ConnectionSource { // us.tractat.kuilt.core.fabric/ConnectionSource|null[0]
@@ -139,6 +140,7 @@ abstract interface us.tractat.kuilt.core/Seam { // us.tractat.kuilt.core/Seam|nu
     abstract suspend fun broadcast(kotlin/ByteArray) // us.tractat.kuilt.core/Seam.broadcast|broadcast(kotlin.ByteArray){}[0]
     abstract suspend fun close(us.tractat.kuilt.core/CloseReason = ...) // us.tractat.kuilt.core/Seam.close|close(us.tractat.kuilt.core.CloseReason){}[0]
     abstract suspend fun sendTo(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.core/Seam.sendTo|sendTo(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+    open suspend fun flush(kotlin.time/Duration): us.tractat.kuilt.core/FlushOutcome // us.tractat.kuilt.core/Seam.flush|flush(kotlin.time.Duration){}[0]
 }
 
 abstract interface us.tractat.kuilt.core/Tag { // us.tractat.kuilt.core/Tag|null[0]
@@ -283,6 +285,39 @@ sealed interface us.tractat.kuilt.core/FabricAvailability { // us.tractat.kuilt.
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/FabricAvailability.Available.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/FabricAvailability.Available.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.core/FabricAvailability.Available.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.core/FlushOutcome { // us.tractat.kuilt.core/FlushOutcome|null[0]
+    final class Failed : us.tractat.kuilt.core/FlushOutcome { // us.tractat.kuilt.core/FlushOutcome.Failed|null[0]
+        constructor <init>(kotlin/Throwable) // us.tractat.kuilt.core/FlushOutcome.Failed.<init>|<init>(kotlin.Throwable){}[0]
+
+        final val cause // us.tractat.kuilt.core/FlushOutcome.Failed.cause|{}cause[0]
+            final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.core/FlushOutcome.Failed.cause.<get-cause>|<get-cause>(){}[0]
+
+        final fun component1(): kotlin/Throwable // us.tractat.kuilt.core/FlushOutcome.Failed.component1|component1(){}[0]
+        final fun copy(kotlin/Throwable = ...): us.tractat.kuilt.core/FlushOutcome.Failed // us.tractat.kuilt.core/FlushOutcome.Failed.copy|copy(kotlin.Throwable){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/FlushOutcome.Failed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/FlushOutcome.Failed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/FlushOutcome.Failed.toString|toString(){}[0]
+    }
+
+    final object Drained : us.tractat.kuilt.core/FlushOutcome { // us.tractat.kuilt.core/FlushOutcome.Drained|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/FlushOutcome.Drained.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/FlushOutcome.Drained.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/FlushOutcome.Drained.toString|toString(){}[0]
+    }
+
+    final object TimedOut : us.tractat.kuilt.core/FlushOutcome { // us.tractat.kuilt.core/FlushOutcome.TimedOut|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/FlushOutcome.TimedOut.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/FlushOutcome.TimedOut.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/FlushOutcome.TimedOut.toString|toString(){}[0]
+    }
+
+    final object Unsupported : us.tractat.kuilt.core/FlushOutcome { // us.tractat.kuilt.core/FlushOutcome.Unsupported|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/FlushOutcome.Unsupported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/FlushOutcome.Unsupported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/FlushOutcome.Unsupported.toString|toString(){}[0]
     }
 }
 
@@ -859,3 +894,4 @@ final suspend fun us.tractat.kuilt.core.fabric/handshaking(us.tractat.kuilt.core
 final suspend fun us.tractat.kuilt.core.fabric/hubMesh(us.tractat.kuilt.core/PeerId, kotlin.collections/List<us.tractat.kuilt.core.fabric/Connection>, kotlin.coroutines/CoroutineContext, kotlin.random/Random = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., us.tractat.kuilt.core.fabric/LinkAdmission = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Function1<us.tractat.kuilt.core.fabric/MeshDisplacement, kotlin/Unit> = ...): us.tractat.kuilt.core.fabric/Mesh // us.tractat.kuilt.core.fabric/hubMesh|hubMesh(us.tractat.kuilt.core.PeerId;kotlin.collections.List<us.tractat.kuilt.core.fabric.Connection>;kotlin.coroutines.CoroutineContext;kotlin.random.Random;us.tractat.kuilt.core.DeliveryPolicy;us.tractat.kuilt.core.fabric.LinkAdmission;kotlin.time.Duration;kotlin.Int;kotlin.Function1<us.tractat.kuilt.core.fabric.MeshDisplacement,kotlin.Unit>){}[0]
 final suspend fun us.tractat.kuilt.core.fabric/meshSeam(us.tractat.kuilt.core/PeerId, kotlin.collections/List<us.tractat.kuilt.core.fabric/Connection>, kotlin.coroutines/CoroutineContext, kotlin.random/Random = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., us.tractat.kuilt.core.fabric/LinkAdmission = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Function1<us.tractat.kuilt.core.fabric/MeshDisplacement, kotlin/Unit> = ...): us.tractat.kuilt.core.fabric/Mesh // us.tractat.kuilt.core.fabric/meshSeam|meshSeam(us.tractat.kuilt.core.PeerId;kotlin.collections.List<us.tractat.kuilt.core.fabric.Connection>;kotlin.coroutines.CoroutineContext;kotlin.random.Random;us.tractat.kuilt.core.DeliveryPolicy;us.tractat.kuilt.core.fabric.LinkAdmission;kotlin.time.Duration;kotlin.Int;kotlin.Function1<us.tractat.kuilt.core.fabric.MeshDisplacement,kotlin.Unit>){}[0]
 final suspend fun us.tractat.kuilt.core.fabric/peerMesh(us.tractat.kuilt.core/PeerId, kotlin.collections/List<us.tractat.kuilt.core.fabric/Connection>, kotlin.coroutines/CoroutineContext, kotlin.random/Random = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., us.tractat.kuilt.core.fabric/LinkAdmission = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Function1<us.tractat.kuilt.core.fabric/MeshDisplacement, kotlin/Unit> = ...): us.tractat.kuilt.core.fabric/Mesh // us.tractat.kuilt.core.fabric/peerMesh|peerMesh(us.tractat.kuilt.core.PeerId;kotlin.collections.List<us.tractat.kuilt.core.fabric.Connection>;kotlin.coroutines.CoroutineContext;kotlin.random.Random;us.tractat.kuilt.core.DeliveryPolicy;us.tractat.kuilt.core.fabric.LinkAdmission;kotlin.time.Duration;kotlin.Int;kotlin.Function1<us.tractat.kuilt.core.fabric.MeshDisplacement,kotlin.Unit>){}[0]
+final suspend fun us.tractat.kuilt.core/flushWithin(kotlin.time/Duration, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.core/FlushOutcome>): us.tractat.kuilt.core/FlushOutcome // us.tractat.kuilt.core/flushWithin|flushWithin(kotlin.time.Duration;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.core.FlushOutcome>){}[0]

@@ -10,6 +10,7 @@ public final class us/tractat/kuilt/gossip/GossipSeam : us/tractat/kuilt/core/Pr
 	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlin/random/Random;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;ILkotlin/ranges/ClosedRange;ILus/tractat/kuilt/gossip/TopologyPolicy;Lus/tractat/kuilt/core/DeliveryPolicy;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getActivePeers ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun getAttestedPrincipals ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;

@@ -336,6 +336,7 @@ public final class us/tractat/kuilt/session/ReservedRoomPrefix : java/lang/Illeg
 public abstract interface class us/tractat/kuilt/session/Room {
 	public abstract fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun channel (Ljava/lang/String;)Lus/tractat/kuilt/core/Seam;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getAttestedPrincipals ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun getEvents ()Lkotlinx/coroutines/flow/Flow;
 	public abstract fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
@@ -354,6 +355,7 @@ public abstract interface class us/tractat/kuilt/session/Room {
 }
 
 public final class us/tractat/kuilt/session/Room$DefaultImpls {
+	public static fun flush-VtjQ1oo (Lus/tractat/kuilt/session/Room;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun getMaxPayloadBytes (Lus/tractat/kuilt/session/Room;)Ljava/lang/Integer;
 	public static synthetic fun leave$default (Lus/tractat/kuilt/session/Room;Lus/tractat/kuilt/session/LeaveReason;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }

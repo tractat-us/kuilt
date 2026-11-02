@@ -28,6 +28,7 @@ public final class us/tractat/kuilt/test/ControllableLoom : us/tractat/kuilt/cor
 public final class us/tractat/kuilt/test/ControllableSeam : us/tractat/kuilt/core/Seam {
 	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
 	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
@@ -70,6 +71,7 @@ public final class us/tractat/kuilt/test/FakeSeam : us/tractat/kuilt/core/Seam {
 	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun deliver (Lus/tractat/kuilt/core/Swatch;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun deliver-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getBroadcasts ()Ljava/util/List;
 	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getDirected ()Ljava/util/List;
@@ -223,6 +225,7 @@ public final class us/tractat/kuilt/test/FaultySeam : us/tractat/kuilt/core/Seam
 	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/test/FaultProfile;Lus/tractat/kuilt/core/DeliveryPolicy;Lus/tractat/kuilt/test/TeardownFault;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getFramesDelayed ()J
 	public final fun getFramesDelivered ()J
@@ -261,6 +264,7 @@ public final class us/tractat/kuilt/test/FlakyLifecycleSeam : us/tractat/kuilt/c
 	public final fun enterWeaving ()V
 	public final fun flapThenTear-dWUq8MI (IJLus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun flapThenTear-dWUq8MI$default (Lus/tractat/kuilt/test/FlakyLifecycleSeam;IJLus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
 	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
@@ -336,6 +340,19 @@ public final class us/tractat/kuilt/test/fabric/ConnectionPairKt {
 	public static final fun identifiedLoomPair (Lkotlin/Pair;)Lkotlin/Pair;
 }
 
+public final class us/tractat/kuilt/test/fabric/HoldableConnection : us/tractat/kuilt/core/fabric/Connection, us/tractat/kuilt/test/fabric/SendHold {
+	public fun <init> (Lus/tractat/kuilt/core/fabric/Connection;)V
+	public fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxFrameBytes ()Ljava/lang/Integer;
+	public fun getParkedSends ()I
+	public fun hold ()V
+	public fun releaseAll ()V
+	public fun releaseOne ()V
+	public fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public final class us/tractat/kuilt/test/fabric/InMemoryConnectionSource : us/tractat/kuilt/core/fabric/ConnectionSource {
 	public fun <init> ()V
 	public fun accept (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -354,5 +371,12 @@ public final class us/tractat/kuilt/test/fabric/InMemoryRoomFabric {
 
 public final class us/tractat/kuilt/test/fabric/MeshHarnessKt {
 	public static final fun inMemoryMeshOfSize (ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/test/fabric/SendHold {
+	public abstract fun getParkedSends ()I
+	public abstract fun hold ()V
+	public abstract fun releaseAll ()V
+	public abstract fun releaseOne ()V
 }
 

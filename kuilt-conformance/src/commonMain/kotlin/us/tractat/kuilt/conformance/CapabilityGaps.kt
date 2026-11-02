@@ -33,6 +33,14 @@ public object CapabilityGaps {
         "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#reportslivecapability--fabrics-without-a-path-observer"
 
     /**
+     * A fabric that answers `Seam.flush` with `FlushOutcome.Unsupported`: it cannot yet confirm that
+     * frames it accepted have left this device (the default of [SeamConformanceSuite.flushFixture]).
+     * A *fabric* gap, closed one fabric at a time by making it answer and picking a harness arm.
+     */
+    public const val FLUSH: String =
+        "https://github.com/tractat-us/kuilt/blob/main/docs/architecture.md#flush--fabrics-that-cannot-confirm-a-drain"
+
+    /**
      * A conformance harness that has not implemented mid-session transport-death injection
      * (the default [ObligationDeclaration.Gap] of [SeamConformanceSuite.midSessionDeathDeclaration]).
      * Not a *fabric* gap — a *harness* gap:

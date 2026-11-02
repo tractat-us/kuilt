@@ -55,6 +55,9 @@ class TieredSeamConformanceTest : SeamConformanceSuite() {
         ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
 
 
+    /** The host is the tiered union, which does not ask its tiers yet; the joiner is a plain in-memory member. */
+    override fun flushFixture(): FlushFixture = FlushFixture.HostUnsupported(CapabilityGaps.FLUSH)
+
     override fun newLoomPair(): Pair<Loom, Loom> =
         TieredLoomPair(testScope = null).let { it.hostLoom to it.joinerLoom }
 

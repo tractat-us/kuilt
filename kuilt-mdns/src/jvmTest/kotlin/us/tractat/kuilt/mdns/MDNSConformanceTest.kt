@@ -8,6 +8,7 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.conformance.CapabilityGaps
+import us.tractat.kuilt.conformance.FlushFixture
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
 import us.tractat.kuilt.conformance.ObligationDeclaration
 import us.tractat.kuilt.conformance.SeamCapabilities
@@ -66,6 +67,12 @@ class MDNSConformanceTest : SeamConformanceSuite() {
     override fun blankPeerIdDeclaration(): ObligationDeclaration =
         ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
 
+
+    override fun flushFixture(): FlushFixture = FlushFixture.JoinerUnsupported(
+        "this harness's joiner is an OkHttp WebSocket client, whose session drops a frame past its own queue " +
+            "with no error. The host's burst still runs; IdentifiedConformanceTest holds a send on the same " +
+            "LinkSeam.",
+    )
 
     private val hostWsPath = "/ws/mdns-conf-host"
     private val joinerWsPath = "/ws/mdns-conf-joiner"

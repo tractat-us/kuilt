@@ -1,5 +1,7 @@
 package us.tractat.kuilt.websocket
 
+import io.ktor.client.engine.HttpClientEngine
+import io.ktor.client.plugins.websocket.ClientWebSocketSession
 import io.ktor.websocket.DefaultWebSocketSession
 import io.ktor.websocket.close
 import io.ktor.websocket.readBytes
@@ -9,7 +11,11 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.io.IOException
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.fabric.Connection
+import us.tractat.kuilt.core.flushWithin
+import kotlin.concurrent.Volatile
+import kotlin.time.Duration
 import io.ktor.websocket.Frame as KtorFrame
 
 /**
@@ -53,16 +59,56 @@ import io.ktor.websocket.Frame as KtorFrame
  *
  * **close:** closes the underlying session. Idempotent — Ktor's
  * [io.ktor.websocket.close] is a no-op once the session is already closing.
+ *
+ * **flush:** the answer depends on the Ktor engine under the session.
+ *
+ * - A server session, and a client session on the CIO, Darwin or browser engine, answers
+ *   [FlushOutcome.Drained]. That rests on queue order and nothing else: a [close] goes down the session's
+ *   own queue behind the frames ahead of it. `session.flush` skips that queue, so a frame can still be
+ *   in it when this answers. Closing the `HttpClient`, cancelling the session or exiting the process
+ *   instead of closing this connection can still lose such a frame (read from Ktor's source, not run).
+ * - **OkHttp answers [FlushOutcome.Unsupported].** Its session ignores what `WebSocket.send` returns, so
+ *   a frame past OkHttp's 16 MiB send queue is dropped with no error, and its `flush` is empty. Measured:
+ *   3,000 frames of 16 KiB lost frames 3 runs of 3, with every flush saying `Drained`.
+ * - **Any other engine answers [FlushOutcome.Unsupported] too**, since nobody has read what a returning
+ *   send means on it.
+ *
+ * All three answer [FlushOutcome.Failed] once this connection has closed, or the session says it has.
  */
 public class WebSocketConnection(
     private val session: DefaultWebSocketSession,
 ) : Connection {
+    // Set by `close` rather than read off the session: an OkHttp session's queue stays open until the
+    // far end answers the close, so `isClosedForSend` alone would call a closed link healthy.
+    @Volatile
+    private var closedHere = false
+
+    private val closed: Boolean get() = closedHere || session.outgoing.isClosedForSend
+
     override suspend fun send(frame: ByteArray) {
         try {
             session.send(KtorFrame.Binary(fin = true, data = frame))
         } catch (closed: CancellationException) {
             currentCoroutineContext().ensureActive()
             throw IOException("the WebSocket session is closed", closed)
+        }
+    }
+
+    override suspend fun flush(timeout: Duration): FlushOutcome = flushWithin(timeout) {
+        val confirms = session.canConfirmADrain()
+        if (confirms) {
+            try {
+                session.flush()
+            } catch (cause: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                throw IOException("the WebSocket session is closed", cause)
+            }
+        }
+        when {
+            // `flush` also returns normally on a session that has closed, having written nothing.
+            closed -> FlushOutcome.Failed(IOException("the WebSocket session is closed"))
+            confirms -> FlushOutcome.Drained
+            else -> FlushOutcome.Unsupported
         }
     }
 
@@ -76,6 +122,34 @@ public class WebSocketConnection(
     }
 
     override suspend fun close() {
+        closedHere = true
         session.close()
     }
 }
+
+/**
+ * The Ktor client engines whose WebSocket session can back [FlushOutcome.Drained], by class name.
+ *
+ * - `CIOEngine`: run, against Netty and CIO servers, by the burst in `SeamConformanceSuite`.
+ * - `DarwinClientEngine`: read, not run. Its writer awaits each send's completion, and a close frame
+ *   takes its turn in the same queue.
+ * - `JsClientEngine`: read, not run. A close frame takes its turn in the same queue, and the browser's
+ *   `WebSocket.close` sends what it has buffered first.
+ *
+ * **To let OkHttp answer `Drained` after all, add `OkHttpEngine` here.** That is the whole reversal, and
+ * the test pinning the current answer is `flushOnALiveSessionAnswersWhatItsEngineCanConfirm`.
+ *
+ * Names rather than types because the module has no dependency on most of these engines, and an engine a
+ * consumer does not have on its classpath cannot be type-checked against. A name fails the safe way: an
+ * engine this list does not recognise, a Ktor rename, or a shrinker renaming the class all give
+ * [FlushOutcome.Unsupported], never a claim nobody checked. The cost is that an obfuscated release build
+ * can answer `Unsupported` where its debug build answered `Drained`.
+ */
+private val ENGINES_THAT_CONFIRM_A_DRAIN = setOf("CIOEngine", "DarwinClientEngine", "JsClientEngine")
+
+/** Whether [ENGINES_THAT_CONFIRM_A_DRAIN] names this engine. */
+internal fun HttpClientEngine.canConfirmADrain(): Boolean = this::class.simpleName in ENGINES_THAT_CONFIRM_A_DRAIN
+
+// A session that came from no client is a server's: real Netty and CIO servers are what the burst runs on.
+private fun DefaultWebSocketSession.canConfirmADrain(): Boolean =
+    (this as? ClientWebSocketSession)?.call?.client?.engine?.canConfirmADrain() ?: true

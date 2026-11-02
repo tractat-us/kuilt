@@ -10,9 +10,11 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.core.DeliveryPolicy
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.coroutines.CoroutineContext
+import kotlin.time.Duration
 
 /**
  * Adapt a [Connection] so its [incoming] can be consumed by *several* readers over a
@@ -88,6 +90,9 @@ private class SingleCollectionConnection(
     // Adds nothing to a frame — only to how `incoming` is consumed — so the delegate's ceiling
     // passes through unchanged.
     override val maxFrameBytes: Int? get() = delegate.maxFrameBytes
+
+    // No outbound queue here: `send` is a direct call, so the delegate's answer is the whole answer.
+    override suspend fun flush(timeout: Duration): FlushOutcome = delegate.flush(timeout)
 
     override val incoming: Flow<ByteArray> = flow {
         emitAll(inbox.incoming)

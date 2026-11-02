@@ -4,6 +4,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.util.ExponentialBackoff
@@ -16,6 +17,7 @@ import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.random.Random
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 // Minimal, compile-checked snippets quoted verbatim by docs/agent-cookbook/session.md (most) and
@@ -309,4 +311,28 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
 /** Send arbitrary bytes, including reserved Room prefixes, inside a named channel. */
 public suspend fun arbitraryRoomPayloadSample(room: Room, peer: PeerId, payload: ByteArray) {
     room.channel("data").sendTo(peer, payload)
+}
+
+/**
+ * Send a last frame and leave, using a `delay` only where the fabric cannot do better.
+ *
+ * Returns `true` when the leave cannot have thrown the frame away. That is not the member receiving it:
+ * a sender that needs receipt has the member answer.
+ */
+public suspend fun flushThenLeaveSample(
+    room: Room,
+    member: PeerId,
+    lastFrame: ByteArray,
+    delayYouHadBefore: Duration,
+): Boolean {
+    room.sendTo(member, lastFrame)
+    val outcome = room.flush(2.seconds)
+    // Most rooms answer Unsupported today, at once. Keep your delay or an ack until your fabric answers.
+    if (outcome == FlushOutcome.Unsupported) delay(delayYouHadBefore)
+    room.leave()
+    return when (outcome) {
+        FlushOutcome.Drained -> true
+        // Not proven, not lost. This fabric cannot tell, a link stalled, or the room already ended.
+        FlushOutcome.Unsupported, FlushOutcome.TimedOut, is FlushOutcome.Failed -> false
+    }
 }

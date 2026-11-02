@@ -34,6 +34,9 @@ final class us.tractat.kuilt.session.test/FakeRoom : us.tractat.kuilt.session/Ro
     final val selfId // us.tractat.kuilt.session.test/FakeRoom.selfId|{}selfId[0]
         final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.test/FakeRoom.selfId.<get-selfId>|<get-selfId>(){}[0]
 
+    final var flushOutcome // us.tractat.kuilt.session.test/FakeRoom.flushOutcome|{}flushOutcome[0]
+        final fun <get-flushOutcome>(): us.tractat.kuilt.core/FlushOutcome // us.tractat.kuilt.session.test/FakeRoom.flushOutcome.<get-flushOutcome>|<get-flushOutcome>(){}[0]
+        final fun <set-flushOutcome>(us.tractat.kuilt.core/FlushOutcome) // us.tractat.kuilt.session.test/FakeRoom.flushOutcome.<set-flushOutcome>|<set-flushOutcome>(us.tractat.kuilt.core.FlushOutcome){}[0]
     final var resumeResult // us.tractat.kuilt.session.test/FakeRoom.resumeResult|{}resumeResult[0]
         final fun <get-resumeResult>(): us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome // us.tractat.kuilt.session.test/FakeRoom.resumeResult.<get-resumeResult>|<get-resumeResult>(){}[0]
         final fun <set-resumeResult>(us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome) // us.tractat.kuilt.session.test/FakeRoom.resumeResult.<set-resumeResult>|<set-resumeResult>(us.tractat.kuilt.session.partition.ResumeResult.JoinerOutcome){}[0]
@@ -51,6 +54,7 @@ final class us.tractat.kuilt.session.test/FakeRoom : us.tractat.kuilt.session/Ro
     final suspend fun deliver(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.session.test/FakeRoom.deliver|deliver(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
     final suspend fun emit(us.tractat.kuilt.session/MembershipEvent) // us.tractat.kuilt.session.test/FakeRoom.emit|emit(us.tractat.kuilt.session.MembershipEvent){}[0]
     final suspend fun emitResumed(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.session.test/FakeRoom.emitResumed|emitResumed(us.tractat.kuilt.core.PeerId){}[0]
+    final suspend fun flush(kotlin.time/Duration): us.tractat.kuilt.core/FlushOutcome // us.tractat.kuilt.session.test/FakeRoom.flush|flush(kotlin.time.Duration){}[0]
     final suspend fun hostLost(kotlin.time/Instant, us.tractat.kuilt.session/FailureReason = ...) // us.tractat.kuilt.session.test/FakeRoom.hostLost|hostLost(kotlin.time.Instant;us.tractat.kuilt.session.FailureReason){}[0]
     final suspend fun leave(us.tractat.kuilt.session/LeaveReason) // us.tractat.kuilt.session.test/FakeRoom.leave|leave(us.tractat.kuilt.session.LeaveReason){}[0]
     final suspend fun openWindow(us.tractat.kuilt.core/PeerId, kotlin.time/Instant) // us.tractat.kuilt.session.test/FakeRoom.openWindow|openWindow(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]

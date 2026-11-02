@@ -407,6 +407,47 @@ public suspend fun perMemberFramesSample(room: Room, member: PeerId, onFrame: su
     }
 ```
 
+## A last frame before leaving
+
+**Intent:** send one more frame and then leave — the host's game-over, a departing player's goodbye — and you are reaching for a `delay` between the two, or wondering why the far side sometimes misses that frame.
+**Primitive:** `Room.flush(timeout)` (`us.tractat.kuilt.session`), or `Seam.flush(timeout)` one layer down, answering a `FlushOutcome` (`us.tractat.kuilt.core`). A send that returned has only been accepted. The frame can still be queued on this device, and `leave` and `close` wait for nothing, so they can close the link under it. Measured on real transports, a frame sent just before a close survived 10 of 60 times on WebSocket. A `delay` only guesses. `flush` waits until a `leave` or `close` cannot throw away what was accepted before it, up to your timeout.
+
+**Keep your `delay` or an acknowledgement until your fabric answers.** Most rooms today answer `Unsupported` at once, and deleting a working `delay` on one of them just loses the frame sooner. What confirms a drain today, a list that only grows:
+
+- `LinkSeam` (`identified()`, `handshaking()`) over a WebSocket, except an OkHttp client, whose session drops a frame past its own queue without saying so. `pinnedTlsHttpClient` builds an OkHttp client.
+- `LinkSeam` over `framed()`, which is what `TcpLoom` weaves.
+- `InMemoryLoom`.
+
+Everything else answers `Unsupported` straight away, including a room on `RoomHubSeam`, `MeshSeam` or `NwSeam`.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#flushThenLeaveSample -->
+```kotlin
+public suspend fun flushThenLeaveSample(
+    room: Room,
+    member: PeerId,
+    lastFrame: ByteArray,
+    delayYouHadBefore: Duration,
+): Boolean {
+    room.sendTo(member, lastFrame)
+    val outcome = room.flush(2.seconds)
+    // Most rooms answer Unsupported today, at once. Keep your delay or an ack until your fabric answers.
+    if (outcome == FlushOutcome.Unsupported) delay(delayYouHadBefore)
+    room.leave()
+    return when (outcome) {
+        FlushOutcome.Drained -> true
+        // Not proven, not lost. This fabric cannot tell, a link stalled, or the room already ended.
+        FlushOutcome.Unsupported, FlushOutcome.TimedOut, is FlushOutcome.Failed -> false
+    }
+}
+```
+
+- **`Drained` is not receipt.** It means a `leave` or `close` that follows goes out behind the frames, so it cannot be what throws them away on this device. They can still be in the transport library's own queue: close the seam or leave the room rather than closing the `HttpClient` or exiting straight after, which can still lose them (read from the source, not run). The link can still die on the way. If you need to know the frame arrived, have the other member answer.
+- **It does not cover a far side that is still sending.** A member reading slowly while it sends can lose the tail of what you flushed: its own send fails on the link your close ended, that tears its seam, and a torn seam stops reading what it had not got to. Measured on macOS loopback with a slow consumer sending one frame per 100 ms: lost frames in 32 of 32 WebSocket trials, 0 of 24 with nothing coming back, and 6 of 6 on TCP. A Linux CI runner's TCP trials lost nothing, 3 of 3, so a green run on your machine does not show you are safe. There, have the last frame acknowledged.
+- **`Unsupported` is an honest answer you will meet.** A fabric that cannot tell says so, and a seam written before `flush` existed says so by default. Decide what your caller does then; do not treat it as success.
+- **`TimedOut` costs nothing.** The room stays up and the frames stay queued. One member's stalled link is enough to reach it, and leaving afterwards may lose those frames.
+- **It covers what came before it.** A frame sent after `flush` begins is not waited for, so a busy sender cannot starve it, and `Drained` does not mean the queue is empty. Frames the room forwards for other members are best-effort, and a dropped one does not fail a flush.
+- **The farewell a later `leave` sends is not covered**, because that frame does not exist yet.
+
 ## Host election & the lobby
 
 **Intent:** several peers are connected and one of them has to host — and then that one walks out before the session starts.

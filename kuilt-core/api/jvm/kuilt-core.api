@@ -97,6 +97,45 @@ public final class us/tractat/kuilt/core/FabricAvailability$Unknown : us/tractat
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract interface class us/tractat/kuilt/core/FlushOutcome {
+}
+
+public final class us/tractat/kuilt/core/FlushOutcome$Drained : us/tractat/kuilt/core/FlushOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/core/FlushOutcome$Drained;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/core/FlushOutcome$Failed : us/tractat/kuilt/core/FlushOutcome {
+	public fun <init> (Ljava/lang/Throwable;)V
+	public final fun component1 ()Ljava/lang/Throwable;
+	public final fun copy (Ljava/lang/Throwable;)Lus/tractat/kuilt/core/FlushOutcome$Failed;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/core/FlushOutcome$Failed;Ljava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/core/FlushOutcome$Failed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCause ()Ljava/lang/Throwable;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/core/FlushOutcome$TimedOut : us/tractat/kuilt/core/FlushOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/core/FlushOutcome$TimedOut;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/core/FlushOutcome$Unsupported : us/tractat/kuilt/core/FlushOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/core/FlushOutcome$Unsupported;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/core/FlushOutcomeKt {
+	public static final fun flushWithin-KLykuaI (JLkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public final class us/tractat/kuilt/core/FrameOverflow : java/lang/RuntimeException {
 	public fun <init> (Ljava/lang/String;)V
 }
@@ -406,6 +445,7 @@ public final class us/tractat/kuilt/core/RoomHubSeam : us/tractat/kuilt/core/Pri
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/core/RoomAuthorizer;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getAttestedPrincipals ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
@@ -434,6 +474,7 @@ public abstract interface class us/tractat/kuilt/core/Seam {
 	public abstract fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun close$default (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
 	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
@@ -446,6 +487,7 @@ public abstract interface class us/tractat/kuilt/core/Seam {
 
 public final class us/tractat/kuilt/core/Seam$DefaultImpls {
 	public static synthetic fun close$default (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static fun flush-VtjQ1oo (Lus/tractat/kuilt/core/Seam;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun getCapability (Lus/tractat/kuilt/core/Seam;)Lkotlinx/coroutines/flow/StateFlow;
 	public static fun getMaxPayloadBytes (Lus/tractat/kuilt/core/Seam;)Ljava/lang/Integer;
 	public static fun getPlies (Lus/tractat/kuilt/core/Seam;)Lkotlinx/coroutines/flow/StateFlow;
@@ -663,12 +705,14 @@ public final class us/tractat/kuilt/core/fabric/AcceptPumpKt {
 
 public abstract interface class us/tractat/kuilt/core/fabric/Connection {
 	public abstract fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
 	public fun getMaxFrameBytes ()Ljava/lang/Integer;
 	public abstract fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class us/tractat/kuilt/core/fabric/Connection$DefaultImpls {
+	public static fun flush-VtjQ1oo (Lus/tractat/kuilt/core/fabric/Connection;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun getMaxFrameBytes (Lus/tractat/kuilt/core/fabric/Connection;)Ljava/lang/Integer;
 }
 
@@ -764,6 +808,7 @@ public abstract interface class us/tractat/kuilt/core/fabric/Mesh : us/tractat/k
 }
 
 public final class us/tractat/kuilt/core/fabric/Mesh$DefaultImpls {
+	public static fun flush-VtjQ1oo (Lus/tractat/kuilt/core/fabric/Mesh;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun getCapability (Lus/tractat/kuilt/core/fabric/Mesh;)Lkotlinx/coroutines/flow/StateFlow;
 	public static fun getMaxPayloadBytes (Lus/tractat/kuilt/core/fabric/Mesh;)Ljava/lang/Integer;
 	public static fun getPlies (Lus/tractat/kuilt/core/fabric/Mesh;)Lkotlinx/coroutines/flow/StateFlow;

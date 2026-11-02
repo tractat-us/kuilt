@@ -9,11 +9,13 @@ public final class us/tractat/kuilt/session/test/FakeRoom : us/tractat/kuilt/ses
 	public final fun deliver-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun emit (Lus/tractat/kuilt/session/MembershipEvent;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun emitResumed-t5-yf_A (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getAttestedPrincipals ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getBroadcasts ()Ljava/util/List;
 	public final fun getChannelPolicy ()Lus/tractat/kuilt/core/DeliveryPolicy;
 	public final fun getDirected ()Ljava/util/List;
 	public fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getFlushOutcome ()Lus/tractat/kuilt/core/FlushOutcome;
 	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
 	public fun getLocalFabric ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
@@ -36,6 +38,7 @@ public final class us/tractat/kuilt/session/test/FakeRoom : us/tractat/kuilt/ses
 	public fun resume (Lus/tractat/kuilt/session/partition/ResumeToken;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun sendTo-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun setAttestedPrincipals (Ljava/util/Map;)V
+	public final fun setFlushOutcome (Lus/tractat/kuilt/core/FlushOutcome;)V
 	public final fun setLocalFabric (Lus/tractat/kuilt/core/FabricAvailability;Lkotlin/time/Instant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun setResumeResult (Lus/tractat/kuilt/session/partition/ResumeResult$JoinerOutcome;)V
 	public final fun setResumeToken (Lus/tractat/kuilt/session/partition/ResumeToken;)V
@@ -50,6 +53,7 @@ public final class us/tractat/kuilt/session/test/FakeRoom$FakeChannelSeam : us/t
 	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun deliver-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getId ()Ljava/lang/String;
 	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
