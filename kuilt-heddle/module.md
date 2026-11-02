@@ -216,10 +216,16 @@ and nothing else does:
   truth about who holds what. A peer that meets an entry it cannot read, say one written by a newer
   version, no longer knows that truth, so it refuses to spend rather than guess. `reserve` and
   `schedule` answer `GateClosed` naming the entry, and this one does not clear by itself: it takes a
-  version that can read the entry, or a deliberate migration of the record. The stop reaches the
+  version that can read the entry, or starting the group on a fresh record. The stop reaches the
   whole group, because everyone reads the same record: the same entry on the same version stops
-  every peer, and one peer on a newer version stops the older ones until they upgrade. There is no
-  way to skip an entry. So upgrade a group together, and give the agreement step its own log.
+  every peer, and one peer on a newer version stops the older ones until they upgrade. That cost is
+  accepted, because there is no way to skip an entry. So upgrade a group together.
+- **The agreed record has to be heddle's alone.** An entry heddle did not write stops the group the
+  same way, because a peer cannot tell it from an act it has lost the means to read. So give the
+  agreement step a Raft node of its own: one proposal from anything else on that node stops everyone.
+- **A saved record from v0.7.3 does not carry over.** Its `Mint` and `Prepare` entries no longer
+  read, so a peer stops at the first one. Start a fresh record. There is no migrator: this is the
+  accepted price of a reader that never guesses, not a gap waiting to be filled.
 
 `heddleGoverned` returns a `GovernedHeddleNode`: the same data-plane calls as `HeddleNode` plus
 `mint`/`prepare`/`activate`/`close`/`retire` and `enroll`/`depart`, each of which returns a
