@@ -1862,6 +1862,15 @@ public abstract class SeamConformanceSuite {
                             "joiner, a different seam, confirms a drain",
                     )
                 }
+                is FlushFixture.JoinerUnsupported -> {
+                    assertTrue(fixture.reason.isNotBlank(), "JoinerUnsupported says why, for the next reader")
+                    assertEquals(
+                        listOf<FlushOutcome>(FlushOutcome.Drained, FlushOutcome.Unsupported),
+                        outcomes,
+                        "this harness declares FlushFixture.JoinerUnsupported: the host confirms a drain, and " +
+                            "its joiner, a different seam, cannot tell",
+                    )
+                }
                 is FlushFixture.CannotHold -> {
                     assertTrue(fixture.reason.isNotBlank(), "CannotHold says why, for the next reader")
                     assertEquals(
@@ -1886,12 +1895,16 @@ public abstract class SeamConformanceSuite {
      *
      * The burst outruns the outbox a `LinkSeam` keeps, so a tail is still queued when the last send
      * returns. That tail is what a close without a wait loses.
+     *
+     * **This is the favourable case: a peer that keeps reading and sends nothing back.** It says the
+     * close cost the sender nothing. [hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix] is the case
+     * this cannot promise.
      */
     @Test
     public fun hostBurstSurvivesFlushThenClose(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             connectedPair { host, joiner ->
-                if (flushFixture().confirmsADrain) assertBurstSurvivesFlushThenClose(host, joiner)
+                if (flushFixture().hostConfirmsADrain) assertBurstSurvivesFlushThenClose(host, joiner)
             }
         }
 
@@ -1900,9 +1913,76 @@ public abstract class SeamConformanceSuite {
     public fun joinerBurstSurvivesFlushThenClose(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             connectedPair { host, joiner ->
-                if (flushFixture().confirmsADrain) assertBurstSurvivesFlushThenClose(joiner, host)
+                if (flushFixture().joinerConfirmsADrain) assertBurstSurvivesFlushThenClose(joiner, host)
             }
         }
+
+    /**
+     * The limit of what `Drained` promises: a slow consumer that is still sending can lose the tail of
+     * a burst its peer flushed before closing.
+     *
+     * Its send fails on the link the close ended, that tears its seam, and a torn seam stops reading what
+     * it had not got to yet. So this does **not** assert that every frame arrives. It asserts what
+     * survives: what does arrive is the start of what was sent, in order, and the flush still said
+     * `Drained`, because the flush was right about this end.
+     *
+     * **What this arm cannot show is the loss itself.** Everything here runs on `runTest`'s clock, so the
+     * consumer's pace is real only on a virtual-time harness, and on a real socket it is not slow at all.
+     * Over real sockets the loss is measured by `WebSocketFlushPeerTrafficLimitTest` and
+     * `TcpFlushPeerTrafficLimitTest`, which go red once it stops happening, so that the promise gets
+     * widened.
+     */
+    @Test
+    public fun hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            connectedPair { host, joiner ->
+                if (flushFixture().hostConfirmsADrain) assertBurstUnderPeerTrafficIsAnInOrderPrefix(host, joiner)
+            }
+        }
+
+    /** [hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix] from the other end. */
+    @Test
+    public fun joinerBurstToASlowConsumerStillSendingIsAnInOrderPrefix(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            connectedPair { host, joiner ->
+                if (flushFixture().joinerConfirmsADrain) assertBurstUnderPeerTrafficIsAnInOrderPrefix(joiner, host)
+            }
+        }
+
+    private suspend fun CoroutineScope.assertBurstUnderPeerTrafficIsAnInOrderPrefix(sender: Seam, receiver: Seam) {
+        var peerFramesSent = 0
+        // The sender reads what the peer sends, so a bounded link cannot wedge this into a false red.
+        val senderReads = launch { sender.incoming.collect {} }
+        val received = async {
+            val frames = mutableListOf<String>()
+            receiver.incoming.take(FLUSH_BURST).collect { frame ->
+                frames += frame.decodeToString()
+                if (frames.size % FLUSH_PEER_TRAFFIC_EVERY == 0) {
+                    try {
+                        receiver.broadcast(FLUSH_PEER_TRAFFIC)
+                        peerFramesSent++
+                    } catch (_: IllegalStateException) {
+                        // A cancellation is an IllegalStateException too, and only this job's own may pass.
+                        currentCoroutineContext().ensureActive()
+                        // Otherwise this seam tore, which is the case under test: read what is left.
+                    }
+                    delay(FLUSH_SETTLE)
+                }
+            }
+            frames.toList()
+        }
+        sender.peers.first { receiver.selfId in it }
+        val sent = List(FLUSH_BURST) { "frame-$it" }
+        sent.forEach { sender.sendTo(receiver.selfId, it.encodeToByteArray()) }
+        assertEquals(FlushOutcome.Drained, sender.flush(Duration.INFINITE), "a healthy link drains")
+        sender.close()
+        val arrived = received.await()
+        senderReads.cancelAndJoin()
+        assertAll(
+            { assertTrue(peerFramesSent > 0, "rig: the peer never sent, so this was the favourable case") },
+            { assertEquals(sent.take(arrived.size), arrived, "what arrives is the start of what was sent, in order") },
+        )
+    }
 
     private suspend fun CoroutineScope.assertBurstSurvivesFlushThenClose(sender: Seam, receiver: Seam) {
         // `take` ends early if the link ends early, so a lost tail is a short list, not a wedge.
@@ -1912,7 +1992,11 @@ public abstract class SeamConformanceSuite {
         sent.forEach { sender.sendTo(receiver.selfId, it.encodeToByteArray()) }
         assertEquals(FlushOutcome.Drained, sender.flush(Duration.INFINITE), "a healthy link drains")
         sender.close()
-        assertEquals(sent, received.await(), "every frame accepted before the flush survives the close after it")
+        assertEquals(
+            sent,
+            received.await(),
+            "with a peer keeping up and sending nothing back, the close after a flush costs no frame",
+        )
     }
 
     /** A torn seam cannot confirm anything, and does not pretend to. */
@@ -1920,7 +2004,7 @@ public abstract class SeamConformanceSuite {
     public fun flushOnATornSeamReportsFailed(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             connectedPair { host, _ ->
-                if (!flushFixture().confirmsADrain) return@connectedPair
+                if (!flushFixture().hostConfirmsADrain) return@connectedPair
                 host.close()
                 assertIs<FlushOutcome.Failed>(host.flush(Duration.INFINITE), "a torn seam reports Failed")
             }
@@ -2074,8 +2158,12 @@ public abstract class SeamConformanceSuite {
             }
         }
 
-    /** Whether this arm says both ends of the pair confirm a drain, so a delivery property can run. */
-    private val FlushFixture.confirmsADrain: Boolean
+    /** Whether this arm says the host confirms a drain, so a delivery property can run from it. */
+    private val FlushFixture.hostConfirmsADrain: Boolean
+        get() = this is FlushFixture.CannotHold || this is FlushFixture.Holdable || this is FlushFixture.JoinerUnsupported
+
+    /** Whether this arm says the joiner confirms a drain, and a delivery property can run from it. */
+    private val FlushFixture.joinerConfirmsADrain: Boolean
         get() = this is FlushFixture.CannotHold || this is FlushFixture.Holdable
 
     /** Run [block] sending from each end in turn, over a fresh pair each time. No-op unless holdable. */
@@ -3393,8 +3481,13 @@ public abstract class SeamConformanceSuite {
         /** More frames than `LinkSeam`'s outbox holds, so a tail is still queued when the last send returns. */
         const val FLUSH_BURST = 600
 
-        /** Virtual time for everything runnable to run. Only a [FlushFixture.Holdable] harness uses it. */
+        /** Virtual time for everything runnable to run. Only a virtual-time harness feels it. */
         val FLUSH_SETTLE = 1.seconds
+
+        /** A slow consumer sends one frame of its own for this many it reads. */
+        const val FLUSH_PEER_TRAFFIC_EVERY = 8
+
+        val FLUSH_PEER_TRAFFIC = "peer-traffic".encodeToByteArray()
 
         /** A hold nothing reached proves nothing: "the flush waited" would pass by absence. */
         const val FLUSH_RIG_DID_NOT_FIRE =

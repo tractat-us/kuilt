@@ -68,9 +68,10 @@ class MDNSConformanceTest : SeamConformanceSuite() {
         ObligationDeclaration.Gap(CapabilityGaps.BLANK_PEER_ID)
 
 
-    override fun flushFixture(): FlushFixture = FlushFixture.CannotHold(
-        "real Netty and a real WebSocket client leave no test-side hook between the seam and the socket. " +
-            "The burst is what runs here; IdentifiedConformanceTest holds a send on the same LinkSeam.",
+    override fun flushFixture(): FlushFixture = FlushFixture.JoinerUnsupported(
+        "this harness's joiner is an OkHttp WebSocket client, whose session drops a frame past its own queue " +
+            "with no error. The host's burst still runs; IdentifiedConformanceTest holds a send on the same " +
+            "LinkSeam.",
     )
 
     private val hostWsPath = "/ws/mdns-conf-host"

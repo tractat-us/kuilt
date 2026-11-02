@@ -65,6 +65,15 @@ class FlushFixtureRigTest {
         assertTrue("HostUnsupported" in failure.message.orEmpty(), "red on the arm: ${failure.message}")
     }
 
+    /** The other role-split arm is checked the same way: a joiner that confirms a drain is refused. */
+    @Test
+    fun joinerUnsupportedOnAJoinerThatConfirmsIsRefused(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val failure = assertFailsWith<AssertionError> {
+            harness(pair(InMemoryLoom()), FlushFixture.JoinerUnsupported("a reason")).runFlushDeclarationIsHonest(this)
+        }
+        assertTrue("JoinerUnsupported" in failure.message.orEmpty(), "red on the arm: ${failure.message}")
+    }
+
     /** The lie the reference cannot show: a seam answering `Drained` with a send still stuck. */
     @Test
     fun aSeamThatClaimsADrainWithoutWaitingIsCaught(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {

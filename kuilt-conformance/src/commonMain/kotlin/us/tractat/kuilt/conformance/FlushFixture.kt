@@ -39,6 +39,17 @@ public sealed interface FlushFixture {
     public data class HostUnsupported(val trackingUrl: String) : FlushFixture
 
     /**
+     * A role-split harness whose joiner answers `FlushOutcome.Unsupported`, while its host confirms a
+     * drain. A WebSocket server and an OkHttp client have this shape: the client's engine drops a frame
+     * past its own queue without saying so.
+     *
+     * Checked at both ends, like the rest. The delivery properties run from the host only.
+     *
+     * @property reason why the joiner cannot tell, for the next reader.
+     */
+    public data class JoinerUnsupported(val reason: String) : FlushFixture
+
+    /**
      * This fabric confirms a drain, and the harness cannot stop a send partway.
      *
      * Two honest reasons: the reference has no queue to hold, and a real socket has no test-side
