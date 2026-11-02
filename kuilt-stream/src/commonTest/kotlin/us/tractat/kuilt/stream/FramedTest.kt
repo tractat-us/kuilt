@@ -1,15 +1,26 @@
 package us.tractat.kuilt.stream
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.Buffer
 import kotlinx.io.EOFException
+import kotlinx.io.IOException
+import kotlinx.io.RawSink
+import kotlinx.io.buffered
+import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class FramedTest {
     @Test
@@ -96,5 +107,54 @@ class FramedTest {
         val delivered = mutableListOf<ByteArray>()
         assertFailsWith<EOFException> { conn.incoming.collect { delivered += it } }
         assertEquals(listOf(listOf<Byte>(7)), delivered.map { it.toList() })
+    }
+
+    /**
+     * The rule `Connection.send` states, for a stream rather than a session: a `Sink` whose transport
+     * cancelled itself throws a cancellation up through a write that nobody cancelled. TCP does this
+     * once its socket's job is cancelled. Tested here on every target, where a real socket cannot go.
+     */
+    @Test
+    fun aSinkThatThrowsACancellationFailsALiveCallerWithAnOrdinaryException() = runTest {
+        val thrown = assertFailsWith<IOException> { mintingLink().send(byteArrayOf(1)) }
+        assertAll(
+            { assertTrue(currentCoroutineContext().isActive, "rig: this caller must be live") },
+            { assertEquals(MINTED, thrown.cause, "the transport's own exception must survive as the cause") },
+        )
+    }
+
+    /** The other half: the conversion must not also hide the caller's own cancellation. */
+    @Test
+    fun aSinkThatThrowsACancellationLeavesACancelledCallerCancelled() = runTest {
+        var callerWasCancelled = false
+        var thrown: Throwable? = null
+        launch {
+            currentCoroutineContext().cancel(CancellationException("the caller's own cancellation"))
+            callerWasCancelled = !currentCoroutineContext().isActive
+            thrown = try {
+                mintingLink().send(byteArrayOf(1))
+                null
+            } catch (failure: Throwable) {
+                failure
+            }
+        }.join()
+        assertAll(
+            { assertTrue(callerWasCancelled, "rig: the caller was never cancelled") },
+            { assertIs<CancellationException>(thrown, "a cancelled caller must still see a cancellation") },
+        )
+    }
+
+    private fun mintingLink(): Connection = framed(source = Buffer(), sink = MintingSink().buffered())
+
+    private class MintingSink : RawSink {
+        override fun write(source: Buffer, byteCount: Long): Unit = throw MINTED
+
+        override fun flush() = Unit
+
+        override fun close() = Unit
+    }
+
+    private companion object {
+        val MINTED = CancellationException("the stream's transport was cancelled")
     }
 }
