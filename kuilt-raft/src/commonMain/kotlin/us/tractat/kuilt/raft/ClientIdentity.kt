@@ -33,9 +33,9 @@ public sealed interface ClientIdentity {
      *
      * **Where it must be durable: your own store, written ahead.** Commit each new `requestId` as the
      * new floor **before** calling `propose(command, requestId)`, and read it back on every boot. The
-     * other order is the one that reads your own history as a collision. A retry resends the same
-     * bytes only if you stored them, so keep the command in the same record as its serial: nothing
-     * else hands them back after a crash.
+     * other order leaves the stale floor described below. A retry resends the same bytes only if you
+     * stored them, so keep the command in the same record as its serial: nothing else hands them back
+     * after a crash.
      *
      * **One command at a time: a higher serial abandons every lower one.** Do not issue a serial while
      * a lower one is unresolved, meaning its `propose` has not returned. [ClientSessionTable] keeps one

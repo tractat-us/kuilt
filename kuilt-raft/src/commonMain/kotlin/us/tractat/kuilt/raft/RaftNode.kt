@@ -266,17 +266,18 @@ public interface RaftNode {
      * (retry below). But if that leader *crashes*, no rejection is ever delivered, so this call
      * suspends until the caller cancels it — the library does not spontaneously fail such a proposal.
      * Wrap `propose` in your own timeout and retry against the next leader; use the
-     * [requestId][propose] overload so the retry is exactly-once-safe. (This is the standard
-     * distributed-propose contract: eventual completion of a forwarded proposal is a caller
-     * timeout+retry responsibility, not a library guarantee.)
+     * [requestId][propose] overload so the retry is exactly-once-safe, and retry before issuing a
+     * higher `requestId`, for the reason that overload gives. (This is the standard distributed-propose
+     * contract: eventual completion of a forwarded proposal is a caller timeout+retry responsibility,
+     * not a library guarantee.)
      *
      * **A torn transport seam does not end the node.** Over a [SeamRaftTransport] whose seam is
      * torn, the node stays up and drops every send, so a follower's forward is never answered and
      * this call suspends until the caller cancels it. Nothing ends the node: the owner must watch
      * `seam.state` and [close] the node or cancel its scope. This gap is tracked by #3053.
      *
-     * @throws IllegalStateException on a node with a [ClientIdentity.Durable] id, before anything is
-     *   drawn or sent: a serial the node drew for itself cannot be persisted before it is issued, so
+     * @throws AutoSerialRefusedException on a node with a [ClientIdentity.Durable] id, before anything
+     *   is drawn or sent: a serial the node drew for itself cannot be persisted before it is issued, so
      *   that identity's floor could not cover it. Use the [requestId][propose] overload.
      * @throws LeadershipLostException if a forwarded proposal is rejected by the target leader
      *   (e.g. the leader stepped down); the caller may retry on the new leader.
@@ -306,8 +307,15 @@ public interface RaftNode {
      * it has already applied. The auto-serial [propose] form draws the next monotonic serial itself,
      * and is refused under a durable id.
      *
-     * Under [ClientIdentity.Durable], commit a new [requestId] as the id's `issuedThrough` **before**
-     * this call: [ClientIdentity.Durable] says what a stale floor gets. A retry needs no new write.
+     * Under [ClientIdentity.Durable], commit a new [requestId] as the id's `issuedThrough`, with the
+     * [command] bytes a retry would have to resend, **before** this call: [ClientIdentity.Durable] says
+     * what a stale floor gets. A retry needs no new write.
+     *
+     * **Do not issue a higher [requestId] while a lower one is unresolved: issuing it abandons the lower
+     * one.** A consumer's [ClientSessionTable] keeps one high-water serial per id, so a later retry of
+     * the lower serial returns success, commits, and is dropped. A caller's own timeout gets there as
+     * surely as a crash. So when this call times out, retry the same [requestId] and only then issue the
+     * next. That gap is tracked by #3107.
      *
      * A [requestId] names one command: a retry must carry the **same command bytes**. While the
      * current leader holds the committed result in its best-effort cache, a retry gets that result
