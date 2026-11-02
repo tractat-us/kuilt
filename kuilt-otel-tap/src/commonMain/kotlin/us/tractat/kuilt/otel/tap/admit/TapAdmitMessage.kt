@@ -28,7 +28,8 @@ import us.tractat.kuilt.otel.tap.TapCbor
  * ```
  * verifier → prover : Challenge(nonce)
  * prover   → verifier: Proof(proverNonce, tag)   // tag: see admissionTag
- * verifier → prover : Reject(reason)   // on mismatch/expiry; otherwise the peer is surfaced
+ * verifier → prover : Reject(reason)   // on mismatch/expiry; otherwise, a Proof back:
+ * verifier → prover : Proof(nonce, tag)    // over the prover's nonce; the peer is then surfaced
  * ```
  * The code never appears on the wire — only the [Proof] tag derived from it does. The tag covers a
  * nonce from each side and both peers' ids. A captured [Proof] is good for no later exchange because
@@ -37,15 +38,18 @@ import us.tractat.kuilt.otel.tap.TapCbor
  * ahead of time. It does not stop a replay: it travels in the frame and the verifier keeps no record
  * of the ones it has seen.
  *
- * The frames carry no direction and no role. Which way a proof runs is in the ids the tag covers, so
- * two peers could run the exchange at each other at once with no change to this format.
+ * The frames carry no direction and no role. Which way a proof runs is in the ids the tag covers, and
+ * a prover's nonce doubles as the challenge the verifier's proof answers, so both directions share this
+ * format. A peer takes a [Proof] only as the answer to a nonce it sent, so a tag it made itself is no
+ * use against it.
  *
  * ## Mixed versions refuse, on purpose
  *
  * A peer from before this format shares the wire and not the handshake, and nothing downgrades. An
  * old [Proof] has no `proverNonce`, so it does not decode here and is dropped. A current [Proof] has a
- * key an old decoder does not know, and its tag is not one an old verifier computes. Both ends see a
- * pull that never converges.
+ * key an old decoder does not know, and its tag is not one an old verifier computes. A verifier that
+ * never sends the [Proof] back is never admitted by a current prover. All of them see a pull that never
+ * converges.
  */
 @Serializable
 public sealed interface TapAdmitMessage {
@@ -90,9 +94,11 @@ public sealed interface TapAdmitMessage {
     }
 
     /**
-     * Prover → verifier: proof of the join code, good for this one exchange.
+     * Proof of the join code, good for this one exchange. The prover sends one against the verifier's
+     * [Challenge], and the verifier sends one back against that proof's [proverNonce]; here the
+     * "prover" is whichever side is sending.
      *
-     * [proverNonce] is [Challenge.NONCE_BYTES] bytes the prover drew from a secure source when it
+     * [proverNonce] is [Challenge.NONCE_BYTES] bytes the sender drew from a secure source when it
      * answered, and [tag] is [TAG_BYTES] bytes. Both widths are enforced here for the reason
      * [Challenge] gives: the verifier feeds [proverNonce] straight into a MAC input whose encoding
      * relies on that width to be unambiguous.

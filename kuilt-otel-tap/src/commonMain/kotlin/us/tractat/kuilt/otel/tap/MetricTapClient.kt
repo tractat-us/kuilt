@@ -59,7 +59,7 @@ public class MetricTapClient(
 
     // When admission is not Open, wrap the joined seam in the pulling-side token gate,
     // running in this client's own [scope], so it answers the host's challenge with the
-    // presented code before any replication is expected.
+    // presented code and replicates with nobody who has not proved that code back.
     private val seam: Seam = seam.gatedIfNeeded(admission.pullingRole(), scope)
 
     private val replicator: Quilter<MetricCatalog> = Quilter(

@@ -73,6 +73,17 @@ class GatedMetricTapEndToEndTest {
         assertFailsWith<TimeoutCancellationException> { c.pull() }
     }
 
+    /** The metric client shares the log client's gate. The control is [validCodePullsTheBuffer]. */
+    @Test
+    fun aPullerHoldingACodeTakesNoMetricsFromAPeerThatNeverProvedIt() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        host = installMetricTap(loom, exporterWith(7), backgroundScope, config, LogTapAdmission.Open)
+        val c = MetricTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config, LogTapAdmission.Present("CODE1234", Random(11)))
+            .also { client = it }
+
+        assertFailsWith<TimeoutCancellationException> { c.pull() }
+    }
+
     @Test
     fun openAdmissionMatchesUngatedBehaviour() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()

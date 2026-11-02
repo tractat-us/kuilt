@@ -101,7 +101,10 @@ in.
   [LogTapAdmission.Present][us.tractat.kuilt.otel.tap.LogTapAdmission.Present] with
   the code you read off the device. Its nonce source defaults to the secure
   `cryptoRandom()`, so you need not pass one. A wrong or expired
-  code is refused, and the device's replicator never sees the unauthorized peer.
+  code is refused, and the device's replicator never sees the unauthorized peer. The
+  puller checks back: it takes nothing from a peer until that peer has proved the code
+  too. So a puller with a code cannot pull from a device with no lock. That pull times
+  out.
 
 <!-- verbatim from kuilt-otel-tap/src/commonSamples/kotlin/us/tractat/kuilt/otel/tap/Samples.kt#sampleGatedLogTap -->
 ```kotlin
@@ -134,7 +137,7 @@ host.close()
 return logs
 ```
 
-The code itself never travels the network — the puller proves it knows the code by
+The code itself never travels the network — each side proves it knows the code by
 answering a one-time challenge, so a passive listener never learns it. The default
 [LogTapAdmission.Open][us.tractat.kuilt.otel.tap.LogTapAdmission.Open] keeps the
 ungated loopback behaviour unchanged.
@@ -233,34 +236,41 @@ controls *who is allowed to pull* — it does not encrypt the traffic, so someon
 already positioned to snoop the network could read logs of a session that was
 legitimately admitted. Where a listener is the worry, use the encrypted Multipeer path
 above (Apple-only), or another encrypted fabric. That stops someone reading the traffic
-and does not stop someone joining, which is the next limitation. On the WebSocket path
+and does not stop someone joining, which is the last limitation here. On the WebSocket path
 this module's guarantee is *admission control*, deliberately and only.
 
-**The lock is on the device, and the puller has none.** The puller shares what it
-holds with whoever reaches it, and it takes what they send. Where peers can see each
-other, as on Multipeer, a stranger who cannot get past the phone can get the same logs
-from the laptop that pulled them, and can hand that laptop forged ones. Keep the
-puller on a link only it and the device can reach, and close it when you are done.
+**The laptop's lock proves the code, not the phone.** The laptop shares nothing and
+takes nothing until a peer has proved the code, so a stranger under its own name cannot
+read the laptop's copy or hand it forged logs. Anyone else who holds the code gets in,
+and their logs look like the phone's. A peer that gets in and then stops reading costs
+the other side memory, one stalled send for each frame it sends. Close the puller when
+you are done.
 
 **The code can be guessed, at a price.** It has about a billion billion possible
 values, and anyone who reaches the puller can get one answer out of it to test guesses
-against at home. That answer is only useful while the code is valid, which is why a
-code lasts five minutes. Trying them all in that time takes about four quadrillion
-guesses a second. No laptop gets close, but it is a price and not a wall, so this keeps
-out everyone short of an attacker with serious money to spend on you.
+against at home. The phone stops honouring a code after five minutes, which is why an
+answer is only useful to get past the phone for that long. Trying every code in that
+time takes about four quadrillion guesses a second. No laptop gets close, but it is a
+price and not a wall, so this keeps out everyone short of an attacker with serious money
+to spend on you. The laptop has no clock, so a code found later still fools a puller
+left running.
 
 **An attacker in the middle can still get in.** One who passes as the laptop to the
-phone and as the phone to the laptop can be admitted without knowing the code, by passing
-the handshake along. The handshake stops an attacker who shows up under its own name. It
+phone and as the phone to the laptop can be admitted at both ends without knowing the
+code, by passing the handshake along. The handshake stops an attacker who shows up under its own name. It
 cannot stop one who claims both names, because nothing vouches for who a peer says it is.
 
-**Getting in once lets in anyone who borrows the name.** The phone remembers which name
-proved the code, not which connection did. Where a fabric will carry a second connection
-under that name, that connection is let in too, with no code at all, and it can read what
-the phone sends that name. The same trick can use up a peer's one challenge and shut it
-out until it reconnects. Reading the source says Multipeer and a hub with no attestation
-both allow this. Nobody has yet run it.
+**Getting in once lets in anyone who borrows the name.** Each side remembers which name
+proved the code, not which connection did, and nothing on a later frame shows more than
+the name. Where a fabric will carry a second connection under that name, that connection
+is let in too, with no code at all. It can read what the phone or the laptop sends that
+name, and it can hand the laptop logs the phone never wrote. The same trick can shut a
+peer out until it reconnects. Reading the source says Multipeer and a hub with no
+attestation both allow this. Nobody has yet run it. **So Multipeer is not a private path
+today:** its encryption stops a listener, and the code stops a stranger under its own
+name, and neither stops one that borrows a name.
 
 Under the surface: an answer is an HMAC under the code over a nonce from each side and
-both peers' ids. Peers from before this format and peers after it refuse each other,
+both peers' ids. The phone answers the laptop's nonce the same way, and only once it has
+admitted the laptop. Peers from before this format and peers after it refuse each other,
 so upgrade both ends together.

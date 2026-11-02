@@ -472,13 +472,14 @@ class TapPullerGateTest {
         val loom = InMemoryLoom()
         val deviceGate = loom.host(Pattern("mutual")).tokenGated(verifier(), backgroundScope)
         val stranger = loom.join(InMemoryTag("stranger"))
-        val pullerGate = loom.join(InMemoryTag("puller")).tokenGated(GateRole.Prover(code, Random(PROVER_SEED)), backgroundScope)
+        val pullerSeam = loom.join(InMemoryTag("puller"))
+        val pullerGate = pullerSeam.tokenGated(GateRole.Prover(code, Random(PROVER_SEED)), backgroundScope)
         runCurrent()
 
         assertAll(
             { assertEquals(setOf(deviceGate.selfId, pullerGate.selfId), deviceGate.peers.value, "the device's roster") },
             { assertEquals(setOf(deviceGate.selfId, pullerGate.selfId), pullerGate.peers.value, "the puller's roster") },
-            { assertTrue(stranger.selfId in stranger.peers.value, "rig: the stranger must really be on the mesh") },
+            { assertTrue(stranger.selfId in pullerSeam.peers.value, "rig: the stranger must really be reachable from the puller") },
         )
     }
 

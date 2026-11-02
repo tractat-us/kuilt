@@ -67,8 +67,9 @@ session's traffic (`en0`, ~300 packets during a pull) and grepped the raw payloa
 plaintext marker the test data would produce (log bodies, the metric value, both join codes)
 — zero hits, all payload bytes high-entropy, consistent with `MCEncryptionRequired`.
 
-The admission handshake's `Proof` frame has changed since this run. The handshake is covered over an
-injected fabric, but these checks have not been repeated on real Multipeer with the new frame.
+The admission handshake's `Proof` frame has changed since this run, and the phone now proves the code
+back to the Mac, which admits it only then. The handshake is covered over an injected fabric, but these
+checks have not been repeated on real Multipeer with either change.
 
 One discovery-side gotcha worth recording for whoever builds the next manual harness: the
 `MultipeerServiceBrowser` must have at least one feed **collected** across the `join()` call
