@@ -51,11 +51,27 @@ import kotlin.time.Instant
  * dependencies its path needs — the repo's "Optional ≠ tuning" rule forbids one door with a nullable
  * `RaftNode?` knob.
  *
- * **Shared-RaftNode compaction caveat.** v1 does not publish snapshots to [raft] (log compaction is
- * off), so the control plane can replay the whole log via `committedFrom(1)`. If [raft] is a node
- * shared with another state machine that publishes snapshots, a control entry below the compaction
- * floor would be skipped on replay — give the control plane a dedicated Raft node (or one whose
- * compaction floor never advances past unreplayed control entries).
+ * **Give the control plane a Raft node of its own, and put nothing else on it.** A log entry this
+ * module cannot read stops this node for good, whether it is a heddle act from another version or bytes
+ * heddle never wrote, so one proposal from another state machine on [raft] stops the whole group.
+ * Writes are refused with [GateClosed.Reason.UnreadableControlEntry], and only a build that can read
+ * the entry, or starting the group on a fresh log, recovers it. A build from before the control log
+ * carried a header cannot read this one's acts at all, and drops them silently (#1738).
+ *
+ * **That stop is group-wide, and nothing overrides it.** Every peer applies the same log, so the same
+ * bytes on the same build stop every peer at the same index. One peer on a newer build, writing an act
+ * older peers cannot read, stops those older peers until they upgrade. That cost is accepted: there is
+ * deliberately no way to skip an entry, since skipping is what lets peers disagree about who holds
+ * what. So upgrade a cluster together.
+ *
+ * **A durable log from v0.7.3 does not carry over.** Its `Mint` and `Prepare` no longer decode, so a
+ * peer stops at the first one. Start a fresh log. There is no migrator, and that is also an accepted
+ * trade rather than a gap.
+ *
+ * **No compaction.** v1 does not publish snapshots to [raft] (log compaction is off), so the control
+ * plane can replay the whole log via `committedFrom(1)`. A [raft] whose compaction floor passes an
+ * unreplayed control entry fails this plane's apply loop, rather than letting it carry on from a wrong
+ * state.
  *
  * Time is a dependency (§11): [clock] is required, never a wall-clock default.
  *
@@ -63,7 +79,10 @@ import kotlin.time.Instant
  *   plane's committed-log apply loop) live on; cancel it to tear the node down.
  * @param seam the data-plane fabric this peer participates over.
  * @param self this peer's replica identity; matches [Seam.selfId] by string value.
- * @param raft the control plane — the required consensus log mint and reshape serialize through.
+ * @param raft the control plane — the required consensus log mint and reshape serialize through. It
+ *   must use `ClientIdentity.Auto`, the default: this plane replays from index 1 and restarts its
+ *   request serials on every boot, and a `ClientIdentity.Durable` node may throw on its own entries
+ *   when it replays after a restart, tracked by #3060.
  * @param root the root group of the fairness tree (the handle consumers build [AttachmentRecord]s
  *   against), and the group every mint this peer proposes credits its supply at. **Every peer must
  *   pass an identical value** — one ledger describes one tree (#1751). A peer that passes a
@@ -129,8 +148,10 @@ private const val GOVERNED_GENESIS_NONCE: String = "heddle-governed-genesis"
  *
  * The control verbs **suspend** until their act commits and return a [ControlOutcome] — [Applied]
  * [ControlOutcome.Applied] when admitted, or [Conflict][ControlOutcome.Conflict] carrying a structured
- * [ControlConflict] when the log serialized the act as a loser. The data-plane verbs are the exact H4
- * calls and never coordinate.
+ * [ControlConflict] when the log serialized the act as a loser. A peer that halts at a log entry it
+ * cannot read while a call is in flight answers [ControlOutcome.Indeterminate]: that act may still
+ * commit, so do not treat it as a refusal. The data-plane verbs are the exact H4 calls and never
+ * coordinate.
  *
  * The **ungoverned** lifecycle mutators (`HeddleNode.prepare`/`activate`/…) are deliberately **not**
  * re-exposed here: routing them around the log would recreate the very [LedgerConflict.DualActiveInbound]
@@ -187,7 +208,11 @@ public class GovernedHeddleNode internal constructor(
      * ("call it after quiescing local work, or the peer keeps a promise it has already broken").
      * Stated precisely here because the fence's quantifier rests on the departure promise, and an
      * overstated "it is transitively gated" would invite a reader to assume enforcement that this
-     * class does not perform.
+     * class does not perform. The same goes for [GateClosed.Reason.UnreadableControlEntry], the third
+     * way it closes: a reservation taken before the halt can still be completed after it.
+     *
+     * [GateClosed.Reason.UnreadableControlEntry] outranks everything above: once this peer has met a
+     * log entry it cannot read, no [enroll] reopens the gate. See [heddleGoverned].
      */
     public val isWritable: Boolean get() = control.writeGateClosedBecause == null
 
@@ -368,8 +393,11 @@ public class GovernedHeddleNode internal constructor(
      * peer is *exactly* the peer that may hold an unreplicated reservation crossing [edge], so it is
      * the one promise the barrier cannot do without. A crashed peer therefore leaves relocation
      * refused until it returns and acks, or formally departs — this design trades the availability of
-     * a rare recovery operation for its correctness, and stands by that trade. Use this to *see* the
-     * blockage; there is deliberately no way to proceed without them.
+     * a rare recovery operation for its correctness, and stands by that trade. A peer halted at a
+     * log entry it cannot read ([GateClosed.Reason.UnreadableControlEntry]) can do neither, because
+     * its acks and its [depart] are refused, so it blocks the fence until a build that can read the
+     * entry recovers it. Use this to *see* the blockage; there is deliberately no way to proceed
+     * without them.
      */
     public fun pendingAcks(edge: AttachmentId): Set<ReplicaId>? = control.pendingAcks(edge)
 
@@ -431,7 +459,9 @@ public class GovernedHeddleNode internal constructor(
         for (edge in control.projectionSnapshot().retiredInboundEdges(child)) {
             if (control.pendingAcks(edge) == null) {
                 val opened = quiesce(edge, timeout)
-                if (opened is ControlOutcome.Conflict) return opened
+                // Not just a refusal: an indeterminate barrier must not be masked by the definite
+                // refusal the Reconcile below would then draw, which says nothing about this act.
+                if (opened !is ControlOutcome.Applied) return opened
             }
         }
         return control.submit(ControlCommand.Reconcile(child), timeout)
@@ -453,13 +483,15 @@ public class GovernedHeddleNode internal constructor(
      * So enrolling **self** is what opens this node's [isWritable] boot gate — until it returns
      * [ControlOutcome.Applied] here, [reserve] and [schedule] answer [GateClosed] and author nothing.
      *
-     * It doubles as the §6.5.3 **boot-ordering** fence: `submit` returns only once this peer's apply
-     * loop has applied the entry, and Raft applies in index order, so a peer that has applied its own
-     * enroll has applied every entry before it — every quiesce mark this incarnation lost to a restart
-     * is restored before the first mutator can run. Do it on **every** boot, including a restart where
-     * the replica is already enrolled: the fold is then idempotent, but the act still commits, still
-     * applies, and opens the gate unless a later departure has already closed it (and it is also
-     * what re-attaches a lost peer's detector, #1652).
+     * It doubles as the §6.5.3 **boot-ordering** fence: [ControlOutcome.Applied] comes back only once
+     * this peer's apply loop has applied the entry, and Raft applies in index order, so a peer that has
+     * applied its own enroll has applied every entry before it — every quiesce mark this incarnation
+     * lost to a restart is restored before the first mutator can run. Do it on **every** boot,
+     * including a restart where the replica is already enrolled: the fold is then idempotent, but the
+     * act still commits, still
+     * applies, and opens the gate unless a later departure has already closed it, or this peer has
+     * halted at a log entry it cannot read, in which case the call is refused without proposing
+     * (and it is also what re-attaches a lost peer's detector, #1652).
      *
      * The gate opens on this run's own applied enroll and nothing else: a third party enrolling this
      * replica proves nothing about what this run has applied, and neither does an enroll an earlier

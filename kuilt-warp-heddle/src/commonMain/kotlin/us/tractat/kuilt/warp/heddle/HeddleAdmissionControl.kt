@@ -41,9 +41,11 @@ import us.tractat.kuilt.warp.WarpNode
  *    so warp *defers* the task (leaves it pending) and re-attempts it on a later claim cycle — work
  *    resumes when entitlement flows in.
  *  - **A closed write gate defers too, but says so.** A governed node answers [GateClosed] until
- *    its own `enroll(self)` applies. Warp has only one way to not run a task, so the task is
- *    deferred exactly as for exhaustion — but the refusal is logged with its reason, so a node that
- *    never enrolled no longer looks like an idle lane (issue #1892).
+ *    its own `enroll(self)` applies, after it departs, and for good once it halts at a control-log
+ *    entry it cannot read. Warp has only one way to not run a task, so the task is deferred exactly
+ *    as for exhaustion — but the refusal is logged with its reason, so a node that never enrolled or
+ *    has halted no longer looks like an idle lane (issue #1892). A halted node's gated tasks stay
+ *    deferred until a build that can read the entry, or a fresh log, recovers it (#1738).
  *  - **Zero consensus on the hot path.** [reserve] / [complete] are local reads and writes of
  *    already-converged holdings; admitting a task adds no consensus round. The heddle's own
  *    ledger replication is coordination-free cloth (a `Quilter`), not consensus.
@@ -59,7 +61,8 @@ import us.tractat.kuilt.warp.WarpNode
  *   [us.tractat.kuilt.heddle.heddleGoverned] node (governed) interchangeably. One asymmetry: a
  *   governed node must have enrolled **itself** before it will author any entitlement — until
  *   `enroll(self)` applies, its write gate is closed, so `reserve` and `schedule` answer
- *   [GateClosed] and this adapter admits no gated task (#1693, design §13.2).
+ *   [GateClosed] and this adapter admits no gated task (#1693, design §13.2). The same goes for a
+ *   node that has departed, or has halted at a control-log entry it cannot read (#1738).
  * @param costPerTask service units reserved and charged per **execution**. Defaults to `1` — the
  *   §14.4 one-unit-per-execution costing; a caller with variable-cost work supplies a
  *   per-descriptor cost via [costOf].
@@ -94,7 +97,8 @@ public class HeddleAdmissionControl(
             is ReserveOutcome.Reserved -> AdmissionTicket { heddle.complete(outcome.id, cost) }
             ReserveOutcome.NoHoldings -> null // lane exhausted → defer
             is GateClosed -> {
-                // Normal for a moment after every boot; permanent if the consumer never enrolls.
+                // Normal for a moment after every boot; permanent if the consumer never enrolls, or
+                // once the node halts at an unreadable control entry. The reason below says which.
                 logger.debug { "deferring ${descriptor.lane}: write gate of ${outcome.replica} closed (${outcome.reason})" }
                 null
             }

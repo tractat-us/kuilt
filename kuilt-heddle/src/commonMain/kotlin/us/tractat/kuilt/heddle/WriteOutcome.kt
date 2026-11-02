@@ -50,8 +50,8 @@ public sealed interface ScheduleOutcome {
  * static [HeddleNode] has no gate and never returns it.
  *
  * It is one type in both results on purpose. "Closed" is a property of the *node*, not of the call,
- * so a caller can handle it once — and a later reason the gate closes (for instance a control-log
- * entry this peer cannot decode, issue #1738) arrives as a new [Reason], not a new arm in
+ * so a caller can handle it once — and each reason the gate closes, such as a control-log entry this
+ * peer cannot read ([Reason.UnreadableControlEntry]), is a [Reason], not a new arm in
  * [ReserveOutcome] or [ScheduleOutcome]. A caller that branches on `GateClosed` and treats [reason]
  * as diagnostic text keeps compiling when one is added; a caller that `when`s over [Reason] does not,
  * which is the point of matching on it.
@@ -59,7 +59,8 @@ public sealed interface ScheduleOutcome {
  * Closed is not always a bug. Every governed node boots closed and opens only when its own
  * post-boot `enroll(self)` has applied, so the gate is legitimately shut for a short window on every
  * start. What used to be the bug is that nothing *said* so (`docs/heddle-ledger-relocation-design.md`
- * §13.2, §14 item 7).
+ * §13.2, §14 item 7). Closed for [Reason.UnreadableControlEntry] is the opposite case: it does not
+ * clear by itself, and it needs an operator.
  *
  * @property replica the peer whose gate is closed.
  * @property reason why it is closed.
@@ -81,5 +82,21 @@ public data class GateClosed(
 
         /** This peer applied its own `depart()` and has promised to author nothing more. */
         public data object Departed : Reason
+
+        /**
+         * This peer met a log entry it cannot read, at log [index], and has stopped applying the
+         * log there. It no longer knows the true control state, so writing from what it does know
+         * could break conservation (issue #1738).
+         *
+         * This is a latch. Nothing in this process clears it: `enroll` is refused, and a restart
+         * replays the same log to the same entry and closes again. Recovery is a build that can read
+         * the entry, or starting the group on a fresh log. There is no migrator.
+         *
+         * @property index the log index of the entry.
+         * @property version the format the entry's header names: `0` if it has no header, which covers
+         *   both an act from before the control log carried one and bytes heddle never wrote, or `null`
+         *   if it was cut off before its version byte.
+         */
+        public data class UnreadableControlEntry(public val index: Long, public val version: Int?) : Reason
     }
 }
