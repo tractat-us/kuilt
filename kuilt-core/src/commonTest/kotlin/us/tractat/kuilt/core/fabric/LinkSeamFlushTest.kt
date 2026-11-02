@@ -307,6 +307,35 @@ class LinkSeamFlushTest {
         assertIs<FlushOutcome.Failed>(flush.await(), "those frames went nowhere, so this cannot be Drained")
     }
 
+    /**
+     * What a flush's read of `state` rests on: `Torn` is readable before anything can close the connection,
+     * on each of the three paths that close it. Closing first would open the window that read exists to
+     * shut, and on one thread nothing else would notice.
+     */
+    @Test
+    fun everyPathHasTornBeforeItClosesTheConnection() = runTest {
+        suspend fun stateAtClose(sendWith: suspend () -> Unit = {}, end: suspend (FlushTestConnection, Seam) -> Unit): List<SeamState> {
+            val seen = mutableListOf<SeamState>()
+            lateinit var seam: Seam
+            val conn = FlushTestConnection(sendWith = sendWith, closeWith = { seen += seam.state.value })
+            seam = seamOver(conn)
+            testScheduler.advanceUntilIdle()
+            end(conn, seam)
+            testScheduler.advanceUntilIdle()
+            return seen
+        }
+        val paths = mapOf(
+            "a local close" to stateAtClose { _, seam -> seam.close() },
+            "the remote ending" to stateAtClose { conn, _ -> conn.remoteEnds() },
+            "a failed send" to stateAtClose(sendWith = { error("the link") }) { _, seam -> seam.broadcast(byteArrayOf(1)) },
+        )
+        assertAll(
+            *paths.map { (path, seen) ->
+                { assertEquals(listOf(true), seen.map { it is SeamState.Torn }, "$path closes once, already torn") }
+            }.toTypedArray(),
+        )
+    }
+
     /** A flush on a torn seam answers without touching the connection. */
     @Test
     fun aFlushOnATornSeamNeverAsksTheConnection() = runTest {
@@ -398,6 +427,7 @@ private const val INBOUND_BURST = DeliveryPolicy.DEFAULT_CAPACITY + 16
 private class FlushTestConnection(
     private val sendWith: suspend () -> Unit = {},
     private val flushWith: (suspend () -> FlushOutcome)? = null,
+    private val closeWith: () -> Unit = {},
 ) : Connection {
     private val inbound = Channel<ByteArray>(Channel.UNLIMITED)
     val frames = mutableListOf<ByteArray>()
@@ -414,6 +444,7 @@ private class FlushTestConnection(
         flushWith?.invoke() ?: super.flush(timeout)
 
     override suspend fun close() {
+        closeWith()
         inbound.close()
     }
 
