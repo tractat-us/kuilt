@@ -202,7 +202,7 @@ public sealed interface ControlOutcome {
     /**
      * The act was **refused** — it lost an overlapping-reshape race, its precondition no longer held
      * once ordered, or it was refused locally before proposing (a non-drained retire, or a peer already
-     * halted at a control act it cannot read). The entitlement state is untouched; the loser is
+     * halted at a log entry it cannot read). The entitlement state is untouched; the loser is
      * surfaced as a structured [conflict], never silently dropped and never resolved by a clock
      * (design §4.6, §9). Retrying is safe, because this act will never take effect.
      */
@@ -210,7 +210,7 @@ public sealed interface ControlOutcome {
 
     /**
      * **This peer cannot say what became of the act.** It was proposed, and before this peer saw it
-     * apply, this peer halted at the control act [halt] names. It applies nothing past that entry, so
+     * apply, this peer halted at the log entry [halt] names. It applies nothing past that entry, so
      * it cannot see the act's own entry, which sits later in the log.
      *
      * That entry can still commit, or already has, and a peer that can read the log will apply it. So
@@ -254,7 +254,7 @@ public sealed interface ControlConflict {
      * unknown/divergent or retired edge, a retire of a non-CLOSING edge, or a retire refused
      * **locally** because the edge is not drained (retiring a non-drained edge would strand its
      * outstanding entitlement, since a RETIRED edge is no longer on the live lineage the data plane
-     * drains through). Also any act a peer refuses because it has already halted at a control act it
+     * drains through). Also any act a peer refuses because it has already halted at a log entry it
      * cannot read. The [reason] is a diagnostic string.
      */
     public data class Refused(public val reason: String) : ControlConflict
@@ -553,7 +553,7 @@ internal class HeddleControlPlane(
      * gave up on an `Enroll(self)` or `Depart(self)` needs no repair, whether the entry applied before
      * the timeout or commits after it (see the class KDoc).
      *
-     * **Halted.** Once this peer has met a control act it cannot read, this answers a
+     * **Halted.** Once this peer has met a log entry it cannot read, this answers a
      * [ControlOutcome.Conflict] at [ControlOutcome.NOT_COMMITTED] without proposing, so that answer
      * means the act was never written. A call registered before the halt gets
      * [ControlOutcome.Indeterminate] instead, once its proposal returns: its act may still commit, and

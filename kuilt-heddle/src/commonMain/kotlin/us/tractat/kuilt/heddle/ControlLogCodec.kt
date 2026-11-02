@@ -51,7 +51,7 @@ internal sealed interface ControlEntry {
 @OptIn(ExperimentalSerializationApi::class)
 internal object ControlLogCodec {
 
-    /** How an entry with no header reports its format. No build writes one any more. */
+    /** How an entry with no header reports its format. No version of heddle writes one any more. */
     const val UNTAGGED_VERSION: Int = 0
 
     /** The format this build writes, and the only tagged one it can read. */
