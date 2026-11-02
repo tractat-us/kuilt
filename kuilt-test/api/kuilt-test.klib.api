@@ -18,6 +18,15 @@ final enum class us.tractat.kuilt.test/Direction : kotlin/Enum<us.tractat.kuilt.
     final fun values(): kotlin/Array<us.tractat.kuilt.test/Direction> // us.tractat.kuilt.test/Direction.values|values#static(){}[0]
 }
 
+abstract interface us.tractat.kuilt.test.fabric/SendHold { // us.tractat.kuilt.test.fabric/SendHold|null[0]
+    abstract val parkedSends // us.tractat.kuilt.test.fabric/SendHold.parkedSends|{}parkedSends[0]
+        abstract fun <get-parkedSends>(): kotlin/Int // us.tractat.kuilt.test.fabric/SendHold.parkedSends.<get-parkedSends>|<get-parkedSends>(){}[0]
+
+    abstract fun hold() // us.tractat.kuilt.test.fabric/SendHold.hold|hold(){}[0]
+    abstract fun releaseAll() // us.tractat.kuilt.test.fabric/SendHold.releaseAll|releaseAll(){}[0]
+    abstract fun releaseOne() // us.tractat.kuilt.test.fabric/SendHold.releaseOne|releaseOne(){}[0]
+}
+
 sealed interface us.tractat.kuilt.test/FaultProfile { // us.tractat.kuilt.test/FaultProfile|null[0]
     final class BufferCeiling : us.tractat.kuilt.test/FaultProfile { // us.tractat.kuilt.test/FaultProfile.BufferCeiling|null[0]
         constructor <init>(kotlin/Int) // us.tractat.kuilt.test/FaultProfile.BufferCeiling.<init>|<init>(kotlin.Int){}[0]
@@ -183,6 +192,24 @@ sealed interface us.tractat.kuilt.test/TeardownFault { // us.tractat.kuilt.test/
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.test/TeardownFault.None.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.test/TeardownFault.None.toString|toString(){}[0]
     }
+}
+
+final class us.tractat.kuilt.test.fabric/HoldableConnection : us.tractat.kuilt.core.fabric/Connection, us.tractat.kuilt.test.fabric/SendHold { // us.tractat.kuilt.test.fabric/HoldableConnection|null[0]
+    constructor <init>(us.tractat.kuilt.core.fabric/Connection) // us.tractat.kuilt.test.fabric/HoldableConnection.<init>|<init>(us.tractat.kuilt.core.fabric.Connection){}[0]
+
+    final val incoming // us.tractat.kuilt.test.fabric/HoldableConnection.incoming|{}incoming[0]
+        final fun <get-incoming>(): kotlinx.coroutines.flow/Flow<kotlin/ByteArray> // us.tractat.kuilt.test.fabric/HoldableConnection.incoming.<get-incoming>|<get-incoming>(){}[0]
+    final val maxFrameBytes // us.tractat.kuilt.test.fabric/HoldableConnection.maxFrameBytes|{}maxFrameBytes[0]
+        final fun <get-maxFrameBytes>(): kotlin/Int? // us.tractat.kuilt.test.fabric/HoldableConnection.maxFrameBytes.<get-maxFrameBytes>|<get-maxFrameBytes>(){}[0]
+    final val parkedSends // us.tractat.kuilt.test.fabric/HoldableConnection.parkedSends|{}parkedSends[0]
+        final fun <get-parkedSends>(): kotlin/Int // us.tractat.kuilt.test.fabric/HoldableConnection.parkedSends.<get-parkedSends>|<get-parkedSends>(){}[0]
+
+    final fun hold() // us.tractat.kuilt.test.fabric/HoldableConnection.hold|hold(){}[0]
+    final fun releaseAll() // us.tractat.kuilt.test.fabric/HoldableConnection.releaseAll|releaseAll(){}[0]
+    final fun releaseOne() // us.tractat.kuilt.test.fabric/HoldableConnection.releaseOne|releaseOne(){}[0]
+    final suspend fun close() // us.tractat.kuilt.test.fabric/HoldableConnection.close|close(){}[0]
+    final suspend fun flush(kotlin.time/Duration): us.tractat.kuilt.core/FlushOutcome // us.tractat.kuilt.test.fabric/HoldableConnection.flush|flush(kotlin.time.Duration){}[0]
+    final suspend fun send(kotlin/ByteArray) // us.tractat.kuilt.test.fabric/HoldableConnection.send|send(kotlin.ByteArray){}[0]
 }
 
 final class us.tractat.kuilt.test.fabric/InMemoryConnectionSource : us.tractat.kuilt.core.fabric/ConnectionSource { // us.tractat.kuilt.test.fabric/InMemoryConnectionSource|null[0]

@@ -26,6 +26,7 @@ public final class us/tractat/kuilt/conformance/CanonicalDigestKt {
 public final class us/tractat/kuilt/conformance/CapabilityGaps {
 	public static final field BLANK_PEER_ID Ljava/lang/String;
 	public static final field DUPLICATE_PEER_ID Ljava/lang/String;
+	public static final field FLUSH Ljava/lang/String;
 	public static final field INSTANCE Lus/tractat/kuilt/conformance/CapabilityGaps;
 	public static final field LIVE_CAPABILITY Ljava/lang/String;
 	public static final field MEMBERSHIP_DRAIN Ljava/lang/String;
@@ -74,6 +75,7 @@ public final class us/tractat/kuilt/conformance/DelayedWovenLoom : us/tractat/ku
 public final class us/tractat/kuilt/conformance/DelayedWovenSeam : us/tractat/kuilt/core/Seam {
 	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
 	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
@@ -162,6 +164,37 @@ public final class us/tractat/kuilt/conformance/FixedWidthHeader {
 	public final fun getEncodeFrameOfSize ()Lkotlin/jvm/functions/Function1;
 	public final fun getHeaderBytes ()I
 	public final fun getName ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/FlushFixture {
+}
+
+public final class us/tractat/kuilt/conformance/FlushFixture$CannotHold : us/tractat/kuilt/conformance/FlushFixture {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/FlushFixture$CannotHold;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/FlushFixture$CannotHold;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/FlushFixture$CannotHold;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/FlushFixture$Holdable : us/tractat/kuilt/conformance/FlushFixture {
+	public fun <init> (Lus/tractat/kuilt/test/fabric/SendHold;Lus/tractat/kuilt/test/fabric/SendHold;)V
+	public final fun getHost ()Lus/tractat/kuilt/test/fabric/SendHold;
+	public final fun getJoiner ()Lus/tractat/kuilt/test/fabric/SendHold;
+}
+
+public final class us/tractat/kuilt/conformance/FlushFixture$Unsupported : us/tractat/kuilt/conformance/FlushFixture {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/FlushFixture$Unsupported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/FlushFixture$Unsupported;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/FlushFixture$Unsupported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTrackingUrl ()Ljava/lang/String;
+	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
@@ -549,10 +582,15 @@ public final class us/tractat/kuilt/conformance/SeamCapabilities$Companion {
 
 public abstract class us/tractat/kuilt/conformance/SeamConformanceSuite {
 	public fun <init> ()V
+	public final fun aCloseAfterAFlushFollowsCompletion ()V
+	public final fun aCloseDoesNotWaitForAHeldSend ()V
+	public final fun aCloseEndsAPendingFlushWithFailed ()V
+	public final fun aHeldSendTimesOutAndIsNotDropped ()V
 	public fun blankPeerIdDeclaration ()Lus/tractat/kuilt/conformance/ObligationDeclaration;
 	public final fun blankPeerIdDeclarationIsHonest ()V
 	public final fun blankRemoteIdIsRejected ()V
 	public final fun broadcastFromHostDeliversToJoinedPeer ()V
+	public final fun cancellingAFlushLeavesTheSeamAndItsFramesAlone ()V
 	public abstract fun capabilities ()Lus/tractat/kuilt/conformance/SeamCapabilities;
 	public abstract fun capabilityGaps ()Ljava/util/Map;
 	public final fun closeDoesNotReportFailureAsCancellation ()V
@@ -564,6 +602,12 @@ public abstract class us/tractat/kuilt/conformance/SeamConformanceSuite {
 	public final fun duplicatePeerIdDeclarationIsHonest ()V
 	public final fun duplicateRemoteIdDoesNotEvictTheIncumbent ()V
 	public final fun everyFalseCapabilityDeclaresAGap ()V
+	public final fun flushCoversEarlierSendsAndNotLaterOnes ()V
+	public final fun flushDeclarationIsHonest ()V
+	public fun flushFixture ()Lus/tractat/kuilt/conformance/FlushFixture;
+	public final fun flushOnATornSeamReportsFailed ()V
+	public final fun flushWaitsForAHeldSend ()V
+	public final fun hostBurstSurvivesFlushThenClose ()V
 	public final fun hostStateIsWovenEvenAlone ()V
 	public final fun hostYieldsUsableSeamWithNonEmptySelfId ()V
 	public final fun incomingCompletesOnInjectedMidSessionDeath ()V
@@ -576,6 +620,7 @@ public abstract class us/tractat/kuilt/conformance/SeamConformanceSuite {
 	public fun injectSelfDial (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/Seam;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun joinHandshakeFramesAtHost ()I
 	public fun joinTag ()Lus/tractat/kuilt/core/Tag;
+	public final fun joinerBurstSurvivesFlushThenClose ()V
 	public abstract fun joinerRosterOrigin ()Lus/tractat/kuilt/conformance/JoinerRosterOrigin;
 	public final fun joinerRosterOriginIsDeclaredAndHonest ()V
 	public fun membershipDrainDeclaration ()Lus/tractat/kuilt/conformance/ObligationDeclaration;

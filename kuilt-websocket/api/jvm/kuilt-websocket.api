@@ -90,6 +90,7 @@ public final class us/tractat/kuilt/websocket/WebSocketAdvertisement : us/tracta
 public final class us/tractat/kuilt/websocket/WebSocketConnection : us/tractat/kuilt/core/fabric/Connection {
 	public fun <init> (Lio/ktor/websocket/DefaultWebSocketSession;)V
 	public fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun flush-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
 	public fun getMaxFrameBytes ()Ljava/lang/Integer;
 	public fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;

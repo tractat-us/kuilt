@@ -152,6 +152,7 @@ abstract interface us.tractat.kuilt.session/Room { // us.tractat.kuilt.session/R
     abstract suspend fun leave(us.tractat.kuilt.session/LeaveReason = ...) // us.tractat.kuilt.session/Room.leave|leave(us.tractat.kuilt.session.LeaveReason){}[0]
     abstract suspend fun resume(us.tractat.kuilt.session.partition/ResumeToken): us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome // us.tractat.kuilt.session/Room.resume|resume(us.tractat.kuilt.session.partition.ResumeToken){}[0]
     abstract suspend fun sendTo(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.session/Room.sendTo|sendTo(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+    open suspend fun flush(kotlin.time/Duration): us.tractat.kuilt.core/FlushOutcome // us.tractat.kuilt.session/Room.flush|flush(kotlin.time.Duration){}[0]
 }
 
 abstract interface us.tractat.kuilt.session/RoomFactory { // us.tractat.kuilt.session/RoomFactory|null[0]

@@ -73,6 +73,43 @@ sealed interface us.tractat.kuilt.conformance/DepartureFixture { // us.tractat.k
     }
 }
 
+sealed interface us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt.conformance/FlushFixture|null[0]
+    final class CannotHold : us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt.conformance/FlushFixture.CannotHold|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/FlushFixture.CannotHold.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.conformance/FlushFixture.CannotHold.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.CannotHold.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.CannotHold.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.conformance/FlushFixture.CannotHold // us.tractat.kuilt.conformance/FlushFixture.CannotHold.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/FlushFixture.CannotHold.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/FlushFixture.CannotHold.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.CannotHold.toString|toString(){}[0]
+    }
+
+    final class Holdable : us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt.conformance/FlushFixture.Holdable|null[0]
+        constructor <init>(us.tractat.kuilt.test.fabric/SendHold, us.tractat.kuilt.test.fabric/SendHold) // us.tractat.kuilt.conformance/FlushFixture.Holdable.<init>|<init>(us.tractat.kuilt.test.fabric.SendHold;us.tractat.kuilt.test.fabric.SendHold){}[0]
+
+        final val host // us.tractat.kuilt.conformance/FlushFixture.Holdable.host|{}host[0]
+            final fun <get-host>(): us.tractat.kuilt.test.fabric/SendHold // us.tractat.kuilt.conformance/FlushFixture.Holdable.host.<get-host>|<get-host>(){}[0]
+        final val joiner // us.tractat.kuilt.conformance/FlushFixture.Holdable.joiner|{}joiner[0]
+            final fun <get-joiner>(): us.tractat.kuilt.test.fabric/SendHold // us.tractat.kuilt.conformance/FlushFixture.Holdable.joiner.<get-joiner>|<get-joiner>(){}[0]
+    }
+
+    final class Unsupported : us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt.conformance/FlushFixture.Unsupported|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/FlushFixture.Unsupported.<init>|<init>(kotlin.String){}[0]
+
+        final val trackingUrl // us.tractat.kuilt.conformance/FlushFixture.Unsupported.trackingUrl|{}trackingUrl[0]
+            final fun <get-trackingUrl>(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.Unsupported.trackingUrl.<get-trackingUrl>|<get-trackingUrl>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.Unsupported.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.conformance/FlushFixture.Unsupported // us.tractat.kuilt.conformance/FlushFixture.Unsupported.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/FlushFixture.Unsupported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/FlushFixture.Unsupported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.Unsupported.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.conformance/JoinerRosterOrigin { // us.tractat.kuilt.conformance/JoinerRosterOrigin|null[0]
     final class FilledByConstruction : us.tractat.kuilt.conformance/JoinerRosterOrigin { // us.tractat.kuilt.conformance/JoinerRosterOrigin.FilledByConstruction|null[0]
         constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/JoinerRosterOrigin.FilledByConstruction.<init>|<init>(kotlin.String){}[0]
@@ -1217,6 +1254,7 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
     final suspend fun (kotlinx.coroutines.test/TestScope).connectedPair(kotlin.coroutines/SuspendFunction3<kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/Seam, kotlin/Unit>) // us.tractat.kuilt.conformance/SeamConformanceSuite.connectedPair|connectedPair@kotlinx.coroutines.test.TestScope(kotlin.coroutines.SuspendFunction3<kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.core.Seam,us.tractat.kuilt.core.Seam,kotlin.Unit>){}[0]
     open fun blankPeerIdDeclaration(): us.tractat.kuilt.conformance/ObligationDeclaration // us.tractat.kuilt.conformance/SeamConformanceSuite.blankPeerIdDeclaration|blankPeerIdDeclaration(){}[0]
     open fun duplicatePeerIdDeclaration(): us.tractat.kuilt.conformance/ObligationDeclaration // us.tractat.kuilt.conformance/SeamConformanceSuite.duplicatePeerIdDeclaration|duplicatePeerIdDeclaration(){}[0]
+    open fun flushFixture(): us.tractat.kuilt.conformance/FlushFixture // us.tractat.kuilt.conformance/SeamConformanceSuite.flushFixture|flushFixture(){}[0]
     open fun joinHandshakeFramesAtHost(): kotlin/Int // us.tractat.kuilt.conformance/SeamConformanceSuite.joinHandshakeFramesAtHost|joinHandshakeFramesAtHost(){}[0]
     open fun joinTag(): us.tractat.kuilt.core/Tag // us.tractat.kuilt.conformance/SeamConformanceSuite.joinTag|joinTag(){}[0]
     open fun membershipDrainDeclaration(): us.tractat.kuilt.conformance/ObligationDeclaration // us.tractat.kuilt.conformance/SeamConformanceSuite.membershipDrainDeclaration|membershipDrainDeclaration(){}[0]
@@ -1232,6 +1270,18 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
     open suspend fun injectSelfDial(us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/Seam): kotlin/Boolean // us.tractat.kuilt.conformance/SeamConformanceSuite.injectSelfDial|injectSelfDial(us.tractat.kuilt.core.Seam;us.tractat.kuilt.core.Seam){}[0]
 
     // Targets: [apple]
+    final fun aCloseAfterAFlushFollowsCompletion() // us.tractat.kuilt.conformance/SeamConformanceSuite.aCloseAfterAFlushFollowsCompletion|aCloseAfterAFlushFollowsCompletion(){}[0]
+
+    // Targets: [apple]
+    final fun aCloseDoesNotWaitForAHeldSend() // us.tractat.kuilt.conformance/SeamConformanceSuite.aCloseDoesNotWaitForAHeldSend|aCloseDoesNotWaitForAHeldSend(){}[0]
+
+    // Targets: [apple]
+    final fun aCloseEndsAPendingFlushWithFailed() // us.tractat.kuilt.conformance/SeamConformanceSuite.aCloseEndsAPendingFlushWithFailed|aCloseEndsAPendingFlushWithFailed(){}[0]
+
+    // Targets: [apple]
+    final fun aHeldSendTimesOutAndIsNotDropped() // us.tractat.kuilt.conformance/SeamConformanceSuite.aHeldSendTimesOutAndIsNotDropped|aHeldSendTimesOutAndIsNotDropped(){}[0]
+
+    // Targets: [apple]
     final fun blankPeerIdDeclarationIsHonest() // us.tractat.kuilt.conformance/SeamConformanceSuite.blankPeerIdDeclarationIsHonest|blankPeerIdDeclarationIsHonest(){}[0]
 
     // Targets: [apple]
@@ -1239,6 +1289,9 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
 
     // Targets: [apple]
     final fun broadcastFromHostDeliversToJoinedPeer() // us.tractat.kuilt.conformance/SeamConformanceSuite.broadcastFromHostDeliversToJoinedPeer|broadcastFromHostDeliversToJoinedPeer(){}[0]
+
+    // Targets: [apple]
+    final fun cancellingAFlushLeavesTheSeamAndItsFramesAlone() // us.tractat.kuilt.conformance/SeamConformanceSuite.cancellingAFlushLeavesTheSeamAndItsFramesAlone|cancellingAFlushLeavesTheSeamAndItsFramesAlone(){}[0]
 
     // Targets: [apple]
     final fun closeDoesNotReportFailureAsCancellation() // us.tractat.kuilt.conformance/SeamConformanceSuite.closeDoesNotReportFailureAsCancellation|closeDoesNotReportFailureAsCancellation(){}[0]
@@ -1256,6 +1309,21 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
     final fun duplicateRemoteIdDoesNotEvictTheIncumbent() // us.tractat.kuilt.conformance/SeamConformanceSuite.duplicateRemoteIdDoesNotEvictTheIncumbent|duplicateRemoteIdDoesNotEvictTheIncumbent(){}[0]
 
     // Targets: [apple]
+    final fun flushCoversEarlierSendsAndNotLaterOnes() // us.tractat.kuilt.conformance/SeamConformanceSuite.flushCoversEarlierSendsAndNotLaterOnes|flushCoversEarlierSendsAndNotLaterOnes(){}[0]
+
+    // Targets: [apple]
+    final fun flushDeclarationIsHonest() // us.tractat.kuilt.conformance/SeamConformanceSuite.flushDeclarationIsHonest|flushDeclarationIsHonest(){}[0]
+
+    // Targets: [apple]
+    final fun flushOnATornSeamReportsFailed() // us.tractat.kuilt.conformance/SeamConformanceSuite.flushOnATornSeamReportsFailed|flushOnATornSeamReportsFailed(){}[0]
+
+    // Targets: [apple]
+    final fun flushWaitsForAHeldSend() // us.tractat.kuilt.conformance/SeamConformanceSuite.flushWaitsForAHeldSend|flushWaitsForAHeldSend(){}[0]
+
+    // Targets: [apple]
+    final fun hostBurstSurvivesFlushThenClose() // us.tractat.kuilt.conformance/SeamConformanceSuite.hostBurstSurvivesFlushThenClose|hostBurstSurvivesFlushThenClose(){}[0]
+
+    // Targets: [apple]
     final fun hostStateIsWovenEvenAlone() // us.tractat.kuilt.conformance/SeamConformanceSuite.hostStateIsWovenEvenAlone|hostStateIsWovenEvenAlone(){}[0]
 
     // Targets: [apple]
@@ -1269,6 +1337,9 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
 
     // Targets: [apple]
     final fun incomingPreservesSendOrderToSingleCollector() // us.tractat.kuilt.conformance/SeamConformanceSuite.incomingPreservesSendOrderToSingleCollector|incomingPreservesSendOrderToSingleCollector(){}[0]
+
+    // Targets: [apple]
+    final fun joinerBurstSurvivesFlushThenClose() // us.tractat.kuilt.conformance/SeamConformanceSuite.joinerBurstSurvivesFlushThenClose|joinerBurstSurvivesFlushThenClose(){}[0]
 
     // Targets: [apple]
     final fun membershipDrainDeclarationIsHonest() // us.tractat.kuilt.conformance/SeamConformanceSuite.membershipDrainDeclarationIsHonest|membershipDrainDeclarationIsHonest(){}[0]
@@ -1328,6 +1399,18 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
     final fun wovenSeamCapabilityIsHonest() // us.tractat.kuilt.conformance/SeamConformanceSuite.wovenSeamCapabilityIsHonest|wovenSeamCapabilityIsHonest(){}[0]
 
     // Targets: [wasmJs]
+    final fun aCloseAfterAFlushFollowsCompletion(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.aCloseAfterAFlushFollowsCompletion|aCloseAfterAFlushFollowsCompletion(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aCloseDoesNotWaitForAHeldSend(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.aCloseDoesNotWaitForAHeldSend|aCloseDoesNotWaitForAHeldSend(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aCloseEndsAPendingFlushWithFailed(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.aCloseEndsAPendingFlushWithFailed|aCloseEndsAPendingFlushWithFailed(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aHeldSendTimesOutAndIsNotDropped(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.aHeldSendTimesOutAndIsNotDropped|aHeldSendTimesOutAndIsNotDropped(){}[0]
+
+    // Targets: [wasmJs]
     final fun blankPeerIdDeclarationIsHonest(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.blankPeerIdDeclarationIsHonest|blankPeerIdDeclarationIsHonest(){}[0]
 
     // Targets: [wasmJs]
@@ -1335,6 +1418,9 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun broadcastFromHostDeliversToJoinedPeer(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.broadcastFromHostDeliversToJoinedPeer|broadcastFromHostDeliversToJoinedPeer(){}[0]
+
+    // Targets: [wasmJs]
+    final fun cancellingAFlushLeavesTheSeamAndItsFramesAlone(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.cancellingAFlushLeavesTheSeamAndItsFramesAlone|cancellingAFlushLeavesTheSeamAndItsFramesAlone(){}[0]
 
     // Targets: [wasmJs]
     final fun closeDoesNotReportFailureAsCancellation(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.closeDoesNotReportFailureAsCancellation|closeDoesNotReportFailureAsCancellation(){}[0]
@@ -1352,6 +1438,21 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
     final fun duplicateRemoteIdDoesNotEvictTheIncumbent(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.duplicateRemoteIdDoesNotEvictTheIncumbent|duplicateRemoteIdDoesNotEvictTheIncumbent(){}[0]
 
     // Targets: [wasmJs]
+    final fun flushCoversEarlierSendsAndNotLaterOnes(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.flushCoversEarlierSendsAndNotLaterOnes|flushCoversEarlierSendsAndNotLaterOnes(){}[0]
+
+    // Targets: [wasmJs]
+    final fun flushDeclarationIsHonest(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.flushDeclarationIsHonest|flushDeclarationIsHonest(){}[0]
+
+    // Targets: [wasmJs]
+    final fun flushOnATornSeamReportsFailed(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.flushOnATornSeamReportsFailed|flushOnATornSeamReportsFailed(){}[0]
+
+    // Targets: [wasmJs]
+    final fun flushWaitsForAHeldSend(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.flushWaitsForAHeldSend|flushWaitsForAHeldSend(){}[0]
+
+    // Targets: [wasmJs]
+    final fun hostBurstSurvivesFlushThenClose(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.hostBurstSurvivesFlushThenClose|hostBurstSurvivesFlushThenClose(){}[0]
+
+    // Targets: [wasmJs]
     final fun hostStateIsWovenEvenAlone(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.hostStateIsWovenEvenAlone|hostStateIsWovenEvenAlone(){}[0]
 
     // Targets: [wasmJs]
@@ -1365,6 +1466,9 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun incomingPreservesSendOrderToSingleCollector(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.incomingPreservesSendOrderToSingleCollector|incomingPreservesSendOrderToSingleCollector(){}[0]
+
+    // Targets: [wasmJs]
+    final fun joinerBurstSurvivesFlushThenClose(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.joinerBurstSurvivesFlushThenClose|joinerBurstSurvivesFlushThenClose(){}[0]
 
     // Targets: [wasmJs]
     final fun membershipDrainDeclarationIsHonest(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.membershipDrainDeclarationIsHonest|membershipDrainDeclarationIsHonest(){}[0]
@@ -1751,6 +1855,8 @@ final object us.tractat.kuilt.conformance/CapabilityGaps { // us.tractat.kuilt.c
         final fun <get-BLANK_PEER_ID>(): kotlin/String // us.tractat.kuilt.conformance/CapabilityGaps.BLANK_PEER_ID.<get-BLANK_PEER_ID>|<get-BLANK_PEER_ID>(){}[0]
     final const val DUPLICATE_PEER_ID // us.tractat.kuilt.conformance/CapabilityGaps.DUPLICATE_PEER_ID|{}DUPLICATE_PEER_ID[0]
         final fun <get-DUPLICATE_PEER_ID>(): kotlin/String // us.tractat.kuilt.conformance/CapabilityGaps.DUPLICATE_PEER_ID.<get-DUPLICATE_PEER_ID>|<get-DUPLICATE_PEER_ID>(){}[0]
+    final const val FLUSH // us.tractat.kuilt.conformance/CapabilityGaps.FLUSH|{}FLUSH[0]
+        final fun <get-FLUSH>(): kotlin/String // us.tractat.kuilt.conformance/CapabilityGaps.FLUSH.<get-FLUSH>|<get-FLUSH>(){}[0]
     final const val LIVE_CAPABILITY // us.tractat.kuilt.conformance/CapabilityGaps.LIVE_CAPABILITY|{}LIVE_CAPABILITY[0]
         final fun <get-LIVE_CAPABILITY>(): kotlin/String // us.tractat.kuilt.conformance/CapabilityGaps.LIVE_CAPABILITY.<get-LIVE_CAPABILITY>|<get-LIVE_CAPABILITY>(){}[0]
     final const val MEMBERSHIP_DRAIN // us.tractat.kuilt.conformance/CapabilityGaps.MEMBERSHIP_DRAIN|{}MEMBERSHIP_DRAIN[0]

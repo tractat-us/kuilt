@@ -230,7 +230,7 @@ wrap also keeps blocking reads off the seam's scheduling dispatcher when the
 transport pins `incoming` to an IO dispatcher (see `tcpConnection`'s `flowOn` below),
 so the seam's state loop is never stalled by a slow read.
 
-### Step 3 — `TcpConnection`: the full adapter in ~11 lines
+### Step 3 — `TcpConnection`: the full adapter in ~14 lines
 
 `:kuilt-tcp`'s `tcpConnection` shows the complete pipeline for a Ktor TCP socket:
 
@@ -245,6 +245,12 @@ internal fun tcpConnection(socket: Socket, ioDispatcher: CoroutineDispatcher): C
         // Only the read side is re-dispatched; the frame ceiling is [framed]'s, unchanged (#2047).
         override val maxFrameBytes: Int? get() = framed.maxFrameBytes
         override val incoming: Flow<ByteArray> = framed.incoming.flowOn(ioDispatcher)
+
+        // `framed`'s answer stops at the socket's write channel. That is enough for what a flush
+        // promises: `Socket.close` flushes that channel and lets the socket's writer finish it before
+        // it closes the socket, so an orderly close cannot lose what got this far.
+        override suspend fun flush(timeout: Duration): FlushOutcome = framed.flush(timeout)
+
         override suspend fun close() {
             framed.close()
             socket.close()
