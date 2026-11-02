@@ -26,6 +26,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -35,6 +36,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
@@ -46,13 +48,15 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 import io.ktor.server.websocket.WebSockets as ServerWebSockets
 
 /**
- * Cancelling a weave mid-dial leaves no socket behind (#3044).
+ * Cancelling a weave mid-dial leaves no socket behind (#3044), with one engine's exception pinned too.
  *
  * Ktor's `webSocketSession` runs the handshake on the [HttpClient]'s own scope, so a cancel ends the
  * caller's wait and nothing else. Every test here lets the far end report what the socket did, and
@@ -60,14 +64,17 @@ import io.ktor.server.websocket.WebSockets as ServerWebSockets
  *
  *  - **Before the upgrade answers.** [HeldHandshakeServer] has read the request and is holding the
  *    `101`, so the client cannot have a session yet. The cancel lands, and only then does the far end
- *    answer.
+ *    answer, which also gives a surviving socket a reason to end.
+ *  - **With no answer ever coming.** The same cancel, with that reason taken away. This is the arm that
+ *    tells an abort from a socket that was only waiting for the far end, and OkHttp is the difference.
  *  - **As the session arrives.** The caller's thread is held while the handshake finishes, until
  *    [HeldCallerThread] has seen the dial's result queued for it. The cancel lands then, so the caller
  *    takes the cancellation instead of a session already delivered to it, which is the one window that
  *    aborting the request cannot reach.
  *
- * Time is real and bounded. A bound here is only ever waited out on a red: a green reaches the far
- * end's verdict in well under a second, so [OBSERVATION] can be generous enough for a loaded box.
+ * Time is real and bounded. [OBSERVATION] is only ever waited out on a red: a green reaches the far
+ * end's verdict in well under a second, so it can be generous enough for a loaded box. Two arms wait
+ * on a green because the wait is the claim, [OKHTTP_WATCH] and [ABANDON_BOUND], and both are short.
  */
 class WeaveCancelledMidDialTest {
 
@@ -120,19 +127,85 @@ class WeaveCancelledMidDialTest {
     }
 
     @Test
-    fun aKtorClientLoomWeaveCancelledBeforeTheUpgradeAnswersLeavesNoSocketOnOkHttp() = realTime {
-        assertAbandonedDialClosesTheSocket(clientLoom(client(OkHttp)))
-    }
-
-    @Test
     fun aKtorMeshClientLoomWeaveCancelledBeforeTheUpgradeAnswersLeavesNoSocket() = realTime {
         assertAbandonedDialClosesTheSocket(meshLoom(client()))
+    }
+
+    /** OkHttp did not abort, so it finishes the upgrade it was asked for and only then closes. */
+    @Test
+    fun anOkHttpWeaveCancelledBeforeTheUpgradeAnswersClosesOnceTheFarEndAnswers() = realTime {
+        val weave = rigScope.launch { clientLoom(client(OkHttp)).join(advertisement()) }
+        server.awaitRequest()
+        assertFalse(weave.isCompleted, "rig: the weave finished before the far end answered, so nothing is in flight")
+
+        weave.cancelAndJoin()
+        server.finishHandshake()
+
+        assertEquals<HeldHandshakeServer.FarEnd>(
+            HeldHandshakeServer.FarEnd.CloseFrame(code = INTERNAL_ERROR_CLOSE, socketEnded = true),
+            server.farEnd(),
+            "OkHttp's behaviour moved, so ownedWebSocketSession's KDoc needs another look",
+        )
+    }
+
+    // ── Cancelled with no answer ever coming ─────────────────────────────────────────────────────
+
+    /** An abort: the far end says nothing, so the socket can only end because the client ended it. */
+    @Test
+    fun aKtorClientLoomWeaveCancelledWithNoAnswerComingEndsTheSocket() = realTime {
+        val weave = rigScope.launch { clientLoom(client()).join(advertisement()) }
+        server.awaitRequest()
+        assertFalse(weave.isCompleted, "rig: the weave finished with no answer, so nothing is in flight")
+
+        weave.cancelAndJoin()
+        server.leaveUnanswered()
+
+        assertEquals<HeldHandshakeServer.FarEnd>(
+            HeldHandshakeServer.FarEnd.SocketEnded,
+            server.farEnd(),
+            "a cancel with no answer coming has to abort the request itself",
+        )
+    }
+
+    /**
+     * The exception `ownedWebSocketSession`'s KDoc states: OkHttp keeps this socket, and kuilt cannot
+     * reach it. Pinned so an upgrade that fixes it says so, rather than leaving the KDoc wrong.
+     *
+     * `readTimeout(0)` is what makes this deterministic. OkHttp's default gives up after about 10 s, so
+     * at that setting this arm would depend on how long the box took to get here.
+     */
+    @Test
+    fun anOkHttpWeaveCancelledWithNoAnswerComingKeepsItsSocket() = realTime {
+        val unanswered = HeldHandshakeServer(OKHTTP_WATCH)
+        val noReadTimeout = HttpClient(OkHttp) {
+            install(ClientWebSockets)
+            engine { config { readTimeout(0, TimeUnit.SECONDS) } }
+        }.also { clients += it }
+        try {
+            val weave = rigScope.launch {
+                clientLoom(noReadTimeout).join(advertisement(unanswered.url))
+            }
+            unanswered.awaitRequest()
+            assertFalse(weave.isCompleted, "rig: the weave finished with no answer, so nothing is in flight")
+
+            weave.cancelAndJoin()
+            unanswered.leaveUnanswered()
+
+            assertEquals<HeldHandshakeServer.FarEnd>(
+                HeldHandshakeServer.FarEnd.StillOpen,
+                unanswered.farEnd(),
+                "OkHttp ended this socket, so ownedWebSocketSession's KDoc is out of date",
+            )
+        } finally {
+            unanswered.close()
+        }
     }
 
     // ── Cancelled as the session arrives ─────────────────────────────────────────────────────────
 
     /**
-     * Cancels the weave with the session already handed over and the caller not yet running.
+     * Cancels the weave with the session already handed over and the caller not yet running, and returns
+     * how long the cancelled weave then took to end.
      *
      * [requestSeen] and [finishHandshake] are the far end's: the first returns once the dial is waiting
      * on the answer, the second lets it through. Holding the caller only after the first, and finishing
@@ -143,7 +216,7 @@ class WeaveCancelledMidDialTest {
         url: String,
         requestSeen: suspend () -> Unit,
         finishHandshake: () -> Unit,
-    ) {
+    ): Duration {
         var woven: Seam? = null
         val weave = rigScope.launch(callerThread) { woven = loom.join(advertisement(url)) }
         requestSeen()
@@ -153,11 +226,14 @@ class WeaveCancelledMidDialTest {
         finishHandshake()
         callerThread.awaitDispatchPast(queuedWithTheCallerHeld)
         weave.cancel()
+        val released = TimeSource.Monotonic.markNow()
         callerThread.release()
         weave.join()
+        val waited = released.elapsedNow()
 
         assertTrue(weave.isCancelled, "rig: the weave was not cancelled")
         assertNull(woven, "rig: the caller got its seam, so it is the owner and this window was not reached")
+        return waited
     }
 
     private suspend fun cancelAsTheSessionArrivesAtTheHeldServer(loom: Loom) =
@@ -224,22 +300,33 @@ class WeaveCancelledMidDialTest {
      * far end that never answers the Close frame is what OkHttp sits on: it holds the socket for that
      * answer on a clock of its own, and the cancelled caller must not wait out the same clock.
      *
-     * The second assertion says the unclaimed session's close was still sent, on the arm where nothing
+     * The bound is also what makes the two steps inside it visible, because this far end keeps the
+     * session up for all of it. A real wait reaches [ABANDON_BOUND] and then cuts the call. Take away
+     * the `NonCancellable` shield and the join throws at once, so the cut never runs and the call stays
+     * on the client. Take away the join and nothing waits, so the close gets no time to land. The
+     * elapsed check is a lower bound on a real clock, so a slow box cannot fail it.
+     *
+     * The last assertion says the unclaimed session's close was still sent, on the arm where nothing
      * else in this test would notice if it were not.
      */
     @Test
     fun aFarEndThatNeverAnswersTheCloseCannotHoldUpTheCancel() = realTime {
         val silent = HeldHandshakeServer(OBSERVATION, answersClose = false)
+        val httpClient = client(OkHttp)
         try {
-            val cancelSettled = withTimeoutOrNull(HANG_BOUND) {
+            val waited = withTimeoutOrNull(HANG_BOUND) {
                 cancelAsTheSessionArrives(
-                    clientLoom(client(OkHttp)),
+                    clientLoom(httpClient),
                     silent.url,
                     silent::awaitRequest,
                     silent::finishHandshake,
                 )
             }
-            assertNotNull(cancelSettled, "the cancelled weave was still waiting on the far end after $HANG_BOUND")
+            assertNotNull(waited, "the cancelled weave was still waiting on the far end after $HANG_BOUND")
+            val liveCalls = httpClient.coroutineContext.job.children.count { it.isActive }
+            val seen = "after $waited, with $liveCalls call(s) still on the client"
+            assertTrue(waited >= ABANDON_BOUND, "the weave did not wait out the close: it returned $seen")
+            assertEquals(0, liveCalls, "the bound expired and the call was not cut: the weave returned $seen")
             assertTrue(silent.closeFrameSeen, "the unclaimed session's close was never sent")
         } finally {
             silent.close()
@@ -406,7 +493,11 @@ class WeaveCancelledMidDialTest {
         val FAR_END = PeerId("far-end")
         const val NETTY_PATH = "/route"
         const val NORMAL_CLOSE = 1000
+        const val INTERNAL_ERROR_CLOSE = 1011
         val POLL = 5.milliseconds
+
+        /** How long a socket kuilt cannot reach is watched. Unlike [OBSERVATION], a green waits this out. */
+        val OKHTTP_WATCH = 3.seconds
 
         /** Waited out only on a red; see the class KDoc. */
         val OBSERVATION = 15.seconds
