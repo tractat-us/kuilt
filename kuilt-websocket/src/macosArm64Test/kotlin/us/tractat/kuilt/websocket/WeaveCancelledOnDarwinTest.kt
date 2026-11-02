@@ -13,7 +13,7 @@ import io.ktor.util.encodeBase64
 import io.ktor.util.sha1
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.ByteWriteChannel
-import io.ktor.utils.io.readFully
+import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readUTF8Line
 import io.ktor.utils.io.writeByteArray
 import io.ktor.utils.io.writeStringUtf8
@@ -118,7 +118,7 @@ class WeaveCancelledOnDarwinTest {
 
         assertTrue(weave.isCancelled, "rig: the weave was not cancelled")
         assertNull(woven, "rig: the caller got its seam, so it is the owner and this window was not reached")
-        assertEquals<FarEndSaw>(FarEndSaw.CloseFrame(NORMAL_CLOSE), farEnd.saw.await())
+        assertEquals<FarEndSaw>(FarEndSaw.CloseFrame(NORMAL_CLOSE, socketEnded = true), farEnd.saw.await())
     }
 
     @Test
@@ -142,18 +142,19 @@ class WeaveCancelledOnDarwinTest {
     }
 
     private sealed interface FarEndSaw {
-        data class CloseFrame(val code: Int?) : FarEndSaw
+        data class CloseFrame(val code: Int?, val socketEnded: Boolean) : FarEndSaw
 
         data object SocketEnded : FarEndSaw
 
         data object StillOpen : FarEndSaw
     }
 
-    /** One upgrade on a plain socket, answered when told, then read until the connection says something. */
+    /** One upgrade on a plain socket, answered when told, then read until the socket ends. */
     private class HeldUpgrade(private val listener: ServerSocket, scope: CoroutineScope) {
         val requestSeen = CompletableDeferred<Unit>()
         val answer = CompletableDeferred<Unit>()
         val saw = CompletableDeferred<FarEndSaw>()
+        private var closeCode: Int? = null
         val url: String get() = "ws://127.0.0.1:${listener.port}/held"
 
         init {
@@ -163,8 +164,27 @@ class WeaveCancelledOnDarwinTest {
                 val output = socket.openWriteChannel(autoFlush = true)
                 val key = readWebSocketKey(input)
                 requestSeen.complete(Unit)
+                // Reading from here on, not from the answer. A ktor-network socket whose peer has left
+                // can leave a read begun after the write parked for good, which measures this rig.
+                val reader = launch { readToTheEnd(input, output) }
                 answer.await()
-                saw.complete(withTimeoutOrNull(OBSERVATION) { observe(key, input, output) } ?: FarEndSaw.StillOpen)
+                try {
+                    output.writeStringUtf8(
+                        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                            "Sec-WebSocket-Accept: ${acceptOf(key)}\r\n\r\n",
+                    )
+                } catch (_: IOException) {
+                    // The client is already gone, and the read says so.
+                }
+                val socketEnded = withTimeoutOrNull(OBSERVATION) { reader.join() } != null
+                saw.complete(
+                    when {
+                        closeCode != null -> FarEndSaw.CloseFrame(closeCode, socketEnded)
+                        socketEnded -> FarEndSaw.SocketEnded
+                        else -> FarEndSaw.StillOpen
+                    },
+                )
+                reader.cancel()
                 socket.close()
             }
         }
@@ -178,32 +198,40 @@ class WeaveCancelledOnDarwinTest {
             }
         }
 
-        private suspend fun observe(key: String, input: ByteReadChannel, output: ByteWriteChannel): FarEndSaw =
+        private suspend fun readToTheEnd(input: ByteReadChannel, output: ByteWriteChannel) {
+            val received = mutableListOf<Byte>()
+            val buffer = ByteArray(1024)
             try {
-                output.writeStringUtf8(
-                    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
-                        "Sec-WebSocket-Accept: ${acceptOf(key)}\r\n\r\n",
-                )
-                var verdict: FarEndSaw = FarEndSaw.SocketEnded
-                while (verdict == FarEndSaw.SocketEnded) {
-                    val closeCode = readCloseCodeIfCloseFrame(input) ?: continue
-                    output.writeByteArray(byteArrayOf(0x88.toByte(), 0x00))
-                    verdict = FarEndSaw.CloseFrame(closeCode)
+                while (true) {
+                    val read = input.readAvailable(buffer)
+                    if (read < 0) return
+                    received += buffer.take(read)
+                    if (closeCode == null) {
+                        closeCode = closeCodeIn(received)
+                        // What any live peer does, and what lets a client release the socket.
+                        if (closeCode != null) output.writeByteArray(byteArrayOf(0x88.toByte(), 0x00))
+                    }
                 }
-                verdict
             } catch (_: IOException) {
-                FarEndSaw.SocketEnded
+                // A reset is the socket ending too.
             }
+        }
 
-        /** Reads one client frame. Returns the Close code, or null for any other frame. */
-        private suspend fun readCloseCodeIfCloseFrame(input: ByteReadChannel): Int? {
-            val header = ByteArray(2).also { input.readFully(it) }
-            val length = header[1].toInt() and 0x7F
-            val mask = ByteArray(4).also { input.readFully(it) }
-            val payload = ByteArray(length).also { input.readFully(it) }
-            payload.indices.forEach { i -> payload[i] = (payload[i].toInt() xor mask[i % 4].toInt()).toByte() }
-            if (header[0].toInt() and 0x0F != OPCODE_CLOSE || payload.size < 2) return null
-            return (payload[0].toInt() and 0xFF shl 8) or (payload[1].toInt() and 0xFF)
+        /** The code of the first complete Close frame in [bytes], walking client frames from the start. */
+        private fun closeCodeIn(bytes: List<Byte>): Int? {
+            var at = 0
+            while (at + MASKED_HEADER <= bytes.size) {
+                val length = bytes[at + 1].toInt() and 0x7F
+                val payloadAt = at + MASKED_HEADER
+                if (payloadAt + length > bytes.size) return null
+                if (bytes[at].toInt() and 0x0F == OPCODE_CLOSE && length >= 2) {
+                    val high = bytes[payloadAt].toInt() xor bytes[at + 2].toInt()
+                    val low = bytes[payloadAt + 1].toInt() xor bytes[at + 3].toInt()
+                    return (high and 0xFF shl 8) or (low and 0xFF)
+                }
+                at = payloadAt + length
+            }
+            return null
         }
 
         private fun acceptOf(key: String): String = sha1((key + WEBSOCKET_GUID).encodeToByteArray()).encodeBase64()
@@ -249,6 +277,9 @@ class WeaveCancelledOnDarwinTest {
         val FAR_END = PeerId("far-end")
         const val WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         const val OPCODE_CLOSE = 0x8
+
+        /** A client frame's two header bytes and four mask bytes, for a short payload. */
+        const val MASKED_HEADER = 6
         const val NORMAL_CLOSE = 1000
         val POLL = 5.milliseconds
 
