@@ -121,7 +121,7 @@ class WeaveCancelledOnDarwinTest {
      * Pins the outcome and not the two steps that protect it, the `NonCancellable` shield and the join.
      * Removing either stays green here. URLSession does not wait for the far end's Close, so the session
      * is over in under a millisecond and there is no wait to observe, and a lost Close is only a race:
-     * 120 of 1,120 dials with the join removed, against 0 of 1,120 with it. No rig here forces that.
+     * about one dial in ten with the join removed, and none with it. No rig here forces that.
      * `WeaveCancelledMidDialTest` pins both lines on OkHttp, and they are common code.
      */
     @Test
