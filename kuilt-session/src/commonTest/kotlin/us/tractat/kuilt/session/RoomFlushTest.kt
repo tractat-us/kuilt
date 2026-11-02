@@ -280,9 +280,10 @@ class RoomFlushTest {
             roomScope.cancel()
             testScheduler.runCurrent()
 
+            val outcome = flush.await()
             assertAll(
                 { assertIs<SeamState.Woven>(star.host.wire.state.value, "rig: the fabric is still up") },
-                { assertIs<FlushOutcome.Failed>(flush.await(), "those frames went nowhere, so this cannot be Drained") },
+                { assertIs<FlushOutcome.Failed>(outcome, "those frames went nowhere, so this cannot be Drained") },
                 { assertEquals(0, star.host.wire.flushesAsked, "the fabric cannot answer for the lanes") },
             )
         }
