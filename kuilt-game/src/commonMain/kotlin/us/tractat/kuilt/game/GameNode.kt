@@ -590,12 +590,12 @@ public suspend fun CoroutineScope.gameJoin(
     val mux = MuxSeam(seam, this)
     val raftSeam = mux.channel(RAFT_CHANNEL)
     val (presenceSeam, appMux) = broadcastPlane(mux, overlay)
-    answerHeartbeatPings(mux.channel(HEARTBEAT_CHANNEL))
 
     val self = NodeId(seam.selfId.value)
 
     // Announce presence (non-host) so the host's convergence wait sees us promptly.
     val presence = GamePresence(presenceSeam, this, raftConfig.expectVirtualTime)
+    answerHeartbeatPings(mux.channel(HEARTBEAT_CHANNEL), presence)
     presence.declarePresent()
 
     // Start as a learner with no known voters. The host's changeMembership will commit a

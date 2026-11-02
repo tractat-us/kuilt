@@ -170,6 +170,42 @@ class HostLivenessTest {
     }
 
     /**
+     * A player who leaves and keeps its session open has given the seat up, so it must not hold it by
+     * answering pings. The seat comes free by the end of the window at the latest, whether or not the
+     * host acts on the vacate before then, and the player who stayed keeps its seat.
+     */
+    @Test
+    fun aJoinerThatLeftWithoutClosingDoesNotHoldItsSeat() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val liveness = fastLivenessConfig()
+        val loom = InMemoryLoom()
+        val (hostRaw, stayingRaw, leavingRaw) = seats(loom, 3)
+        val hostDeferred = async {
+            backgroundScope.gameHost(
+                hostRaw,
+                peerCount = 3,
+                raftConfig = fastRaftConfig(seed = 1L),
+                livenessConfig = liveness,
+                clock = schedulerClock(),
+            )
+        }
+        val stayingDeferred = async { backgroundScope.gameJoin(stayingRaw, raftConfig = fastRaftConfig(seed = 2L)) }
+        val leavingDeferred = async { backgroundScope.gameJoin(leavingRaw, raftConfig = fastRaftConfig(seed = 3L)) }
+        val host = hostDeferred.await().node
+        stayingDeferred.await()
+        val leaving = leavingDeferred.await()
+
+        leaving.leave()
+        val watched = watchVoters(host, forTime = liveness.lossWindow() * 2, step = 2.milliseconds)
+
+        val final = host.membership.value.voters
+        assertAll(
+            { assertEquals(3, watched.initial.size, "the fixture must seat three voters, was ${watched.initial}") },
+            { assertFalse(leavingRaw.nodeId() in final, "the leaver's seat must come free: ${watched.changes}") },
+            { assertTrue(stayingRaw.nodeId() in final, "the player who stayed must keep its seat: ${watched.changes}") },
+        )
+    }
+
+    /**
      * A player who takes a freed seat is watched from then on, by a detector whose countdown starts at
      * its admission. It joined through [gameJoin] like everyone else, so it answers like everyone else.
      * The eviction before it is asserted, because a replacement that never got in would stay quiet too.

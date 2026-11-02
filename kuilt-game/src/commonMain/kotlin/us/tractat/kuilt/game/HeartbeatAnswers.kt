@@ -30,6 +30,10 @@ private val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
  * a frame for a channel nobody has opened. It ends with the seam, so a closed session goes quiet and its
  * seat comes free.
  *
+ * **A player who has left stops answering.** Once [presence] holds this player's vacate, a ping goes
+ * unanswered, so a [GameSession.leave] with no [GameSession.close] after it still frees the seat by the
+ * end of the window, even if the host never acts on the vacate itself.
+ *
  * **An answer proves the session's seam is open, not that its node is taking part.** A caller that
  * stops [GameSession.node] and keeps the seam open will go on answering. [GameSession.close] does both.
  *
@@ -40,7 +44,7 @@ private val PONG = HeartbeatPartitionDetector.PONG_PREFIX.encodeToByteArray()
  *
  * @return the pump's job. Each pong runs as a child of the receiver, not of this job.
  */
-internal fun CoroutineScope.answerHeartbeatPings(heartbeatSeam: Seam): Job {
+internal fun CoroutineScope.answerHeartbeatPings(heartbeatSeam: Seam, presence: GamePresence): Job {
     val pongsInFlight = MutableStateFlow<Set<PeerId>>(emptySet())
     return heartbeatSeam.incoming.pumpIn(
         scope = this,
@@ -52,6 +56,7 @@ internal fun CoroutineScope.answerHeartbeatPings(heartbeatSeam: Seam): Job {
     ) { frame ->
         val pinger = frame.sender ?: return@pumpIn
         if (!frame.decodeToString().startsWith(HeartbeatPartitionDetector.PING_PREFIX)) return@pumpIn
+        if (presence.replica in presence.vacaters()) return@pumpIn
         if (pinger in pongsInFlight.getAndUpdate { it + pinger }) return@pumpIn
         launch {
             try {
