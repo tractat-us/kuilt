@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.otel.tap.admit.GateRole
 import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
+import us.tractat.kuilt.otel.tap.admit.cryptoRandom
 import us.tractat.kuilt.otel.tap.admit.tokenGated
 import kotlin.random.Random
 import kotlin.time.Clock
@@ -45,13 +46,16 @@ public sealed interface LogTapAdmission {
     /**
      * Pulling side: answer the offering side's challenge with the shown [code].
      *
-     * **[random] MUST be cryptographically secure in production** — pass
-     * [us.tractat.kuilt.otel.tap.admit.cryptoRandom]. It sources the nonce this side puts in each
-     * answer, and a peer that could predict that nonce could build a table of answers for every code
-     * in advance and read the code off a single one. The `Random` parameter is injectable **only so
-     * tests can supply a seeded, deterministic source**, never as licence for `Random.Default`.
+     * [random] defaults to [us.tractat.kuilt.otel.tap.admit.cryptoRandom], the module's CSPRNG, so a
+     * call that omits it is already secure. It sources the nonce this side puts in each answer, and a
+     * peer that could predict that nonce could build a table of answers for every code in advance and
+     * read the code off a single one. The parameter exists **only so tests can supply a seeded,
+     * deterministic source**, never as licence for `Random.Default`.
      */
-    public class Present(public val code: String, public val random: Random) : LogTapAdmission
+    public class Present(
+        public val code: String,
+        public val random: Random = cryptoRandom(),
+    ) : LogTapAdmission
 }
 
 /** The gate role a peer that **offers** its logs plays. `null` for [LogTapAdmission.Open]. */

@@ -99,7 +99,8 @@ in.
   `os_log`/logcat), so surfacing it is the app's call.
 - **In the puller:** pass
   [LogTapAdmission.Present][us.tractat.kuilt.otel.tap.LogTapAdmission.Present] with
-  the code you read off the device, plus the same secure source. A wrong or expired
+  the code you read off the device. Its nonce source defaults to the secure
+  `cryptoRandom()`, so you need not pass one. A wrong or expired
   code is refused, and the device's replicator never sees the unauthorized peer.
 
 <!-- verbatim from kuilt-otel-tap/src/commonSamples/kotlin/us/tractat/kuilt/otel/tap/Samples.kt#sampleGatedLogTap -->
@@ -124,7 +125,7 @@ val host = installLogTap(loom, exporter, scope, admission = LogTapAdmission.Veri
 val client = LogTapClient(
     loom.join(InMemoryTag("puller")),
     scope,
-    admission = LogTapAdmission.Present(token.code, secure),
+    admission = LogTapAdmission.Present(token.code),
 )
 val logs: List<LogRecord> = client.pull()
 

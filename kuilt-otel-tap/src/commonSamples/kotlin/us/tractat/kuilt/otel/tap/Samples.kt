@@ -63,7 +63,7 @@ internal suspend fun sampleGatedLogTap(scope: CoroutineScope): List<LogRecord> {
     val client = LogTapClient(
         loom.join(InMemoryTag("puller")),
         scope,
-        admission = LogTapAdmission.Present(token.code, secure),
+        admission = LogTapAdmission.Present(token.code),
     )
     val logs: List<LogRecord> = client.pull()
 
@@ -161,7 +161,7 @@ internal suspend fun sampleGatedMetricTap(scope: CoroutineScope): MetricSnapshot
     val client = MetricTapClient(
         loom.join(InMemoryTag("puller")),
         scope,
-        admission = LogTapAdmission.Present(token.code, secure),
+        admission = LogTapAdmission.Present(token.code),
     )
     val metrics: MetricSnapshot = client.pull()
 
