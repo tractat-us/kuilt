@@ -1,8 +1,12 @@
 package us.tractat.kuilt.stream
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.io.EOFException
+import kotlinx.io.IOException
 import kotlinx.io.Sink
 import kotlinx.io.Source
 import kotlinx.io.readByteArray
@@ -33,6 +37,9 @@ public class FrameTooLargeException(size: Int, max: Int) :
  *   [incoming] normally. A stream that ends anywhere else — inside a length prefix as well as
  *   inside a body — is a truncated stream and propagates as [EOFException]. A close at a frame
  *   boundary is the wire's only graceful leave, so a cut stream must never read as one.
+ * - **A dead transport is a failure, not a cancellation:** a [sink] that throws a
+ *   [CancellationException] at a caller nobody cancelled reaches that caller as an [IOException] (see
+ *   [Connection.send]). A Ktor socket's write channel does this once the socket's job is cancelled.
  *
  * **Assumption:** the provided [Source] is backed by a hot (buffered) stream
  * (e.g. a Ktor read channel or an in-memory [kotlinx.io.Buffer]). Cold/non-buffered
@@ -55,9 +62,14 @@ private class FramedConnection(
 
     override suspend fun send(frame: ByteArray) {
         if (frame.size > maxFrameSize) throw FrameTooLargeException(frame.size, maxFrameSize)
-        sink.writeInt(frame.size)
-        sink.write(frame)
-        sink.flush()
+        try {
+            sink.writeInt(frame.size)
+            sink.write(frame)
+            sink.flush()
+        } catch (cancelled: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            throw IOException("the stream's transport was cancelled", cancelled)
+        }
     }
 
     override val incoming: Flow<ByteArray> = flow {
