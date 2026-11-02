@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.FabricAvailability
 import java.lang.ref.Cleaner
+import java.lang.ref.Reference
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 
@@ -366,6 +367,8 @@ public class BridgeNwApi internal constructor(
         // and a callback parked here would never finish.
         bytesReceivedStaging.cancel()
         cleanable.clean()
+        // JNA retains only weak callback references: keep the trampolines alive through the native call.
+        Reference.reachabilityFence(this)
     }
 
     /**
