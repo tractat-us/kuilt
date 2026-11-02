@@ -21,7 +21,8 @@ import kotlin.test.assertNull
  * [aTightRestartOnTheRealBridgeDoesNotAbortTheProcess] fails on a clean assertion. Take away the
  * collectors' `pumpIn` as well and the same collision is an abort: the test JVM dies with
  * `Uncaught Kotlin exception: kotlin.IllegalStateException: MultipeerPeerLinkFactory is already browsing`
- * on stderr, and this class has no results XML.
+ * on stderr and exit value 134. The results XML shows no failure, only the test it died in as `skipped`,
+ * so read the task's failure rather than counting failure rows.
  *
  * A wedged `mc_browser_stop` is the third failure this can show, as a JUnit timeout, which is why these
  * use `org.junit.Test` rather than `kotlin.test.Test`. `BridgeBrowserQuiesceTest` on `macosArm64Test`
