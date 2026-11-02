@@ -71,16 +71,25 @@ internal sealed interface GateRole {
  * reading fills its own buffer until the next [Seam.sendTo] suspends, as that call is entitled to.
  * The sole collector of `inner.incoming` must not be the coroutine suspended there, because every
  * other peer's frames arrive through it. So a proof goes out in a job of its own, and the collector
- * moves on. It runs undispatched, so an accepted send finishes in place and only one that truly
- * suspends leaves anything behind.
+ * moves on. The job starts undispatched: queued, it could be cancelled by the next challenge before it
+ * had run, and two challenges in one go would draw one answer.
  *
  * One challenger holds at most one such job. A newer challenge cancels the send still parked for that
  * peer, so a flood costs one job and one frame rather than one per challenge, and a peer back on a
  * fresh link is answered there rather than behind a send to the link it left.
  *
- * A verifier's sends stay on their collectors, deliberately. It owes a peer one challenge and at most
- * one reject per connection, which is not enough to fill anything, and it answers nothing else until
- * the peer is admitted.
+ * A challenger that leaves gives its job up too, since nothing obliges a seam to wake a send parked
+ * for a peer that has gone. Every answer cancels the jobs of peers no longer in [peers], so the jobs
+ * never outnumber the peers there at the last challenge, and leaving wins a stranger nothing it could
+ * not hold by staying. Only an answer can add a job, so an answer is the one place the check has to
+ * run. A collector of `inner.peers` would free the last jobs sooner, at the price of a second thread
+ * into this map and a lock, and it would still miss a peer that came and went between two emissions.
+ * A timeout on the send would be a bound in time and not in jobs, and it would drop an answer to a
+ * slow honest peer, who gets no other.
+ *
+ * A verifier's sends stay on their collectors, deliberately. It challenges a peer only when [peers]
+ * shows the peer arriving, and a challenge draws at most one reject, so a connection draws two frames.
+ * That is not enough to fill anything, and it answers nothing else until the peer is admitted.
  *
  * ## What the peer ids buy
  *
@@ -112,11 +121,16 @@ internal sealed interface GateRole {
  *
  * [verified] holds ids, and an id leaves it only when [peers] shows that peer going. So wherever a
  * fabric carries a second connection under an admitted id without moving the roster, that connection
- * is admitted too, with no relay and no code. It can read what the device sends that id and send as
- * that id. By reading the source and not by running it, Multipeer does this, stamping
- * [Swatch.sender] from a display name, and so does a hub with no attestation, replacing the route.
- * The same stamp lets a stranger send a bad proof as a peer and use up that peer's challenge, which
- * locks the peer out until the roster next moves. `anAdmittedIdStaysAdmittedWhoeverIsWearingIt` and
+ * is admitted too, with no relay and no code. It can send as that id, and it may read what the device
+ * sends that id, depending on which connection the fabric picks. By reading the source and not by
+ * running it, Multipeer does this, stamping [Swatch.sender] from a display name and sending to the
+ * first session peer wearing the id, and so does a hub with no attestation, replacing the route.
+ *
+ * The same stamp lets a stranger send a bad proof as a peer and use up that peer's challenge. A used-up
+ * challenge is not reissued, and neither is one that failed to send, so either way the peer waits
+ * until it reconnects, which here means until [peers] shows it leave and return. Reissuing on any
+ * roster move only ever rescued the first case, by luck, and it gave a stranger who stopped reading a
+ * way to fill its own buffer and stall the gate. `anAdmittedIdStaysAdmittedWhoeverIsWearingIt` and
  * `aForgedProofStampedWithAPeersIdUsesUpThatPeersChallenge` pin the gate's half. #3079 tracks the rest.
  *
  * Scope-owning: collectors of `inner.incoming` and, on a verifier, of `inner.peers` run in [scope];
@@ -138,8 +152,8 @@ internal class TokenGatedSeam(
     // Verifier-only: peers that have proven the code. Always includes selfId (peers invariant).
     private val verified = MutableStateFlow(setOf(inner.selfId))
 
-    // Prover-only, and touched only by the sole `inner.incoming` collector: the proof still parked for
-    // each challenger, if any.
+    // Prover-only, and touched only by the sole `inner.incoming` collector: the latest proof for each
+    // challenger, which may have gone out already. Cancelling a finished job does nothing.
     private val parkedProofs = mutableMapOf<PeerId, Job>()
 
     // Replication frames surfaced to the replicator. Buffered so the sole relay collector
@@ -163,7 +177,7 @@ internal class TokenGatedSeam(
                     // reconnect must re-prove and pendingNonces cannot grow without bound.
                     val departed = known - current
                     if (departed.isNotEmpty()) prune(departed)
-                    for (peer in current) if (peer != inner.selfId) maybeChallenge(peer)
+                    for (peer in current - known) if (peer != inner.selfId) maybeChallenge(peer)
                     known = current
                 }
             }
@@ -257,13 +271,12 @@ internal class TokenGatedSeam(
             proverNonce = proverNonce,
         )
         val frame = TapAdmitMessage.encode(TapAdmitMessage.Proof(proverNonce, ByteString(tag)))
-        parkedProofs.remove(challenger)?.cancel()
-        val send = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        parkedProofs[challenger]?.cancel()
+        parkedProofs[challenger] = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             runCatchingCancellable { inner.sendTo(challenger, frame) }
                 .onFailure { logger.debug { "proof send to $challenger failed: ${it.message}" } }
         }
-        parkedProofs.values.removeAll { it.isCompleted }
-        if (!send.isCompleted) parkedProofs[challenger] = send
+        for (peer in parkedProofs.keys - inner.peers.value) parkedProofs.remove(peer)?.cancel()
     }
 
     private suspend fun verify(peer: PeerId, proof: TapAdmitMessage.Proof) {
@@ -281,7 +294,7 @@ internal class TokenGatedSeam(
             val ok = constantTimeEquals(expected, proof.tag.toByteArray()) && verifier.token.isValid(verifier.clock.now())
             // Consume the nonce whichever way it went: on success the peer is admitted; on a
             // reject the entry is cleared so it cannot linger or be reused, and a retry needs a
-            // fresh challenge.
+            // fresh challenge, which takes a reconnect.
             pendingNonces.remove(peer)
             if (ok) verified.value = verified.value + peer
             ok
