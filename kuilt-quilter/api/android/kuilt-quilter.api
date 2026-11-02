@@ -277,6 +277,7 @@ public final class us/tractat/kuilt/quilter/Quilter : us/tractat/kuilt/core/Scop
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/crdt/Quilted;Lkotlinx/serialization/KSerializer;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/quilter/MonotonicMillis;Lkotlinx/serialization/BinaryFormat;Lkotlin/jvm/functions/Function1;Lkotlin/random/Random;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/crdt/Quilted;Lkotlinx/serialization/KSerializer;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/quilter/MonotonicMillis;Lkotlinx/serialization/BinaryFormat;Lkotlin/jvm/functions/Function1;Lkotlin/random/Random;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun apply-TbMkhKA (Lus/tractat/kuilt/crdt/Quilted;)V
+	public final fun drainAndClose (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getCutFrontier ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getDeliveredLocal ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getReplica-ffK6qZA ()Ljava/lang/String;

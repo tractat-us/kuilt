@@ -884,6 +884,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun hostFactoryAssignsHostRole() // us.tractat.kuilt.conformance/RoomConformanceSuite.hostFactoryAssignsHostRole|hostFactoryAssignsHostRole(){}[0]
 
     // Targets: [apple]
+    final fun hostLostEmptiesTheRosterBeforeItCompletesTheHostsReader() // us.tractat.kuilt.conformance/RoomConformanceSuite.hostLostEmptiesTheRosterBeforeItCompletesTheHostsReader|hostLostEmptiesTheRosterBeforeItCompletesTheHostsReader(){}[0]
+
+    // Targets: [apple]
     final fun hostLostIsTerminalBroadcastIsNoOp() // us.tractat.kuilt.conformance/RoomConformanceSuite.hostLostIsTerminalBroadcastIsNoOp|hostLostIsTerminalBroadcastIsNoOp(){}[0]
 
     // Targets: [apple]
@@ -933,6 +936,12 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [apple]
     final fun leaveDoesNotReportFailureAsCancellation() // us.tractat.kuilt.conformance/RoomConformanceSuite.leaveDoesNotReportFailureAsCancellation|leaveDoesNotReportFailureAsCancellation(){}[0]
+
+    // Targets: [apple]
+    final fun leaveEmptiesAHostsRosterBeforeItCompletesAMembersReader() // us.tractat.kuilt.conformance/RoomConformanceSuite.leaveEmptiesAHostsRosterBeforeItCompletesAMembersReader|leaveEmptiesAHostsRosterBeforeItCompletesAMembersReader(){}[0]
+
+    // Targets: [apple]
+    final fun leaveEmptiesAJoinersRosterBeforeItCompletesTheHostsReader() // us.tractat.kuilt.conformance/RoomConformanceSuite.leaveEmptiesAJoinersRosterBeforeItCompletesTheHostsReader|leaveEmptiesAJoinersRosterBeforeItCompletesTheHostsReader(){}[0]
 
     // Targets: [apple]
     final fun leaveIsIdempotent() // us.tractat.kuilt.conformance/RoomConformanceSuite.leaveIsIdempotent|leaveIsIdempotent(){}[0]
@@ -989,6 +998,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun hostFactoryAssignsHostRole(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.hostFactoryAssignsHostRole|hostFactoryAssignsHostRole(){}[0]
 
     // Targets: [wasmJs]
+    final fun hostLostEmptiesTheRosterBeforeItCompletesTheHostsReader(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.hostLostEmptiesTheRosterBeforeItCompletesTheHostsReader|hostLostEmptiesTheRosterBeforeItCompletesTheHostsReader(){}[0]
+
+    // Targets: [wasmJs]
     final fun hostLostIsTerminalBroadcastIsNoOp(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.hostLostIsTerminalBroadcastIsNoOp|hostLostIsTerminalBroadcastIsNoOp(){}[0]
 
     // Targets: [wasmJs]
@@ -1038,6 +1050,12 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun leaveDoesNotReportFailureAsCancellation(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.leaveDoesNotReportFailureAsCancellation|leaveDoesNotReportFailureAsCancellation(){}[0]
+
+    // Targets: [wasmJs]
+    final fun leaveEmptiesAHostsRosterBeforeItCompletesAMembersReader(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.leaveEmptiesAHostsRosterBeforeItCompletesAMembersReader|leaveEmptiesAHostsRosterBeforeItCompletesAMembersReader(){}[0]
+
+    // Targets: [wasmJs]
+    final fun leaveEmptiesAJoinersRosterBeforeItCompletesTheHostsReader(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.leaveEmptiesAJoinersRosterBeforeItCompletesTheHostsReader|leaveEmptiesAJoinersRosterBeforeItCompletesTheHostsReader(){}[0]
 
     // Targets: [wasmJs]
     final fun leaveIsIdempotent(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.leaveIsIdempotent|leaveIsIdempotent(){}[0]
@@ -1111,6 +1129,9 @@ abstract class us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite 
     final fun aNonMembersFrameNeverEntersTheRoom() // us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite.aNonMembersFrameNeverEntersTheRoom|aNonMembersFrameNeverEntersTheRoom(){}[0]
 
     // Targets: [apple]
+    final fun aRoomHostedAgainUnderAClosedRoomsNameAdmitsMembers() // us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite.aRoomHostedAgainUnderAClosedRoomsNameAdmitsMembers|aRoomHostedAgainUnderAClosedRoomsNameAdmitsMembers(){}[0]
+
+    // Targets: [apple]
     final fun broadcastOnRoomReachesOnlyRoomMembers() // us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite.broadcastOnRoomReachesOnlyRoomMembers|broadcastOnRoomReachesOnlyRoomMembers(){}[0]
 
     // Targets: [apple]
@@ -1127,6 +1148,9 @@ abstract class us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite 
 
     // Targets: [wasmJs]
     final fun aNonMembersFrameNeverEntersTheRoom(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite.aNonMembersFrameNeverEntersTheRoom|aNonMembersFrameNeverEntersTheRoom(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aRoomHostedAgainUnderAClosedRoomsNameAdmitsMembers(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite.aRoomHostedAgainUnderAClosedRoomsNameAdmitsMembers|aRoomHostedAgainUnderAClosedRoomsNameAdmitsMembers(){}[0]
 
     // Targets: [wasmJs]
     final fun broadcastOnRoomReachesOnlyRoomMembers(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite.broadcastOnRoomReachesOnlyRoomMembers|broadcastOnRoomReachesOnlyRoomMembers(){}[0]

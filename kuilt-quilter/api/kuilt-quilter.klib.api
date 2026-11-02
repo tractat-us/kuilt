@@ -48,6 +48,7 @@ final class <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.quilter/Qui
     final fun apply(us.tractat.kuilt.crdt/Patch<#A>) // us.tractat.kuilt.quilter/Quilter.apply|apply(us.tractat.kuilt.crdt.Patch<1:0>){}[0]
     final fun mutate(kotlin/Function1<#A, us.tractat.kuilt.crdt/Patch<#A>>) // us.tractat.kuilt.quilter/Quilter.mutate|mutate(kotlin.Function1<1:0,us.tractat.kuilt.crdt.Patch<1:0>>){}[0]
     final fun mutateOrSkip(kotlin/Function1<#A, us.tractat.kuilt.crdt/Patch<#A>?>): kotlin/Boolean // us.tractat.kuilt.quilter/Quilter.mutateOrSkip|mutateOrSkip(kotlin.Function1<1:0,us.tractat.kuilt.crdt.Patch<1:0>?>){}[0]
+    final suspend fun drainAndClose() // us.tractat.kuilt.quilter/Quilter.drainAndClose|drainAndClose(){}[0]
 }
 
 final class us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig { // us.tractat.kuilt.quilter/BoundedCounterEqualizerConfig|null[0]

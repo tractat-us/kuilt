@@ -86,6 +86,9 @@ public final class us/tractat/kuilt/warp/test/WasmKernelFixtures {
 	public final fun getIMPORTS ()[B
 	public final fun getINITIAL_ABOVE_DECLARED_MAX ()Lus/tractat/kuilt/warp/test/DeclaredLimitsVector;
 	public final fun getINITIAL_AT_CAP ()Lus/tractat/kuilt/warp/test/DeclaredLimitsVector;
+	public final fun getMEMORY64_MAX_2_POW_31 ()[B
+	public final fun getMEMORY64_MAX_2_POW_32 ()[B
+	public final fun getMEMORY64_WITHIN_CAP ()[B
 	public final fun getMISSING_ABI_EXPORTS ()[B
 	public final fun getMISSING_MEMORY ()[B
 	public final fun getNO_MAX_MEMORY ()[B
@@ -93,6 +96,7 @@ public final class us/tractat/kuilt/warp/test/WasmKernelFixtures {
 	public final fun getOVERSIZE_INITIAL_MEMORY ()[B
 	public final fun getOVERSIZE_MAX_MEMORY ()[B
 	public final fun getREVERSE ()[B
+	public final fun getSECOND_MEMORY_NO_MAX ()[B
 	public final fun getSTART_CPU_BOMB ()[B
 	public final fun getTRAP ()[B
 }
@@ -110,6 +114,8 @@ public abstract class us/tractat/kuilt/warp/test/WasmRuntimeConformanceSuite {
 	public final fun growPastDeclaredMaxTraps ()V
 	public final fun loadAcceptsInitialMemoryExactlyAtTheCap ()V
 	public final fun loadRejectsMalformedBytes ()V
+	public final fun loadRejectsMemory64MaxPastThe32BitRange ()V
+	public final fun loadRejectsModuleDeclaringASecondMemory ()V
 	public final fun loadRejectsModuleDeclaringMemoryWithNoMax ()V
 	public final fun loadRejectsModuleMissingAbiExports ()V
 	public final fun loadRejectsModuleMissingMemory ()V

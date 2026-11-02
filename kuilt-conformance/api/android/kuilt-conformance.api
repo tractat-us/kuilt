@@ -356,6 +356,7 @@ public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public final fun getFastHeartbeatConfig ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
 	public fun getMemberInboxCapacity ()I
 	public final fun hostFactoryAssignsHostRole ()V
+	public final fun hostLostEmptiesTheRosterBeforeItCompletesTheHostsReader ()V
 	public final fun hostLostIsTerminalBroadcastIsNoOp ()V
 	public final fun hostRoomKnowsItsRoomIdAtConstruction ()V
 	public final fun incomingFromClaimedAfterAnUnclaimedOverflowFailsNamingTheLoss ()V
@@ -373,6 +374,8 @@ public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public final fun joinerLearnsHostRoomIdOnAdmission ()V
 	public final fun leaveDoesNotMintACancellationWhenTeardownIsSlow ()V
 	public final fun leaveDoesNotReportFailureAsCancellation ()V
+	public final fun leaveEmptiesAHostsRosterBeforeItCompletesAMembersReader ()V
+	public final fun leaveEmptiesAJoinersRosterBeforeItCompletesTheHostsReader ()V
 	public final fun leaveIsIdempotent ()V
 	public final fun leaveIsIdempotentEvenWhenTeardownFails ()V
 	public final fun leaveNormalFiresLeftEventAndShrinksRoster ()V
@@ -459,6 +462,7 @@ public abstract class us/tractat/kuilt/conformance/RoomFanoutIsolationConformanc
 	public fun <init> ()V
 	public final fun aDepartedClientLeavesEveryRoomItJoined ()V
 	public final fun aNonMembersFrameNeverEntersTheRoom ()V
+	public final fun aRoomHostedAgainUnderAClosedRoomsNameAdmitsMembers ()V
 	public final fun broadcastOnRoomReachesOnlyRoomMembers ()V
 	public final fun closingOneRoomDoesNotAffectSibling ()V
 	public fun getAbsenceBudget-UwyO8pc ()J
