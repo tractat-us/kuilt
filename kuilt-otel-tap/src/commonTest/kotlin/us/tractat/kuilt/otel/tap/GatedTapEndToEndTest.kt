@@ -3,6 +3,11 @@
 package us.tractat.kuilt.otel.tap
 
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
@@ -11,14 +16,19 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
 import us.tractat.kuilt.otel.tap.admit.SendCountingSeam
 import us.tractat.kuilt.otel.tap.admit.TapAdmitMessage
+import us.tractat.kuilt.otel.tap.admit.admissionTag
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.store.InMemoryDurableStore
+import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -33,7 +43,8 @@ import kotlin.time.Instant
 /**
  * The gated tap end-to-end over an in-memory [InMemoryLoom] pair: a puller presenting the
  * valid code pulls the device buffer; a wrong code is never admitted, so the pull never
- * converges; and the default `Open` admission reproduces the ungated behaviour.
+ * converges; a peer that never proved the code is shut out of the puller too; and the
+ * default `Open` admission reproduces the ungated behaviour.
  */
 class GatedTapEndToEndTest {
     private val t0 = Instant.fromEpochSeconds(1_700_000_000)
@@ -181,14 +192,12 @@ class GatedTapEndToEndTest {
     }
 
     /**
-     * A known limit, pinned so the claim about it is a measurement. The gate guards the device and not
-     * the puller: a puller's gate is transparent, so on a fabric where joiners reach each other, its
-     * replicator hands what it has pulled to any peer that turns up, code or no code. The device never
-     * admitted this stranger, and the stranger reads the logs anyway. See "The honest limitations" in
-     * `module.md`. If this reds because the puller stopped leaking, delete it and fix that section.
+     * A stranger on the mesh after the pull. It can reach the puller, and the challenge it sends proves
+     * its collector works, so the silence that follows means something: the puller replicates only to a
+     * peer that has answered its nonce.
      */
     @Test
-    fun aStrangerJoiningAfterThePullReadsWhatThePullerHolds() = runTest(UnconfinedTestDispatcher()) {
+    fun aStrangerJoiningAfterThePullReadsNothingFromThePuller() = runTest(UnconfinedTestDispatcher()) {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
         host = installLogTap(loom, exporterWith(1), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
@@ -199,30 +208,136 @@ class GatedTapEndToEndTest {
 
         val stranger = loom.join(InMemoryTag("stranger"))
         val replicated = mutableListOf<String>()
+        var answers = 0
         backgroundScope.launch {
             stranger.incoming.collect { swatch ->
                 val frame = swatch.toByteArray()
-                if (swatch.sender == pullerSeam.selfId && !TapAdmitMessage.isAdmitFrame(frame)) {
-                    replicated += frame.decodeToString()
+                when {
+                    swatch.sender != pullerSeam.selfId -> Unit
+                    TapAdmitMessage.isAdmitFrame(frame) -> answers++
+                    else -> replicated += frame.decodeToString()
                 }
             }
         }
+        val nonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES))
+        stranger.sendTo(pullerSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
         delay(1.seconds) // suspends for real, so the collector above gets to run
 
-        assertTrue(replicated.any { "log 1" in it }, "the stranger must be reading the log body off the puller")
+        assertAll(
+            { assertEquals(1, answers, "control: the stranger reaches the puller and hears what it is sent") },
+            { assertEquals(emptyList(), replicated, "the puller must replicate nothing to a peer that never proved the code") },
+        )
     }
 
-    /** The other half of the same limit: nothing tells a puller that what it pulled came from a device. */
+    /**
+     * The other half. An `Open` device has no code to prove, so to this puller it is any stranger with a
+     * replicator: the frames arrive, and the pull does not take them. The control is
+     * `roleInvertedDeviceJoinsAndLaptopPulls`, the same rig with a device that holds the code.
+     */
     @Test
-    fun aStrangerCanHandThePullerLogsTheDeviceNeverWrote() = runTest(UnconfinedTestDispatcher()) {
+    fun aPullerHoldingACodeTakesNoLogsFromAPeerThatNeverProvedIt() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
-        val puller = LogTapClient(
-            loom.host(us.tractat.kuilt.core.Pattern("forged")), backgroundScope, config, LogTapAdmission.Present("CODE1234", Random(11)),
-        ).also { client = it }
+        val pullerSeam = IncomingCountingSeam(loom.host(us.tractat.kuilt.core.Pattern("forged")))
+        val puller = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present("CODE1234", Random(11)))
+            .also { client = it }
 
+        // `pull()` parks at awaitRemotePeer until an admitted peer exists, so it times out whether or not
+        // forged logs arrived. What the replicator holds is what `tail()` shows.
+        val seen = mutableListOf<String>()
+        backgroundScope.launch { puller.tail().collect { seen += it.body.orEmpty() } }
         host = installLogTapJoining(loom, exporterWith(1), backgroundScope, InMemoryTag("forged"), config, LogTapAdmission.Open)
+        delay(config.syncInterval * 3) // virtual time: several host syncs
 
-        assertEquals(listOf("log 1"), puller.pull().map { it.body }, "the puller takes what an unauthenticated peer offers")
+        assertAll(
+            { assertTrue(pullerSeam.received > 0, "rig: the stranger's frames must have reached the puller's gate") },
+            { assertEquals(emptyList(), seen, "the puller must hold none of the stranger's logs") },
+        )
+    }
+
+    /**
+     * Every replication frame the replicator takes earns an ack in a job of its own, so a sender that
+     * stops reading could park one job per frame on the puller. Dropping a stranger's frames at the gate
+     * is what bounds that, since no ack is ever owed. The review of #3070 measured 873 parked at 1000
+     * records with no gate here.
+     */
+    @Test
+    fun aStrangerWhoStopsReadingParksNothingOnThePullerByLoggingAtIt() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val counted = IncomingCountingSeam(loom.host(us.tractat.kuilt.core.Pattern("deaf")))
+        val pullerSeam = SendCountingSeam(counted)
+        client = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present("CODE1234", Random(11)))
+        val raw = loom.join(InMemoryTag("stranger"))
+        val deaf = object : Seam by raw {
+            override val incoming: Flow<Swatch> = flow { awaitCancellation() }
+        }
+        val exporter = WarpLogRecordExporter(replica = ReplicaId("stranger"), store = InMemoryDurableStore())
+        host = LogTapHost(deaf, exporter, backgroundScope, config, LogTapAdmission.Open)
+        runCurrent()
+
+        logAndSampleParkedSends(exporter, pullerSeam, raw.selfId)
+
+        assertAll(
+            { assertTrue(counted.received >= PARKING_RECORDS, "rig: the frames must have reached the gate, got ${counted.received}") },
+            { assertEquals(0, pullerSeam.parkedTo(raw.selfId), "nothing may park for a peer that never proved the code") },
+            { assertEquals(0, pullerSeam.deliveredTo(raw.selfId), "and nothing may be sent to it either") },
+        )
+    }
+
+    /**
+     * A known limit. A peer that really proved the code and then stops reading still parks a send per
+     * frame, because the replicator's acks have no bound of their own. On a fabric that carries a second
+     * connection under an admitted id (#3079) a stranger gets this too. The cost measured here is memory;
+     * no stall was measured.
+     *
+     * If this reds because acks are now bounded, delete it and fix "The honest limitations" in `module.md`.
+     */
+    @Test
+    fun aPeerThatProvedTheCodeAndStopsReadingStillParksASendPerFrame() = runTest(UnconfinedTestDispatcher()) {
+        val code = "CODE1234"
+        val loom = InMemoryLoom()
+        val pullerSeam = SendCountingSeam(loom.host(us.tractat.kuilt.core.Pattern("deaf")))
+        val puller = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present(code, Random(11)))
+            .also { client = it }
+        val raw = loom.join(InMemoryTag("holder"))
+
+        val nonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES))
+        raw.sendTo(pullerSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
+        val proof = TapAdmitMessage.decode(raw.incoming.first().toByteArray()) as TapAdmitMessage.Proof
+        val answerNonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 0x44 })
+        val tag = admissionTag(code, pullerSeam.selfId, raw.selfId, proof.proverNonce, answerNonce)
+        raw.sendTo(pullerSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Proof(answerNonce, ByteString(tag))))
+
+        val deaf = object : Seam by raw {
+            override val incoming: Flow<Swatch> = flow { awaitCancellation() }
+        }
+        val exporter = WarpLogRecordExporter(replica = ReplicaId("holder"), store = InMemoryDurableStore())
+        host = LogTapHost(deaf, exporter, backgroundScope, config, LogTapAdmission.Open)
+        runCurrent()
+
+        val samples = logAndSampleParkedSends(exporter, pullerSeam, raw.selfId)
+        val pulled = puller.pull()
+
+        assertAll(
+            { assertTrue(pulled.isNotEmpty(), "rig: the puller must have taken this peer's records") },
+            { assertTrue(samples.last() > samples.first(), "parked sends to one peer keep growing: $samples") },
+        )
+    }
+
+    /** Export [PARKING_RECORDS] records, one sync each, and return the parked sends to [peer] every 200. */
+    private suspend fun kotlinx.coroutines.test.TestScope.logAndSampleParkedSends(
+        exporter: WarpLogRecordExporter,
+        pullerSeam: SendCountingSeam,
+        peer: PeerId,
+    ): List<Int> {
+        val samples = mutableListOf<Int>()
+        val sender = host ?: error("rig: the host must be installed first")
+        repeat(PARKING_RECORDS) { i ->
+            exporter.export(LogRecord(recordId = ByteString(ByteArray(8) { b -> ((i shr (b * 8)) and 0xFF).toByte() }), body = "x"))
+            sender.sync()
+            runCurrent()
+            if ((i + 1) % 200 == 0) samples += pullerSeam.parkedTo(peer)
+        }
+        return samples
     }
 
     @Test
@@ -235,4 +350,14 @@ class GatedTapEndToEndTest {
 
         assertEquals(listOf("log 1", "log 2"), c.pull().map { it.body })
     }
+}
+
+private const val PARKING_RECORDS = 1000
+
+/** Counts the frames that reach whoever collects this seam, so a test can show a stranger's arrived. */
+private class IncomingCountingSeam(private val delegate: Seam) : Seam by delegate {
+    var received = 0
+        private set
+
+    override val incoming: Flow<Swatch> = delegate.incoming.onEach { received++ }
 }

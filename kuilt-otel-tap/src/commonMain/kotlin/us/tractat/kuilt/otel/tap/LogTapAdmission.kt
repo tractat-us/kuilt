@@ -16,7 +16,11 @@ import kotlin.time.Clock
  * loopback fabric where only local processes can reach the session. To expose the tap on
  * a real network, use a short-lived join code: the offering side holds [Verify] (it
  * challenges each joiner and checks their proof) and the pulling side holds [Present] (it
- * answers the challenge with the code the device showed).
+ * answers the challenge with the code the device showed, then waits for the offering side to
+ * prove the code back before it shares or takes anything).
+ *
+ * Each peer plays one role. Neither [Verify] nor [Present] on both ends converges, so a mesh
+ * where every peer both offers and pulls has no gate here yet (#2740).
  *
  * The live [Clock]/[Random] a [Verify] needs are carried here, deliberately **outside**
  * [LogTapConfig] — that is a value `data class`, and embedding live dependencies in it
@@ -44,7 +48,8 @@ public sealed interface LogTapAdmission {
     ) : LogTapAdmission
 
     /**
-     * Pulling side: answer the offering side's challenge with the shown [code].
+     * Pulling side: answer the offering side's challenge with the shown [code], and accept a peer
+     * only once it proves [code] back. A device on [Open] cannot, so a pull from one times out.
      *
      * [random] defaults to [us.tractat.kuilt.otel.tap.admit.cryptoRandom], the module's CSPRNG, so a
      * call that omits it is already secure. It sources the nonce this side puts in each answer, and a

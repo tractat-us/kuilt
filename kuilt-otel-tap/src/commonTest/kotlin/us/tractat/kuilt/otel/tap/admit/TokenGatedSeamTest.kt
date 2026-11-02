@@ -221,8 +221,8 @@ class TokenGatedSeamTest {
      *
      * `selfId` is never in `verified`, so the Verifier arm would classify a self-send as an
      * unadmitted peer and **drop** it with a debug line — a silent success from the caller's view,
-     * and the inner seam that does carry the refusal is never reached. Asserted on the verifier
-     * *because* that is the dropping arm; the prover arm forwards and would inherit it either way.
+     * and the inner seam that does carry the refusal is never reached. Both roles share that arm now,
+     * so asserting it on the verifier covers the prover too.
      */
     @Test
     fun selfSendIsRefusedByTheVerifierRatherThanDroppedAsUnadmitted() = runTest(UnconfinedTestDispatcher()) {

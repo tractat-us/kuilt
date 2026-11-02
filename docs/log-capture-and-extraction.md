@@ -223,8 +223,9 @@ correlation of two separately-extracted stores.
 - **It cannot recover what the backend dropped.** Point 1 above is the whole
   lever, and it only works if you set it beforehand.
 - **On a plain LAN WebSocket the log bytes travel unencrypted.** The join code
-  controls who may pull from the device; it does not encrypt the traffic, and it does
-  not guard the puller. See "The honest limitations" in
+  controls who may pull from the device, and whom the puller takes logs from. It does
+  not encrypt the traffic, and either side goes by a peer's name once that name has
+  proved the code. See "The honest limitations" in
   `kuilt-otel-tap/module.md`.
 - **It is another peer on the network.** It consumes an interface and a
   connection. If the bug you are chasing is about contention or interface churn,

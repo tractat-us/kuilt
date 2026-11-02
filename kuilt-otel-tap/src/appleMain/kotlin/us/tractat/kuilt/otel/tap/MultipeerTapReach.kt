@@ -14,6 +14,8 @@ import us.tractat.kuilt.otel.WarpMetricExporter
  * DTLS-encrypted link (the underlying session is created with encryption *required*), so even a
  * listener already positioned to snoop the network reads nothing. A peer that joins is not a
  * listener: the link is encrypted to it, and [MultipeerPeerLinkFactory] accepts every invitation.
+ * A joiner can also claim any peer's id, as a display name, so this path is not private either. See
+ * "The honest limitations" in `module.md`.
  *
  * It also removes the awkward role inversion the plain path needs. An iPhone can't run a
  * Wi-Fi server, so over that fabric it has to *join* a laptop-hosted rendezvous. Over Multipeer

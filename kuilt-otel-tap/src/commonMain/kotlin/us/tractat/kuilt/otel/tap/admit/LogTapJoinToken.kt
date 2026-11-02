@@ -33,10 +33,12 @@ import kotlin.time.Instant
  *   grind. A prover answers everyone, so this needs no race; see `TokenGatedSeam`.
  *
  * On both paths the tag covers a nonce the prover drew when it answered, so no table can be built
- * ahead of time and the grind cannot start until a tag is in hand. The attacker then wins only by
- * cracking the code **before the token expires** — a recovered code is useless once [isValid]
- * returns false. The short [ttl] is therefore a load-bearing security control, not a UX knob: it
- * is what limits how much of a 2⁶⁰ offline search can pay off.
+ * ahead of time and the grind cannot start until a tag is in hand. To get past the device the
+ * attacker has to crack the code **before the token expires**, since a recovered code is useless
+ * there once [isValid] returns false. The short [ttl] is therefore a load-bearing security control,
+ * not a UX knob: it is what limits how much of a 2⁶⁰ offline search can pay off. It does not bound
+ * what a recovered code can do at a puller, which holds no token and no clock, so a code recovered
+ * late still passes as the device there for as long as that puller runs.
  *
  * It limits that search and does not rule it out. Covering 2⁶⁰ inside the default window takes
  * about 4×10¹⁵ HMACs a second, and half that for an even chance. That is far past one
