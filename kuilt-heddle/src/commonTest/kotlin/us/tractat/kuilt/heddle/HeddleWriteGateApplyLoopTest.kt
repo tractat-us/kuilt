@@ -13,8 +13,6 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.ReplicaId
@@ -48,7 +46,7 @@ import kotlin.time.Instant
  * gate. Without that, "the gate did not move" is also what a rig that never reached the apply loop
  * would report.
  */
-@OptIn(ExperimentalCoroutinesApi::class, ExperimentalSerializationApi::class)
+@OptIn(ExperimentalCoroutinesApi::class)
 class HeddleWriteGateApplyLoopTest {
 
     @Test
@@ -218,10 +216,7 @@ class HeddleWriteGateApplyLoopTest {
             val governed = boot(raft, "third-party")
             val other = ReplicaId("other")
             raft.pushCommitted(
-                Cbor.encodeToByteArray(
-                    ControlEnvelope.serializer(),
-                    ControlEnvelope("other#boot#0", ControlCommand.Enroll(SELF), other),
-                ),
+                ControlLogCodec.encode(ControlEnvelope("other#boot#0", ControlCommand.Enroll(SELF), other)),
             )
             runCurrent()
 
@@ -267,7 +262,7 @@ class HeddleWriteGateApplyLoopTest {
             assertIs<ControlOutcome.Applied>(governed.enroll(SELF))
             assertIs<ControlOutcome.Applied>(governed.mint(SELF, 5L))
             assertIs<ControlOutcome.Applied>(governed.enroll(ReplicaId("other")))
-            val keys = raft.proposals.map { Cbor.decodeFromByteArray(ControlEnvelope.serializer(), it).requestKey }
+            val keys = raft.proposals.map { assertIs<ControlEntry.Act>(ControlLogCodec.decode(it)).envelope.requestKey }
 
             assertAll(
                 { assertEquals(3, keys.size, "rig: three acts proposed") },
@@ -308,7 +303,7 @@ class HeddleWriteGateApplyLoopTest {
     }
 
     private fun assertReplayedKeyIsThisIncarnations(raft: FakeRaftNode) {
-        val replayed = Cbor.decodeFromByteArray(ControlEnvelope.serializer(), raft.proposals.first())
+        val replayed = assertIs<ControlEntry.Act>(ControlLogCodec.decode(raft.proposals.first())).envelope
         assertEquals(ControlCommand.Enroll(SELF), replayed.command, "rig: the replayed act is a self-enroll")
         assertEquals(SELF, replayed.proposer, "rig: proposed by this replica")
         assertTrue(

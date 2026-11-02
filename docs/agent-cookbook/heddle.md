@@ -71,8 +71,9 @@ everyone to agree on the order so a split-brain can't double-mint and two overla
 reshapes don't corrupt the tree.
 **Primitive:** `heddleGoverned(...)` → `GovernedHeddleNode` (`:kuilt-heddle`) — the same data
 plane as `heddleStatic`, but `mint`/`prepare`/`activate`/`close`/`retire` are serialized
-through `:kuilt-raft`; each returns a `ControlOutcome` (`Applied`, or `Conflict` with the
-structured reason when it loses a race). If a gossip-lagged peer's `retire` races a delegate
+through `:kuilt-raft`; each returns a `ControlOutcome` (`Applied`, `Conflict` with the
+structured reason when it loses a race, or `Indeterminate` when this peer halted with the call in
+flight, so the act may still commit and a blind retry can double-mint). If a gossip-lagged peer's `retire` races a delegate
 and strands budget on a since-reparented child, `reconcile(child)` re-homes it — net inflow
 *and* any service already charged through it — onto the child's live lineage through the log,
 conservingly (mints nothing), clearing the resulting
@@ -94,8 +95,13 @@ quantifies over (`enrolledReplicas()` reads it back); only a peer may depart its
 **`enroll(self)` is what opens a node's write gate** — until it applies, `reserve` and
 `schedule` answer `GateClosed` (with the replica and a `Reason`), which is a separate arm from
 `ReserveOutcome.NoHoldings` and `ScheduleOutcome.NothingToDelegate`, so a node that never
-enrolled can no longer pass for an idle one. The spend path
-(`schedule`/`reserve`/`complete`) never touches the log.
+enrolled can no longer pass for an idle one. **A peer that cannot read a log entry stops there**:
+`GateClosed.Reason.UnreadableControlEntry` names the log index and format version, `enroll` is
+refused, and a restart stops at the same entry, so it takes a build that can read the entry or a
+fresh log. The same bytes stop every peer on that build, and one peer on a newer build stops older
+ones, with no way to skip. That includes bytes heddle never wrote, so give the control plane a Raft
+node of its own, with nothing else proposing into it, and upgrade a cluster together. A durable log
+from v0.7.3 stops at its first `Mint` or `Prepare`: start it fresh, as there is no migrator. The spend path (`schedule`/`reserve`/`complete`) never touches the log.
 
 <!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleHeddleGoverned -->
 ```kotlin
