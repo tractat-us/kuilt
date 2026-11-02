@@ -224,8 +224,8 @@ class WeaveCancelledMidDialTest {
      * far end that never answers the Close frame is what OkHttp sits on: it holds the socket for that
      * answer on a clock of its own, and the cancelled caller must not wait out the same clock.
      *
-     * The second assertion is the shield's. It says the close was out by the time the caller heard the
-     * cancel, and an unshielded close lets the caller go at once.
+     * The second assertion says the unclaimed session's close was still sent, on the arm where nothing
+     * else in this test would notice if it were not.
      */
     @Test
     fun aFarEndThatNeverAnswersTheCloseCannotHoldUpTheCancel() = realTime {
@@ -240,7 +240,7 @@ class WeaveCancelledMidDialTest {
                 )
             }
             assertNotNull(cancelSettled, "the cancelled weave was still waiting on the far end after $HANG_BOUND")
-            assertTrue(silent.closeFrameSeen, "the caller heard its cancel before the unclaimed session's close was out")
+            assertTrue(silent.closeFrameSeen, "the unclaimed session's close was never sent")
         } finally {
             silent.close()
         }
