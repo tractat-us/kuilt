@@ -117,6 +117,7 @@ public final class us/tractat/kuilt/heddle/ControlConflict$Refused : us/tractat/
 }
 
 public abstract interface class us/tractat/kuilt/heddle/ControlOutcome {
+	public static final field COMMIT_UNKNOWN J
 	public static final field Companion Lus/tractat/kuilt/heddle/ControlOutcome$Companion;
 	public static final field NOT_COMMITTED J
 	public abstract fun getIndex ()J
@@ -134,6 +135,7 @@ public final class us/tractat/kuilt/heddle/ControlOutcome$Applied : us/tractat/k
 }
 
 public final class us/tractat/kuilt/heddle/ControlOutcome$Companion {
+	public static final field COMMIT_UNKNOWN J
 	public static final field NOT_COMMITTED J
 }
 
@@ -145,6 +147,18 @@ public final class us/tractat/kuilt/heddle/ControlOutcome$Conflict : us/tractat/
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ControlOutcome$Conflict;JLus/tractat/kuilt/heddle/ControlConflict;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ControlOutcome$Conflict;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getConflict ()Lus/tractat/kuilt/heddle/ControlConflict;
+	public fun getIndex ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ControlOutcome$Indeterminate : us/tractat/kuilt/heddle/ControlOutcome {
+	public fun <init> (Lus/tractat/kuilt/heddle/GateClosed$Reason$UnreadableControlEntry;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/GateClosed$Reason$UnreadableControlEntry;
+	public final fun copy (Lus/tractat/kuilt/heddle/GateClosed$Reason$UnreadableControlEntry;)Lus/tractat/kuilt/heddle/ControlOutcome$Indeterminate;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ControlOutcome$Indeterminate;Lus/tractat/kuilt/heddle/GateClosed$Reason$UnreadableControlEntry;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ControlOutcome$Indeterminate;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHalt ()Lus/tractat/kuilt/heddle/GateClosed$Reason$UnreadableControlEntry;
 	public fun getIndex ()J
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -329,6 +343,19 @@ public final class us/tractat/kuilt/heddle/GateClosed$Reason$AwaitingEnrollment 
 public final class us/tractat/kuilt/heddle/GateClosed$Reason$Departed : us/tractat/kuilt/heddle/GateClosed$Reason {
 	public static final field INSTANCE Lus/tractat/kuilt/heddle/GateClosed$Reason$Departed;
 	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/GateClosed$Reason$UnreadableControlEntry : us/tractat/kuilt/heddle/GateClosed$Reason {
+	public fun <init> (JLjava/lang/Integer;)V
+	public final fun component1 ()J
+	public final fun component2 ()Ljava/lang/Integer;
+	public final fun copy (JLjava/lang/Integer;)Lus/tractat/kuilt/heddle/GateClosed$Reason$UnreadableControlEntry;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/GateClosed$Reason$UnreadableControlEntry;JLjava/lang/Integer;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/GateClosed$Reason$UnreadableControlEntry;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIndex ()J
+	public final fun getVersion ()Ljava/lang/Integer;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
