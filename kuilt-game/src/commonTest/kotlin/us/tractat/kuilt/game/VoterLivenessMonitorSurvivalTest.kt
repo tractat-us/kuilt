@@ -409,6 +409,38 @@ class VoterLivenessMonitorSurvivalTest {
         )
     }
 
+    // ── Closing the host stops the monitor ──────────────────────────────────────────────────────
+
+    /** The control for the arm below: left open, this table evicts at the window. */
+    @Test
+    fun anOpenHostEvictsAtTheWindow() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val table = riggedTable(seatCount = 2)
+
+        advance(PAST_THE_WINDOW)
+
+        assertEquals(setOf(table.hostId), table.node.membership.value.voters, "the monitor evicted at the window")
+    }
+
+    /**
+     * Closing the session stops the monitor before it stops the node, and for good. The session's
+     * scope is the caller's and closing does not end it, so nothing else would.
+     */
+    @Test
+    fun closingTheHostStopsItsMonitorBeforeItsNode() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val table = riggedTable(seatCount = 2)
+        var monitorCancelledAtNodeClose: Boolean? = null
+        table.node.onClose = { monitorCancelledAtNodeClose = table.session.livenessMonitor?.isCancelled }
+
+        table.session.close()
+        advance(PAST_THE_WINDOW)
+
+        assertAll(
+            { assertEquals(true, monitorCancelledAtNodeClose, "the node's close came after the monitor's cancel") },
+            { assertEquals(emptyList(), table.node.attempts, "no eviction after the close") },
+            { table.hostScope.assertSurvived() },
+        )
+    }
+
     // ── Vacating with nobody able to act on it ──────────────────────────────────────────────────
 
     /**

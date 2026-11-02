@@ -6,8 +6,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -23,6 +23,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.test.FakeRaftNode
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -37,7 +38,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 
 private val SEND_TIME = 1.milliseconds
-private val CLOSE_TIME = 1.milliseconds
+private val CLOSE_TIME = 2.milliseconds
 
 /** The vacate marker as it appears inside a presence frame. Only a presence board can carry it. */
 private val VACATE_BYTES = "vacate".encodeToByteArray()
@@ -95,8 +96,16 @@ private class HeldSendSeam(
     }
 }
 
+/** A stubbed node whose [close] fails, for what teardown does after that. */
+internal class ThrowingCloseNode(private val fake: FakeRaftNode) : RaftNode by fake {
+    override suspend fun close() {
+        fake.close()
+        throw IllegalStateException("node close failed")
+    }
+}
+
 /**
- * The prescribed departure, `leave()` then `close()`, must free the seat at once (#3027).
+ * What `leave()` then `close()` does (#3027), including the part that is not fixed.
  *
  * A three-voter game on [StandardTestDispatcher], so a launched send is queued until something
  * suspends, exactly as on any single-threaded dispatcher. [fastLivenessConfig]'s reconnect window is
@@ -142,24 +151,69 @@ class GameLeaveThenCloseTest {
 
     private val halfWindow = fastLivenessConfig().reconnectWindow / 2
 
-    /** The issue's shape, in the order `GameSession`'s KDoc prescribes it. */
+    private fun TestScope.assertSeatHeldThenFreedAtTheWindow(table: Table) {
+        advance(halfWindow)
+        val insideTheWindow = table.host.node.membership.value.voters
+        val hostHeard = table.host.lobbyPresence?.vacaters().orEmpty()
+        assertAll(
+            { assertEquals(0, table.seam.vacateHanded, "the vacate frame never reached the fabric") },
+            { assertEquals(emptySet(), hostHeard, "so the host's board has no marker") },
+            { assertTrue(table.leavingId in insideTheWindow, "the seat is held inside the window, voters were $insideTheWindow") },
+        )
+
+        advance(fastLivenessConfig().reconnectWindow * 2)
+
+        val afterTheWindow = table.host.node.membership.value.voters
+        assertFalse(table.leavingId in afterTheWindow, "freed after the window, voters were $afterTheWindow")
+    }
+
+    /**
+     * **The remaining gap, stated as a test.** `close` waits for nothing, so `leave()` then `close()`
+     * loses the frame and the seat waits for the window. When a public `flush` lands (#2830) and a
+     * caller can wait for the frame, this is the arm to change: it pins the behaviour of the two calls
+     * with nothing between them, which is what a caller has today.
+     */
     @Test
-    fun leaveThenCloseFreesTheSeatInsideTheWindow() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+    fun leaveThenCloseLosesTheFrameAndTheSeatWaitsForTheWindow() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val table = table()
 
         table.leaving.leave()
         assertEquals(0, table.seam.vacateEntered, "precondition: leave returned with the send still queued")
+        table.leaving.close()
 
+        assertSeatHeldThenFreedAtTheWindow(table)
+    }
+
+    /** The gap does not depend on the seam holding the send: nothing runs the send before the close. */
+    @Test
+    fun leaveThenCloseLosesTheFrameOverASeamThatNeverHolds() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val table = table(hold = {})
+
+        table.leaving.leave()
+        assertEquals(0, table.seam.vacateEntered, "precondition: leave returned with the send still queued")
+        table.leaving.close()
+
+        assertSeatHeldThenFreedAtTheWindow(table)
+    }
+
+    /**
+     * What this PR does fix: once the frame does reach the host, the host acts on it inside the window.
+     * The time between the calls stands in for the wait a caller cannot yet ask for.
+     */
+    @Test
+    fun aFrameThatGotOutBeforeTheCloseFreesTheSeatInsideTheWindow() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val table = table()
+
+        table.leaving.leave()
+        advance(SEND_TIME)
+        assertEquals(1, table.seam.vacateHanded, "precondition: the frame went through to the fabric")
         table.leaving.close()
         advance(halfWindow)
 
         val voters = table.host.node.membership.value.voters
         val hostHeard = table.host.lobbyPresence?.vacaters().orEmpty().map { it.value }
         assertAll(
-            { assertEquals(1, table.seam.vacateEntered, "the vacate frame reached the seam's send") },
-            { assertEquals(0, table.seam.vacateCancelled, "and was not cancelled out of it") },
-            { assertEquals(1, table.seam.vacateHanded, "and went through to the fabric") },
-            { assertEquals(listOf(table.leavingId.value), hostHeard, "and the host's board holds the marker") },
+            { assertEquals(listOf(table.leavingId.value), hostHeard, "the host's board holds the marker") },
             { assertFalse(table.leavingId in voters, "the host freed the seat inside the window, voters were $voters") },
             { assertEquals(2, voters.size, "and only that seat, voters were $voters") },
         )
@@ -189,7 +243,7 @@ class GameLeaveThenCloseTest {
         assertFalse(table.leavingId in afterTheWindow, "freed after the window, voters were $afterTheWindow")
     }
 
-    // ── The wait's bound, and what ends up closed however the wait ends ───────────────────────
+    // ── close waits for nothing, and what ends up closed however it is called ─────────────────
 
     /** One session over a real presence board and a [FakeRaftNode], whose `closed` can be read back. */
     private class Lone(
@@ -206,13 +260,16 @@ class GameLeaveThenCloseTest {
         }
     }
 
-    private suspend fun TestScope.lone(hold: suspend (ByteArray) -> Unit): Lone {
+    private suspend fun TestScope.lone(
+        hold: suspend (ByteArray) -> Unit,
+        wrap: (FakeRaftNode) -> RaftNode = { it },
+    ): Lone {
         val (raw, _) = seats(InMemoryLoom(), 2)
         val seam = HeldSendSeam(raw, hold)
         val mux = MuxSeam(seam, backgroundScope)
         val presence = GamePresence(mux.channel(2), backgroundScope, expectVirtualTime = true)
         val node = FakeRaftNode(NodeId(raw.selfId.value))
-        val session = GameSession(node, seam, NamedMux(mux.channel(3), backgroundScope), presence)
+        val session = GameSession(wrap(node), seam, NamedMux(mux.channel(3), backgroundScope), presence)
         runCurrent()
         return Lone(session, node, seam, presence)
     }
@@ -224,90 +281,32 @@ class GameLeaveThenCloseTest {
     }
 
     /**
-     * A caller with no timeout of its own must not hang on a seam that holds the frame for ever.
-     *
-     * The `withTimeout` stands in for "for ever", at twice the bound. Without it a lost bound leaves
-     * virtual time spinning on the session's re-arming timers until the test JVM runs out of memory,
-     * which records this arm as `skipped` rather than failed. Measured on the mutation.
+     * The ruling this PR carries: `close` does not wait, even after `leave`, even for a send already in
+     * the seam. It takes the fabric's own close and no longer, and leaves the stuck frame behind.
      */
     @Test
-    fun aWedgedSendHoldsCloseOnlyForTheBound() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+    fun closeAfterLeaveWaitsForNoSend() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val lone = lone(wedgedVacate())
 
         lone.session.leave()
+        runCurrent()
+        assertEquals(1, lone.seam.vacateEntered, "precondition: the vacate frame is stuck in the seam")
+
         val start = testScheduler.currentTime
-        withTimeout(DEPARTURE_HANDOFF_BOUND * 2) { lone.session.close() }
+        lone.session.close()
 
         assertAll(
-            {
-                assertEquals(
-                    DEPARTURE_HANDOFF_BOUND.inWholeMilliseconds + CLOSE_TIME.inWholeMilliseconds,
-                    testScheduler.currentTime - start,
-                    "close waited out the bound, then the fabric's own close, and no longer",
-                )
-            },
-            { assertEquals(1, lone.seam.vacateEntered, "precondition: the wait really was on a stuck send") },
-            { assertEquals(1, lone.seam.vacateCancelled, "expiring the bound cancelled the stuck send") },
+            { assertEquals(CLOSE_TIME.inWholeMilliseconds, testScheduler.currentTime - start, "close waited for no send") },
             { assertEquals(0, lone.seam.vacateHanded, "the frame never reached the fabric") },
             { lone.assertAllClosed() },
         )
     }
 
-    /** The caller's timeout fires during the wait: it surfaces, on time, and leaves nothing open. */
-    @Test
-    fun aCallerTimeoutDuringTheWaitStillClosesEverything() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-        val lone = lone(wedgedVacate())
-        val callerBound = DEPARTURE_HANDOFF_BOUND / 2
-
-        lone.session.leave()
-        val start = testScheduler.currentTime
-        assertFailsWith<TimeoutCancellationException> {
-            withTimeout(callerBound) { lone.session.close() }
-        }
-
-        assertAll(
-            {
-                assertEquals(
-                    callerBound.inWholeMilliseconds + CLOSE_TIME.inWholeMilliseconds,
-                    testScheduler.currentTime - start,
-                    "the caller's bound ended the wait, not the session's",
-                )
-            },
-            { assertEquals(1, lone.seam.vacateEntered, "precondition: the wait really was on a stuck send") },
-            { assertEquals(1, lone.seam.vacateCancelled, "the stuck send was cancelled") },
-            { lone.assertAllClosed() },
-        )
-    }
-
-    /** The same, for a caller cancelled from outside rather than by a bound of its own. */
-    @Test
-    fun aCancelledCallerStillClosesEverything() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-        val lone = lone(wedgedVacate())
-
-        lone.session.leave()
-        val closing = launch { lone.session.close() }
-        runCurrent()
-        assertAll(
-            { assertEquals(1, lone.seam.vacateEntered, "precondition: the wait really was on a stuck send") },
-            { assertFalse(lone.node.closed, "precondition: close is still waiting") },
-        )
-
-        closing.cancelAndJoin()
-
-        assertAll(
-            { assertTrue(closing.isCancelled, "the cancellation went on to the caller") },
-            { lone.assertAllClosed() },
-        )
-    }
-
-    /**
-     * [GameSession.close] with no departure stays a hard local teardown: a stuck send it has no reason
-     * to care about does not delay it by a single virtual millisecond beyond the fabric's own close.
-     */
+    /** The same, with no departure in the picture at all. */
     @Test
     fun closeWithoutLeaveWaitsForNoSend() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val neverReleased = CompletableDeferred<Unit>()
-        val lone = lone { neverReleased.await() }
+        val lone = lone(hold = { neverReleased.await() })
         val sendsBefore = lone.seam.sendsEntered
 
         lone.presence.declarePresent()
@@ -323,18 +322,72 @@ class GameLeaveThenCloseTest {
         )
     }
 
+    /** The caller's timeout fires during the fabric's close: it surfaces, and leaves nothing open. */
+    @Test
+    fun aCallerTimeoutDuringTheCloseStillClosesEverything() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val lone = lone(hold = { delay(SEND_TIME) })
+        val callerBound = CLOSE_TIME / 2
+
+        val start = testScheduler.currentTime
+        assertFailsWith<TimeoutCancellationException> {
+            withTimeout(callerBound) { lone.session.close() }
+        }
+
+        assertAll(
+            {
+                assertEquals(
+                    CLOSE_TIME.inWholeMilliseconds,
+                    testScheduler.currentTime - start,
+                    "the shield outlasted the caller's bound, so the fabric's close ran to its end",
+                )
+            },
+            { lone.assertAllClosed() },
+        )
+    }
+
+    /** The same, for a caller whose job was already cancelled when it called `close`. */
+    @Test
+    fun anAlreadyCancelledCallerStillClosesEverything() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val lone = lone(hold = { delay(SEND_TIME) })
+
+        var cancelledBeforeTheCall = false
+        val closing = launch {
+            coroutineContext.job.cancel()
+            cancelledBeforeTheCall = coroutineContext.job.isCancelled
+            lone.session.close()
+        }
+        closing.join()
+
+        assertAll(
+            { assertTrue(cancelledBeforeTheCall, "precondition: the job was cancelled before the call") },
+            { lone.assertAllClosed() },
+        )
+    }
+
+    /** A node whose close fails does not cost the fabric, and the failure is not swallowed. */
+    @Test
+    fun aThrowingNodeCloseStillClosesTheFabric() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val lone = lone(hold = { delay(SEND_TIME) }, wrap = { ThrowingCloseNode(it) })
+
+        val failure = assertFailsWith<IllegalStateException> { lone.session.close() }
+
+        assertAll(
+            { assertEquals("node close failed", failure.message, "the rig fired, and its failure went on to the caller") },
+            { lone.assertAllClosed() },
+        )
+    }
+
     @Test
     fun aSecondCloseAfterLeaveIsANoOp() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-        val lone = lone { delay(SEND_TIME) }
+        val lone = lone(hold = { delay(SEND_TIME) })
 
         lone.session.leave()
         lone.session.close()
-        val handed = lone.seam.vacateHanded
+        val entered = lone.seam.sendsEntered
         lone.session.close()
 
         assertAll(
-            { assertEquals(1, handed, "precondition: the first close handed the frame over") },
-            { assertEquals(1, lone.seam.vacateHanded, "the second close sent nothing") },
+            { assertEquals(entered, lone.seam.sendsEntered, "the second close sent nothing") },
             { lone.assertAllClosed() },
         )
     }
