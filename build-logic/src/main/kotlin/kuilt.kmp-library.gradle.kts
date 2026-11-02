@@ -207,8 +207,10 @@ tasks.matching { it.name == "wasmJsBrowserTest" }.configureEach {
     usesService(browserTestSerializer)
 }
 
-// ABI gate off macOS (#2684). A cinterop on a native target's `main` compilation blocks klib
-// cross-compilation, so off macOS KGP cannot build this module's Apple klibs. It then INFERS
+// ABI gate off macOS (#2684). A cinterop on ANY compilation of a native target, test included,
+// blocks klib cross-compilation for that target (KGP's KotlinNativeTarget
+// .crossCompilationOnCurrentHostSupported is `compilations.none { it.cinterops.isNotEmpty() }`),
+// so off macOS KGP cannot build this module's Apple klibs. It then INFERS
 // their dump from the targets it can build, which for these modules is wasmJs alone: a wasm-only
 // declaration (`:kuilt-warp-runtime`'s `BrowserWasmRuntime`) lands in the Apple targets and the
 // check goes red with no code change. KGP's own KDoc on keepLocallyUnsupportedTargets calls this
@@ -219,28 +221,47 @@ tasks.matching { it.name == "wasmJsBrowserTest" }.configureEach {
 // new cinterop module is covered the day it lands. Today it selects :kuilt-nw,
 // :kuilt-otel-logging and :kuilt-warp-runtime.
 //
-// afterEvaluate because the module's own build script declares its cinterops after this plugin
-// runs. The host is read through a provider inside `onlyIf`, which the configuration cache
-// serializes, rather than by an eager System.getProperty.
-afterEvaluate {
-    val appleKlibNeedsMacHost = kotlin.targets
-        .withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>()
-        .any { target -> target.compilations.findByName("main")?.cinterops?.isNotEmpty() == true }
-    if (!appleKlibNeedsMacHost) return@afterEvaluate
+// Lazy, because the module's own build script declares its cinterops after this plugin runs: the
+// first cinterop to appear installs the gate, once per module. The check and update tasks are
+// reached through abiValidation's own providers, which throw if KGP renames a task, rather than
+// by a name match that would then select nothing and let a Linux `updateKotlinAbi` write the
+// inferred dump. KGP exposes no provider for `internalDumpKotlinAbi`, so it is skipped only if
+// present by that name: skipping it merely saves the dump work, since the check and update that
+// consume it are already skipped. The host is read through a provider inside `onlyIf`, which
+// the configuration cache serializes, rather than by an eager System.getProperty. Everything sits
+// inside `run` so the `onlyIf` lambdas capture locals, never the script object.
+run {
     val hostIsMac = providers.systemProperty("os.name").map { it.startsWith("Mac") }
-    val modulePath = path
-    tasks.matching { it.name in setOf("checkKotlinAbi", "updateKotlinAbi", "internalDumpKotlinAbi") }
-        .configureEach {
-            onlyIf("$modulePath has a cinterop, so its Apple ABI is checked on macOS only") { task ->
-                val onMac = hostIsMac.get()
-                if (!onMac && task.name == "updateKotlinAbi") {
-                    task.logger.warn(
-                        "Skipping $modulePath:updateKotlinAbi off macOS: its Apple dump would be " +
-                            "inferred from wasmJs. Run it on a Mac, or " +
-                            "`gh workflow run apple-nightly.yml --ref <branch> -f update_abi=true`.",
-                    )
+    val modulePath = project.path
+    val reason = "$modulePath has a cinterop, so its Apple ABI is checked on macOS only"
+    val projectTasks = project.tasks
+    @OptIn(ExperimentalAbiValidation::class)
+    val abi = kotlin.abiValidation
+    var installed = false
+    kotlin.targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>().configureEach {
+        compilations.configureEach {
+            cinterops.configureEach {
+                if (!installed) {
+                    installed = true
+                    abi.checkTaskProvider.configure { onlyIf(reason) { hostIsMac.get() } }
+                    abi.updateTaskProvider.configure {
+                        onlyIf(reason) { task ->
+                            val onMac = hostIsMac.get()
+                            if (!onMac) {
+                                task.logger.warn(
+                                    "Skipping $modulePath:updateKotlinAbi off macOS: its Apple dump would be " +
+                                        "inferred from wasmJs. Run it on a Mac, or " +
+                                        "`gh workflow run apple-nightly.yml --ref <branch> -f update_abi=true`.",
+                                )
+                            }
+                            onMac
+                        }
+                    }
+                    if ("internalDumpKotlinAbi" in projectTasks.names) {
+                        projectTasks.named("internalDumpKotlinAbi").configure { onlyIf(reason) { hostIsMac.get() } }
+                    }
                 }
-                onMac
             }
         }
+    }
 }
