@@ -172,6 +172,7 @@ class RoomFlushTest {
 
         star.joinerB.room.leave()
         testScheduler.runCurrent()
+        assertTrue(flush.isCompleted, "the flush is still waiting on a member who has gone")
         assertEquals(FlushOutcome.Drained, flush.await(), "nothing is owed to a member who has gone")
     }
 

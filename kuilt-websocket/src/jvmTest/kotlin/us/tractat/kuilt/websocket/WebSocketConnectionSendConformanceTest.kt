@@ -24,12 +24,19 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.TestResult
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.conformance.CancelledCallerFixture
 import us.tractat.kuilt.conformance.ConnectionSendConformanceSuite
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.fabric.Connection
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
+import kotlin.test.Test
+import kotlin.test.assertIs
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
@@ -100,6 +107,16 @@ abstract class WebSocketConnectionSendConformanceRig(
             }
             WebSocketConnection(dead)
         }.await()
+
+    /**
+     * A dead session cannot confirm anything. Ktor's own `flush` is no help here: on a session that has
+     * closed it returns normally, having written nothing, and on OkHttp it does nothing at all.
+     */
+    @Test
+    fun flushOnADeadSessionReportsFailed(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            assertIs<FlushOutcome.Failed>(deadLink().flush(Duration.INFINITE))
+        }
 
     private companion object {
         const val PATH = "/send-conformance"
