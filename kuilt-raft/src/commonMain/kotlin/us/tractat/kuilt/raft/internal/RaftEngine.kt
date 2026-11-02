@@ -266,8 +266,11 @@ internal class RaftEngine(
      */
     private val clientIdProbe: ClientId = myClientId
 
-    /** Monotonic per-client serial for the auto [propose] form. Confined to the actor loop. */
-    private var serial: Long = issuedFloor
+    /**
+     * Monotonic per-client serial for the auto [propose] form, so an auto id's alone: a durable id
+     * refuses that form. Confined to the actor loop.
+     */
+    private var serial: Long = 0L
 
     /** Best-effort, non-durable leader-side dedup of recently-committed proposals. */
     private val dedupCache = LeaderDedupCache()
@@ -3558,7 +3561,22 @@ internal class RaftEngine(
         tryAdvanceLeaderCommit()
     }
 
-    override suspend fun propose(command: ByteArray): LogEntry = proposeWithRequestId(command, null)
+    /**
+     * A serial this node drew for itself can never be on disk before it is issued, so a durable id's
+     * floor could not cover it. Measured with the auto serial resuming from the floor, and the caller
+     * holding the highest serial any call had returned: the serial in flight at a crash either read
+     * as a collision on catch-up, or was drawn again and the next command was acknowledged and then
+     * dropped. A caller with no floor lost a command to a snapshot past its last entry, and mixing
+     * the forms reused a serial with no crash at all. Refused here, before anything is drawn.
+     */
+    override suspend fun propose(command: ByteArray): LogEntry {
+        check(!isDurableId) {
+            "propose(command) is refused under ClientIdentity.Durable ('${clientIdProbe.value}'): a serial the " +
+                "node draws cannot be persisted before it is issued. Commit a requestId as the new issuedThrough, " +
+                "then call propose(command, requestId), or use ClientIdentity.Auto."
+        }
+        return proposeWithRequestId(command, null)
+    }
 
     override suspend fun propose(command: ByteArray, requestId: Long): LogEntry =
         proposeWithRequestId(command, requestId)
