@@ -52,8 +52,8 @@ class TapPullerGateTest {
 
     // ── the puller ─────────────────────────────────────────────────────────────────────────────
 
-    private inner class PullerRig(scope: TestScope, vararg remotes: PeerId) {
-        val seam = FakeSeam(pullerId, setOf(pullerId, *remotes))
+    private inner class PullerRig(scope: TestScope, remotes: Set<PeerId>) {
+        val seam = FakeSeam(pullerId, remotes + pullerId)
         val gate: Seam = seam.tokenGated(GateRole.Prover(code, Random(PROVER_SEED)), scope.backgroundScope)
         val relayed = mutableListOf<Swatch>()
 
@@ -92,7 +92,7 @@ class TapPullerGateTest {
 
     @Test
     fun aPullerSurfacesAPeerOnlyAfterThatPeerAnswersItsNonce() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId)
+        val rig = PullerRig(this, setOf(deviceId))
         runCurrent()
         val onTheRoster = rig.gate.peers.value
 
@@ -111,7 +111,7 @@ class TapPullerGateTest {
 
     @Test
     fun anAnswerUnderTheWrongCodeAdmitsNobody() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId)
+        val rig = PullerRig(this, setOf(deviceId))
         with(rig) {
             val proof = challengedBy(deviceId)
             answer(deviceId, proof, usingCode = "WRONGGGG")
@@ -128,7 +128,7 @@ class TapPullerGateTest {
     /** With no challenge outstanding the puller has no nonce an answer could be over. */
     @Test
     fun anAnswerNobodyAskedForAdmitsNobody() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId)
+        val rig = PullerRig(this, setOf(deviceId))
         with(rig) {
             val unasked = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 0x09 })
             seam.deliver(deviceId, answerFrame(deviceId, unasked))
@@ -146,7 +146,7 @@ class TapPullerGateTest {
      */
     @Test
     fun aBadAnswerDoesNotSpendTheNonceTheDeviceIsAnswering() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId)
+        val rig = PullerRig(this, setOf(deviceId))
         with(rig) {
             val proof = challengedBy(deviceId)
             val garbage = TapAdmitMessage.Proof(
@@ -168,7 +168,7 @@ class TapPullerGateTest {
     /** An answer recorded earlier is over a nonce the puller has moved on from. */
     @Test
     fun aRecordedAnswerDoesNotAdmitAgainstAFreshNonce() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId)
+        val rig = PullerRig(this, setOf(deviceId))
         with(rig) {
             val earlier = challengedBy(deviceId, seed = 1)
             val later = challengedBy(deviceId, seed = 2)
@@ -194,7 +194,7 @@ class TapPullerGateTest {
     @Test
     fun aPullersOwnAnswerReflectedThroughASecondPeerDoesNotAdmit() = runTest(UnconfinedTestDispatcher()) {
         val accomplice = PeerId("accomplice")
-        val rig = PullerRig(this, strangerId, accomplice)
+        val rig = PullerRig(this, setOf(strangerId, accomplice))
         with(rig) {
             val waitingOn = challengedBy(strangerId).proverNonce
             seam.deliver(accomplice, TapAdmitMessage.encode(TapAdmitMessage.Challenge(waitingOn)))
@@ -220,7 +220,7 @@ class TapPullerGateTest {
 
     @Test
     fun aFrameFromAnUnadmittedPeerDoesNotReachTheReplicator() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId, strangerId)
+        val rig = PullerRig(this, setOf(deviceId, strangerId))
         with(rig) {
             answer(deviceId, challengedBy(deviceId))
             frameFrom(strangerId)
@@ -236,7 +236,7 @@ class TapPullerGateTest {
 
     @Test
     fun aPullerSendsNothingToAnUnadmittedPeer() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId, strangerId)
+        val rig = PullerRig(this, setOf(deviceId, strangerId))
         with(rig) {
             gate.broadcast(replicationFrame)
             gate.sendTo(strangerId, replicationFrame)
@@ -262,7 +262,7 @@ class TapPullerGateTest {
     /** A peer that returns under the same id has a new connection, and the proof was for the old one. */
     @Test
     fun aPeerThatLeavesMustProveAgain() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId)
+        val rig = PullerRig(this, setOf(deviceId))
         with(rig) {
             answer(deviceId, challengedBy(deviceId))
             val whileConnected = gate.peers.value
@@ -287,7 +287,7 @@ class TapPullerGateTest {
     /** The nonce goes too, so an answer computed before the peer left is not good after it returns. */
     @Test
     fun aNonceDoesNotOutliveThePeerItWasFor() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId)
+        val rig = PullerRig(this, setOf(deviceId))
         with(rig) {
             val proof = challengedBy(deviceId)
             seam.removePeer(deviceId)
@@ -508,7 +508,7 @@ class TapPullerGateTest {
      */
     @Test
     fun aFrameWearingTheAdmittedDevicesIdReachesThePullersReplicator() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId, strangerId)
+        val rig = PullerRig(this, setOf(deviceId, strangerId))
         with(rig) {
             frameFrom(strangerId)
             val underItsOwnId = relayed.size
@@ -529,7 +529,7 @@ class TapPullerGateTest {
      */
     @Test
     fun aChallengeWearingTheDevicesIdReplacesTheNonceTheDeviceIsAnswering() = runTest(UnconfinedTestDispatcher()) {
-        val rig = PullerRig(this, deviceId, strangerId)
+        val rig = PullerRig(this, setOf(deviceId, strangerId))
         with(rig) {
             val devicesProof = challengedBy(deviceId, seed = 1)
             challengedBy(strangerId, seed = 2)
