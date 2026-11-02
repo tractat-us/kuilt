@@ -81,7 +81,7 @@ class ExactlyOnceHappyPathTest {
                 raftConfig = MULTI_NODE_SIM_BASE_CONFIG.copy(
                     random = Random(MULTI_NODE_SIM_SEED + sim.nodeIds.size),
                 ),
-                identity = ClientIdentity.Durable(ClientId(clientId.value)),
+                identity = ClientIdentity.Durable(ClientId(clientId.value), issuedThrough = 0L),
             )
 
             val leader = sim.awaitLeader()
@@ -152,6 +152,6 @@ private fun voterAndLearnerFactory(
         transport = transport,
         storage = storage,
         raftConfig = nodeConfig,
-        identity = ClientIdentity.Durable(ClientId(id.value)),
+        identity = ClientIdentity.Durable(ClientId(id.value), issuedThrough = 0L),
     )
 }

@@ -64,7 +64,8 @@ public class FakeRaftNode(
     /**
      * This node's Raft §8 dedup identity, stamped onto the [LogEntry] returned by [propose]. Defaults
      * to a deterministic auto id derived from [selfId] (distinct per node id, stable per instance);
-     * pass a fixed [ClientId] to assert exact dedup keys.
+     * pass a fixed [ClientId] to assert exact dedup keys. A fixed id does not make this node durable:
+     * unlike a real node under `ClientIdentity.Durable`, it still accepts the one-argument [propose].
      */
     public val clientId: ClientId = ClientId.auto(selfId, Random(selfId.value.hashCode())),
     initialMembership: ClusterConfig = ClusterConfig.ofVoters(listOf(NodeId("self"))),

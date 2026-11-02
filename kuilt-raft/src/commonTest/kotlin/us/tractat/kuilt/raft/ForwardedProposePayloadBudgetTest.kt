@@ -143,7 +143,7 @@ class ForwardedProposePayloadBudgetTest {
             nodeScope = backgroundScope,
             maxPayloadBytes = leaderBudget,
             nodeFactory = { id, transport, storage, childScope ->
-                val identity = if (id == longIdNode) ClientIdentity.Durable(ClientId(longDurableId)) else ClientIdentity.Auto
+                val identity = if (id == longIdNode) ClientIdentity.Durable(ClientId(longDurableId), issuedThrough = 0L) else ClientIdentity.Auto
                 childScope.raftNode(cluster, transport, storage, config, identity)
             },
         )
@@ -163,7 +163,7 @@ class ForwardedProposePayloadBudgetTest {
         val leadersOwnLimit = assertFailsWith<PayloadTooLarge> { leader.propose(ByteArray(leaderBudget)) }.budgetBytes
         val command = commandOfWireSize(leadersOwnLimit)
         val outcome = runCatchingCancellable {
-            withTimeout(30.seconds) { sim.nodes.getValue(longIdNode).propose(command) }
+            withTimeout(30.seconds) { sim.nodes.getValue(longIdNode).propose(command, requestId = 1L) }
         }
         sim.settle()
 

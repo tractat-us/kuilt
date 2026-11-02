@@ -76,7 +76,7 @@ class NoDoubleApplyFailoverTest {
             transport = sim.network.transport(clientId),
             storage = InMemoryRaftStorage(),
             raftConfig = MULTI_NODE_SIM_BASE_CONFIG.copy(random = Random(485L + 99)),
-            identity = ClientIdentity.Durable(ClientId("client")),
+            identity = ClientIdentity.Durable(ClientId("client"), issuedThrough = 0L),
         )
         // Register so sim.awaitCommit(on = setOf(clientId)) works.
         sim.nodes[clientId] = clientNode

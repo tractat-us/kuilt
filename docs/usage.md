@@ -591,7 +591,8 @@ clientScope.launch {
 val entry: LogEntry = client.propose("action:move=1".encodeToByteArray())
 println("committed at index ${entry.index}")
 
-// For cross-crash exactly-once semantics, persist the requestId and replay it on retry.
+// For cross-crash exactly-once, see "Exactly-once proposals" below. It takes a durable identity,
+// and one of those refuses the one-argument form above.
 val entry2: LogEntry = client.propose("action:move=2".encodeToByteArray(), requestId = 42L)
 
 client.close()
@@ -608,10 +609,24 @@ an error — reconnect is correct, it costs a re-snapshot on the learner's log.
 
 ### Exactly-once proposals
 
-`propose(command)` auto-mints a monotonic `requestId`. `propose(command,
-requestId)` is the cross-crash exactly-once overload: persist `requestId` before
-calling, replay it after a crash or failover. The server's `ClientSessionTable`
-deduplicates retries transparently.
+`propose(command)` auto-mints a monotonic `requestId`, which is at-least-once
+across a crash. For cross-crash exactly-once, build the client with
+`ClientIdentity.Durable(clientId, issuedThrough)` and use `propose(command,
+requestId)`. That identity refuses the one-argument form with an
+`AutoSerialRefusedException`. The recipe:
+
+1. **Before each new command**, read the last serial from your own store, add one,
+   and commit the new serial and the command's bytes together. That serial is what
+   you hand back as `issuedThrough` at the next boot.
+2. **Propose** under that serial.
+3. **After a crash, a failover or your own timeout**, retry the same serial with the
+   stored bytes, and do that before issuing a new serial. A higher serial abandons
+   every lower one: a retry of a lower one after that returns success, commits, and
+   is dropped.
+
+Duplicates are skipped where you fold `ClientSessionTable.shouldApply` into your
+apply loop, not by the transport. `ClientIdentity.Durable`'s KDoc says what a floor
+behind the truth gets, and a clean boot does not rule one out.
 
 ### Current scope
 

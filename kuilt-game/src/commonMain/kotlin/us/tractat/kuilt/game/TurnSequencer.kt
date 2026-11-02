@@ -135,6 +135,8 @@ public class TurnSequencer<A>(
      * Use the [propose] (action, requestId) overload instead when the caller is a **durable** client
      * that needs cross-crash exactly-once (replay the same `requestId` on a post-crash retry).
      *
+     * @throws [us.tractat.kuilt.raft.AutoSerialRefusedException] if the backing node has a
+     *   [us.tractat.kuilt.raft.ClientIdentity.Durable] id, which refuses this form.
      * @throws [LeadershipLostException] if a forwarded proposal is rejected because
      *   the leader stepped down mid-flight. The caller may retry.
      */
@@ -152,7 +154,8 @@ public class TurnSequencer<A>(
      * on a post-crash retry and the consumer's [us.tractat.kuilt.raft.ClientSessionTable] skips the
      * serial it has already applied. The client supplies its stable identity at bootstrap
      * (`gameNode`/`gameHost`/`gameJoin`/`gameSpectate`'s `identity` parameter); [requestId] must be a
-     * per-client monotonic serial the caller owns — do not pass a log index or a random value.
+     * per-client monotonic serial the caller owns — do not pass a log index or a random value — and is
+     * committed as that identity's `issuedThrough` before this call.
      * A retry must resend the **same** [action], which must encode to the same bytes; a
      * [requestId] names one action and is never reused for another.
      *
