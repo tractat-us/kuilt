@@ -101,7 +101,8 @@ swapping the transport underneath one long-lived node rather than rebuilding it.
 ```kotlin
 val client: ClusterClient = clusterClientWithNode(fakeNode)
 
-// Propose with an auto-minted requestId — at-least-once but survives failover.
+// Propose with an auto-minted requestId — at-least-once but survives failover. ClientIdentity.Auto
+// only: a real node with a durable id refuses this form, which a FakeRaftNode does not model.
 val entry = client.propose("set x=1".encodeToByteArray())
 
 // Propose with a caller-pinned requestId for cross-crash exactly-once semantics.
@@ -118,13 +119,36 @@ val committed = client.committed
 request id per call, which survives a *failover* but not a *crash*: after a restart the retry looks
 like a brand-new command and can apply twice. `propose(command, requestId)` with an id you persisted
 **before** calling is the cross-crash form — the server's `ClientSessionTable` recognises the replay.
-Pair it with `ClientIdentity.Durable(clientId)`, because the identity that table keys on has to
-outlive the restart too; the default `ClientIdentity.Auto` mints a new one per incarnation, which is
-right only where at-least-once genuinely is. One trap on that pairing today: a client keeps its log
-in memory, so after a process restart its own earlier entries come back over replication and read as
-another writer, and the node fails with `ClientIdCollisionException`, tracked by #3060. Re-proposing
-your highest persisted `requestId` straight after building the client avoids it only if it gets there
-before replication does.
+Pair it with `ClientIdentity.Durable(clientId, issuedThrough)`, because the identity that table keys
+on has to outlive the restart too; the default `ClientIdentity.Auto` mints a new one per incarnation,
+which is right only where at-least-once genuinely is. A durable identity refuses the one-argument form
+with an `IllegalStateException`, since a serial the node drew for itself could not be on disk first.
+
+`issuedThrough` is that persisted id, handed back at boot. A client keeps its log in memory, so after
+a process restart its own earlier entries come back over replication, and the floor is what says they
+are its own and not another writer's. Commit it **before** each new proposal, because a floor behind
+the truth reads your own history as a `ClientIdCollisionException` on every boot, or, if a proposal
+gets in first, reuses a serial whose command a consumer's table then drops:
+
+<!-- verbatim from kuilt-raft/src/commonSamples/kotlin/us/tractat/kuilt/raft/RaftSamples.kt#sampleDurableClientIdentity -->
+```kotlin
+// The floor lives in your own store, beside the id. A sample uses the in-memory store.
+val store: DurableStore = InMemoryDurableStore()
+val floor = StoreKey("client/issued-through")
+suspend fun readFloor(): Long = store.read(floor)?.decodeToString()?.toLong() ?: 0L
+
+// Boot: read the floor and hand it over — `scope.raftNode(cluster, transport, storage, identity = identity)`.
+val identity = ClientIdentity.Durable(ClientId("checkout-client"), issuedThrough = readFloor())
+
+// A new command: commit its serial as the new floor FIRST, then `node.propose(command, requestId)`.
+val requestId = identity.issuedThrough + 1
+store.write(floor, requestId.toString().encodeToByteArray())
+
+// A crash from here on loses nothing: the next boot's floor already covers that serial, so its
+// entry coming back is not a collision, and the retry resends the same bytes under the same id.
+val restarted = ClientIdentity.Durable(identity.clientId, issuedThrough = readFloor())
+check(restarted.issuedThrough == requestId)
+```
 
 Server side: `CoroutineScope.serverCluster(host, voterIds, raftConfig)` stands the voter mesh up and
 mounts a `RoomHost` — a `KtorRoomHost` on a WebSocket path, in practice — as the relay clients attach

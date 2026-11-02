@@ -276,8 +276,9 @@ public enum class ReturnPolicy { FullMembership, Quorum }
  *   `expectVirtualTime` as its own parameter (D4).
  * @param identity How this peer obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default) mints
  *   a per-incarnation auto id (at-least-once forwarding, no cross-crash dedup). A **durable** peer
- *   passes [ClientIdentity.Durable] with a stable id it persists itself and replays the same
- *   `requestId` on [TurnSequencer.propose] after a restart. See [us.tractat.kuilt.raft.ClientSessionTable].
+ *   passes [ClientIdentity.Durable] with a stable id and serial floor it persists itself, and replays
+ *   the same `requestId` on [TurnSequencer.propose] after a restart. It takes that pinned form only:
+ *   the one-argument propose is refused. See [us.tractat.kuilt.raft.ClientSessionTable].
  * @param placement Where this session's consensus authority lives. The default
  *   [ConsensusPlacement.SessionOwned] seats [voterIds] directly — today's roster-given behaviour.
  *   [ConsensusPlacement.serverCore] seats a fixed voter core instead (all core nodes vote; a
@@ -439,8 +440,9 @@ internal fun CoroutineScope.bootstrapRosterGiven(
  *   known-local.
  * @param identity How this host obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default) mints
  *   a per-incarnation auto id (at-least-once forwarding, no cross-crash dedup). A **durable** host
- *   passes [ClientIdentity.Durable] with a stable id it persists itself and replays the same
- *   `requestId` on [TurnSequencer.propose] after a restart. See [us.tractat.kuilt.raft.ClientSessionTable].
+ *   passes [ClientIdentity.Durable] with a stable id and serial floor it persists itself, and replays
+ *   the same `requestId` on [TurnSequencer.propose] after a restart. It takes that pinned form only:
+ *   the one-argument propose is refused. See [us.tractat.kuilt.raft.ClientSessionTable].
  * @param placement How this session obtains its consensus node. The default
  *   [ConsensusPlacement.SessionOwned] constructs the singleton-then-grown host node — today's
  *   behaviour. [ConsensusPlacement.preBuilt] hands the bootstrap a caller-constructed node (e.g. a
@@ -556,8 +558,9 @@ public suspend fun CoroutineScope.gameHost(
  *   quickly under virtual time.
  * @param identity How this joiner obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default)
  *   mints a per-incarnation auto id (at-least-once forwarding, no cross-crash dedup). A **durable**
- *   joiner passes [ClientIdentity.Durable] with a stable id it persists itself and replays the same
- *   `requestId` on [TurnSequencer.propose] after a restart. See [us.tractat.kuilt.raft.ClientSessionTable].
+ *   joiner passes [ClientIdentity.Durable] with a stable id and serial floor it persists itself, and
+ *   replays the same `requestId` on [TurnSequencer.propose] after a restart. It takes that pinned form
+ *   only: the one-argument propose is refused. See [us.tractat.kuilt.raft.ClientSessionTable].
  * @param placement How this session obtains its consensus node. The default
  *   [ConsensusPlacement.SessionOwned] constructs the learner-awaiting-promotion node — today's
  *   behaviour. [ConsensusPlacement.preBuilt] hands the bootstrap a caller-constructed node (e.g. a

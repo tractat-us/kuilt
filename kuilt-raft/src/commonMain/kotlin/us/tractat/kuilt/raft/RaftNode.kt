@@ -275,6 +275,9 @@ public interface RaftNode {
      * this call suspends until the caller cancels it. Nothing ends the node: the owner must watch
      * `seam.state` and [close] the node or cancel its scope. This gap is tracked by #3053.
      *
+     * @throws IllegalStateException on a node with a [ClientIdentity.Durable] id, before anything is
+     *   drawn or sent: a serial the node drew for itself cannot be persisted before it is issued, so
+     *   that identity's floor could not cover it. Use the [requestId][propose] overload.
      * @throws LeadershipLostException if a forwarded proposal is rejected by the target leader
      *   (e.g. the leader stepped down); the caller may retry on the new leader.
      * @throws ForwardedProposalFailedException if the leader a proposal was forwarded to reports it
@@ -300,7 +303,11 @@ public interface RaftNode {
      * A **durable** client replays the *same* [requestId] on a post-crash retry to get exactly-once
      * across the crash: the proposer stamps `DedupKey(clientId, requestId)` onto the entry, it rides
      * the forward hop unchanged, and the consumer's dedup table ([ClientSessionTable]) skips a serial
-     * it has already applied. The auto-serial [propose] form draws the next monotonic serial itself.
+     * it has already applied. The auto-serial [propose] form draws the next monotonic serial itself,
+     * and is refused under a durable id.
+     *
+     * Under [ClientIdentity.Durable], commit a new [requestId] as the id's `issuedThrough` **before**
+     * this call: [ClientIdentity.Durable] says what a stale floor gets. A retry needs no new write.
      *
      * A [requestId] names one command: a retry must carry the **same command bytes**. While the
      * current leader holds the committed result in its best-effort cache, a retry gets that result
@@ -522,8 +529,9 @@ public suspend fun RaftNode.awaitRead(applied: StateFlow<Long>): Long {
  * @param identity How this node obtains its Raft §8 dedup [ClientId]. [ClientIdentity.Auto] (default)
  *   mints `ClientId.auto(thisNodeId, raftConfig.random)` — a per-incarnation id giving at-least-once
  *   forwarding without cross-crash dedup, re-minted on collision. Pass
- *   [ClientIdentity.Durable] with a **stable** [ClientId] the caller persists itself for exactly-once
- *   across process restarts (replay the same `requestId` on retry). See [ClientSessionTable].
+ *   [ClientIdentity.Durable] with a **stable** [ClientId] and the serial floor the caller persists
+ *   itself, for exactly-once across process restarts (replay the same `requestId` on retry). It
+ *   takes the pinned [RaftNode.propose] form only. See [ClientSessionTable].
  * @param onMetric Optional callback invoked on the engine's coroutine at each [RaftMetric]
  *   transition. Use to route metrics to Prometheus, StatsD, OpenTelemetry, or a test
  *   assertion. **Must not block** — the callback runs synchronously on the engine actor;

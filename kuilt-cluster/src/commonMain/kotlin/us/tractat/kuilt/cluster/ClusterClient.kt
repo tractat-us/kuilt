@@ -59,14 +59,13 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ClusterClient")
  *
  * ## Exactly-once proposals
  *
- * [propose] (no-arg overload) delegates to [RaftNode.propose] which auto-mints and
- * persists a monotonic `requestId` internally — a retry after failover with the same
- * id coalesces to the original committed entry via
- * [us.tractat.kuilt.raft.ClientSessionTable.shouldApply].
+ * [propose] (no-arg overload) delegates to [RaftNode.propose], which draws a monotonic
+ * `requestId` internally, in memory, for this incarnation only. It is refused under
+ * [ClientIdentity.Durable].
  *
  * [propose] with an explicit [requestId] is the public cross-crash exactly-once overload:
  * callers that persist a [requestId] and replay it after a crash get at-most-once
- * application of the command.
+ * application of the command, via [us.tractat.kuilt.raft.ClientSessionTable.shouldApply].
  *
  * ## Failover model (S3a API contract; S3b wires the production path)
  *
@@ -109,6 +108,9 @@ public class ClusterClient internal constructor(
      * the same `requestId` via the [propose(command, requestId)] overload.
      *
      * Returns the committed [LogEntry] — guaranteed to appear in [committed].
+     *
+     * @throws IllegalStateException if this client was built with [ClientIdentity.Durable], whose
+     *   floor could not cover a serial the node drew for itself. Use the overload with a `requestId`.
      */
     public suspend fun propose(command: ByteArray): LogEntry =
         raftNode.propose(command)
@@ -116,7 +118,8 @@ public class ClusterClient internal constructor(
     /**
      * Proposes [command] with a caller-pinned [requestId] for cross-crash exactly-once dedup.
      *
-     * The caller must persist [requestId] before invoking this method. A retry with the same
+     * The caller must persist [requestId] before invoking this method: under
+     * [ClientIdentity.Durable], as that identity's new `issuedThrough`. A retry with the same
      * [requestId] and the **same command bytes** coalesces to the original committed entry via
      * [us.tractat.kuilt.raft.ClientSessionTable.shouldApply]. A [requestId] names one command:
      * never reuse it for a different one.
@@ -235,12 +238,11 @@ public data class ClusterEndpoints(
  * @param clusterConfig Full cluster membership (voters + this learner).
  * @param raftConfig Raft timing and dedup configuration.
  * @param identity How this client obtains its Raft §8 dedup id. [ClientIdentity.Auto] (default)
- *   mints a per-incarnation id; pass [ClientIdentity.Durable] with a stable [ClientId] for
- *   cross-crash exactly-once. **A restart is exposed under that id:** this client keeps its log in
- *   memory, so when replication brings the earlier incarnation's entries back they read as another
- *   writer, and its node fails with [us.tractat.kuilt.raft.ClientIdCollisionException]. Re-proposing
- *   your highest persisted `requestId` straight after building the client raises the bar first, but
- *   that is a race with replication, not a guarantee. This trap is tracked by #3060.
+ *   mints a per-incarnation id; pass [ClientIdentity.Durable] with a stable [ClientId] and its
+ *   persisted floor for cross-crash exactly-once. **The floor is what makes a restart survivable:**
+ *   this client keeps its log in memory, so replication brings the earlier incarnation's entries
+ *   back on every boot. A floor covering them makes them this id's own. One behind them fails its
+ *   node with [us.tractat.kuilt.raft.ClientIdCollisionException].
  * @param clock Injected clock for session resume-token timestamps. **Required** — no real-clock
  *   default (prevents silent virtual-time breakage per the "optional ≠ tuning" policy).
  *   Threaded into the room-layer [SeamRoomFactory], which stamps reconnect-token `issuedAt`

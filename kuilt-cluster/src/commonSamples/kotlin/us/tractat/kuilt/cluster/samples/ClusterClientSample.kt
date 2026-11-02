@@ -39,7 +39,8 @@ object ClusterClientSample {
 
         val client: ClusterClient = clusterClientWithNode(fakeNode)
 
-        // Propose with an auto-minted requestId — at-least-once but survives failover.
+        // Propose with an auto-minted requestId — at-least-once but survives failover. ClientIdentity.Auto
+        // only: a real node with a durable id refuses this form, which a FakeRaftNode does not model.
         val entry = client.propose("set x=1".encodeToByteArray())
 
         // Propose with a caller-pinned requestId for cross-crash exactly-once semantics.

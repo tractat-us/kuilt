@@ -83,7 +83,7 @@ import kotlin.time.Instant
  *   must use `ClientIdentity.Auto`, the default: this plane replays from index 1 and restarts its
  *   request serials on every boot. Under `ClientIdentity.Durable` those reused serials can reach a
  *   leader still holding the key, which refuses different bytes with `RequestIdConflictException`,
- *   and a node that retained no log may throw on its own entries when it replays, tracked by #3060.
+ *   and no `issuedThrough` could describe a serial space that starts over at every boot.
  * @param root the root group of the fairness tree (the handle consumers build [AttachmentRecord]s
  *   against), and the group every mint this peer proposes credits its supply at. **Every peer must
  *   pass an identical value** — one ledger describes one tree (#1751). A peer that passes a

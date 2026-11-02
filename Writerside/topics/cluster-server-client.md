@@ -151,6 +151,15 @@ val entry = client.propose("action:move=2".encodeToByteArray(), requestId = 42L)
 The server's `ClientSessionTable` deduplicates retries so the command is
 applied at most once.
 
+That also needs an identity that survives the crash. Build the client with
+`ClientIdentity.Durable(clientId, issuedThrough)`, where `issuedThrough` is the
+last `requestId` you persisted. The client keeps its log in memory, so its old
+entries come back after a restart, and that number is how it knows they are its
+own. Save each new `requestId` first, then propose. If you save it after, a crash
+in between leaves the number too low: the client fails with
+`ClientIdCollisionException`, or a new command is dropped as a duplicate. This
+identity only takes the form above. The one-argument `propose()` throws.
+
 ## Failover (round-robin)
 
 When the client's link to its entry server tears, it round-robins to the next
