@@ -1,3 +1,9 @@
+public final class us/tractat/kuilt/raft/AutoSerialRefusedException : java/lang/Exception {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
 public final class us/tractat/kuilt/raft/ClientId {
 	public static final field Companion Lus/tractat/kuilt/raft/ClientId$Companion;
 	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/raft/ClientId;

@@ -993,6 +993,10 @@ sealed interface us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft
     }
 }
 
+final class us.tractat.kuilt.raft/AutoSerialRefusedException : kotlin/Exception { // us.tractat.kuilt.raft/AutoSerialRefusedException|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.raft/AutoSerialRefusedException.<init>|<init>(kotlin.String){}[0]
+}
+
 final class us.tractat.kuilt.raft/ClientIdCollisionException : kotlin/IllegalStateException { // us.tractat.kuilt.raft/ClientIdCollisionException|null[0]
     constructor <init>(kotlin/String) // us.tractat.kuilt.raft/ClientIdCollisionException.<init>|<init>(kotlin.String){}[0]
 }
