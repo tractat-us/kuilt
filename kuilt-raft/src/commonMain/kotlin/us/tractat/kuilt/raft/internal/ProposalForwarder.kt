@@ -85,6 +85,16 @@ internal class ProposalForwarder {
     private var nextForwardId: Long = 0L
 
     /**
+     * How many forwards this machine holds, sent or parked, each retaining its command bytes. Confined
+     * to the actor like the maps it reads: only a test on a single-threaded dispatcher may read it from
+     * outside.
+     */
+    val heldCount: Int get() = forwardedProposals.size
+
+    /** How many of [heldCount] are parked in [waitingForLeader]. Confined the same way. */
+    val parkedCount: Int get() = waitingForLeader.size
+
+    /**
      * Register a proposal this non-leader node must forward (Raft §8). Records a [PendingForward] under a
      * fresh correlation id and returns [ForwardDecision.SendToLeader] when a distinct leader is known — the
      * engine then sends the `Forward` — or [ForwardDecision.Queued] when none is (parked in
@@ -185,6 +195,9 @@ internal class ProposalForwarder {
         }
         return actions
     }
+
+    /** Not yet implemented: the measuring test for #3054 runs against today's behaviour. */
+    fun reapCancelled() = Unit
 
     /**
      * Fail every forwarded proposal awaiting a leader or a `ForwardResponse` with [cause] and clear both

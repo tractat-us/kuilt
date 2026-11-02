@@ -834,6 +834,9 @@ internal class RaftEngine(
     // actor teardown.
     private val forwarder = ProposalForwarder()
 
+    /** See [ProposalForwarder.heldCount]: a test's view of retained forwards, confined the same way. */
+    val forwardsHeld: Int get() = forwarder.heldCount
+
     /**
      * The shared consensus core — term/vote, log, commit/snapshot boundary, membership, and the
      * leader-side replication indices. Declared BEFORE the `init` block (#1077): the actor's
