@@ -87,6 +87,11 @@ kotlin {
         iosArm64Test.get().dependsOn(appleTest)
         iosSimulatorArm64Test.get().dependsOn(appleTest)
         macosArm64Test.get().dependsOn(appleTest)
+        // A plain loopback far end for WeaveCancelledOnDarwinTest, where the JVM's java.net has no
+        // counterpart. macOS only: an iOS simulator test needs a booted device to run.
+        macosArm64Test.dependencies {
+            implementation(libs.ktor.network)
+        }
 
         // iosMain: intermediate for both iOS K/N targets. Wired explicitly because
         // adding a manual jvmAndAndroidMain intermediate disables the KMP plugin's

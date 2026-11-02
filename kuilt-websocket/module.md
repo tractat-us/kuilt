@@ -3,6 +3,13 @@
 Connect peers through a WebSocket relay, and let each device report when its own network becomes
 unusable. The caller supplies a Ktor HTTP client; JVM and Android callers can also host the relay.
 
+## Dialling your own session
+
+`HttpClient.ownedWebSocketSession` opens a session and hands it over, or gives it up. Ktor's
+`webSocketSession` runs the handshake on the client's scope, so a cancelled caller can leave a live
+socket with no owner. Use this one whenever you open a session yourself, on CIO or Darwin if a far end
+might never answer: the OkHttp engine does not abort a dial, and its KDoc has the details.
+
 ## Device connectivity
 
 Pass a caller-owned observer to `KtorClientLoom`'s `connectivity` parameter:

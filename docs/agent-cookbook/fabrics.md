@@ -208,6 +208,44 @@ public suspend fun flushWithinSample(timeout: Duration, queueDrained: Completabl
 
 Report `Drained` only when a close after it goes out behind the frames, so it cannot be what throws them away on this device. If your `send` returns only once the frame is handed over, that is true at once: answer `Drained`, or `Failed` after a close. Otherwise ask the transport to wait. If the transport can drop a queued frame without saying so, as an OkHttp WebSocket session does, keep `Unsupported`. A decorator with no queue of its own delegates, and class delegation already does; one with a queue drains it first. To hold your fabric to it, take a `FlushFixture` arm in its `SeamConformanceSuite` harness. Only `FlushFixture.Holdable` can prove a flush waits, so prefer it where a test can reach the point a send blocks.
 
+## A cancelled dial
+
+**Intent:** you are opening a WebSocket with Ktor's `webSocketSession`, or you wrote a wrapper to stop
+what it leaks, or the far end still sees you connected after you cancelled the join.
+**Primitive:** `HttpClient.ownedWebSocketSession(url) { … }` (`:kuilt-websocket`, every target). It
+takes the same arguments and returns the same session. `KtorClientLoom`, `KtorMeshClientLoom` and
+`voterMeshOverWebSockets` all dial through it, so reach for it only when you open a session yourself.
+
+<!-- verbatim from kuilt-cluster/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/cluster/WebSocketVoterMesh.kt -->
+```kotlin
+dial = { _, peer -> WebSocketConnection(httpClient.ownedWebSocketSession(dialUrlByPeer.getValue(peer))) },
+```
+
+Ktor runs the handshake on the client's own scope and only waits for it, so cancelling ends the wait
+and the handshake carries on. When it finishes, the socket stays open with nothing holding it, until
+the session ends from outside or the `HttpClient` closes. Measured on real sockets: the far end saw no
+close within 15 s, on CIO, OkHttp and Darwin alike. Here a cancel mid-handshake aborts the request on
+CIO and Darwin, and a cancel landing as the session arrives gives that session a normal close. Only a
+return makes the session yours.
+
+**Pick CIO or Darwin if a far end might never answer.** OkHttp does not abort a dial. After a cancel
+its socket waits on OkHttp's read timeout, about 10 s by default, and with `readTimeout(0)` it was still
+open at 30 s. A far end that answers late gets a finished upgrade and then a `1011` Close frame. kuilt
+cannot reach that socket. Darwin has one narrow exception: an answer written right behind the cancel,
+on the first dial of a process, can beat it. The function's KDoc has the numbers.
+
+Two failures change shape too. A closed `HttpClient` with no session left on it throws `IOException`,
+where Ktor's call hangs forever. With another session still open, its job stays active and the dial
+simply goes ahead: on CIO and OkHttp it reached the far end and returned a session. And a cancellation
+that is not yours arrives as `IOException` rather than cancelling you.
+
+It does not put a clock on the dial, and an `HttpClient` closed during one does not end it. Bound the
+dial with a timeout around the call, which is an ordinary cancel. `install(HttpTimeout)` will not do it:
+Ktor turns the request timeout off for a WebSocket request, and a socket timeout also kills a healthy
+session that has gone idle.
+
+The same promise is what `Loom.weave` asks of any fabric: see its KDoc if you are writing one.
+
 ## Sending to yourself
 
 **Intent:** loop a frame back to your own peer — replay your own move locally, feed your own replicator, treat "everyone" uniformly by iterating `peers` and sending to each.

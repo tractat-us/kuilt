@@ -30,6 +30,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Fabrics](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md)
 - [Discovery](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#discovery)
 - [Your own transport](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#your-own-transport)
+- [A cancelled dial](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#a-cancelled-dial)
 - [Sending to yourself](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#sending-to-yourself)
 - [Payload limits](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#payload-limits)
 - [Long-lived pumps](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#long-lived-pumps)
