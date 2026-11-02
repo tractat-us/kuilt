@@ -430,6 +430,30 @@ class VoterLivenessMonitorSurvivalTest {
         )
     }
 
+    /** The set comes from the node whatever it says, even when it names neither outcome of this change. */
+    @Test
+    fun aFailedEvictionTakesTheVoterSetFromTheNode() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val table = riggedTable(seatCount = 3)
+        val (first, second) = table.peers
+        table.node.onChange = {
+            table.node.onChange = {}
+            table.node.setMembership(ClusterConfig.ofVoters(setOf(table.hostId, first.id)))
+            throw LeadershipLostException()
+        }
+
+        first.presence.declareVacate()
+        advance(FRAME_TIME)
+        assertEquals(1, table.node.attempts.size, "precondition: the first eviction was attempted")
+
+        advance(PAST_THE_WINDOW)
+
+        assertAll(
+            { assertEquals(2, table.node.attempts.size, "precondition: the rewatched voter's eviction was attempted") },
+            { assertEquals(setOf(table.hostId), table.node.attempts.last().voters, "the voter the node had dropped stays out, $second") },
+            { table.hostScope.assertSurvived() },
+        )
+    }
+
     /** A voter a failed eviction left in the membership is watched again, so its seat is not stuck. */
     @Test
     fun aVoterAFailedEvictionKeptIsWatchedAgain() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {

@@ -225,8 +225,9 @@ internal class VoterLivenessMonitor(
 
     /**
      * A change failed with the leadership, and it may or may not have landed. Takes the voter set from
-     * [node] rather than from what was attempted, and matches the detectors to it: a voter the change
-     * left in place is watched again, so its seat can still come free at the end of a window.
+     * [node] rather than from what was attempted, and watches any voter in it that has no detector: one
+     * the change left in place is watched again, so its seat can still come free at the end of a window.
+     * A detector left over for a voter no longer in the set is harmless: the eviction loop skips it.
      *
      * [RaftNode.membership] is the latest config in the log, committed or not, so this can name a set
      * that a later leader replaces. Nothing here follows that.
@@ -235,7 +236,6 @@ internal class VoterLivenessMonitor(
         val current = node.membership.value.voters
         voters.retainAll(current)
         voters.addAll(current)
-        (detectorJobs.keys - voters).forEach { gone -> detectorJobs.remove(gone)?.cancel() }
         (voters - detectorJobs.keys - self).forEach { voterId -> detectorJobs[voterId] = launchDetectorFor(voterId) }
     }
 }
