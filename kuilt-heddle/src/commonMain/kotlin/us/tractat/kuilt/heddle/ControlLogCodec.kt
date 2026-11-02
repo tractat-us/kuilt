@@ -5,25 +5,20 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 
 /**
- * What one committed log entry turned out to be, as far as heddle's control plane is concerned.
- *
- * [NotHeddle] and [Unreadable] are separate on purpose. A node that cannot read one of its own acts
- * cannot know the true control state, so it must stop; bytes heddle never wrote tell it nothing about
- * that state, so it can step over them (#1738).
+ * What one committed log entry turned out to be, as far as heddle's control plane is concerned: an act
+ * it can read, or an entry it has to stop at. There is no third answer. The log is dedicated to this
+ * control plane, so bytes heddle cannot read are never set aside as somebody else's (#1738).
  */
 internal sealed interface ControlEntry {
 
     /** A heddle act this build can read. */
     data class Act(val envelope: ControlEnvelope) : ControlEntry
 
-    /** Bytes no version of heddle wrote: neither the header nor the untagged shape every old act has. */
-    data object NotHeddle : ControlEntry
-
     /**
-     * A heddle act this build cannot read.
+     * An entry this build cannot read.
      *
-     * @property version the format it was written in: [ControlLogCodec.UNTAGGED_VERSION] for an act from
-     *   before the header existed, or `null` for one cut off before its version byte.
+     * @property version the format its header names: [ControlLogCodec.UNTAGGED_VERSION] when it has no
+     *   header, or `null` when it was cut off before its version byte.
      * @property failure the decode failure's type and message; a version this build does not know is
      *   never decoded, so there it names the version instead.
      */
@@ -36,48 +31,44 @@ internal sealed interface ControlEntry {
  * entry discriminator by ruling, because it stays inside this module and leaves other consumers'
  * logs alone.
  *
- * ## Reading a log written before the header
+ * ## An entry with no header
  *
- * Governed nodes replay from index 1 on every boot, so untagged acts stay readable for as long as this
- * build can decode them. Whether untagged bytes *are* an act is decided from a fact, not from whether
- * they happen to decode: every untagged act was written with the default [Cbor] as a [ControlEnvelope]
- * whose first property is `requestKey`, so it opens with an indefinite-length map (`0xBF`), a ten-byte
- * text key (`0x6A`) and the word `requestKey`. Nothing writes untagged acts any more, so that set of
- * writers is closed and [UNTAGGED_PREFIX] cannot drift, whatever later happens to [ControlEnvelope].
- *
- * So bytes with that opening which fail to decode are [ControlEntry.Unreadable], including a foreign
- * entry that happens to share the opening: the error is then a needless halt, never a skipped act.
- * Bytes with neither opening are [ControlEntry.NotHeddle]. The one thing that could turn an act into
- * those is corruption of its first bytes, which the crash-fault model the Raft log assumes rules out.
+ * Governed nodes replay from index 1 on every boot, so an act from before the header existed stays
+ * readable for as long as this build can decode it. Anything without the header gets that one chance:
+ * it decodes as a [ControlEnvelope] and is an act, or it does not and is [ControlEntry.Unreadable].
+ * Whether it was a heddle act from an older version or bytes heddle never wrote is deliberately not
+ * asked, because both answers stop the peer.
  *
  * **A decoding default is not a repair.** It would turn an unreadable act into a readable, wrong one.
  * `ControlCommand.Mint.root` is the sharp case: a defaulted root could admit a second root.
+ *
+ * ## A log from v0.7.3 does not carry over
+ *
+ * Its `Mint` has no `root` and its `Prepare` carries a field since deleted, so a durable log holding
+ * either stops every peer of this version at that entry. **The answer is to start a fresh log. There
+ * is no migrator, and none is planned:** that is the accepted trade for a reader that never guesses.
  */
 @OptIn(ExperimentalSerializationApi::class)
 internal object ControlLogCodec {
 
-    /** The format of an act from before the header existed. Never written any more. */
+    /** How an entry with no header reports its format. No build writes one any more. */
     const val UNTAGGED_VERSION: Int = 0
 
     /** The format this build writes, and the only tagged one it can read. */
     const val CURRENT_VERSION: Int = 1
 
     /**
-     * **Never change this; change only the version byte.** A build that meets a magic it does not know
-     * reads the entry as [ControlEntry.NotHeddle] and steps over it, so a new magic would make every
-     * older peer skip acts silently, while a new version makes them halt and say why.
+     * **Change the version byte, never this.** A build that meets a magic it does not know reads the
+     * entry as having no header, so it still stops, but it reports [UNTAGGED_VERSION] in place of the
+     * version that would have told an operator what to upgrade to.
      */
     private val MAGIC = "KHCL".encodeToByteArray()
-    private val UNTAGGED_PREFIX = byteArrayOf(0xBF.toByte(), 0x6A) + "requestKey".encodeToByteArray()
 
     fun encode(envelope: ControlEnvelope): ByteArray =
         MAGIC + CURRENT_VERSION.toByte() + Cbor.encodeToByteArray(ControlEnvelope.serializer(), envelope)
 
-    fun decode(bytes: ByteArray): ControlEntry = when {
-        bytes.opensWith(MAGIC) -> decodeTagged(bytes)
-        bytes.opensWith(UNTAGGED_PREFIX) -> decodeCbor(bytes, UNTAGGED_VERSION)
-        else -> ControlEntry.NotHeddle
-    }
+    fun decode(bytes: ByteArray): ControlEntry =
+        if (bytes.opensWith(MAGIC)) decodeTagged(bytes) else decodeCbor(bytes, UNTAGGED_VERSION)
 
     private fun decodeTagged(bytes: ByteArray): ControlEntry {
         if (bytes.size == MAGIC.size) return ControlEntry.Unreadable(null, "cut off before its version byte")

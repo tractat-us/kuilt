@@ -376,16 +376,18 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleControl
  * under a reused [incarnation]. Without it, the normal boot (enroll first, sequence number 0, replay
  * still behind) would be resolved by the old entry, opening the gate with later barriers unreplayed.
  *
- * ## The log is dedicated to this control plane, and an act it cannot read stops it
+ * ## The log is dedicated to this control plane, and an entry it cannot read stops it
  *
- * The control log is a consensus log, so a peer that cannot read one of its acts cannot know the true
- * control state. Scheduling from what happened to decode is how a conservation break arrives by a
- * second route, so [applyEntry] halts there: no later entry applies, and [submit] refuses from then
+ * The control log is a consensus log, so a peer that cannot read one of its entries cannot know the
+ * true control state. Scheduling from what happened to decode is how a conservation break arrives by
+ * a second route, so [applyEntry] halts there: no later entry applies, and [submit] refuses from then
  * on. The reason latches in [writeGateClosedBecause] and outranks enrollment (#1738). Recovery is a
- * build that can read the entry, or an explicit offline migration of the log. A restart alone
- * replays to the same entry and halts again.
+ * build that can read the entry, or starting the group on a fresh log; there is no migrator. A restart
+ * alone replays to the same entry and halts again.
  *
- * The one thing it steps over is an entry [ControlLogCodec] can show no version of heddle wrote.
+ * Nothing is stepped over, including bytes heddle never wrote: this plane cannot tell those from an
+ * act it has lost the means to read, so it does not try. Raft's own no-ops and membership entries
+ * never reach it, because raft withholds them as [Committed.Internal].
  *
  * @param membership the seam the node's local enrollment effects ride ([ControlMembershipSink]).
  * @param barrier the seam the §6.2 step-2 peer-local quiesce barrier runs on ([ControlBarrierSink]).
@@ -477,7 +479,7 @@ internal class HeddleControlPlane(
                     // (#1718); this projection tracks control state, not an index, so it ignores it.
                     is Committed.Internal -> Unit
                     // v1 does not publish snapshots to raft (compaction disabled — see heddleGoverned),
-                    // so no Install ever arrives. If one does, a shared RaftNode compacted below an
+                    // so no Install ever arrives. If one does, a RaftNode compacted below an
                     // unreplayed control entry — the projection would silently continue from a wrong
                     // state, so fail loud rather than diverge (repo fail-fast discipline).
                     is Committed.Install -> error(
@@ -628,41 +630,31 @@ internal class HeddleControlPlane(
     /**
      * Apply one delivered committed entry, in log order, or stop at it (see the class KDoc).
      *
-     * [ControlLogCodec] sorts the entry three ways:
+     * [ControlLogCodec] sorts the entry two ways:
      *
      *  - **Readable** — applied, whichever format it was written in.
-     *  - **Not heddle's** — stepped over. It contributes only its index to the delivered prefix, and is
-     *    logged at `warn` with that index, since a foreign entry on a log the control plane is meant to
-     *    own is worth someone's attention.
-     *  - **Heddle's, but unreadable** — the end of the line for this peer. The roster's applied index
-     *    stays below it, so the prefix never reads as covering an act whose effect is missing, and every
+     *  - **Unreadable** — the end of the line for this peer, whoever wrote it. The roster's applied index
+     *    stays below it, so the prefix never reads as covering an entry whose effect is missing, and every
      *    later entry returns at the top of this function. The latch therefore cannot be overwritten by a
      *    later enroll, in flight or otherwise: nothing past this point reaches the code that moves
      *    the gate.
      *
-     * Both logs interpolate the failure rather than attaching it. A trace here would be
-     * kotlinx-serialization's own frames, while the type and message are the whole diagnosis, and a
-     * foreign entry is walked again on every boot's replay (#1596).
+     * The log interpolates the failure rather than attaching it. A trace here would be
+     * kotlinx-serialization's own frames, while the type and message are the whole diagnosis (#1596).
      */
     private fun applyEntry(entry: LogEntry) {
         if (halt() != null) return
         val decoded = ControlLogCodec.decode(entry.command)
-        when (decoded) {
-            is ControlEntry.Act -> Unit
-            is ControlEntry.NotHeddle -> logger.warn {
-                "[heddle:${self.value}] skipping a non-heddle entry at index ${entry.index} " +
-                    "(term ${entry.term}, ${entry.command.size} bytes): the control log should be dedicated"
-            }
-            is ControlEntry.Unreadable -> logger.error {
-                "[heddle:${self.value}] HALTED at an unreadable control act at index ${entry.index} " +
+        if (decoded is ControlEntry.Unreadable) {
+            logger.error {
+                "[heddle:${self.value}] HALTED at an unreadable control entry at index ${entry.index} " +
                     "(term ${entry.term}, ${entry.command.size} bytes, format version ${decoded.version}). " +
-                    "Writes are refused until a build can read it or the log is migrated: ${decoded.failure}"
+                    "Writes are refused until a build can read it or the group starts a fresh log: ${decoded.failure}"
             }
         }
         lock.withLock {
             when (decoded) {
                 is ControlEntry.Unreadable -> latch(entry.index, decoded.version)
-                is ControlEntry.NotHeddle -> roster = roster.advancedTo(entry.index)
                 is ControlEntry.Act -> applyAct(decoded.envelope, entry.index)
             }
         }
@@ -681,9 +673,8 @@ internal class HeddleControlPlane(
 
     /** Apply one readable act. Called under [lock]. */
     private fun applyAct(envelope: ControlEnvelope, index: Long) {
-        // Advance the roster's applied index for every APPLIED OR STEPPED-OVER entry — it is the prefix
-        // marker `enrolledAt` answers against, so it must track the delivered log, not just the roster
-        // acts.
+        // Advance the roster's applied index for every act — it is the prefix marker `enrolledAt`
+        // answers against, so it must track the delivered log, not just the roster acts.
         //
         // It therefore tracks the *application-visible* prefix, NOT Raft's commit index: the §5.4.2
         // election no-op and configuration entries advance commitIndex but are deliberately withheld
