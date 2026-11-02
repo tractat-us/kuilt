@@ -230,12 +230,12 @@ tasks.matching { it.name == "wasmJsBrowserTest" }.configureEach {
 // consume it are already skipped. The host is read through a provider inside `onlyIf`, which
 // the configuration cache serializes, rather than by an eager System.getProperty. Everything sits
 // inside `run` so the `onlyIf` lambdas capture locals, never the script object.
+@OptIn(ExperimentalAbiValidation::class)
 run {
     val hostIsMac = providers.systemProperty("os.name").map { it.startsWith("Mac") }
     val modulePath = project.path
     val reason = "$modulePath has a cinterop, so its Apple ABI is checked on macOS only"
     val projectTasks = project.tasks
-    @OptIn(ExperimentalAbiValidation::class)
     val abi = kotlin.abiValidation
     var installed = false
     kotlin.targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>().configureEach {
