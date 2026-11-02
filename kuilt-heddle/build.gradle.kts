@@ -39,6 +39,7 @@ kotlin {
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
             implementation(project(":kuilt-raft-test"))
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.serialization.json)
         }
         jvmTest.dependencies {
