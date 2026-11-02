@@ -830,8 +830,8 @@ internal class RaftEngine(
     // Extracted to ProposalForwarder (§8): it owns the outstanding forwards awaiting a
     // ForwardResponse, the ones parked while no leader is known, and the monotonic
     // correlation nonce; the engine keeps all send/deferred.complete side-effects at the
-    // call site. Drained by flushWaitingForLeader after every non-Close command; failed on
-    // actor teardown.
+    // call site. Drained by flushWaitingForLeader after every non-Close command, released by
+    // EngineCommand.ReapCancelledForwards when a caller cancels; failed on actor teardown.
     private val forwarder = ProposalForwarder()
 
     /** See [ProposalForwarder.heldCount]: a test's view of retained forwards, confined the same way. */
@@ -1060,6 +1060,7 @@ internal class RaftEngine(
                         is EngineCommand.TransferLeadership -> onTransferLeadership(c.target, c.response)
                         is EngineCommand.CancelTransfer   -> onCancelTransfer()
                         is EngineCommand.TransferTimeout  -> onTransferTimeout(c.epoch)
+                        is EngineCommand.ReapCancelledForwards -> forwarder.reapCancelled()
                         is EngineCommand.Close            -> { cmd.close(); break }
                     }
                     if (!closing) flushWaitingForLeader()
@@ -1111,7 +1112,8 @@ internal class RaftEngine(
                         is EngineCommand.Close,
                         is EngineCommand.QuorumCheck,
                         is EngineCommand.CancelTransfer,
-                        is EngineCommand.TransferTimeout -> Unit
+                        is EngineCommand.TransferTimeout,
+                        is EngineCommand.ReapCancelledForwards -> Unit
                     }
                 }
             }
@@ -3555,8 +3557,8 @@ internal class RaftEngine(
         }
         if (_role.value !is RaftRole.Leader) {
             // Follower/Candidate/Learner: forward to the leader (Raft §8). Wait, cancellably,
-            // if none is known yet. Cleanup of cancelled entries is handled on the actor loop
-            // in flushWaitingForLeader (isCompleted check) and forwarder.failAll (finally).
+            // if none is known yet. Cleanup of cancelled entries is handled on the actor loop:
+            // EngineCommand.ReapCancelledForwards, which proposeWithRequestId enqueues on cancel.
             // Do NOT use invokeOnCompletion to mutate the forwarder maps — that runs on the
             // caller's thread and races the actor loop, which is the sole owner of the maps.
             when (val d = forwarder.forward(response, command, dedupKey, _leader.value, transport.selfId)) {
@@ -3778,10 +3780,16 @@ internal class RaftEngine(
         } finally {
             // If this coroutine was cancelled before the deferred completed, mark the deferred
             // cancelled so the actor loop's flushWaitingForLeader sees isCompleted==true and
-            // drops it rather than forwarding a cancelled request. This is the only mutation of
-            // d that touches the caller's thread; all other map/state mutations stay on the actor.
-            // cancel() on an already-completed deferred is a harmless no-op.
-            d.cancel()
+            // drops it rather than forwarding a cancelled request, then ask the actor to release
+            // whatever it still holds for it, since a forward already sent is never flushed (#3054).
+            // This is the only mutation of d that touches the caller's thread; all other map/state
+            // mutations stay on the actor. Losing the race to the actor costs one empty sweep:
+            // cancel() on a completed deferred is a harmless no-op. The channel is unlimited, so
+            // trySend fails only once it is closed, when failAll has already released everything.
+            if (!d.isCompleted) {
+                d.cancel()
+                cmd.trySend(EngineCommand.ReapCancelledForwards)
+            }
         }
     }
 

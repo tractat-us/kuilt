@@ -83,6 +83,13 @@ internal sealed interface EngineCommand {
      * operation resumes; a stale [epoch] from an already-resolved transfer's timer is ignored (#1232).
      */
     data class TransferTimeout(val epoch: Long) : EngineCommand
+
+    /**
+     * A `propose` caller left with its deferred uncompleted, so the forwarder may hold a forward nobody
+     * is waiting for (#3054). Enqueued by that caller, after the cancel and behind its own [Propose], so
+     * the actor sees the registration first and the cancelled deferred when it sweeps.
+     */
+    data object ReapCancelledForwards : EngineCommand
 }
 
 /** The result of an [EngineCommand.CommitCut]: the committed instruction prefix plus the cut index. */

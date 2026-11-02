@@ -257,7 +257,8 @@ public interface RaftNode {
      * **Cancellation is best-effort.** A forward that is still queued when the caller cancels
      * is guaranteed not to be sent. However, a command already forwarded to — or appended by —
      * the leader may still commit even if the caller cancels; Raft does not support revocation
-     * of in-flight proposals.
+     * of in-flight proposals. Either way this node releases its own copy of [command] once the caller
+     * cancels, so a timeout-and-retry loop does not accumulate them.
      *
      * **A forwarded proposal relies on caller-side timeout for a leader *crash*.** If the leader a
      * proposal was forwarded to *steps down*, its rejection surfaces here as [LeadershipLostException]
