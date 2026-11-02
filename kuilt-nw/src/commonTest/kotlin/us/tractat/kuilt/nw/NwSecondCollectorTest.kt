@@ -68,15 +68,17 @@ class NwSecondCollectorTest {
     /** Starts collecting at once, inline, so the claim is made before this returns. */
     private fun TestScope.collectorOn(seam: Seam): Collector {
         val collector = Collector()
-        collector.job = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            try {
-                seam.incoming.collect { swatch -> collector.frames += swatch.byteAt(0).toInt() }
-            } catch (refused: IllegalStateException) {
-                currentCoroutineContext().ensureActive()
-                collector.refusal = refused
-            }
-        }
+        collector.job = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { collectInto(collector, seam) }
         return collector
+    }
+
+    private suspend fun collectInto(collector: Collector, seam: Seam) {
+        try {
+            seam.incoming.collect { swatch -> collector.frames += swatch.byteAt(0).toInt() }
+        } catch (refused: IllegalStateException) {
+            currentCoroutineContext().ensureActive()
+            collector.refusal = refused
+        }
     }
 
     /** Two peers woven over one radio, handed to [block], and closed whatever [block] does. */
@@ -169,20 +171,29 @@ class NwSecondCollectorTest {
             }
         }
 
+    /**
+     * Read in one coroutine, because its [Job] is still active when it reads again: only the first collector
+     * letting go can free the seam here, not its job ending.
+     */
     @Test
-    fun aCollectorThatHasFinishedLeavesTheSeamFreeForTheNext() =
+    fun aCollectorThatHasFinishedLeavesTheSeamFreeForTheSameCoroutine() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             withFormedSeams { seam, peer ->
-                val taking = async { seam.incoming.first() }
+                val next = Collector()
+                var taken: Int? = null
+                next.job = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    taken = seam.incoming.first().byteAt(0).toInt()
+                    collectInto(next, seam)
+                }
                 testScheduler.runCurrent()
-                peer.broadcast(byteArrayOf(7))
-                val taken = taking.await()
+                peer.broadcast(byteArrayOf(FIRST_FRAME))
+                testScheduler.advanceTimeBy(50.milliseconds)
+                testScheduler.runCurrent()
 
-                val next = collectorOn(seam)
                 sendFrames(from = peer)
 
                 assertAll(
-                    { assertEquals(7, taken.byteAt(0).toInt(), "the rig's first collector did read") },
+                    { assertEquals(FIRST_FRAME.toInt(), taken, "the rig's first collector did read") },
                     { assertNull(next.refusal, "the seam was free: ${next.refusal}") },
                     { assertEquals((0 until FRAMES).toList(), next.frames) },
                 )
@@ -271,5 +282,6 @@ class NwSecondCollectorTest {
     private companion object {
         const val SERVICE: String = "_kuilt._tcp"
         const val FRAMES: Int = 20
+        const val FIRST_FRAME: Byte = 77
     }
 }
