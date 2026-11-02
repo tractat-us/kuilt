@@ -3,6 +3,8 @@ package us.tractat.kuilt.multipeer
 import com.sun.jna.Pointer
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: exercises the production IO boundary with callbacks delivered during registration and overlapping real collectors
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.LinkedBlockingQueue
@@ -12,6 +14,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -152,10 +155,10 @@ class MultipeerSharedBrowseTest {
     }
 
     /**
-     * `mc_browser_stop` does not wait for callbacks already in flight, so a found callback that was
-     * blocked on the factory's discovery lock can run after teardown. Invoking the stopped session's
-     * captured callback after `cancelAndJoin` is that interleaving, forced: the stale peer must reach
-     * neither [MultipeerPeerLinkFactory.visiblePeers] nor the next session's discovery snapshot.
+     * `mc_browser_stop` waits for callbacks in flight, so this interleaving needs a bridge breaking
+     * that promise; the factory's generation check is the backstop. Invoking the stopped session's
+     * captured callback after `cancelAndJoin` forces it: the stale peer must reach neither
+     * [MultipeerPeerLinkFactory.visiblePeers] nor the next session's discovery snapshot.
      */
     @Test
     fun foundCallbackFromAStoppedSessionNeverReachesTheNextSession() = runBlocking {
@@ -219,14 +222,105 @@ class MultipeerSharedBrowseTest {
         }
     }
 
+    /**
+     * The native stop blocks until callbacks in flight have returned, and the JVM holds its lifecycle
+     * lock across that call, so a callback that took the lock would deadlock teardown. This fake stop
+     * models that wait: it fires both callbacks from another thread and refuses to finish until they
+     * return. It says nothing about what a collector does: an unconfined `visiblePeers` collector runs
+     * inside the callback, and one that blocked would wedge a real stop with this test still green.
+     */
+    @Test
+    fun callbacksFiredDuringStopReturnWhileTheLifecycleLockIsHeld() = runBlocking {
+        val lockHeldDuringStop = AtomicReference<Boolean?>()
+        lateinit var browser: MultipeerServiceBrowser
+        lateinit var lib: BrowseLib
+        lib = BrowseLib(
+            beforeStop = {
+                val lockField = browser.javaClass.getDeclaredField("lock").apply { isAccessible = true }
+                lockHeldDuringStop.set((lockField.get(browser) as ReentrantLock).isLocked)
+                val returned = CountDownLatch(1)
+                thread {
+                    lib.fireFound("during-stop")
+                    lib.fireLost("during-stop")
+                    returned.countDown()
+                }
+                assertTrue(returned.await(30, TimeUnit.SECONDS), "a callback must never wait on teardown")
+            },
+        )
+        browser = lib.browser()
+        val ready = CountDownLatch(1)
+        val collector = launch(Dispatchers.Default) { browser.departures().collect { ready.countDown() } }
+        assertTrue(ready.await(5, TimeUnit.SECONDS), "the session must start")
+        collector.cancelAndJoin()
+        assertAll(
+            { assertEquals(true, lockHeldDuringStop.get(), "the rig must fire with the lifecycle lock held") },
+            { assertEquals(1, lib.stops.get()) },
+        )
+    }
+
+    /**
+     * Two browsers on one factory, with the first still browsing: what `mc_browser_stop` not reaching
+     * the second looks like from the JVM. The harm it guards is the one a refused browser's teardown
+     * would do, ending the first session's generation so that the first owner's next callback is
+     * dropped, which is why this fires one after the refusal rather than only reading the snapshot.
+     */
+    @Test
+    fun aRefusedSecondBrowserFailsItsCollectorAndLeavesTheFirstSessionLive() = runBlocking {
+        val lib = BrowseLib(refusesASecondSession = true)
+        val ready = CountDownLatch(1)
+        val departed = LinkedBlockingQueue<String>()
+        val first = launch(Dispatchers.Default) {
+            lib.browser().departures().collect {
+                departed.add(it)
+                ready.countDown()
+            }
+        }
+        try {
+            assertTrue(ready.await(5, TimeUnit.SECONDS), "the first session must start")
+            lib.fireFound("before")
+            val visibleBeforeRefusal = lib.factory.visiblePeers.value.map { it.handle }.toSet()
+
+            val refusal = AtomicReference<Throwable?>()
+            launch(Dispatchers.Default) {
+                try {
+                    lib.browser().discoveries().collect { }
+                } catch (failure: IllegalStateException) {
+                    currentCoroutineContext().ensureActive()
+                    refusal.set(failure)
+                }
+            }.join()
+
+            val visibleAfterRefusal = lib.factory.visiblePeers.value.map { it.handle }.toSet()
+            lib.fireFound("after")
+            val visibleAfterNextFound = lib.factory.visiblePeers.value.map { it.handle }.toSet()
+            lib.fireLost("after")
+            assertAll(
+                { assertEquals(setOf("arriving", "before"), visibleBeforeRefusal, "the rig must have a peer to lose") },
+                { assertEquals(1, lib.refusals.get(), "the second browser must have reached the refusal") },
+                { assertEquals("MultipeerPeerLinkFactory is already browsing", refusal.get()?.message) },
+                { assertEquals(visibleBeforeRefusal, visibleAfterRefusal, "a refusal must not clear the first session's peers") },
+                { assertEquals(visibleBeforeRefusal + "after", visibleAfterNextFound, "the first session must keep its generation") },
+                { assertEquals(0, lib.stops.get(), "a refused browser has no session to stop, and must not stop the first") },
+                { assertEquals(1, lib.starts.get(), "only the first browser may own a session") },
+            )
+            assertEquals("leaving", departed.poll(5, TimeUnit.SECONDS), "the registration departure comes first")
+            assertEquals("after", departed.poll(5, TimeUnit.SECONDS), "the first session's departures must still arrive")
+        } finally {
+            first.cancelAndJoin()
+        }
+        assertEquals(1, lib.stops.get(), "the first browser still owns teardown")
+    }
+
     /** Callbacks fire inline during registration, before the native start call returns. */
     private class BrowseLib(
         private val arrivalForStart: (Int) -> String = { "arriving" },
         private val beforeStop: () -> Unit = {},
+        private val refusesASecondSession: Boolean = false,
     ) : MultipeerNativeLib by FakeMultipeerNativeLib() {
         val starts = AtomicInteger()
         val stops = AtomicInteger()
         val lostFirings = AtomicInteger()
+        val refusals = AtomicInteger()
         private val found = AtomicReference<MultipeerNativeLib.PeerFoundCallback?>()
         private val lost = AtomicReference<MultipeerNativeLib.PeerLostCallback?>()
 
@@ -234,7 +328,11 @@ class MultipeerSharedBrowseTest {
 
         fun browser(): MultipeerServiceBrowser = MultipeerServiceBrowser(factory, libLoader = { this })
 
-        override fun mc_browser_start(runtime: Pointer?, peerFoundCb: MultipeerNativeLib.PeerFoundCallback): Pointer {
+        override fun mc_browser_start(runtime: Pointer?, peerFoundCb: MultipeerNativeLib.PeerFoundCallback): Pointer? {
+            if (refusesASecondSession && found.get() != null) {
+                refusals.incrementAndGet()
+                return null
+            }
             val arrival = arrivalForStart(starts.incrementAndGet())
             found.set(peerFoundCb)
             peerFoundCb.invoke(arrival, "Arrival")
