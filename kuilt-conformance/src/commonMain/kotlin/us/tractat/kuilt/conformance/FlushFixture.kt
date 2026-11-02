@@ -27,6 +27,18 @@ public sealed interface FlushFixture {
     public data class Unsupported(val trackingUrl: String) : FlushFixture
 
     /**
+     * A role-split harness whose host seam answers `FlushOutcome.Unsupported`, while its joiner is a
+     * different seam that confirms a drain. A hub and its spokes have this shape: the members of a tiered
+     * union are not themselves tiered.
+     *
+     * Checked at both ends, like the rest. **Runs no delivery property**, because the suite's burst
+     * properties cover both directions and only the joiner's would mean anything here.
+     *
+     * @property trackingUrl where the host's gap is tracked.
+     */
+    public data class HostUnsupported(val trackingUrl: String) : FlushFixture
+
+    /**
      * This fabric confirms a drain, and the harness cannot stop a send partway.
      *
      * Two honest reasons: the reference has no queue to hold, and a real socket has no test-side

@@ -56,6 +56,15 @@ class FlushFixtureRigTest {
             .runFlushDeclarationIsHonest(this)
     }
 
+    /** The role-split arm is a claim about each end, so a harness whose host confirms a drain is refused. */
+    @Test
+    fun hostUnsupportedOnAHostThatConfirmsIsRefused(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val failure = assertFailsWith<AssertionError> {
+            harness(pair(InMemoryLoom()), FlushFixture.HostUnsupported(CapabilityGaps.FLUSH)).runFlushDeclarationIsHonest(this)
+        }
+        assertTrue("HostUnsupported" in failure.message.orEmpty(), "red on the arm: ${failure.message}")
+    }
+
     /** The lie the reference cannot show: a seam answering `Drained` with a send still stuck. */
     @Test
     fun aSeamThatClaimsADrainWithoutWaitingIsCaught(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {

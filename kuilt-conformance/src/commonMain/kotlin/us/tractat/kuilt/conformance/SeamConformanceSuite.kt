@@ -1853,6 +1853,15 @@ public abstract class SeamConformanceSuite {
                             "A seam that now confirms a drain needs a harness arm that tests it",
                     )
                 }
+                is FlushFixture.HostUnsupported -> {
+                    assertTrue(fixture.trackingUrl.isNotBlank(), "a tracked gap names where it is tracked")
+                    assertEquals(
+                        listOf<FlushOutcome>(FlushOutcome.Unsupported, FlushOutcome.Drained),
+                        outcomes,
+                        "this harness declares FlushFixture.HostUnsupported: the host cannot tell, and its " +
+                            "joiner, a different seam, confirms a drain",
+                    )
+                }
                 is FlushFixture.CannotHold -> {
                     assertTrue(fixture.reason.isNotBlank(), "CannotHold says why, for the next reader")
                     assertEquals(
@@ -1882,7 +1891,7 @@ public abstract class SeamConformanceSuite {
     public fun hostBurstSurvivesFlushThenClose(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             connectedPair { host, joiner ->
-                if (flushFixture() !is FlushFixture.Unsupported) assertBurstSurvivesFlushThenClose(host, joiner)
+                if (flushFixture().confirmsADrain) assertBurstSurvivesFlushThenClose(host, joiner)
             }
         }
 
@@ -1891,7 +1900,7 @@ public abstract class SeamConformanceSuite {
     public fun joinerBurstSurvivesFlushThenClose(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             connectedPair { host, joiner ->
-                if (flushFixture() !is FlushFixture.Unsupported) assertBurstSurvivesFlushThenClose(joiner, host)
+                if (flushFixture().confirmsADrain) assertBurstSurvivesFlushThenClose(joiner, host)
             }
         }
 
@@ -1911,7 +1920,7 @@ public abstract class SeamConformanceSuite {
     public fun flushOnATornSeamReportsFailed(): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             connectedPair { host, _ ->
-                if (flushFixture() is FlushFixture.Unsupported) return@connectedPair
+                if (!flushFixture().confirmsADrain) return@connectedPair
                 host.close()
                 assertIs<FlushOutcome.Failed>(host.flush(Duration.INFINITE), "a torn seam reports Failed")
             }
@@ -2064,6 +2073,10 @@ public abstract class SeamConformanceSuite {
                 assertEquals("held", received.await())
             }
         }
+
+    /** Whether this arm says both ends of the pair confirm a drain, so a delivery property can run. */
+    private val FlushFixture.confirmsADrain: Boolean
+        get() = this is FlushFixture.CannotHold || this is FlushFixture.Holdable
 
     /** Run [block] sending from each end in turn, over a fresh pair each time. No-op unless holdable. */
     private suspend fun TestScope.forEachHeldEnd(
