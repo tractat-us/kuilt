@@ -26,6 +26,11 @@ public interface Connection {
      * Send one whole message. Suspends until the transport accepts it (backpressure).
      *
      * A send failure must **not** be reported as a cancellation — see [us.tractat.kuilt.core.Seam.close].
+     * That includes a link that has died: a transport reporting its own closure as a cancellation is
+     * the commonest way to break this, and Ktor's WebSocket session does it (#3083). Catch the
+     * cancellation, call `currentCoroutineContext().ensureActive()` so the caller's own still
+     * propagates, and throw an ordinary exception. Held for each real transport by
+     * `ConnectionSendConformanceSuite`.
      */
     public suspend fun send(frame: ByteArray)
 
@@ -58,6 +63,11 @@ class MyRpcConnection(private val rpc: YourRpcSession) : Connection {
 
 The `incoming` flow from a message-based RPC is already hot (the transport
 delivers frames in the background; you just consume them). No pump needed.
+
+If `rpc.send` can throw a cancellation once the session has closed, as a Ktor session's
+does, this one-line `send` passes it on and breaks the contract above.
+[The send suite](#if-you-wrote-a-connection-connectionsendconformancesuite) shows the
+guard and holds you to it.
 
 ### Step 2 — choose an identity strategy
 
