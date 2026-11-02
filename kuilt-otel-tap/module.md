@@ -99,8 +99,8 @@ in.
   `os_log`/logcat), so surfacing it is the app's call.
 - **In the puller:** pass
   [LogTapAdmission.Present][us.tractat.kuilt.otel.tap.LogTapAdmission.Present] with
-  the code you read off the device. A wrong or expired code is refused, and the
-  replicator never sees the unauthorized peer.
+  the code you read off the device, plus the same secure source. A wrong or expired
+  code is refused, and the device's replicator never sees the unauthorized peer.
 
 <!-- verbatim from kuilt-otel-tap/src/commonSamples/kotlin/us/tractat/kuilt/otel/tap/Samples.kt#sampleGatedLogTap -->
 ```kotlin
@@ -124,7 +124,7 @@ val host = installLogTap(loom, exporter, scope, admission = LogTapAdmission.Veri
 val client = LogTapClient(
     loom.join(InMemoryTag("puller")),
     scope,
-    admission = LogTapAdmission.Present(token.code),
+    admission = LogTapAdmission.Present(token.code, secure),
 )
 val logs: List<LogRecord> = client.pull()
 
@@ -146,20 +146,22 @@ can **join** a session your laptop hosts and its logs still flow to the laptop. 
 [installLogTapJoining][us.tractat.kuilt.otel.tap.installLogTapJoining] on the phone
 (it discovers and joins) while the laptop hosts and advertises.
 
-### iPhone ↔ Mac, encrypted end to end (Apple Multipeer)
+### iPhone ↔ Mac, encrypted on the air (Apple Multipeer)
 
 On Apple devices there is a stronger path. Apple's Multipeer Connectivity fabric
-carries every frame over an encrypted link out of the box, so the logs themselves —
-not just *who may pull* — are protected from anyone snooping the network. It also
-drops the role inversion above: an iPhone advertises itself natively over Multipeer,
-so it simply **hosts** the tap and a nearby **Mac** discovers it and pulls.
+carries every frame over an encrypted link out of the box, so someone listening to the
+network cannot read the logs as they pass. That is all the encryption does. A link is
+encrypted to whoever is on the other end of it, and any nearby Mac can join, so it does
+not keep a stranger out. See "The honest limitations" below. This path also drops the
+role inversion above: an iPhone advertises itself natively over Multipeer, so it simply
+**hosts** the tap and a nearby **Mac** discovers it and pulls.
 
 - **On the iPhone:** call
   [installMultipeerLogTap][us.tractat.kuilt.otel.tap.installMultipeerLogTap] with a
   [MultipeerPeerLinkFactory][us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory].
-  The link is already encrypted; layer a join code on top with
-  [LogTapAdmission.Verify][us.tractat.kuilt.otel.tap.LogTapAdmission.Verify] when you
-  also want admission control — the *same* fabric-agnostic gate, unchanged.
+  Pass a join code with
+  [LogTapAdmission.Verify][us.tractat.kuilt.otel.tap.LogTapAdmission.Verify], or any Mac in
+  range can join and pull — the *same* fabric-agnostic gate, unchanged.
 - **On the Mac:** discover the iPhone over Multipeer, join, and pull with a
   [LogTapClient][us.tractat.kuilt.otel.tap.LogTapClient]. Metrics ride the same
   encrypted fabric via
@@ -220,11 +222,44 @@ Worth stating before you rely on it in an incident.
 The full procedure, including what to set and in what order, is in
 [`docs/log-capture-and-extraction.md`](../docs/log-capture-and-extraction.md).
 
-### The one honest limitation
+### The honest limitations
 
-Over a plain LAN WebSocket the log bytes themselves travel **unencrypted**. The
-join code controls *who is allowed to pull* — it does not encrypt the traffic, so
-someone already positioned to snoop the network could read logs of a session that
-was legitimately admitted. Where that matters, use the encrypted Multipeer path
-above (Apple-only), or another encrypted fabric. On the WebSocket path this module's
-guarantee is *admission control*, deliberately and only.
+The join code keeps a stranger on the network from walking up to your phone and
+reading its logs. It is a debugging lock, and five things sit outside it.
+
+**Over a plain LAN WebSocket the log bytes travel unencrypted.** The join code
+controls *who is allowed to pull* — it does not encrypt the traffic, so someone
+already positioned to snoop the network could read logs of a session that was
+legitimately admitted. Where a listener is the worry, use the encrypted Multipeer path
+above (Apple-only), or another encrypted fabric. That stops someone reading the traffic
+and does not stop someone joining, which is the next limitation. On the WebSocket path
+this module's guarantee is *admission control*, deliberately and only.
+
+**The lock is on the device, and the puller has none.** The puller shares what it
+holds with whoever reaches it, and it takes what they send. Where peers can see each
+other, as on Multipeer, a stranger who cannot get past the phone can get the same logs
+from the laptop that pulled them, and can hand that laptop forged ones. Keep the
+puller on a link only it and the device can reach, and close it when you are done.
+
+**The code can be guessed, at a price.** It has about a billion billion possible
+values, and anyone who reaches the puller can get one answer out of it to test guesses
+against at home. That answer is only useful while the code is valid, which is why a
+code lasts five minutes. Trying them all in that time takes about four quadrillion
+guesses a second. No laptop gets close, but it is a price and not a wall, so this keeps
+out everyone short of an attacker with serious money to spend on you.
+
+**An attacker in the middle can still get in.** One who passes as the laptop to the
+phone and as the phone to the laptop can be admitted without knowing the code, by passing
+the handshake along. The handshake stops an attacker who shows up under its own name. It
+cannot stop one who claims both names, because nothing vouches for who a peer says it is.
+
+**Getting in once lets in anyone who borrows the name.** The phone remembers which name
+proved the code, not which connection did. Where a fabric will carry a second connection
+under that name, that connection is let in too, with no code at all, and it can read what
+the phone sends that name. The same trick can use up a peer's one challenge and shut it
+out until it reconnects. Reading the source says Multipeer and a hub with no attestation
+both allow this. Nobody has yet run it.
+
+Under the surface: an answer is an HMAC under the code over a nonce from each side and
+both peers' ids. Peers from before this format and peers after it refuse each other,
+so upgrade both ends together.

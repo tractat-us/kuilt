@@ -12,7 +12,7 @@ import kotlin.time.Instant
  * The device **shows** this code — printed once to the platform log (Xcode console /
  * logcat / stdout) or surfaced in an app debug UI — and the operator types it into the
  * puller. The code itself never crosses the wire: the puller proves knowledge of it by
- * returning `HMAC-SHA256(code, nonce)` to the device's challenge (see [TokenGatedSeam]).
+ * answering the device's challenge with an HMAC keyed by the code (see [admissionTag]).
  *
  * The token is valid only within [ttl] of [issuedAt], and is **reusable** for repeated
  * pulls or reconnects inside that window (so a `LogTapClient` that reconnects re-admits
@@ -23,28 +23,26 @@ import kotlin.time.Instant
  *
  * ### Entropy ↔ TTL: why the window is short (and must stay short)
  *
- * The code carries about 2⁴⁰ of entropy (8 characters over a 32-symbol alphabet). On the
+ * The code carries 2⁶⁰ of entropy (12 characters over a 32-symbol alphabet). On the
  * plaintext (`ws://`) wire that this tap targets, the code's secrecy is bounded **in time,
  * not just in size**. Two offline-cracking paths exist within the accepted honest-seam
  * threat model:
- * - a **passive eavesdropper** captures a `Challenge` nonce and the matching `Proof` tag
- *   and grinds candidate codes offline against `HMAC-SHA256(candidate, nonce)`;
- * - in the **role-inverted topology** (the prover hosts), an attacker sends the hosting
- *   prover a `Challenge` purely to harvest a `HMAC(code, nonce)` tag to grind.
+ * - a **passive eavesdropper** captures a `Challenge` and the matching `Proof` and grinds
+ *   candidate codes offline against [admissionTag];
+ * - any peer that can reach a prover sends it a `Challenge` purely to **harvest** a `Proof` to
+ *   grind. A prover answers everyone, so this needs no race; see `TokenGatedSeam`.
  *
- * On the **eavesdropper** path the nonce is the verifier's own fresh random value, so the grind
- * cannot start until the tag is captured and the attacker only wins by cracking the code
- * **before the token expires** — a recovered code is useless once [isValid] returns false. The
- * short [ttl] is therefore a load-bearing security control on that path, not a UX knob: it is
- * what keeps a ~2⁴⁰ offline search from being worthwhile.
+ * On both paths the tag covers a nonce the prover drew when it answered, so no table can be built
+ * ahead of time and the grind cannot start until a tag is in hand. The attacker then wins only by
+ * cracking the code **before the token expires** — a recovered code is useless once [isValid]
+ * returns false. The short [ttl] is therefore a load-bearing security control, not a UX knob: it
+ * is what limits how much of a 2⁶⁰ offline search can pay off.
  *
- * The **harvest** path is weaker, and the [ttl] does not bound it (#1865). There the nonce is
- * chosen by the attacker, who can pick a fixed value and precompute the whole ~2⁴⁰ table
- * *before the token is minted*, making recovery on harvest a lookup. Enforcing the nonce's width
- * (#1820) makes the challenge well-formed, not fresh, and does not change that. The only control
- * on this path today is `TokenGatedSeam`'s first-challenger binding, which makes the harvest a
- * race the attacker must win rather than a certainty. Closing it properly needs
- * prover-contributed freshness in the `Proof` frame — a wire change, tracked in #1865.
+ * It limits that search and does not rule it out. Covering 2⁶⁰ inside the default window takes
+ * about 4×10¹⁵ HMACs a second, and half that for an even chance. That is far past one
+ * general-purpose machine and not past what a funded attacker could build, and a prover hands one
+ * tag to anyone who asks. So the margin is a cost and not a proof. Keeping the code off the table
+ * entirely takes a key exchange the code authenticates, which this handshake is not.
  *
  * **WARNING — do not raise [DEFAULT_TTL].** Widening the window trades directly against the
  * code's entropy: every extra minute is extra offline-cracking budget on the plaintext wire.
@@ -66,7 +64,7 @@ public class LogTapJoinToken(
     public companion object {
         /**
          * Default pairing window: long enough to read and type the code, short enough to bound
-         * an offline crack of the ~2⁴⁰ code on the plaintext wire.
+         * an offline crack of the 2⁶⁰ code on the plaintext wire.
          *
          * **Do not raise this.** The TTL bounds the attacker's offline-cracking budget; see the
          * "Entropy ↔ TTL" note on [LogTapJoinToken]. Add entropy or encrypt the transport instead.
@@ -75,7 +73,7 @@ public class LogTapJoinToken(
 
         // Crockford base32 — omits I/L/O/U so the code is unambiguous when read aloud or typed.
         private const val ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-        private const val CODE_LENGTH = 8
+        private const val CODE_LENGTH = 12
 
         /**
          * Mint a fresh token: a [CODE_LENGTH]-character code drawn from [random], stamped with

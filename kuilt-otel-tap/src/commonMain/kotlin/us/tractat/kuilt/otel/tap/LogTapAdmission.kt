@@ -26,14 +26,15 @@ public sealed interface LogTapAdmission {
     public data object Open : LogTapAdmission
 
     /**
-     * Offering side: challenge joiners and admit only those whose proof matches
-     * `HMAC-SHA256(token.code, nonce)` while [token] is valid.
+     * Offering side: challenge joiners and admit only those whose proof of [token]'s code is good
+     * for that exchange while [token] is valid.
      *
      * **[random] MUST be cryptographically secure in production** — pass
-     * [us.tractat.kuilt.otel.tap.admit.cryptoRandom]. It sources the per-challenge nonces,
-     * whose unpredictability is what makes each challenge fresh (replay resistance); a
-     * predictable source weakens that. The `Random` parameter is injectable **only so tests
-     * can supply a seeded, deterministic source**, never as licence for `Random.Default`.
+     * [us.tractat.kuilt.otel.tap.admit.cryptoRandom]. It sources the per-challenge nonces, and a
+     * fresh one each time is the whole of the replay defence: a peer wearing the right ids can replay
+     * a recorded proof against any nonce that repeats, so a predictable source breaks it. The `Random`
+     * parameter is injectable **only so tests can supply a seeded, deterministic source**, never as
+     * licence for `Random.Default`.
      */
     public class Verify(
         public val token: LogTapJoinToken,
@@ -41,8 +42,16 @@ public sealed interface LogTapAdmission {
         public val random: Random,
     ) : LogTapAdmission
 
-    /** Pulling side: answer the offering side's challenge with the shown [code]. */
-    public class Present(public val code: String) : LogTapAdmission
+    /**
+     * Pulling side: answer the offering side's challenge with the shown [code].
+     *
+     * **[random] MUST be cryptographically secure in production** — pass
+     * [us.tractat.kuilt.otel.tap.admit.cryptoRandom]. It sources the nonce this side puts in each
+     * answer, and a peer that could predict that nonce could build a table of answers for every code
+     * in advance and read the code off a single one. The `Random` parameter is injectable **only so
+     * tests can supply a seeded, deterministic source**, never as licence for `Random.Default`.
+     */
+    public class Present(public val code: String, public val random: Random) : LogTapAdmission
 }
 
 /** The gate role a peer that **offers** its logs plays. `null` for [LogTapAdmission.Open]. */
@@ -56,7 +65,7 @@ internal fun LogTapAdmission.offeringRole(): GateRole? = when (this) {
 /** The gate role a peer that **pulls** logs plays. `null` for [LogTapAdmission.Open]. */
 internal fun LogTapAdmission.pullingRole(): GateRole? = when (this) {
     is LogTapAdmission.Open -> null
-    is LogTapAdmission.Present -> GateRole.Prover(code)
+    is LogTapAdmission.Present -> GateRole.Prover(code, random)
     is LogTapAdmission.Verify ->
         error("LogTapAdmission.Verify is for the offering side; a pulling client needs Present or Open")
 }

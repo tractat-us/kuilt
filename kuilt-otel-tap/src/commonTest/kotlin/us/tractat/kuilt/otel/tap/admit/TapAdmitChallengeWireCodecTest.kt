@@ -16,7 +16,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 
 /**
- * [TapAdmitMessage.Challenge] against the fixed-width wire contract (#1822).
+ * [TapAdmitMessage.Challenge] and [TapAdmitMessage.Proof] against the fixed-width wire contract (#1822).
  *
  * The third of the three independent nonce sites, and the one that makes the class a class rather
  * than a duplicated mistake: a different module, a different serializer, a different hand — and the
@@ -41,6 +41,12 @@ class TapAdmitChallengeWireCodecTest : WireCodecConformanceSuite() {
 
     override fun exactWidthFields(): List<ExactWidthField> = listOf(
         ExactWidthField("nonce", TapAdmitMessage.Challenge.NONCE_BYTES) { width -> challengeWithNonceWidth(width) },
+        ExactWidthField("proverNonce", TapAdmitMessage.Challenge.NONCE_BYTES) { width ->
+            proofWithWidths(proverNonce = width, tag = TapAdmitMessage.Proof.TAG_BYTES)
+        },
+        ExactWidthField("tag", TapAdmitMessage.Proof.TAG_BYTES) { width ->
+            proofWithWidths(proverNonce = TapAdmitMessage.Challenge.NONCE_BYTES, tag = width)
+        },
     )
 
     /**
@@ -93,23 +99,45 @@ class TapAdmitChallengeWireCodecTest : WireCodecConformanceSuite() {
      * `init { require }` deleted, which is the very defect this suite exists to catch, reappearing
      * inside the rig.
      */
-    private fun challengeWithNonceWidth(width: Int): ByteArray {
-        val cbor = TapCbor.encodeToByteArray<UnconstrainedAdmitMessage>(
-            UnconstrainedAdmitMessage.Challenge(ByteArray(width)),
-        )
+    private fun challengeWithNonceWidth(width: Int): ByteArray =
+        unconstrainedFrame(UnconstrainedAdmitMessage.Challenge(ByteArray(width)))
+
+    /** The `Proof` counterpart of [challengeWithNonceWidth], and for the same reason a re-encode. */
+    private fun proofWithWidths(proverNonce: Int, tag: Int): ByteArray =
+        unconstrainedFrame(UnconstrainedAdmitMessage.Proof(ByteArray(proverNonce), ByteArray(tag)))
+
+    private fun unconstrainedFrame(message: UnconstrainedAdmitMessage): ByteArray {
+        val cbor = TapCbor.encodeToByteArray<UnconstrainedAdmitMessage>(message)
         return ByteArray(cbor.size + 1).also {
             it[0] = TapAdmitMessage.PREFIX_BYTE
             cbor.copyInto(it, destinationOffset = 1)
         }
     }
+
+    /** [theRigIsByteIdenticalToTheRealEncoderAtTheDeclaredWidth], for the `Proof` surrogate. */
+    @Test
+    fun theProofRigIsByteIdenticalToTheRealEncoderAtTheDeclaredWidths() {
+        val real = TapAdmitMessage.encode(
+            TapAdmitMessage.Proof(
+                proverNonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES)),
+                tag = ByteString(ByteArray(TapAdmitMessage.Proof.TAG_BYTES)),
+            ),
+        )
+        assertContentEquals(
+            real,
+            proofWithWidths(TapAdmitMessage.Challenge.NONCE_BYTES, TapAdmitMessage.Proof.TAG_BYTES),
+            "the surrogate encoder must emit the same frame TapAdmitMessage.encode does",
+        )
+    }
 }
 
 /**
- * A width-unconstrained mirror of [TapAdmitMessage], used only to put a wrong-width nonce on the
- * wire. Only the arm the suite needs is mirrored: the polymorphic discriminator comes from the
- * subclass's `@SerialName`, so a one-armed hierarchy encodes identically to the real three-armed
+ * A width-unconstrained mirror of [TapAdmitMessage], used only to put a wrong-width field on the
+ * wire. Only the arms the suite needs are mirrored: the polymorphic discriminator comes from the
+ * subclass's `@SerialName`, so a two-armed hierarchy encodes identically to the real three-armed
  * one — asserted, not assumed, by
- * [TapAdmitChallengeWireCodecTest.theRigIsByteIdenticalToTheRealEncoderAtTheDeclaredWidth].
+ * [TapAdmitChallengeWireCodecTest.theRigIsByteIdenticalToTheRealEncoderAtTheDeclaredWidth] and
+ * [TapAdmitChallengeWireCodecTest.theProofRigIsByteIdenticalToTheRealEncoderAtTheDeclaredWidths].
  */
 @Serializable
 private sealed interface UnconstrainedAdmitMessage {
@@ -120,4 +148,8 @@ private sealed interface UnconstrainedAdmitMessage {
         override fun equals(other: Any?): Boolean = other is Challenge && nonce.contentEquals(other.nonce)
         override fun hashCode(): Int = nonce.contentHashCode()
     }
+
+    @Serializable
+    @SerialName("proof")
+    class Proof(val proverNonce: ByteArray, val tag: ByteArray) : UnconstrainedAdmitMessage
 }
