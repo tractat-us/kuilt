@@ -1,6 +1,7 @@
 package us.tractat.kuilt.websocket
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.engine.okhttp.OkHttp
@@ -100,13 +101,16 @@ class WeaveCancelledMidDialTest {
     // ── Cancelled before the upgrade answers ─────────────────────────────────────────────────────
 
     private suspend fun assertAbandonedDialClosesTheSocket(loom: Loom) {
+        val endedWith = CompletableDeferred<Throwable?>()
         val weave = rigScope.launch { loom.join(advertisement()) }
+        weave.invokeOnCompletion { endedWith.complete(it) }
         server.awaitRequest()
         assertFalse(weave.isCompleted, "rig: the weave finished before the far end answered, so nothing is in flight")
 
         weave.cancelAndJoin()
         server.finishHandshake()
 
+        assertTrue(endedWith.await() is CancellationException, "the caller's own cancel reaches it as a cancel")
         assertTheSocketClosed(server.farEnd())
     }
 
@@ -215,6 +219,29 @@ class WeaveCancelledMidDialTest {
         return netty
     }
 
+    /**
+     * The shield around the close removes the only other way out, so something else has to bound it. A
+     * far end that never answers the Close frame is what OkHttp sits on: it holds the socket for that
+     * answer on a clock of its own, and the cancelled caller must not wait out the same clock.
+     */
+    @Test
+    fun aFarEndThatNeverAnswersTheCloseCannotHoldUpTheCancel() = realTime {
+        val silent = HeldHandshakeServer(OBSERVATION, answersClose = false)
+        try {
+            val cancelSettled = withTimeoutOrNull(HANG_BOUND) {
+                cancelAsTheSessionArrives(
+                    clientLoom(client(OkHttp)),
+                    silent.url,
+                    silent::awaitRequest,
+                    silent::finishHandshake,
+                )
+            }
+            assertNotNull(cancelSettled, "the cancelled weave was still waiting on the far end after $HANG_BOUND")
+        } finally {
+            silent.close()
+        }
+    }
+
     // ── After the upgrade, before the mesh preamble ──────────────────────────────────────────────
 
     /**
@@ -256,6 +283,26 @@ class WeaveCancelledMidDialTest {
     fun aKtorMeshClientLoomWeaveOnAClosedClientFailsRatherThanHangs() = realTime {
         val httpClient = client()
         assertFailsOnAClosedClient(meshLoom(httpClient), httpClient)
+    }
+
+    /**
+     * The window [Loom.weave]'s contract is about. A plugin throwing here stands in for anything in the
+     * call that mints a cancellation with this caller alive, as the Darwin engine does for a session it
+     * has closed.
+     */
+    @Test
+    fun aCancellationTheCallerDidNotAskForArrivesAsAFailure() = realTime {
+        val minting = HttpClient(CIO) {
+            install(ClientWebSockets)
+            install(createClientPlugin("mints-a-cancellation") {
+                onRequest { _, _ -> throw CancellationException("nobody cancelled the caller") }
+            })
+        }.also { clients += it }
+
+        val failure = attempt { clientLoom(minting).join(advertisement()) }.failure
+
+        assertNotNull(failure, "the dial cannot have succeeded: the plugin refuses every request")
+        assertFalse(failure is CancellationException, "the caller was not cancelled, so it must not hear one: $failure")
     }
 
     /** A refused upgrade still reaches the caller as what it is. */

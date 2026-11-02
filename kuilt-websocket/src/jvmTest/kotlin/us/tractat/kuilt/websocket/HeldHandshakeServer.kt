@@ -27,7 +27,10 @@ import kotlin.time.Duration
  *
  * It serves exactly one connection, on its own daemon thread.
  */
-internal class HeldHandshakeServer(private val observation: Duration) : AutoCloseable {
+internal class HeldHandshakeServer(
+    private val observation: Duration,
+    private val answersClose: Boolean = true,
+) : AutoCloseable {
 
     /** What the far end saw once the upgrade had been answered. */
     sealed interface FarEnd {
@@ -114,7 +117,7 @@ internal class HeldHandshakeServer(private val observation: Duration) : AutoClos
                 val frame = readFrame(input) ?: return FarEnd.SocketEnded
                 when (frame.opcode) {
                     OPCODE_CLOSE -> {
-                        answerClose(output)
+                        if (answersClose) answerClose(output)
                         return FarEnd.CloseFrame(frame.closeCode(), socketEnded = endsAfterClose(input))
                     }
                     OPCODE_BINARY, OPCODE_TEXT -> dataFrameSeen.complete(Unit)
