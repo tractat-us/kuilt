@@ -9,10 +9,12 @@ import ch.qos.logback.core.read.ListAppender
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryTag
@@ -457,87 +459,95 @@ class NwFormationStuckDumpTest {
                 }
                 assertTrue(pumpUntil { woven?.state?.value is SeamState.Woven }, "rig: the pair must weave first")
                 val seam = assertNotNull(woven)
+                try {
 
-                // CONTROL: a healthy session, five minutes of it, emits nothing.
-                advance(300.seconds)
-                val whileWoven = appender.lines(Level.WARN, STUCK, tag)
+                    // CONTROL: a healthy session, five minutes of it, emits nothing.
+                    advance(300.seconds)
+                    val whileWoven = appender.lines(Level.WARN, STUCK, tag)
 
-                // Break it beyond repair: stop advertising FIRST (so a redial can never resolve the name
-                // again), then cut the live link.
-                peerApi.stopListening()
-                pumpUntil { false }
-                val link = assertNotNull(
-                    radio.openedLinks.firstOrNull { it.endOn("$tag-dev-b") != null },
-                    "rig: a link between the two devices must exist to cut",
-                )
-                radio.disconnect("$tag-dev-b", assertNotNull(link.endOn("$tag-dev-b")))
-                assertTrue(
-                    pumpUntil { seam.state.value is SeamState.Weaving },
-                    "rig: the seam must re-form to Weaving rather than tear (#1513): ${seam.state.value}",
-                )
-                val atBreak = appender.lines(Level.WARN, STUCK, tag).size
+                    // Break it beyond repair: stop advertising FIRST (so a redial can never resolve the name
+                    // again), then cut the live link.
+                    peerApi.stopListening()
+                    pumpUntil { false }
+                    val link = assertNotNull(
+                        radio.openedLinks.firstOrNull { it.endOn("$tag-dev-b") != null },
+                        "rig: a link between the two devices must exist to cut",
+                    )
+                    radio.disconnect("$tag-dev-b", assertNotNull(link.endOn("$tag-dev-b")))
+                    assertTrue(
+                        pumpUntil { seam.state.value is SeamState.Weaving },
+                        "rig: the seam must re-form to Weaving rather than tear (#1513): ${seam.state.value}",
+                    )
+                    val atBreak = appender.lines(Level.WARN, STUCK, tag).size
 
-                advance(9.seconds)
-                val before1 = appender.lines(Level.WARN, STUCK, tag).size
-                advance(1.seconds)
-                val after1 = appender.lines(Level.WARN, STUCK, tag)
-                advance(39.seconds)
-                val before2 = appender.lines(Level.WARN, STUCK, tag).size
-                advance(1.seconds)
-                val after2 = appender.lines(Level.WARN, STUCK, tag).size
-                advance(159.seconds)
-                val before3 = appender.lines(Level.WARN, STUCK, tag).size
-                advance(1.seconds)
-                val after3 = appender.lines(Level.WARN, STUCK, tag).size
-                advance(299.seconds)
-                val before4 = appender.lines(Level.WARN, STUCK, tag).size
-                advance(1.seconds)
-                val after4 = appender.lines(Level.WARN, STUCK, tag).size
+                    advance(9.seconds)
+                    val before1 = appender.lines(Level.WARN, STUCK, tag).size
+                    advance(1.seconds)
+                    val after1 = appender.lines(Level.WARN, STUCK, tag)
+                    advance(39.seconds)
+                    val before2 = appender.lines(Level.WARN, STUCK, tag).size
+                    advance(1.seconds)
+                    val after2 = appender.lines(Level.WARN, STUCK, tag).size
+                    advance(159.seconds)
+                    val before3 = appender.lines(Level.WARN, STUCK, tag).size
+                    advance(1.seconds)
+                    val after3 = appender.lines(Level.WARN, STUCK, tag).size
+                    advance(299.seconds)
+                    val before4 = appender.lines(Level.WARN, STUCK, tag).size
+                    advance(1.seconds)
+                    val after4 = appender.lines(Level.WARN, STUCK, tag).size
 
-                // This weave RETURNED, so cancelling its job is a no-op — the seam is the consumer's now,
-                // and closing it is the only thing that cancels the scope its loops (and their re-arming
-                // timers) run on. See [endWeave] for why that is mandatory rather than tidy.
-                assertTrue(weaveJob.isCompleted, "rig: the weave must have returned a seam, not still be running")
-                seam.close(CloseReason.Normal)
-                pumpUntil { false }
+                    // This weave RETURNED, so cancelling its job is a no-op — the seam is the consumer's now,
+                    // and closing it is the only thing that cancels the scope its loops (and their re-arming
+                    // timers) run on. See [endWeave] for why that is mandatory rather than tidy.
+                    assertTrue(weaveJob.isCompleted, "rig: the weave must have returned a seam, not still be running")
 
-                assertAll(
-                    {
-                        assertEquals(
-                            emptyList(),
-                            whileWoven,
-                            "a Woven seam must emit nothing however long it is held: $whileWoven",
-                        )
-                    },
-                    { assertEquals(0, atBreak, "…including through the break itself: $atBreak") },
-                    { assertEquals(0, before1, "re-armed at the FIRST interval (10s), not sooner: $before1") },
-                    { assertEquals(1, after1.size, "…and it fires on it: $after1") },
-                    { assertEquals(1, before2, "second interval is ×4 (40s), not another 10s: $before2") },
-                    { assertEquals(2, after2, "…and fires on it") },
-                    { assertEquals(2, before3, "third interval is ×4 again (160s)") },
-                    { assertEquals(3, after3, "…and fires on it") },
-                    { assertEquals(3, before4, "fourth interval is CAPPED at 300s, not 640s") },
-                    { assertEquals(4, after4, "…and fires on it — four lines across eight minutes of wedge") },
-                    {
-                        assertTrue(
-                            after1.single().contains("visible=[]"),
-                            "the peer left the browse roster on its removal: ${after1.single()}",
-                        )
-                    },
-                    {
-                        assertTrue(
-                            after1.single().contains("$tag-ep-b(name=$tag-ep-b backoff="),
-                            "…while its redialer is still hammering, which is why the trigger cannot key on " +
-                                "the roster alone: ${after1.single()}",
-                        )
-                    },
-                    {
-                        assertTrue(
-                            after1.single().contains("state=Weaving") && after1.single().contains("settled=[]"),
-                            "…and the endpoint has genuinely un-settled: ${after1.single()}",
-                        )
-                    },
-                )
+                    assertAll(
+                        {
+                            assertEquals(
+                                emptyList(),
+                                whileWoven,
+                                "a Woven seam must emit nothing however long it is held: $whileWoven",
+                            )
+                        },
+                        { assertEquals(0, atBreak, "…including through the break itself: $atBreak") },
+                        { assertEquals(0, before1, "re-armed at the FIRST interval (10s), not sooner: $before1") },
+                        { assertEquals(1, after1.size, "…and it fires on it: $after1") },
+                        { assertEquals(1, before2, "second interval is ×4 (40s), not another 10s: $before2") },
+                        { assertEquals(2, after2, "…and fires on it") },
+                        { assertEquals(2, before3, "third interval is ×4 again (160s)") },
+                        { assertEquals(3, after3, "…and fires on it") },
+                        { assertEquals(3, before4, "fourth interval is CAPPED at 300s, not 640s") },
+                        { assertEquals(4, after4, "…and fires on it — four lines across eight minutes of wedge") },
+                        {
+                            assertTrue(
+                                after1.single().contains("visible=[]"),
+                                "the peer left the browse roster on its removal: ${after1.single()}",
+                            )
+                        },
+                        {
+                            assertTrue(
+                                after1.single().contains("$tag-ep-b(name=$tag-ep-b backoff="),
+                                "…while its redialer is still hammering, which is why the trigger cannot key on " +
+                                    "the roster alone: ${after1.single()}",
+                            )
+                        },
+                        {
+                            assertTrue(
+                                after1.single().contains("state=Weaving") && after1.single().contains("settled=[]"),
+                                "…and the endpoint has genuinely un-settled: ${after1.single()}",
+                            )
+                        },
+                    )
+                } finally {
+                    // Closed in a `finally` (#3082): a seam left open re-arms its timers on the test scheduler for
+                    // ever, so a failed assertion above reads as a spinning JVM rather than as a red.
+                    withContext(NonCancellable) {
+                        seam.close(CloseReason.Normal)
+                        peerSeam.close(CloseReason.Normal)
+                    }
+                    pumpUntil { false }
+                }
             }
         }
 
