@@ -29,8 +29,9 @@ public interface Connection {
      * That includes a link that has died: a transport reporting its own closure as a cancellation is
      * the commonest way to break this, and Ktor's WebSocket session does it (#3083). Catch the
      * cancellation, call `currentCoroutineContext().ensureActive()` so the caller's own still
-     * propagates, and throw an ordinary exception. Held for each real transport by
-     * `ConnectionSendConformanceSuite`.
+     * propagates, and throw an ordinary exception.
+     * `ConnectionSendConformanceSuite` holds a transport to this only where that transport subclasses
+     * it; a binding nobody wrote is not checked.
      */
     public suspend fun send(frame: ByteArray)
 
