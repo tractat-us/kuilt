@@ -111,28 +111,22 @@ class HeddleControlLogCodecTest {
         assertEquals(null, assertIs<ControlEntry.Unreadable>(decoded).version)
     }
 
-    /** An untagged act that no longer decodes is never mistaken for a foreign entry. */
     @Test
-    fun anUntaggedActThatNoLongerDecodesIsUnreadableNotForeign() {
+    fun anUntaggedActThatNoLongerDecodesIsUnreadable() {
         val truncated = ControlLogVectors.bodies.getValue("Enroll").dropLast(4).hexToByteArray()
-        assertIs<ControlEntry.Unreadable>(ControlLogCodec.decode(truncated))
+        assertEquals(ControlLogCodec.UNTAGGED_VERSION, assertIs<ControlEntry.Unreadable>(ControlLogCodec.decode(truncated)).version)
     }
 
+    /**
+     * Nothing is set aside as "not heddle's". Each of these is told apart from an act only by failing to
+     * decode, and answers exactly as an act this build cannot read does.
+     */
     @Test
-    fun bytesNoVersionOfHeddleWroteAreNotHeddle() {
-        val foreign = listOf(
-            "" to byteArrayOf(),
-            "CBOR break byte" to "ff0042".hexToByteArray(),
-            "a CBOR map, but not an envelope" to "a1616101".hexToByteArray(),
-            "the indefinite map opening alone" to "bf".hexToByteArray(),
-            "an indefinite map with another first key" to "bf6170ff".hexToByteArray(),
-            "plain text" to "set x=1".encodeToByteArray(),
-        )
-        assertEquals(
-            emptyList(),
-            foreign.filter { (_, bytes) -> ControlLogCodec.decode(bytes) != ControlEntry.NotHeddle }.map { it.first },
-            "entries wrongly claimed as heddle's",
-        )
+    fun bytesNoVersionOfHeddleWroteAreUnreadableToo() {
+        val misread = ControlLogVectors.foreign.filter { (_, bytes) ->
+            (ControlLogCodec.decode(bytes) as? ControlEntry.Unreadable)?.version != ControlLogCodec.UNTAGGED_VERSION
+        }
+        assertEquals(emptyList(), misread.map { it.first }, "entries not read as unreadable, with no format")
     }
 }
 
@@ -210,6 +204,21 @@ internal object ControlLogVectors {
         "QuiesceAck" to ControlCommand.QuiesceAck(EDGE, P, SlotFinals(1L, 2L, 3L, 4L, mapOf(ReplicaId("q") to 5L))),
         "Enroll" to ControlCommand.Enroll(P),
         "Depart" to ControlCommand.Depart(P),
+    )
+
+    /**
+     * Bytes no version of heddle wrote, each named. The last two aim at the decoder rather than the
+     * header: another magic over a well-formed act, and a key claiming a length far past the entry.
+     */
+    val foreign: List<Pair<String, ByteArray>> = listOf(
+        "nothing at all" to byteArrayOf(),
+        "CBOR break byte" to "ff0042".hexToByteArray(),
+        "a CBOR map, but not an envelope" to "a1616101".hexToByteArray(),
+        "the indefinite map opening alone" to "bf".hexToByteArray(),
+        "an indefinite map with another first key" to "bf6170ff".hexToByteArray(),
+        "plain text" to "set x=1".encodeToByteArray(),
+        "another magic over a well-formed act" to ("4b48434d01" + bodies.getValue("Enroll")).hexToByteArray(),
+        "a key claiming a huge length" to "bf7b7fffffffffffffff".hexToByteArray(),
     )
 
     fun envelope(command: ControlCommand): ControlEnvelope = ControlEnvelope(KEY, command, P)
