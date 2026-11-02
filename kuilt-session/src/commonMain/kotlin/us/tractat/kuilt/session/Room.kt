@@ -340,7 +340,7 @@ public interface Room {
      *
      * Keep this room and its underlying [Seam]. The loom must heal that **same seam instance**
      * with its [Seam.selfId] unchanged; [us.tractat.kuilt.core.MuxClientLoom] provides this stable,
-     * resumable handle. The host keys the reconnect window by [ResumeToken.peerId].
+     * resumable handle, and so does `NwLoom`. The host keys the reconnect window by [ResumeToken.peerId].
      *
      * A joiner built by [SeamRoomFactory] attempts resume automatically after a transport tear,
      * within the reconnect window. This explicit call is for manual control once the existing

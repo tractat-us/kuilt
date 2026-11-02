@@ -27,6 +27,25 @@ val seam = nwJoin(NwTag("kitchen-game", peerKey = myId, roomKey = code), "_kuilt
 Both calls return a `Seam` that is already connected to the other peers, ready
 to exchange frames.
 
+## One session per loom
+
+A device has one connection to the radio, and that connection carries one
+conversation. So an `NwLoom` holds one live seam at a time, and what a second
+weave gets depends on what it asks for:
+
+- **The same rendezvous while the seam is live** gets that seam back, once it has
+  a peer. This is how a joiner built with `SeamRoomFactory.join` keeps its seat
+  when its host link drops: the seam re-forms by itself, and the room resumes on it.
+- **A different rendezvous while the seam is live** gets an `IllegalStateException`
+  at once. Sharing the seam would merge two sessions without telling either. Close
+  it first.
+- **After the seam is closed**, a weave starts fresh, once the old seam has let go
+  of the radio.
+
+To start another session from a room, wait for `leave` to return. Do not react to
+`MembershipEvent.HostLost`: a room emits it before its `leave` closes the seam, so
+in that window the seam is still live.
+
 ## Security — the code encrypts the link
 
 The code you share is never sent over the air. It is run through HKDF to derive

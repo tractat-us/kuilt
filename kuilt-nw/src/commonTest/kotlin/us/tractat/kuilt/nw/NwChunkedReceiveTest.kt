@@ -42,7 +42,7 @@ import kotlin.test.assertTrue
  * [FakeNwRadio.maxChunkBytes] switches chunking OFF for any payload that fits inside it — one
  * emission, no boundary, and a test that goes green having proved nothing. So no test here infers
  * chunking from a successful reassembly. Each one **counts the emissions the receiving device
- * actually saw**, through a collector on that device's own [NwApi.bytesReceived] — an instrument
+ * actually saw**, through [FakeNwApi.bytesDeliveredForTest] on that device — an instrument
  * independent of the radio's own bookkeeping — and asserts that count is at least two and is what
  * the budget implies, *before* asserting anything about the frame that came out.
  *
@@ -432,7 +432,7 @@ class NwChunkedReceiveTest {
             backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { host.incoming.collect { } }
             backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { joiner.incoming.collect { atJoiner += it } }
             backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                joinerApi.bytesReceived.collect { joinerChunks += it }
+                joinerApi.bytesDeliveredForTest.collect { joinerChunks += it }
             }
             testScheduler.runCurrent()
 
@@ -546,8 +546,9 @@ class NwChunkedReceiveTest {
      * encoders, through the production radio. That is what makes a chunk boundary land exactly where
      * a test asks for it — a second seam would interpose its own sends and its dedup.
      *
-     * [chunks] is the rig's instrument: a collector on the hub device's own [NwApi.bytesReceived],
-     * independent of anything [FakeNwRadio] reports about itself.
+     * [chunks] is the rig's instrument: [FakeNwApi.bytesDeliveredForTest] on the hub device, which the
+     * hub's seam does not share a collection with, and independent of anything [FakeNwRadio] reports
+     * about itself.
      */
     private class Hub(
         val radio: FakeNwRadio,
@@ -619,7 +620,7 @@ class NwChunkedReceiveTest {
         val received = mutableListOf<Swatch>()
         val chunks = mutableListOf<NwBytesReceived>()
         backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { seam.incoming.collect { received += it } }
-        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { api.bytesReceived.collect { chunks += it } }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { api.bytesDeliveredForTest.collect { chunks += it } }
         testScheduler.runCurrent()
         return Hub(radio, api, seam, selfId, deviceId, received, chunks, this)
     }
