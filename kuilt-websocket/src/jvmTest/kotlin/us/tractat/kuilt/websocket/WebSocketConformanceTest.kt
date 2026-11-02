@@ -40,9 +40,10 @@ import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
  * stopping the server, so the receive loop sees a graceful close rather than an
  * abrupt EOF — preventing uncaught coroutine exceptions from leaking across tests.
  */
-open class WebSocketConformanceTest(
-    private val clientEngine: HttpClientEngineFactory<*> = OkHttp,
-) : SeamConformanceSuite() {
+open class WebSocketConformanceTest : SeamConformanceSuite() {
+
+    /** A property rather than a constructor parameter: JUnit wants one constructor, with no arguments. */
+    protected open val clientEngine: HttpClientEngineFactory<*> get() = OkHttp
 
     /** The current rig does not inject malformed announcements; these obligations remain unproven (#2561). */
     override fun duplicatePeerIdDeclaration(): ObligationDeclaration =
@@ -198,7 +199,9 @@ open class WebSocketConformanceTest(
  * The same suite with a CIO client: the one client engine whose `Drained` is run rather than read, so a
  * burst from the joiner over a real socket happens here and nowhere else.
  */
-class CioClientWebSocketConformanceTest : WebSocketConformanceTest(CIO) {
+class CioClientWebSocketConformanceTest : WebSocketConformanceTest() {
+    override val clientEngine: HttpClientEngineFactory<*> get() = CIO
+
     override fun flushFixture(): FlushFixture = FlushFixture.CannotHold(
         "a real Netty server and a real CIO client leave no test-side hook between the seam and the socket. " +
             "The burst is what runs here, over the real close; IdentifiedConformanceTest holds a send on the " +
