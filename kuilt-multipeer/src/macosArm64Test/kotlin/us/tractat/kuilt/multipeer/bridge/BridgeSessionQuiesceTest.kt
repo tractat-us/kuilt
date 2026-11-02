@@ -164,7 +164,8 @@ class BridgeSessionQuiesceTest {
 
     /**
      * Two frames, so one is already queued when the replacement starts. With no wait the next callback
-     * takes it at once, while the old one is still held: the overlap is forced rather than raced.
+     * takes it at once, while the old one is still held: the overlap is forced rather than raced. The same
+     * frame pins that a replacement loses nothing, since a pump cancelled to make way would eat it.
      */
     @Test
     fun replacingTheDataCallbackWaitsForTheOldOne() = withLink { link, session ->
