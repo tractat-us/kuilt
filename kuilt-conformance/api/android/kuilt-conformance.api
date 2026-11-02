@@ -198,6 +198,17 @@ public final class us/tractat/kuilt/conformance/FlushFixture$HostUnsupported : u
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/conformance/FlushFixture$JoinerUnsupported : us/tractat/kuilt/conformance/FlushFixture {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/conformance/FlushFixture$JoinerUnsupported;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/conformance/FlushFixture$JoinerUnsupported;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/conformance/FlushFixture$JoinerUnsupported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/conformance/FlushFixture$Unsupported : us/tractat/kuilt/conformance/FlushFixture {
 	public fun <init> (Ljava/lang/String;)V
 	public final fun component1 ()Ljava/lang/String;
@@ -619,6 +630,7 @@ public abstract class us/tractat/kuilt/conformance/SeamConformanceSuite {
 	public final fun flushOnATornSeamReportsFailed ()V
 	public final fun flushWaitsForAHeldSend ()V
 	public final fun hostBurstSurvivesFlushThenClose ()V
+	public final fun hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix ()V
 	public final fun hostStateIsWovenEvenAlone ()V
 	public final fun hostYieldsUsableSeamWithNonEmptySelfId ()V
 	public final fun incomingCompletesOnInjectedMidSessionDeath ()V
@@ -632,6 +644,7 @@ public abstract class us/tractat/kuilt/conformance/SeamConformanceSuite {
 	public fun joinHandshakeFramesAtHost ()I
 	public fun joinTag ()Lus/tractat/kuilt/core/Tag;
 	public final fun joinerBurstSurvivesFlushThenClose ()V
+	public final fun joinerBurstToASlowConsumerStillSendingIsAnInOrderPrefix ()V
 	public abstract fun joinerRosterOrigin ()Lus/tractat/kuilt/conformance/JoinerRosterOrigin;
 	public final fun joinerRosterOriginIsDeclaredAndHonest ()V
 	public fun membershipDrainDeclaration ()Lus/tractat/kuilt/conformance/ObligationDeclaration;

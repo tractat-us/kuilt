@@ -109,6 +109,19 @@ sealed interface us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt
         final fun toString(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.HostUnsupported.toString|toString(){}[0]
     }
 
+    final class JoinerUnsupported : us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt.conformance/FlushFixture.JoinerUnsupported|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/FlushFixture.JoinerUnsupported.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.conformance/FlushFixture.JoinerUnsupported.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.JoinerUnsupported.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.JoinerUnsupported.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.conformance/FlushFixture.JoinerUnsupported // us.tractat.kuilt.conformance/FlushFixture.JoinerUnsupported.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/FlushFixture.JoinerUnsupported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/FlushFixture.JoinerUnsupported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/FlushFixture.JoinerUnsupported.toString|toString(){}[0]
+    }
+
     final class Unsupported : us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt.conformance/FlushFixture.Unsupported|null[0]
         constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/FlushFixture.Unsupported.<init>|<init>(kotlin.String){}[0]
 
@@ -1337,6 +1350,9 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
     final fun hostBurstSurvivesFlushThenClose() // us.tractat.kuilt.conformance/SeamConformanceSuite.hostBurstSurvivesFlushThenClose|hostBurstSurvivesFlushThenClose(){}[0]
 
     // Targets: [apple]
+    final fun hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix() // us.tractat.kuilt.conformance/SeamConformanceSuite.hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix|hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix(){}[0]
+
+    // Targets: [apple]
     final fun hostStateIsWovenEvenAlone() // us.tractat.kuilt.conformance/SeamConformanceSuite.hostStateIsWovenEvenAlone|hostStateIsWovenEvenAlone(){}[0]
 
     // Targets: [apple]
@@ -1353,6 +1369,9 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
 
     // Targets: [apple]
     final fun joinerBurstSurvivesFlushThenClose() // us.tractat.kuilt.conformance/SeamConformanceSuite.joinerBurstSurvivesFlushThenClose|joinerBurstSurvivesFlushThenClose(){}[0]
+
+    // Targets: [apple]
+    final fun joinerBurstToASlowConsumerStillSendingIsAnInOrderPrefix() // us.tractat.kuilt.conformance/SeamConformanceSuite.joinerBurstToASlowConsumerStillSendingIsAnInOrderPrefix|joinerBurstToASlowConsumerStillSendingIsAnInOrderPrefix(){}[0]
 
     // Targets: [apple]
     final fun membershipDrainDeclarationIsHonest() // us.tractat.kuilt.conformance/SeamConformanceSuite.membershipDrainDeclarationIsHonest|membershipDrainDeclarationIsHonest(){}[0]
@@ -1466,6 +1485,9 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
     final fun hostBurstSurvivesFlushThenClose(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.hostBurstSurvivesFlushThenClose|hostBurstSurvivesFlushThenClose(){}[0]
 
     // Targets: [wasmJs]
+    final fun hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix|hostBurstToASlowConsumerStillSendingIsAnInOrderPrefix(){}[0]
+
+    // Targets: [wasmJs]
     final fun hostStateIsWovenEvenAlone(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.hostStateIsWovenEvenAlone|hostStateIsWovenEvenAlone(){}[0]
 
     // Targets: [wasmJs]
@@ -1482,6 +1504,9 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun joinerBurstSurvivesFlushThenClose(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.joinerBurstSurvivesFlushThenClose|joinerBurstSurvivesFlushThenClose(){}[0]
+
+    // Targets: [wasmJs]
+    final fun joinerBurstToASlowConsumerStillSendingIsAnInOrderPrefix(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.joinerBurstToASlowConsumerStillSendingIsAnInOrderPrefix|joinerBurstToASlowConsumerStillSendingIsAnInOrderPrefix(){}[0]
 
     // Targets: [wasmJs]
     final fun membershipDrainDeclarationIsHonest(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.membershipDrainDeclarationIsHonest|membershipDrainDeclarationIsHonest(){}[0]
