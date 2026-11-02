@@ -7,9 +7,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
@@ -166,20 +168,15 @@ class ClusterClientDurableRestartE2ETest {
         private val failure: CompletableDeferred<Throwable>,
     ) {
         /** Ends on the first of: the client surfaced [entries] keyed entries, or its node failed. */
-        suspend fun replayOutcome(entries: Int): Throwable? {
-            val replayed = CompletableDeferred<Unit>()
-            val watcher = CoroutineScope(failure).launch {
-                walked.collect { if (it.size >= entries) replayed.complete(Unit) }
-            }
+        suspend fun replayOutcome(entries: Int): Throwable? = withTimeout(backstop) {
+            val replayed = async { walked.first { it.size >= entries } }
             try {
-                return withTimeout(backstop) {
-                    select {
-                        failure.onAwait { it }
-                        replayed.onAwait { null }
-                    }
+                select {
+                    failure.onAwait { it }
+                    replayed.onAwait { null }
                 }
             } finally {
-                watcher.cancel()
+                replayed.cancel()
             }
         }
     }

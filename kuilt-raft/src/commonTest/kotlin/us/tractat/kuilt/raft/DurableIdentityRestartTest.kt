@@ -194,10 +194,11 @@ class DurableIdentityRestartTest {
         rig.restart(SOLO_ID)
         rig.sim.awaitLeader()
 
+        val storedBefore = rig.storedKeysOf(SOLO_ID)
         val fresh = rig.issue(SOLO_ID, rig.floorOf(SOLO_ID) + 1)
 
         assertAll(
-            { assertEquals(emptyList(), rig.storedKeysOf(SOLO_ID).filter { it != fresh.dedupKey }, "the rig: the log held no record") },
+            { assertEquals(emptyList(), storedBefore, "the rig: the log held no record") },
             { assertEquals(4L, fresh.dedupKey?.requestId, "the serial resumes above the floor") },
             { assertTrue(table.shouldApply(fresh.dedupKey), "a fresh command must not read as a duplicate") },
         )
@@ -287,10 +288,11 @@ class DurableIdentityRestartTest {
 
         val refusal = assertFailsWith<IllegalStateException> { rig.node(SOLO_ID).propose(command(2L)) }
         val next = rig.issue(SOLO_ID, 2L)
+        val stored = rig.storedKeysOf(SOLO_ID).map { it.requestId }
 
         assertAll(
             { assertContains(refusal.message.orEmpty(), "propose(command, requestId)", message = "the refusal names the remedy") },
-            { assertEquals(listOf(1L, 2L), rig.storedKeysOf(SOLO_ID).map { it.requestId }, "the refusal appended nothing") },
+            { assertEquals(listOf(1L, 2L), stored, "the refusal appended nothing") },
             { assertEquals(2L, next.dedupKey?.requestId) },
             { rig.assertStayedUpHavingWalked(SOLO_ID, listOf(1L, 2L)) },
         )
@@ -308,9 +310,10 @@ class DurableIdentityRestartTest {
 
         assertFailsWith<IllegalStateException> { rig.node(followerId).propose(command(2L)) }
         rig.sim.settle()
+        val onLeader = rig.storedKeysOf(leaderId).map { it.requestId }
 
         assertAll(
-            { assertEquals(listOf(1L), rig.storedKeysOf(leaderId).map { it.requestId }, "the rig: serial 1 was forwarded, and only it") },
+            { assertEquals(listOf(1L), onLeader, "the rig: serial 1 was forwarded, and only it") },
             { rig.assertStayedUpHavingWalked(followerId, listOf(1L)) },
         )
     }
@@ -778,7 +781,7 @@ private class DurableRestartRig(
      */
     suspend fun crashWithSerialFourInFlight(writtenAhead: Boolean): CrashedForward {
         val leader = sim.awaitLeader()
-        val leaderId = sim.idOf(leader)
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
         val (followerId, thirdId) = sim.nodes.keys.filter { it != leaderId }
         val durable = (1L..3L).map { issue(followerId, it) }.last()
         sim.awaitCommit(durable.index)
