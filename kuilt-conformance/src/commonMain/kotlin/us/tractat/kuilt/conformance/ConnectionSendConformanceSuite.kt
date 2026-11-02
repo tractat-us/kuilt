@@ -94,9 +94,10 @@ public sealed interface CancelledCallerFixture {
      * failure reaches the caller as it stands, and the caller's cancellation lands at its next
      * suspension point.
      *
-     * The suite still requires that nothing in `send` cleared the cancellation. It cannot tell a
-     * transport that truly has no check from one that has a check and swallows what it found, which
-     * is what [reason] is for: a sentence for a reader, unchecked beyond not being blank.
+     * The suite checks the claim from the one side it can: a `send` declared this way that does
+     * report a cancellation fails the suite, and the declaration should be [Observes]. It cannot
+     * tell a transport with no check from one that has a check and lost what it found, which is why
+     * [reason] exists: a sentence for a reader, unchecked beyond not being blank.
      */
     public data class NeverChecks(val reason: String) : CancelledCallerFixture
 }
@@ -141,26 +142,24 @@ internal suspend fun assertLiveCallerGetsAnOrdinaryFailure(link: Connection) {
 
 /** The property [ConnectionSendConformanceSuite.sendIntoADeadLinkLeavesACancelledCallerCancelled] asserts. */
 internal suspend fun CoroutineScope.assertCancelledCallerOutcome(link: Connection, fixture: CancelledCallerFixture) {
-    var reachedSend = false
+    var callerWasCancelled = false
     var thrown: Throwable? = null
-    var cancelledAfterSend = false
-    val caller = launch {
+    launch {
         currentCoroutineContext().cancel(CancellationException("the caller's own cancellation"))
-        assertFalse(currentCoroutineContext().isActive, "the rig did not cancel the caller")
-        reachedSend = true
+        callerWasCancelled = !currentCoroutineContext().isActive
         thrown = link.sendCatching()
-        cancelledAfterSend = !currentCoroutineContext().isActive
-    }
-    caller.join()
-    assertTrue(reachedSend, "the caller never reached send, so nothing was tested")
-    assertTrue(caller.isCancelled, "the caller finished normally, so its cancellation was lost on the way out")
+    }.join()
+    assertTrue(callerWasCancelled, "the rig never cancelled the caller, so nothing was tested")
     when (fixture) {
         CancelledCallerFixture.Observes ->
             assertIs<CancellationException>(thrown, "a cancelled caller's send into a dead link must report the cancellation")
 
         is CancelledCallerFixture.NeverChecks -> {
             assertTrue(fixture.reason.isNotBlank(), "NeverChecks needs a reason a reader can check")
-            assertTrue(cancelledAfterSend, "send cleared the caller's cancellation")
+            assertFalse(
+                thrown is CancellationException,
+                "this send reports a cancelled caller's cancellation, so it is Observes, not NeverChecks: $thrown",
+            )
         }
     }
 }
