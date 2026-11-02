@@ -14,7 +14,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -77,7 +77,39 @@ class BridgePeerLinkTeardownTest {
             { assertEquals(0, closesBeforeDrop, "the rig's drop must be what provokes the close") },
             { assertEquals(1, lib.closes, "the collector must have closed the seam") },
             { assertTrue(insideCallbackAtClose, "the close must have arrived inside the callback") },
-            { assertFalse(insideCallback) },
+        )
+    }
+
+    /**
+     * The same route by the roster rather than the state. A `peers` collector on an unconfined dispatcher
+     * runs inside the roster write, so its close arrives inside the callback and under the roster lock.
+     * Nothing a callback does may undo that close afterwards: the callback's own bind finishes behind it.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun anUnconfinedPeersCollectorClosingTheSeamReachesMcSessionCloseInsideTheCallback() = runTest {
+        val lib = TeardownFakeNativeLib()
+        val self = PeerId("self")
+        val link = BridgePeerLink(lib, Pointer(SESSION), self)
+        var insideCallback = false
+        var insideCallbackAtClose = false
+        lib.onClose = { insideCallbackAtClose = insideCallback }
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            link.peers.first { PeerId("guest") in it }
+            link.close()
+        }
+        val closesBeforeTheBind = lib.closes
+
+        insideCallback = true
+        lib.firePeerState("guest", 1)
+        insideCallback = false
+
+        assertAll(
+            { assertEquals(0, closesBeforeTheBind, "the rig's bind must be what provokes the close") },
+            { assertEquals(1, lib.closes, "the collector must have closed the seam") },
+            { assertTrue(insideCallbackAtClose, "the close must have arrived inside the callback") },
+            { assertIs<SeamState.Torn>(link.state.value, "the bind must not promote the closed seam") },
+            { assertEquals(setOf(self), link.peers.value, "the bind must not restore the collapsed roster") },
         )
     }
 
