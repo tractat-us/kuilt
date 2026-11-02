@@ -26,6 +26,7 @@ import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.raft.AutoSerialRefusedException
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientIdCollisionException
 import us.tractat.kuilt.raft.ClientIdentity
@@ -3573,10 +3574,12 @@ internal class RaftEngine(
      * the forms reused a serial with no crash at all. Refused here, before anything is drawn.
      */
     override suspend fun propose(command: ByteArray): LogEntry {
-        check(!isDurableId) {
-            "propose(command) is refused under ClientIdentity.Durable ('${clientIdProbe.value}'): a serial the " +
-                "node draws cannot be persisted before it is issued. Commit a requestId as the new issuedThrough, " +
-                "then call propose(command, requestId), or use ClientIdentity.Auto."
+        if (isDurableId) {
+            throw AutoSerialRefusedException(
+                "propose(command) is refused under ClientIdentity.Durable ('${clientIdProbe.value}'): a serial the " +
+                    "node draws cannot be persisted before it is issued. Commit a requestId as the new issuedThrough, " +
+                    "then call propose(command, requestId), or use ClientIdentity.Auto.",
+            )
         }
         return proposeWithRequestId(command, null)
     }
