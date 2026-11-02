@@ -75,6 +75,7 @@ class RoomFlushTest {
 
         star.host.wire.release(star.joinerBId)
         assertEquals(FlushOutcome.Drained, flush.await())
+        testScheduler.runCurrent()
         assertAll(
             { assertEquals(1, star.host.wire.flushesAsked, "and then the fabric is asked") },
             { assertFalse(star.joinerB.room.roster.value.any { it.id == star.joinerAId }, "the farewell arrived") },
@@ -142,6 +143,7 @@ class RoomFlushTest {
 
             star.host.wire.release(star.joinerBId)
             assertEquals(FlushOutcome.Drained, star.host.room.flush(Duration.INFINITE))
+            testScheduler.runCurrent()
             assertFalse(star.joinerB.room.roster.value.any { it.id == star.joinerAId }, "the farewell still arrived")
         }
 
