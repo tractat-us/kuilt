@@ -485,6 +485,7 @@ internal class WireTapSeam(
     private val silenced = MutableStateFlow<Set<PeerId>>(emptySet())
     private val wedged = MutableStateFlow<Set<PeerId>>(emptySet())
     private val held = MutableStateFlow<Set<PeerId>>(emptySet())
+    private val broadcastsHeld = MutableStateFlow(false)
     private val frameLimit = MutableStateFlow<Int?>(null)
     /**
      * Injected inbound frames. **Bounded**, per the repo's `forbidUnboundedSwatchDelivery` guard —
@@ -536,7 +537,17 @@ internal class WireTapSeam(
     override suspend fun broadcast(payload: ByteArray) {
         record(to = null, bytes = payload)
         enforceFrameLimit(payload)
+        broadcastsHeld.first { !it }
         delegate.broadcast(payload)
+    }
+
+    /** Make every [broadcast] wait until [releaseBroadcasts]. */
+    fun holdBroadcasts() {
+        broadcastsHeld.value = true
+    }
+
+    fun releaseBroadcasts() {
+        broadcastsHeld.value = false
     }
 
     /** How many times the room has asked this seam to flush. See [answerFlushWith]. */

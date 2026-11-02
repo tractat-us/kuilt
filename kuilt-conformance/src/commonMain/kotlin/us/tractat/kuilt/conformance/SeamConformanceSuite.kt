@@ -1838,28 +1838,38 @@ public abstract class SeamConformanceSuite {
      */
     @Test
     public fun flushDeclarationIsHonest(): TestResult =
-        runTest(timeout = TEST_WEDGE_BACKSTOP) {
-            connectedPair { host, joiner ->
-                val outcomes = listOf(host.flush(Duration.INFINITE), joiner.flush(Duration.INFINITE))
-                when (val fixture = flushFixture()) {
-                    is FlushFixture.Unsupported -> {
-                        assertTrue(fixture.trackingUrl.isNotBlank(), "a tracked gap names where it is tracked")
-                        assertEquals(
-                            listOf<FlushOutcome>(FlushOutcome.Unsupported, FlushOutcome.Unsupported),
-                            outcomes,
-                            "this harness declares FlushFixture.Unsupported, so the seam must answer that. " +
-                                "A seam that now confirms a drain needs a harness arm that tests it",
-                        )
-                    }
-                    is FlushFixture.CannotHold -> {
-                        assertTrue(fixture.reason.isNotBlank(), "CannotHold says why, for the next reader")
-                        assertEquals(listOf<FlushOutcome>(FlushOutcome.Drained, FlushOutcome.Drained), outcomes)
-                    }
-                    is FlushFixture.Holdable ->
-                        assertEquals(listOf<FlushOutcome>(FlushOutcome.Drained, FlushOutcome.Drained), outcomes)
+        runTest(timeout = TEST_WEDGE_BACKSTOP) { runFlushDeclarationIsHonest(this) }
+
+    internal suspend fun runFlushDeclarationIsHonest(scope: TestScope) {
+        scope.connectedPair { host, joiner ->
+            val outcomes = listOf(host.flush(Duration.INFINITE), joiner.flush(Duration.INFINITE))
+            when (val fixture = flushFixture()) {
+                is FlushFixture.Unsupported -> {
+                    assertTrue(fixture.trackingUrl.isNotBlank(), "a tracked gap names where it is tracked")
+                    assertEquals(
+                        listOf<FlushOutcome>(FlushOutcome.Unsupported, FlushOutcome.Unsupported),
+                        outcomes,
+                        "this harness declares FlushFixture.Unsupported, so the seam must answer that. " +
+                            "A seam that now confirms a drain needs a harness arm that tests it",
+                    )
                 }
+                is FlushFixture.CannotHold -> {
+                    assertTrue(fixture.reason.isNotBlank(), "CannotHold says why, for the next reader")
+                    assertEquals(
+                        listOf<FlushOutcome>(FlushOutcome.Drained, FlushOutcome.Drained),
+                        outcomes,
+                        "this harness declares that the fabric confirms a drain, so the seam must answer that",
+                    )
+                }
+                is FlushFixture.Holdable ->
+                    assertEquals(
+                        listOf<FlushOutcome>(FlushOutcome.Drained, FlushOutcome.Drained),
+                        outcomes,
+                        "this harness declares that the fabric confirms a drain, so the seam must answer that",
+                    )
             }
         }
+    }
 
     /**
      * Send, flush, close, and the peer has every frame, in order. The whole point of `flush`, and the
@@ -1910,22 +1920,24 @@ public abstract class SeamConformanceSuite {
     /** The property the in-memory reference cannot fail: a flush does not return past a held send. */
     @Test
     public fun flushWaitsForAHeldSend(): TestResult =
-        runTest(timeout = TEST_WEDGE_BACKSTOP) {
-            forEachHeldEnd { sender, receiver, hold ->
-                val received = async { receiver.incoming.first().decodeToString() }
-                hold.hold()
-                sender.sendTo(receiver.selfId, "held".encodeToByteArray())
-                val flush = async { sender.flush(Duration.INFINITE) }
-                delay(FLUSH_SETTLE)
-                assertAll(
-                    { assertEquals(1, hold.parkedSends, FLUSH_RIG_DID_NOT_FIRE) },
-                    { assertFalse(flush.isCompleted, "flush returned while the frame was still held") },
-                )
-                hold.releaseAll()
-                assertEquals(FlushOutcome.Drained, flush.await())
-                assertEquals("held", received.await())
-            }
+        runTest(timeout = TEST_WEDGE_BACKSTOP) { runFlushWaitsForAHeldSend(this) }
+
+    internal suspend fun runFlushWaitsForAHeldSend(scope: TestScope) {
+        scope.forEachHeldEnd { sender, receiver, hold ->
+            val received = async { receiver.incoming.first().decodeToString() }
+            hold.hold()
+            sender.sendTo(receiver.selfId, "held".encodeToByteArray())
+            val flush = async { sender.flush(Duration.INFINITE) }
+            delay(FLUSH_SETTLE)
+            assertAll(
+                { assertEquals(1, hold.parkedSends, FLUSH_RIG_DID_NOT_FIRE) },
+                { assertFalse(flush.isCompleted, "flush returned while the frame was still held") },
+            )
+            hold.releaseAll()
+            assertEquals(FlushOutcome.Drained, flush.await())
+            assertEquals("held", received.await())
         }
+    }
 
     /** The timeout path cannot report `Drained`, and costs the frame nothing. */
     @Test

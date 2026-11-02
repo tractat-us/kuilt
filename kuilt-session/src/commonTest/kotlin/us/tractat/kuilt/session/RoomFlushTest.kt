@@ -204,6 +204,27 @@ class RoomFlushTest {
     }
 
     /**
+     * A room that has ended says so even while its fabric is still up, which is what `leave` looks like
+     * until its goodbye has gone. The fabric would answer `Drained` here, for a room whose sends have
+     * already become silent no-ops.
+     */
+    @Test
+    fun `a room mid-leave says Failed while its fabric is still up`() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val star = drainingStar()
+        val wire = star.joinerA.wire
+        wire.answerFlushWith { FlushOutcome.Drained }
+        wire.holdBroadcasts()
+        val leaving = launch { star.joinerA.room.leave() }
+        testScheduler.runCurrent()
+        assertIs<SeamState.Woven>(wire.state.value, "rig: the goodbye is stuck, so the fabric is still up")
+
+        assertIs<FlushOutcome.Failed>(star.joinerA.room.flush(Duration.INFINITE))
+        assertEquals(0, wire.flushesAsked)
+        wire.releaseBroadcasts()
+        leaving.join()
+    }
+
+    /**
      * A fabric tearing ends a flush at once, rather than after the lane's own send budget (10.6 s here).
      *
      * The writer's send can stay parked on a torn link, so a flush watching only the lanes would wait
