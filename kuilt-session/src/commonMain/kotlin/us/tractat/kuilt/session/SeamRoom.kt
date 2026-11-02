@@ -13,6 +13,7 @@ import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -3861,8 +3862,12 @@ internal class SeamRoom(
         val laneWait = lock.withLock { if (hostLost || closed) null else laneWaitOnEntry() }
         when {
             laneWait == null -> FlushOutcome.Failed(IllegalStateException("room for ${selfId.value} has ended"))
-            lanesPassedBeforeTheSeamTore(laneWait) -> seam.flush(Duration.INFINITE)
-            else -> FlushOutcome.Failed(IllegalStateException("the fabric under room ${selfId.value} tore"))
+            !lanesPassedBeforeTheSeamTore(laneWait) ->
+                FlushOutcome.Failed(IllegalStateException("the fabric under room ${selfId.value} tore"))
+            // A lane's wait also ends when its writer does. A member leaving is a good reason, but this
+            // scope ending kills the writers with frames still queued, and the seam knows nothing of those.
+            !scope.isActive -> FlushOutcome.Failed(IllegalStateException("room for ${selfId.value} has ended"))
+            else -> seam.flush(Duration.INFINITE)
         }
     }
 
