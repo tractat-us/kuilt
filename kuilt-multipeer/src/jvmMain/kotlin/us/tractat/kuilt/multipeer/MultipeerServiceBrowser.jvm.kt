@@ -66,11 +66,6 @@ public actual class MultipeerServiceBrowser actual constructor(
     private var session: BrowseSession? = null
     private val departuresFlow = MutableSharedFlow<String>(extraBufferCapacity = 16)
 
-    // TEMPORARY #3075 experiment instrumentation. Never merged.
-    internal var w3075Hold: ((isDepartures: Boolean) -> Unit)? = null
-    internal val w3075DepartureSubs: Int get() = departuresFlow.subscriptionCount.value
-    internal val w3075TryEmits = java.util.concurrent.atomic.AtomicInteger(0)
-
     /** Emits the dylib peer handle, also used by [MultipeerAdvertisement.peerKey]. */
     public actual override fun departures(): Flow<String> = sessionFeed(departuresFlow)
 
@@ -86,7 +81,6 @@ public actual class MultipeerServiceBrowser actual constructor(
         events: SharedFlow<T>,
         onAcquired: () -> Unit = {},
     ): Flow<T> = flow {
-        w3075Hold?.invoke(events === departuresFlow)
         var acquired = false
         try {
             emitAll(events.onSubscription {
@@ -132,7 +126,7 @@ public actual class MultipeerServiceBrowser actual constructor(
             factory.setVisiblePeer(session, handle, ad)
         }
         val lost = MultipeerNativeLib.PeerLostCallback { handle ->
-            if (factory.setVisiblePeer(session, handle, advertisement = null)) { w3075TryEmits.incrementAndGet(); departuresFlow.tryEmit(handle) }
+            if (factory.setVisiblePeer(session, handle, advertisement = null)) departuresFlow.tryEmit(handle)
         }
         // Null means another browser on this factory holds the runtime's session. Throwing here leaves
         // `collectors` unmoved, so this browser's teardown never runs and cannot clear that session's peers.
