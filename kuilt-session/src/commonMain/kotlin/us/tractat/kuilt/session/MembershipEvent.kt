@@ -122,8 +122,12 @@ public sealed interface MembershipEvent {
     /**
      * The host's transport link was permanently lost (joiner perspective only).
      *
-     * Terminal state — no further events follow. [Room.broadcast] and [Room.sendTo]
-     * become silent no-ops after this event.
+     * Terminal state. [Room.broadcast] and [Room.sendTo] become silent no-ops after this event.
+     *
+     * Treat it as the last word, even though it may not arrive last. A [Partitioned] or
+     * [WindowOpened] racing it on another thread can still land just after it, because the room
+     * emits both outside its lock. Ignore any that do: nothing will end them, so a countdown started
+     * from one would run with nothing to stop it.
      *
      * The room then ends itself as [Room.leave] does: [Room.roster] empties and every
      * [Room.incomingFrom] flow completes. The event comes first and the room does not wait for a
