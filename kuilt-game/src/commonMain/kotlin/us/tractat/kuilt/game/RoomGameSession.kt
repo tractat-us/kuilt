@@ -1,11 +1,13 @@
 package us.tractat.kuilt.game
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.NamedMux
 import us.tractat.kuilt.core.Seam
@@ -68,11 +70,18 @@ public class RoomGameSession internal constructor(
      * underlying fabric. Because `gameOverRoom` takes ownership of the room, this override is the
      * single teardown path; the caller must **not** call [Room.leave] directly.
      *
+     * The room is left however the rest of this goes: shielded, so a job that was already cancelled
+     * still leaves it, and in a `finally`, so a failed [GameSession.close] still does. As with
+     * [GameSession.close], the cost of the shield is that a caller's timeout does not bound a slow leave.
+     *
      * Idempotent: a second call is safe — [Room.leave] latches on the room's `closed` flag.
      */
     override suspend fun close(reason: CloseReason) {
-        super.close(reason)
-        room.leave(reason.toLeave())
+        try {
+            super.close(reason)
+        } finally {
+            withContext(NonCancellable) { room.leave(reason.toLeave()) }
+        }
     }
 }
 

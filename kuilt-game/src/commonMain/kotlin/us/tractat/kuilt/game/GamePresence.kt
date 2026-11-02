@@ -163,32 +163,15 @@ public class GamePresence(
     /**
      * Declare that this voter is voluntarily leaving the session.
      *
-     * The host observes this via [vacaters] and immediately evicts the voter via
-     * [RaftNode.changeMembership], without waiting the reconnect window. [GameSession.leave] calls
-     * this, and [GameSession.close] then waits for the frame via [handOffDeparture].
+     * A host running liveness monitoring collects [vacating] and, if it is the leader when the frame
+     * arrives, evicts the voter via [RaftNode.changeMembership] without waiting the reconnect window.
+     * [GameSession.leave] calls this.
      *
      * The vacate signal coexists with [PRESENT_DECLARED]: after calling this the replica's
      * slot holds [VACATE_DECLARED], overwriting [PRESENT_DECLARED]. This returns with the delta
-     * still queued on the [Quilter]'s scope, so a teardown straight after it loses the frame unless
-     * it goes through [handOffDeparture].
+     * still queued on the [Quilter]'s scope, so a teardown straight after it can lose the frame.
      */
     public fun declareVacate(): Unit = declare(VACATE_DECLARED)
-
-    /**
-     * If this peer has declared a departure, waits until the frame carrying it has been handed to the
-     * seam, then closes this presence. Otherwise returns at once and closes nothing.
-     *
-     * The board is what says whether a departure was declared, so there is no second flag to keep in
-     * step with it. Gated because only a departure is worth waiting for: a teardown without one owes
-     * nobody a frame, and must not start depending on whether the seam will finish a send.
-     *
-     * Suspends for as long as the seam holds the send, so the caller bounds it. [Quilter.drainAndClose]
-     * closes this presence however the wait ends, and its KDoc states what a normal return promises:
-     * the hand-off, not delivery. Idempotent.
-     */
-    internal suspend fun handOffDeparture() {
-        if (selfSlot()?.value == VACATE_DECLARED) quilter.drainAndClose()
-    }
 
     /**
      * Publishes the admission-closed signal on the host's presence slot, replacing
