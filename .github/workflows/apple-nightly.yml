@@ -223,12 +223,13 @@ jobs:
 
   # ── abi ──────────────────────────────────────────────────────────────────
   # The macOS half of the ABI gate (#2684). ci.yml's build-jvm runs `checkKotlinAbi` on every PR
-  # on Linux, through `build` -> `check`. Linux checks the JVM, Android and wasm dumps, and the
-  # Apple klib dumps of every module whose Apple targets cross-compile there. It cannot compile the
-  # Apple targets of the cinterop modules (:kuilt-nw, :kuilt-otel-logging, :kuilt-warp-runtime), so
-  # KGP copies those declarations from the committed dump (keepLocallyUnsupportedTargets, default
-  # true) instead of checking them. This job compiles every target, so nothing is copied, and
-  # Apple-only drift surfaces here within 24 h of the merge that caused it.
+  # on Linux, through `build` -> `check`. Linux checks every target's dump of every module whose
+  # Apple targets cross-compile there. It cannot compile the Apple targets of a module with a
+  # cinterop (today :kuilt-nw, :kuilt-otel-logging, :kuilt-warp-runtime), and KGP would then infer
+  # their Apple dump from wasmJs, so the convention plugin skips the ABI tasks for those modules
+  # off macOS and Linux checks none of their targets. They are ABI-checked on macOS only, on every
+  # target, JVM and Android included: here, so their drift surfaces within 24 h of the merge that
+  # caused it.
   #
   # A separate job, not a step of `apple`: that job already spends 25-55 min of its 60-min budget,
   # and the dump compiles every target of every module. Out of band like the rest of this file.
@@ -274,7 +275,7 @@ jobs:
       - name: Regenerate the ABI dumps
         if: ${{ inputs.update_abi || failure() }}
         run: >-
-          ./gradlew updateKotlinAbi --max-workers=2
+          ./gradlew updateKotlinAbi --continue --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
