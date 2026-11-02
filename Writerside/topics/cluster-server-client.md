@@ -160,6 +160,10 @@ in between leaves the number too low: the client fails with
 `ClientIdCollisionException`, or a new command is dropped as a duplicate. This
 identity only takes the form above. The one-argument `propose()` throws.
 
+Save the command's bytes with the number, since a retry has to resend them. Then
+retry before you send anything newer. A higher `requestId` gives up on every lower
+one: retry a lower one after that and the call succeeds, but the command is dropped.
+
 ## Failover (round-robin)
 
 When the client's link to its entry server tears, it round-robins to the next
