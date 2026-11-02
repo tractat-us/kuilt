@@ -66,12 +66,12 @@ public suspend fun installMultipeerLogTap(
  * @param exporter the device's metric buffer to offer.
  * @param scope the scope the host's replicator runs in.
  * @param config tap tuning.
- * @param admission how the pulling Mac is admitted. The Multipeer link is already encrypted, so
- *   [LogTapAdmission.Open] is safe on a trusted pairing; pass [LogTapAdmission.Verify] to *also*
- *   require a short join code (admission control layered over the encrypted transport — the same
- *   fabric-agnostic gate the log path and the plain path use, unchanged). The offering side must
- *   hold [LogTapAdmission.Verify] or [LogTapAdmission.Open]; [LogTapAdmission.Present] is the
- *   puller's role.
+ * @param admission how the pulling Mac is admitted. The default [LogTapAdmission.Open] lets any Mac
+ *   in range join and pull, encrypted link or not. Pass [LogTapAdmission.Verify] to require a join
+ *   code (admission control layered over the encrypted transport — the same fabric-agnostic gate the
+ *   log path and the plain path use, unchanged). The offering side must hold
+ *   [LogTapAdmission.Verify] or [LogTapAdmission.Open]; [LogTapAdmission.Present] is the puller's
+ *   role.
  */
 public suspend fun installMultipeerMetricTap(
     factory: MultipeerPeerLinkFactory,
