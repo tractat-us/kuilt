@@ -1,9 +1,11 @@
 package us.tractat.kuilt.test.fabric
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
@@ -14,6 +16,7 @@ import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.handshaking
 import us.tractat.kuilt.core.fabric.identified
 import kotlin.coroutines.ContinuationInterceptor
+import kotlin.time.Duration
 
 /**
  * Two Connections whose sends cross to each other's `incoming`. In-memory, no network.
@@ -57,6 +60,8 @@ private class ChannelConnection(
     override val maxFrameBytes: Int?,
     private val enforced: Int?,
 ) : Connection {
+    private val closed = atomic(false)
+
     override suspend fun send(frame: ByteArray) {
         // Stand in for a real framed transport's FrameTooLargeException. The type does not matter to
         // the seams above — every one of them treats any `conn.send` failure identically — only that
@@ -67,7 +72,16 @@ private class ChannelConnection(
         out.deliver(frame)
     }
     override val incoming: Flow<ByteArray> = inn.incoming
-    override suspend fun close() { out.close() }
+
+    // `send` returns only once the frame is in the peer's spool, so there is nothing to wait for. A
+    // closed end drops what it is given and returns normally, so it cannot claim the same.
+    override suspend fun flush(timeout: Duration): FlushOutcome =
+        if (closed.value) FlushOutcome.Failed(IllegalStateException("this end of the pair is closed")) else FlushOutcome.Drained
+
+    override suspend fun close() {
+        closed.value = true
+        out.close()
+    }
 }
 
 /**
