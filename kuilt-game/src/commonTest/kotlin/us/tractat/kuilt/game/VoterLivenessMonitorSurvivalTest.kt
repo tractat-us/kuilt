@@ -308,12 +308,21 @@ class VoterLivenessMonitorSurvivalTest {
         )
     }
 
-    /** Three seats, and both of the others go: the first eviction has nobody left to commit with. */
+    /**
+     * Three seats, and both of the others go: the first eviction has nobody left to commit with.
+     *
+     * Both nodes stop before either vacate is sent. With the two sessions simply closed one after the
+     * other, the outcome turns on which vacater the host takes first, and that comes out of a set whose
+     * order differs by target: on macOS that eviction went to a voter still able to acknowledge it, so
+     * the change committed and this arm's rig never fired, while on the JVM the same code failed.
+     */
     @Test
     fun aTableWhereEveryoneElseLeavesLeavesTheHostScopeActive() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val table = realTable(seatCount = 3)
 
+        table.joiners.forEach { it.node.close() }
         table.joiners.forEach { it.leave() }
+        advance(FRAME_TIME)
         table.joiners.forEach { it.close() }
         advance(PAST_THE_WINDOW)
 
