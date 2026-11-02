@@ -195,6 +195,8 @@ class DurableIdentityRestartTest {
         rig.sim.awaitLeader()
 
         val storedBefore = rig.storedKeysOf(SOLO_ID)
+        // The form that used to restart at serial 1 here, and lose this command silently.
+        assertFailsWith<IllegalStateException> { rig.node(SOLO_ID).propose(command(4L)) }
         val fresh = rig.issue(SOLO_ID, rig.floorOf(SOLO_ID) + 1)
 
         assertAll(
