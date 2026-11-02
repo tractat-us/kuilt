@@ -9,10 +9,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -196,7 +198,7 @@ class DurableIdentityRestartTest {
 
         val storedBefore = rig.storedKeysOf(SOLO_ID)
         // The form that used to restart at serial 1 here, and lose this command silently.
-        assertFailsWith<IllegalStateException> { rig.node(SOLO_ID).propose(command(4L)) }
+        assertFailsWith<AutoSerialRefusedException> { rig.node(SOLO_ID).propose(command(4L)) }
         val fresh = rig.issue(SOLO_ID, rig.floorOf(SOLO_ID) + 1)
 
         assertAll(
@@ -208,7 +210,9 @@ class DurableIdentityRestartTest {
 
     /**
      * The crash this contract exists for, with the next proposal arriving before catch-up: the floor
-     * covers the serial still in flight, so the next command draws a fresh one and both apply.
+     * covers the serial still in flight, so the next command draws a fresh one. Both apply only because
+     * serial 4 had already committed when serial 5 went out. Issuing 5 gave up on 4 either way, and
+     * [knownLimitALostSerialRetriedAfterTheNextIsAcknowledgedAndDropped] is the other outcome.
      */
     @Test
     fun aCommandBeforeCatchUpDrawsASerialAboveTheOneInFlight() = raftRunTest {
@@ -288,7 +292,7 @@ class DurableIdentityRestartTest {
         rig.sim.awaitLeader()
         rig.issue(SOLO_ID, 1L)
 
-        val refusal = assertFailsWith<IllegalStateException> { rig.node(SOLO_ID).propose(command(2L)) }
+        val refusal = assertFailsWith<AutoSerialRefusedException> { rig.node(SOLO_ID).propose(command(2L)) }
         val next = rig.issue(SOLO_ID, 2L)
         val stored = rig.storedKeysOf(SOLO_ID).map { it.requestId }
 
@@ -310,7 +314,7 @@ class DurableIdentityRestartTest {
         val first = rig.issue(followerId, 1L)
         rig.sim.awaitCommit(first.index)
 
-        assertFailsWith<IllegalStateException> { rig.node(followerId).propose(command(2L)) }
+        assertFailsWith<AutoSerialRefusedException> { rig.node(followerId).propose(command(2L)) }
         rig.sim.settle()
         val onLeader = rig.storedKeysOf(leaderId).map { it.requestId }
 
@@ -328,9 +332,10 @@ class DurableIdentityRestartTest {
     // ── What a stale floor gets ───────────────────────────────────────────────
 
     /**
-     * A floor behind what the id issued fails loud, and goes on failing. The retained log no longer
-     * raises the mark, so a supervisor restarting on the exception cannot talk itself past it. Only a
-     * true floor boots, and it says nothing about who wrote the serials it covers.
+     * A floor behind what the id issued fails loud, and goes on failing while the node can still walk
+     * the serial. The retained log no longer raises the mark, so a supervisor restarting on the
+     * exception cannot talk itself past it. Short of a snapshot past those serials, which the arms
+     * below measure, only a true floor boots, and it says nothing about who wrote what it covers.
      */
     @Test
     fun aStaleFloorDiesOnReplayAtEveryBootUntilItIsCorrected() = raftRunTest {
@@ -397,6 +402,92 @@ class DurableIdentityRestartTest {
             { assertContains(rig.commandsWalkedBy(crash.thirdId), "cmd-99", "the rig: the command did commit") },
             { assertContains(rig.commandsAppliedBy(crash.thirdId), "cmd-4", "the rig: the table applied the older one") },
             { assertFalse("cmd-99" in rig.commandsAppliedBy(crash.thirdId), "propose returned success and the table drops it") },
+        )
+    }
+
+    /**
+     * The third outcome. The serial past the floor is inside a snapshot, so this node never walks it
+     * and nothing throws at any boot. The next serial above the floor is one the id already used, the
+     * call returns success, and the table that rode the snapshot refuses it. Compare the control below,
+     * which differs only in the snapshot.
+     */
+    @Test
+    fun aStaleFloorPastASnapshotBootsCleanAndTheReusedSerialIsDropped() = raftRunTest {
+        val rig = durableRig(SOLO)
+        rig.sim.awaitLeader()
+        val entries = (1L..3L).map { rig.issue(SOLO_ID, it) }
+        val table = ClientSessionTable()
+        entries.forEach { table.shouldApply(it.dedupKey) }
+        rig.compactThrough(SOLO_ID, entries.last().index)
+        rig.setFloor(SOLO_ID, 1L)
+        rig.restart(SOLO_ID)
+        rig.sim.awaitLeader()
+        delay(BOOT_WINDOW_MS)
+        val failuresAtBoot = rig.failures.map { it.toString() }
+        val committedAtBoot = rig.node(SOLO_ID).commitIndex.value
+        val walkedAtBoot = rig.keysWalkedBy(SOLO_ID)
+
+        val reused = rig.node(SOLO_ID).propose(command(99L), requestId = rig.floorOf(SOLO_ID) + 1)
+
+        assertAll(
+            { assertEquals(emptyList(), failuresAtBoot, "no collision at this boot") },
+            { assertTrue(committedAtBoot >= entries.last().index, "the rig: the boot got past the stale serials") },
+            { assertEquals(emptyList(), walkedAtBoot, "the rig: and walked none of them") },
+            { assertEquals(2L, reused.dedupKey?.requestId, "the call reuses a serial, with no race") },
+            { assertFalse(table.shouldApply(reused.dedupKey), "propose returned success and the table drops it") },
+            { assertEquals(emptyList(), rig.failures.map { it.toString() }, "and still nothing has thrown") },
+        )
+    }
+
+    /** The control: the same stale floor over the same log, with no snapshot, dies inside the same window. */
+    @Test
+    fun aStaleFloorWithNoSnapshotDiesInsideTheSameBootWindow() = raftRunTest {
+        val rig = durableRig(SOLO)
+        rig.sim.awaitLeader()
+        (1L..3L).forEach { rig.issue(SOLO_ID, it) }
+        rig.setFloor(SOLO_ID, 1L)
+        rig.restart(SOLO_ID)
+        delay(BOOT_WINDOW_MS)
+
+        rig.assertCollisionKilledSolo(foreignSerial = 2L)
+    }
+
+    /**
+     * The shape of a restarted `clusterClient` whose voters compacted past its entries: no log and a
+     * stale floor, and catch-up arrives as a snapshot, so
+     * [aWipedLearnerWithAStaleFloorDiesOnCatchUp] never happens. Leadership moves first because a
+     * leader that committed the serial in its own tenure still refuses other bytes.
+     */
+    @Test
+    fun aWipedLearnerWithAStaleFloorOverACompactedClusterBootsCleanAndReusesASerial() = raftRunTest {
+        val client = NodeId("client")
+        val rig = durableRig(TRIO + client, learners = setOf(client))
+        val oldLeader = rig.sim.awaitLeader()
+        val last = (1L..2L).map { rig.issue(client, it) }.last()
+        rig.sim.awaitCommit(last.index)
+        TRIO.forEach { rig.compactThrough(it, last.index) }
+
+        rig.stop(client)
+        rig.wipe(client)
+        rig.setFloor(client, 1L)
+        rig.start(client)
+        rig.awaitSnapshotInstalled(client, through = last.index)
+        val failuresAtBoot = rig.failures.map { it.toString() }
+        val walkedAtBoot = rig.keysWalkedBy(client)
+
+        val cold = TRIO.first { rig.sim.nodes[it] !== oldLeader }
+        oldLeader.transferLeadership(cold)
+        rig.sim.awaitLeader(among = setOf(cold))
+        val reused = rig.node(client).propose(command(99L), requestId = rig.floorOf(client) + 1)
+        rig.sim.awaitCommit(reused.index)
+
+        assertAll(
+            { assertEquals(emptyList(), failuresAtBoot, "no collision at this boot") },
+            { assertTrue(rig.node(client).compactionFloor.value >= last.index, "the rig: it caught up by snapshot") },
+            { assertEquals(emptyList(), walkedAtBoot, "the rig: nothing was walked") },
+            { assertEquals(2L, reused.dedupKey?.requestId, "the call reuses a serial") },
+            { assertContains(rig.commandsWalkedBy(cold), "cmd-99", "the rig: the command did commit") },
+            { assertFalse("cmd-99" in rig.commandsAppliedBy(cold), "propose returned success and the table drops it") },
         )
     }
 
@@ -494,6 +585,88 @@ class DurableIdentityRestartTest {
             rig.sim.awaitTrue("the boot over the retained foreign serial") { rig.failures.isNotEmpty() }
             rig.assertCollisionKilled(second, foreignSerial = 1L, survivor = holder)
         }
+    }
+
+    /**
+     * The catch-up arm above, with a snapshot past the foreign serial. The holder never walks it, so
+     * the second writer goes unseen at this boot, and the holder's next serial reuses the other
+     * writer's. "Caught above the mark" holds only for a serial the node actually walks.
+     */
+    @Test
+    fun aSecondWritersSerialInsideASnapshotIsNeverSeen() = raftRunTest {
+        val rig = durableRig(TRIO)
+        rig.sim.awaitLeader()
+        val (holder, second) = TRIO[0] to TRIO[1]
+        val third = TRIO[2]
+        val survivors = setOf(second, third)
+
+        val last = (1L..2L).map { rig.issue(holder, it) }.last()
+        rig.sim.awaitCommit(last.index)
+        rig.stop(holder)
+
+        rig.handId(of = holder, to = second)
+        rig.restart(second)
+        val writerLeader = rig.sim.awaitLeader(among = survivors)
+        val foreign = rig.issue(second, 3L, command(33L))
+        rig.sim.awaitCommit(foreign.index, on = survivors.toList())
+        survivors.forEach { rig.compactThrough(it, foreign.index) }
+        val cold = survivors.first { rig.sim.nodes[it] !== writerLeader }
+        writerLeader.transferLeadership(cold)
+        rig.sim.awaitLeader(among = setOf(cold))
+
+        rig.start(holder)
+        rig.awaitSnapshotInstalled(holder, through = foreign.index)
+        val failuresAtBoot = rig.failures.map { it.toString() }
+        val walkedAtBoot = rig.keysWalkedBy(holder)
+
+        val reused = rig.issue(holder, rig.floorOf(holder) + 1, command(99L))
+        rig.sim.awaitCommit(reused.index)
+
+        assertAll(
+            { assertEquals(emptyList(), failuresAtBoot, "the writer goes unseen at this boot") },
+            { assertEquals(emptyList(), walkedAtBoot, "the rig: the foreign serial was never walked") },
+            { assertEquals(3L, reused.dedupKey?.requestId, "the holder reuses the other writer's serial") },
+            { assertContains(rig.commandsAppliedBy(third), "cmd-33", "the rig: the other writer's command applied") },
+            { assertContains(rig.commandsWalkedBy(third), "cmd-99", "the rig: the holder's command did commit") },
+            { assertFalse("cmd-99" in rig.commandsAppliedBy(third), "propose returned success and the table drops it") },
+        )
+    }
+
+    /**
+     * A collision is cleared by no restart that can still walk the entry. Compaction past that entry
+     * is the exception: this node dies on it, the cluster moves on and compacts, and the next boot takes
+     * a snapshot and never reads it. Nothing tells the node a collision was forgotten.
+     */
+    @Test
+    fun aCollisionTheClusterCompactedPastIsGoneAtTheNextBoot() = raftRunTest {
+        val rig = durableRig(TRIO)
+        rig.sim.awaitLeader()
+        val (holder, second) = TRIO[0] to TRIO[1]
+        val survivors = setOf(holder, TRIO[2])
+        rig.handId(of = holder, to = second)
+        rig.restart(second)
+
+        // Launched: if the second process leads, it dies inside the commit that would answer this.
+        rig.launch { rig.issue(holder, 1L) }
+        rig.sim.awaitTrue("the second process to see the foreign serial") { rig.failures.isNotEmpty() }
+        rig.assertCollisionKilled(second, foreignSerial = 1L, survivor = holder)
+        val heldAtDeath = rig.storedKeysOf(second).map { it.requestId }
+        rig.failures.clear()
+        rig.stop(second)
+
+        rig.sim.awaitLeader(among = survivors)
+        val later = rig.issue(holder, 2L)
+        rig.sim.awaitCommit(later.index, on = survivors.toList())
+        survivors.forEach { rig.compactThrough(it, later.index) }
+
+        rig.start(second)
+        rig.awaitSnapshotInstalled(second, through = later.index)
+
+        assertAll(
+            { assertEquals(listOf(1L), heldAtDeath, "the rig: the foreign entry reached storage") },
+            { assertEquals(emptyList(), rig.failures.map { it.toString() }, "the same floor now boots clean") },
+            { assertEquals(emptyList(), rig.keysWalkedBy(second), "the rig: because it walked nothing") },
+        )
     }
 
     /**
@@ -608,11 +781,98 @@ class DurableIdentityRestartTest {
         )
     }
 
+    // ── A lower serial after a higher one, tracked by #3107 ────────────────────
+    //
+    // `ClientSessionTable` keeps one high-water serial per id, so issuing a higher serial gives up on
+    // every lower one still unresolved. `ClientIdentity.Durable` states this as the caller's rule.
+
+    /**
+     * A caller that kept the write-ahead contract. Serial 4 is on its floor, its forward is lost at the
+     * crash, and it issues the next command before retrying. Both calls succeed and nothing throws, but
+     * the command under the lower serial never applies.
+     */
+    @Test
+    fun knownLimitALostSerialRetriedAfterTheNextIsAcknowledgedAndDropped() = raftRunTest {
+        val rig = durableRig(TRIO)
+        val lost = rig.crashWithSerialFourLost()
+
+        val next = rig.issue(lost.followerId, rig.floorOf(lost.followerId) + 1, command(99L))
+        rig.sim.awaitCommit(next.index)
+        val retried = rig.issue(lost.followerId, 4L)
+        rig.sim.awaitCommit(retried.index)
+
+        assertAll(
+            { assertEquals(listOf(1L, 2L, 3L), lost.heldByLeader, "the rig: serial 4 never reached the leader") },
+            { assertEquals(4L, lost.floorAtCrash, "the rig: the caller wrote ahead") },
+            { assertEquals(5L, next.dedupKey?.requestId) },
+            { assertEquals(4L, retried.dedupKey?.requestId, "the retry returned success") },
+            { assertEquals(emptyList(), rig.failures.map { it.toString() }, "nothing throws") },
+            { assertContains(rig.commandsWalkedBy(lost.thirdId), "cmd-4", "the rig: the retry did commit") },
+            {
+                assertEquals(
+                    listOf("cmd-1", "cmd-2", "cmd-3", "cmd-99"),
+                    rig.commandsAppliedBy(lost.thirdId),
+                    "$ORDER_WRONG acknowledged, committed and dropped",
+                )
+            },
+        )
+    }
+
+    /** The control: the same crash with the retry first applies both, so the order is the whole cause. */
+    @Test
+    fun aLostSerialRetriedBeforeTheNextBothApply() = raftRunTest {
+        val rig = durableRig(TRIO)
+        val lost = rig.crashWithSerialFourLost()
+
+        val retried = rig.issue(lost.followerId, 4L)
+        val next = rig.issue(lost.followerId, rig.floorOf(lost.followerId) + 1, command(99L))
+        rig.sim.awaitCommit(maxOf(retried.index, next.index))
+
+        assertAll(
+            { assertEquals(listOf(1L, 2L, 3L), lost.heldByLeader, "the rig: serial 4 never reached the leader") },
+            { assertEquals(4L, lost.floorAtCrash, "the rig: the caller wrote ahead") },
+            { assertEquals(5L, next.dedupKey?.requestId) },
+            { assertEquals(listOf("cmd-1", "cmd-2", "cmd-3", "cmd-4", "cmd-99"), rig.commandsAppliedBy(lost.thirdId)) },
+        )
+    }
+
+    /** It takes no crash: a caller's own timeout, then the next command, then the retry. */
+    @Test
+    fun knownLimitATimedOutSerialRetriedAfterTheNextIsDroppedWithNoCrash() = raftRunTest {
+        val rig = durableRig(TRIO)
+        val roles = rig.issueThroughSerialThreeOnAFollower()
+
+        rig.sim.dropLink(from = roles.followerId, to = roles.leaderId)
+        val timedOut = withTimeoutOrNull(BOOT_WINDOW_MS) { rig.issue(roles.followerId, 4L) }
+        rig.sim.heal()
+        val next = rig.issue(roles.followerId, 5L, command(99L))
+        rig.sim.awaitCommit(next.index)
+        val retried = rig.issue(roles.followerId, 4L)
+        rig.sim.awaitCommit(retried.index)
+
+        assertAll(
+            { assertEquals(null, timedOut, "the rig: the first attempt got no answer") },
+            { assertEquals(emptyList(), rig.failures.map { it.toString() }) },
+            { assertContains(rig.commandsWalkedBy(roles.thirdId), "cmd-4", "the rig: the retry did commit") },
+            {
+                assertEquals(
+                    listOf("cmd-1", "cmd-2", "cmd-3", "cmd-99"),
+                    rig.commandsAppliedBy(roles.thirdId),
+                    "$ORDER_WRONG acknowledged, committed and dropped",
+                )
+            },
+        )
+    }
+
     private companion object {
         val SOLO_ID = NodeId("solo")
         val SOLO = listOf(SOLO_ID)
         val TRIO = listOf(NodeId("v1"), NodeId("v2"), NodeId("v3"))
         const val KNOWN_WRONG = "known wrong, tracked by #3081: "
+        const val ORDER_WRONG = "known wrong, tracked by #3107:"
+
+        /** Virtual, and long enough to see a dropped forward stay dropped or a boot reach its end. */
+        const val BOOT_WINDOW_MS = 100L
     }
 }
 
@@ -775,6 +1035,45 @@ private class DurableRestartRig(
             .map { it.entry.command.decodeToString() }
     }
 
+    /** Commits serials 1 to 3 from a follower, and says which node is which for the arm to come. */
+    suspend fun issueThroughSerialThreeOnAFollower(): FollowerRoles {
+        val leader = sim.awaitLeader()
+        val leaderId = sim.nodes.entries.first { it.value === leader }.key
+        val (followerId, thirdId) = sim.nodes.keys.filter { it != leaderId }
+        val durable = (1L..3L).map { issue(followerId, it) }.last()
+        sim.awaitCommit(durable.index)
+        return FollowerRoles(leaderId, followerId, thirdId)
+    }
+
+    /**
+     * Crashes a follower with serial 4 written ahead to its floor and its forward lost on the way to
+     * the leader, so nothing anywhere holds that entry. The follower is back up, with the links
+     * healed, when this returns.
+     */
+    suspend fun crashWithSerialFourLost(): LostForward {
+        val roles = issueThroughSerialThreeOnAFollower()
+        sim.dropLink(from = roles.followerId, to = roles.leaderId)
+        launch { issue(roles.followerId, 4L) }
+        delay(FORWARD_WINDOW_MS)
+        val heldByLeader = storedKeysOf(roles.leaderId)
+            .filter { it.clientId == clientIds.getValue(roles.followerId) }
+            .map { it.requestId }
+        val floorAtCrash = floorOf(roles.followerId)
+        stop(roles.followerId)
+        sim.heal()
+        start(roles.followerId)
+        sim.awaitLeader()
+        return LostForward(roles.followerId, roles.thirdId, heldByLeader, floorAtCrash)
+    }
+
+    /** Ends once [id] holds a snapshot through [through], or some node has failed, then lets it settle. */
+    suspend fun awaitSnapshotInstalled(id: NodeId, through: Long) {
+        sim.awaitTrue("the snapshot through $through on ${id.value}, or a failure") {
+            failures.isNotEmpty() || node(id).compactionFloor.value >= through
+        }
+        sim.settle()
+    }
+
     /**
      * Crashes a follower with serial 4 forwarded and committed elsewhere, but never received. The
      * follower is back up and cut off from the leader when this returns. [writtenAhead] says whether
@@ -824,6 +1123,15 @@ private class DurableRestartRig(
         )
     }
 
+    /** [assertCollisionKilled] for a one-node rig, where no survivor exists to compare against. */
+    fun assertCollisionKilledSolo(foreignSerial: Long) {
+        val failure = failures.singleOrNull()
+        assertAll(
+            { assertIs<ClientIdCollisionException>(failure, "exactly one failure, a collision: $failures") },
+            { assertContains(failure?.message.orEmpty(), "foreign serial $foreignSerial", message = "the serial it names") },
+        )
+    }
+
     fun assertCollisionKilled(id: NodeId, foreignSerial: Long, survivor: NodeId, prefix: String = "") {
         val failure = failures.singleOrNull()
         assertAll(
@@ -838,3 +1146,10 @@ private class DurableRestartRig(
 private class CrashedForward(val leader: RaftNode, val followerId: NodeId, val thirdId: NodeId, val retained: List<Long>)
 
 private class LandedProposal(val entry: LogEntry, val storedAtPropose: List<Long>)
+
+private class FollowerRoles(val leaderId: NodeId, val followerId: NodeId, val thirdId: NodeId)
+
+private class LostForward(val followerId: NodeId, val thirdId: NodeId, val heldByLeader: List<Long>, val floorAtCrash: Long)
+
+/** Virtual, and long enough for a forward the dropped link did not eat to have reached the leader. */
+private const val FORWARD_WINDOW_MS = 100L
