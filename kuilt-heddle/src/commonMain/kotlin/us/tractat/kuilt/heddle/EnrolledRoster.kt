@@ -49,8 +49,8 @@ internal class EnrolledRoster private constructor(
 
     /**
      * This roster advanced to [index] with no membership change — what the apply loop does for every
-     * committed entry it applies or steps over, so [appliedIndex] tracks the prefix actually applied.
-     * It does not advance over a control act it cannot read, or over anything after one: the prefix
+     * committed entry it applies, so [appliedIndex] tracks the prefix actually applied.
+     * It does not advance over an entry it cannot read, or over anything after one: the prefix
      * stops there, so it never reads as covering an act whose effect is missing.
      *
      * Requires [index] to advance **strictly**: `RaftNode.committedFrom` delivers "every subsequent
