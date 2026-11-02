@@ -21,9 +21,11 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.otel.tap.LogTapAdmission
 import us.tractat.kuilt.otel.tap.TapCbor
+import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -54,6 +56,8 @@ class TapAdmissionAttackTest {
     private val clock = object : Clock { override fun now(): Instant = t0 }
     private val code = "CODE1234"
     private val token = LogTapJoinToken(code, t0, 5.minutes)
+    private val wornPuller = PeerId("puller")
+    private val wornStranger = PeerId("stranger")
 
     private fun verifier(seed: Int = VERIFIER_SEED) = GateRole.Verifier(token, clock, Random(seed))
 
@@ -423,6 +427,79 @@ class TapAdmissionAttackTest {
             rejectedBy = replayer.rejectedBy,
         )
     }
+
+    /**
+     * A known limit (#3079). Admission is held against an id, and nothing about a later frame shows
+     * which connection it came from, so one wearing an admitted id gets what that id earned: no second
+     * proof is asked for. Whether a fabric will carry such a frame is the fabric's half, and this test
+     * cannot show it. [FakeSeam] stamps what it is told to, standing in for one that does.
+     *
+     * If this reds because the gate now ties admission to something more, delete it and say so.
+     */
+    @Test
+    fun anAdmittedIdStaysAdmittedWhoeverIsWearingIt() = runTest(UnconfinedTestDispatcher()) {
+        val deviceSeam = FakeSeam(PeerId("device"), setOf(PeerId("device"), wornPuller, wornStranger))
+        val gate = deviceSeam.tokenGated(verifier(), backgroundScope)
+        val relayed = mutableListOf<Swatch>()
+        backgroundScope.launch { gate.incoming.collect { relayed += it } }
+        runCurrent()
+
+        deviceSeam.deliver(wornPuller, honestProofFrame(deviceSeam))
+        runCurrent()
+        val frame = byteArrayOf(0x01, 0x02, 0x03)
+        deviceSeam.deliver(wornStranger, frame)
+        runCurrent()
+        val relayedFromAnUnadmittedId = relayed.size
+        deviceSeam.deliver(wornPuller, frame)
+        runCurrent()
+
+        assertAll(
+            { assertTrue(wornPuller in gate.peers.value, "rig: the honest proof must have admitted the id") },
+            { assertEquals(0, relayedFromAnUnadmittedId, "control: the gate must drop a frame from an id with no proof") },
+            { assertEquals(listOf(wornPuller), relayed.map { it.sender }, "a frame wearing the admitted id gets through") },
+            { assertEquals(1, framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Challenge }, "and no second proof is asked for") },
+        )
+    }
+
+    /**
+     * The other half of [anAdmittedIdStaysAdmittedWhoeverIsWearingIt]. One bad proof stamped with a
+     * peer's id spends the only challenge that peer has, so its real proof arrives to nothing.
+     */
+    @Test
+    fun aForgedProofStampedWithAPeersIdUsesUpThatPeersChallenge() = runTest(UnconfinedTestDispatcher()) {
+        val deviceSeam = FakeSeam(PeerId("device"), setOf(PeerId("device"), wornPuller))
+        val gate = deviceSeam.tokenGated(verifier(), backgroundScope)
+        runCurrent()
+        val honest = honestProofFrame(deviceSeam)
+        val forged = TapAdmitMessage.Proof(
+            proverNonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES)),
+            tag = ByteString(ByteArray(TapAdmitMessage.Proof.TAG_BYTES)),
+        )
+
+        deviceSeam.deliver(wornPuller, TapAdmitMessage.encode(forged))
+        runCurrent()
+        deviceSeam.deliver(wornPuller, honest)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(1, framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Reject }, "rig: the forged proof must have been refused") },
+            { assertFalse(wornPuller in gate.peers.value, "the real proof has no challenge left to answer") },
+            { assertEquals(1, framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Challenge }, "and no fresh challenge is issued") },
+        )
+    }
+
+    /** The proof the real puller would send to the challenge the device has issued it. */
+    private fun honestProofFrame(deviceSeam: FakeSeam): ByteArray {
+        val challenge = deviceSeam.directed
+            .filter { (peer, _) -> peer == wornPuller }
+            .firstNotNullOf { (_, frame) -> TapAdmitMessage.decode(frame) as? TapAdmitMessage.Challenge }
+        val proverNonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 0x33 })
+        val tag = admissionTag(code, deviceSeam.selfId, wornPuller, challenge.nonce, proverNonce)
+        return TapAdmitMessage.encode(TapAdmitMessage.Proof(proverNonce, ByteString(tag)))
+    }
+
+    private fun framesTo(seam: FakeSeam, peer: PeerId, matching: (TapAdmitMessage?) -> Boolean): Int =
+        seam.directed.count { (to, frame) -> to == peer && matching(TapAdmitMessage.decode(frame)) }
 
     private class TwoSessionRelay(val attackerAdmitted: Boolean)
 

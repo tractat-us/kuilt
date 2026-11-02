@@ -6,13 +6,14 @@ import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.WarpMetricExporter
 
 /**
- * Reach a real iPhone's captured logs from a nearby Mac, **encrypted end to end**.
+ * Reach a real iPhone's captured logs from a nearby Mac, **encrypted on the air**.
  *
  * This is the Apple-native complement to the plain-Wi-Fi reach path. On a shared network the
  * plain path carries the log bytes unencrypted and leans on a join code only to control *who*
  * may pull. Apple's Multipeer Connectivity fabric closes that gap: every frame travels over a
  * DTLS-encrypted link (the underlying session is created with encryption *required*), so even a
- * listener already positioned to snoop the network reads nothing.
+ * listener already positioned to snoop the network reads nothing. A peer that joins is not a
+ * listener: the link is encrypted to it, and [MultipeerPeerLinkFactory] accepts every invitation.
  *
  * It also removes the awkward role inversion the plain path needs. An iPhone can't run a
  * Wi-Fi server, so over that fabric it has to *join* a laptop-hosted rendezvous. Over Multipeer
@@ -32,10 +33,10 @@ import us.tractat.kuilt.otel.WarpMetricExporter
  * @param scope the scope the host's replicator runs in. Closing the returned host (or
  *   cancelling this scope) stops the tap.
  * @param config tap tuning; the defaults suit a developer turning the tap on to debug.
- * @param admission how the pulling Mac is admitted. The Multipeer link is already encrypted, so
- *   [LogTapAdmission.Open] is safe on a trusted pairing; pass [LogTapAdmission.Verify] to *also*
- *   require a short join code (admission control layered over the encrypted transport — the same
- *   fabric-agnostic gate the plain path uses, unchanged). The offering side must hold
+ * @param admission how the pulling Mac is admitted. The default [LogTapAdmission.Open] lets any Mac
+ *   in range join and pull, encrypted link or not. Pass [LogTapAdmission.Verify] to require a join
+ *   code (admission control layered over the encrypted transport — the same fabric-agnostic gate the
+ *   plain path uses, unchanged). The offering side must hold
  *   [LogTapAdmission.Verify] or [LogTapAdmission.Open]; [LogTapAdmission.Present] is the puller's
  *   role.
  */

@@ -45,7 +45,7 @@ Multipeer transport are what only two devices can exercise.
       the same join code as the log path, and its gate is **[automated]** by
       `gatedMetricTapComposesOverAnInjectedFabricOnApple` and
       `wrongCodeNeverConvergesTheMetricPullOnApple`.)*
-- [x] **[manual]** Confirm the transport is **encrypted end to end**: the underlying `MCSession`
+- [x] **[manual]** Confirm the transport is **encrypted on the wire**: the underlying `MCSession`
       is created with `encryptionPreference = MCEncryptionRequired`. Verify no plaintext log/metric
       bytes are observable on the wire (e.g. a packet capture on the shared network shows only
       encrypted Multipeer traffic, not readable log bodies). *(Genuinely manual — no in-memory fabric

@@ -96,7 +96,7 @@ internal sealed interface GateRole {
  * - **Multipeer, Nearby:** the id is claimed by the peer, as a suffix of its display name or in a
  *   connection hello, and Multipeer accepts any Mac on the LAN. A relayer has to be the puller's id to
  *   the device and the device's id to the puller, which takes more than one identity and takes knowing
- *   both ids.
+ *   both ids. On Multipeer those identities can sit in one session, as extra display names.
  * - **Network.framework:** the same claim, behind TLS keyed from the room key, so a relayer must first
  *   hold the room key.
  * - **WebSocket, TCP, WebRTC:** the id is claimed in the dial or a hello. A one-to-one seam never puts
@@ -104,9 +104,20 @@ internal sealed interface GateRole {
  *   a spoofed advertisement under the puller's id, and dial the puller under the device's. Then the ids
  *   match and this binding does nothing. A room relayed through a hub is the Multipeer case instead.
  *
- * So the binding closes the relay within one session and leaves the two-session, both-ids relay open,
- * which `aRelayWearingBothIdsAcrossTwoSessionsIsStillAdmitted` pins. Closing that takes a key exchange
- * the code authenticates, which is a different protocol.
+ * So the binding closes the relay for a relayer that shows up as itself, and leaves open one that
+ * wears both ids, which `aRelayWearingBothIdsAcrossTwoSessionsIsStillAdmitted` pins. Closing that takes
+ * a key exchange the code authenticates, which is a different protocol.
+ *
+ * ## Admission belongs to an id, not to a connection
+ *
+ * [verified] holds ids, and an id leaves it only when [peers] shows that peer going. So wherever a
+ * fabric carries a second connection under an admitted id without moving the roster, that connection
+ * is admitted too, with no relay and no code. It can read what the device sends that id and send as
+ * that id. By reading the source and not by running it, Multipeer does this, stamping
+ * [Swatch.sender] from a display name, and so does a hub with no attestation, replacing the route.
+ * The same stamp lets a stranger send a bad proof as a peer and use up that peer's challenge, which
+ * locks the peer out until the roster next moves. `anAdmittedIdStaysAdmittedWhoeverIsWearingIt` and
+ * `aForgedProofStampedWithAPeersIdUsesUpThatPeersChallenge` pin the gate's half. #3079 tracks the rest.
  *
  * Scope-owning: collectors of `inner.incoming` and, on a verifier, of `inner.peers` run in [scope];
  * cancel it to stop the gate. State is guarded by a [reentrantLock] with every suspending
