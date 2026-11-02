@@ -1,0 +1,391 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Alias: apple => [iosArm64, iosSimulatorArm64, macosArm64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-nw>
+final enum class us.tractat.kuilt.nw/NwInterfaceType : kotlin/Enum<us.tractat.kuilt.nw/NwInterfaceType> { // us.tractat.kuilt.nw/NwInterfaceType|null[0]
+    enum entry Cellular // us.tractat.kuilt.nw/NwInterfaceType.Cellular|null[0]
+    enum entry Loopback // us.tractat.kuilt.nw/NwInterfaceType.Loopback|null[0]
+    enum entry Other // us.tractat.kuilt.nw/NwInterfaceType.Other|null[0]
+    enum entry WifiDirect // us.tractat.kuilt.nw/NwInterfaceType.WifiDirect|null[0]
+    enum entry WifiLan // us.tractat.kuilt.nw/NwInterfaceType.WifiLan|null[0]
+    enum entry Wired // us.tractat.kuilt.nw/NwInterfaceType.Wired|null[0]
+
+    final val entries // us.tractat.kuilt.nw/NwInterfaceType.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.nw/NwInterfaceType> // us.tractat.kuilt.nw/NwInterfaceType.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.nw/NwInterfaceType // us.tractat.kuilt.nw/NwInterfaceType.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.nw/NwInterfaceType> // us.tractat.kuilt.nw/NwInterfaceType.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.nw/NwPathStatus : kotlin/Enum<us.tractat.kuilt.nw/NwPathStatus> { // us.tractat.kuilt.nw/NwPathStatus|null[0]
+    enum entry Invalid // us.tractat.kuilt.nw/NwPathStatus.Invalid|null[0]
+    enum entry Satisfiable // us.tractat.kuilt.nw/NwPathStatus.Satisfiable|null[0]
+    enum entry Satisfied // us.tractat.kuilt.nw/NwPathStatus.Satisfied|null[0]
+    enum entry Unsatisfied // us.tractat.kuilt.nw/NwPathStatus.Unsatisfied|null[0]
+
+    final val entries // us.tractat.kuilt.nw/NwPathStatus.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.nw/NwPathStatus> // us.tractat.kuilt.nw/NwPathStatus.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.nw/NwPathStatus // us.tractat.kuilt.nw/NwPathStatus.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.nw/NwPathStatus> // us.tractat.kuilt.nw/NwPathStatus.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.nw/NwUnsatisfiedReason : kotlin/Enum<us.tractat.kuilt.nw/NwUnsatisfiedReason> { // us.tractat.kuilt.nw/NwUnsatisfiedReason|null[0]
+    enum entry CellularDenied // us.tractat.kuilt.nw/NwUnsatisfiedReason.CellularDenied|null[0]
+    enum entry LocalNetworkDenied // us.tractat.kuilt.nw/NwUnsatisfiedReason.LocalNetworkDenied|null[0]
+    enum entry NotAvailable // us.tractat.kuilt.nw/NwUnsatisfiedReason.NotAvailable|null[0]
+    enum entry Unknown // us.tractat.kuilt.nw/NwUnsatisfiedReason.Unknown|null[0]
+    enum entry VpnInactive // us.tractat.kuilt.nw/NwUnsatisfiedReason.VpnInactive|null[0]
+    enum entry WifiDenied // us.tractat.kuilt.nw/NwUnsatisfiedReason.WifiDenied|null[0]
+
+    final val entries // us.tractat.kuilt.nw/NwUnsatisfiedReason.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.nw/NwUnsatisfiedReason> // us.tractat.kuilt.nw/NwUnsatisfiedReason.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.nw/NwUnsatisfiedReason // us.tractat.kuilt.nw/NwUnsatisfiedReason.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.nw/NwUnsatisfiedReason> // us.tractat.kuilt.nw/NwUnsatisfiedReason.values|values#static(){}[0]
+}
+
+abstract interface us.tractat.kuilt.nw/NwApi { // us.tractat.kuilt.nw/NwApi|null[0]
+    abstract val bytesReceived // us.tractat.kuilt.nw/NwApi.bytesReceived|{}bytesReceived[0]
+        abstract fun <get-bytesReceived>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.nw/NwBytesReceived> // us.tractat.kuilt.nw/NwApi.bytesReceived.<get-bytesReceived>|<get-bytesReceived>(){}[0]
+    abstract val connectionClosed // us.tractat.kuilt.nw/NwApi.connectionClosed|{}connectionClosed[0]
+        abstract fun <get-connectionClosed>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.nw/NwConnectionClosed> // us.tractat.kuilt.nw/NwApi.connectionClosed.<get-connectionClosed>|<get-connectionClosed>(){}[0]
+    abstract val connectionOpened // us.tractat.kuilt.nw/NwApi.connectionOpened|{}connectionOpened[0]
+        abstract fun <get-connectionOpened>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.nw/NwConnectionOpened> // us.tractat.kuilt.nw/NwApi.connectionOpened.<get-connectionOpened>|<get-connectionOpened>(){}[0]
+    abstract val endpointFound // us.tractat.kuilt.nw/NwApi.endpointFound|{}endpointFound[0]
+        abstract fun <get-endpointFound>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.nw/NwEndpoint> // us.tractat.kuilt.nw/NwApi.endpointFound.<get-endpointFound>|<get-endpointFound>(){}[0]
+    open val advertisedName // us.tractat.kuilt.nw/NwApi.advertisedName|{}advertisedName[0]
+        open fun <get-advertisedName>(): kotlinx.coroutines.flow/StateFlow<kotlin/String?> // us.tractat.kuilt.nw/NwApi.advertisedName.<get-advertisedName>|<get-advertisedName>(){}[0]
+    open val connectionStates // us.tractat.kuilt.nw/NwApi.connectionStates|{}connectionStates[0]
+        open fun <get-connectionStates>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Map<us.tractat.kuilt.nw/NwConnectionId, us.tractat.kuilt.nw/NwConnState>> // us.tractat.kuilt.nw/NwApi.connectionStates.<get-connectionStates>|<get-connectionStates>(){}[0]
+    open val endpointLost // us.tractat.kuilt.nw/NwApi.endpointLost|{}endpointLost[0]
+        open fun <get-endpointLost>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.nw/NwEndpoint> // us.tractat.kuilt.nw/NwApi.endpointLost.<get-endpointLost>|<get-endpointLost>(){}[0]
+    open val listenerState // us.tractat.kuilt.nw/NwApi.listenerState|{}listenerState[0]
+        open fun <get-listenerState>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.nw/NwListenerState> // us.tractat.kuilt.nw/NwApi.listenerState.<get-listenerState>|<get-listenerState>(){}[0]
+    open val pathState // us.tractat.kuilt.nw/NwApi.pathState|{}pathState[0]
+        open fun <get-pathState>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.nw/NwPathState?> // us.tractat.kuilt.nw/NwApi.pathState.<get-pathState>|<get-pathState>(){}[0]
+
+    abstract fun availability(): us.tractat.kuilt.core/FabricAvailability // us.tractat.kuilt.nw/NwApi.availability|availability(){}[0]
+    abstract suspend fun connect(us.tractat.kuilt.nw/NwEndpoint) // us.tractat.kuilt.nw/NwApi.connect|connect(us.tractat.kuilt.nw.NwEndpoint){}[0]
+    abstract suspend fun disconnect(us.tractat.kuilt.nw/NwConnectionId) // us.tractat.kuilt.nw/NwApi.disconnect|disconnect(us.tractat.kuilt.nw.NwConnectionId){}[0]
+    abstract suspend fun send(us.tractat.kuilt.nw/NwConnectionId, kotlin/ByteArray) // us.tractat.kuilt.nw/NwApi.send|send(us.tractat.kuilt.nw.NwConnectionId;kotlin.ByteArray){}[0]
+    abstract suspend fun startBrowsing(kotlin/String) // us.tractat.kuilt.nw/NwApi.startBrowsing|startBrowsing(kotlin.String){}[0]
+    abstract suspend fun startListening(kotlin/String, kotlin/String) // us.tractat.kuilt.nw/NwApi.startListening|startListening(kotlin.String;kotlin.String){}[0]
+    abstract suspend fun stopBrowsing() // us.tractat.kuilt.nw/NwApi.stopBrowsing|stopBrowsing(){}[0]
+    abstract suspend fun stopListening() // us.tractat.kuilt.nw/NwApi.stopListening|stopListening(){}[0]
+}
+
+sealed interface us.tractat.kuilt.nw/NwConnState { // us.tractat.kuilt.nw/NwConnState|null[0]
+    final class Closed : us.tractat.kuilt.nw/NwConnState { // us.tractat.kuilt.nw/NwConnState.Closed|null[0]
+        constructor <init>(kotlin/String?) // us.tractat.kuilt.nw/NwConnState.Closed.<init>|<init>(kotlin.String?){}[0]
+
+        final val reason // us.tractat.kuilt.nw/NwConnState.Closed.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String? // us.tractat.kuilt.nw/NwConnState.Closed.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String? // us.tractat.kuilt.nw/NwConnState.Closed.component1|component1(){}[0]
+        final fun copy(kotlin/String? = ...): us.tractat.kuilt.nw/NwConnState.Closed // us.tractat.kuilt.nw/NwConnState.Closed.copy|copy(kotlin.String?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwConnState.Closed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwConnState.Closed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwConnState.Closed.toString|toString(){}[0]
+    }
+
+    final object PathLost : us.tractat.kuilt.nw/NwConnState { // us.tractat.kuilt.nw/NwConnState.PathLost|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwConnState.PathLost.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwConnState.PathLost.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwConnState.PathLost.toString|toString(){}[0]
+    }
+
+    final object Viable : us.tractat.kuilt.nw/NwConnState { // us.tractat.kuilt.nw/NwConnState.Viable|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwConnState.Viable.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwConnState.Viable.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwConnState.Viable.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.nw/NwListenerState { // us.tractat.kuilt.nw/NwListenerState|null[0]
+    final class Failed : us.tractat.kuilt.nw/NwListenerState { // us.tractat.kuilt.nw/NwListenerState.Failed|null[0]
+        constructor <init>(kotlin/Int, kotlin/Int) // us.tractat.kuilt.nw/NwListenerState.Failed.<init>|<init>(kotlin.Int;kotlin.Int){}[0]
+
+        final val code // us.tractat.kuilt.nw/NwListenerState.Failed.code|{}code[0]
+            final fun <get-code>(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Failed.code.<get-code>|<get-code>(){}[0]
+        final val domain // us.tractat.kuilt.nw/NwListenerState.Failed.domain|{}domain[0]
+            final fun <get-domain>(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Failed.domain.<get-domain>|<get-domain>(){}[0]
+
+        final fun component1(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Failed.component1|component1(){}[0]
+        final fun component2(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Failed.component2|component2(){}[0]
+        final fun copy(kotlin/Int = ..., kotlin/Int = ...): us.tractat.kuilt.nw/NwListenerState.Failed // us.tractat.kuilt.nw/NwListenerState.Failed.copy|copy(kotlin.Int;kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwListenerState.Failed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Failed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwListenerState.Failed.toString|toString(){}[0]
+    }
+
+    final class Waiting : us.tractat.kuilt.nw/NwListenerState { // us.tractat.kuilt.nw/NwListenerState.Waiting|null[0]
+        constructor <init>(kotlin/Int, kotlin/Int) // us.tractat.kuilt.nw/NwListenerState.Waiting.<init>|<init>(kotlin.Int;kotlin.Int){}[0]
+
+        final val code // us.tractat.kuilt.nw/NwListenerState.Waiting.code|{}code[0]
+            final fun <get-code>(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Waiting.code.<get-code>|<get-code>(){}[0]
+        final val domain // us.tractat.kuilt.nw/NwListenerState.Waiting.domain|{}domain[0]
+            final fun <get-domain>(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Waiting.domain.<get-domain>|<get-domain>(){}[0]
+
+        final fun component1(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Waiting.component1|component1(){}[0]
+        final fun component2(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Waiting.component2|component2(){}[0]
+        final fun copy(kotlin/Int = ..., kotlin/Int = ...): us.tractat.kuilt.nw/NwListenerState.Waiting // us.tractat.kuilt.nw/NwListenerState.Waiting.copy|copy(kotlin.Int;kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwListenerState.Waiting.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Waiting.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwListenerState.Waiting.toString|toString(){}[0]
+    }
+
+    final object Ready : us.tractat.kuilt.nw/NwListenerState { // us.tractat.kuilt.nw/NwListenerState.Ready|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwListenerState.Ready.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Ready.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwListenerState.Ready.toString|toString(){}[0]
+    }
+
+    final object Starting : us.tractat.kuilt.nw/NwListenerState { // us.tractat.kuilt.nw/NwListenerState.Starting|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwListenerState.Starting.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Starting.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwListenerState.Starting.toString|toString(){}[0]
+    }
+
+    final object Unknown : us.tractat.kuilt.nw/NwListenerState { // us.tractat.kuilt.nw/NwListenerState.Unknown|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwListenerState.Unknown.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwListenerState.Unknown.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwListenerState.Unknown.toString|toString(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.nw/NwBytesReceived { // us.tractat.kuilt.nw/NwBytesReceived|null[0]
+    constructor <init>(us.tractat.kuilt.nw/NwConnectionId, kotlin/ByteArray) // us.tractat.kuilt.nw/NwBytesReceived.<init>|<init>(us.tractat.kuilt.nw.NwConnectionId;kotlin.ByteArray){}[0]
+
+    final val bytes // us.tractat.kuilt.nw/NwBytesReceived.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // us.tractat.kuilt.nw/NwBytesReceived.bytes.<get-bytes>|<get-bytes>(){}[0]
+    final val connectionId // us.tractat.kuilt.nw/NwBytesReceived.connectionId|{}connectionId[0]
+        final fun <get-connectionId>(): us.tractat.kuilt.nw/NwConnectionId // us.tractat.kuilt.nw/NwBytesReceived.connectionId.<get-connectionId>|<get-connectionId>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.nw/NwConnectionId // us.tractat.kuilt.nw/NwBytesReceived.component1|component1(){}[0]
+    final fun component2(): kotlin/ByteArray // us.tractat.kuilt.nw/NwBytesReceived.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.nw/NwConnectionId = ..., kotlin/ByteArray = ...): us.tractat.kuilt.nw/NwBytesReceived // us.tractat.kuilt.nw/NwBytesReceived.copy|copy(us.tractat.kuilt.nw.NwConnectionId;kotlin.ByteArray){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwBytesReceived.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwBytesReceived.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwBytesReceived.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nw/NwConnectionClosed { // us.tractat.kuilt.nw/NwConnectionClosed|null[0]
+    constructor <init>(us.tractat.kuilt.nw/NwConnectionId, kotlin/String? = ...) // us.tractat.kuilt.nw/NwConnectionClosed.<init>|<init>(us.tractat.kuilt.nw.NwConnectionId;kotlin.String?){}[0]
+
+    final val connectionId // us.tractat.kuilt.nw/NwConnectionClosed.connectionId|{}connectionId[0]
+        final fun <get-connectionId>(): us.tractat.kuilt.nw/NwConnectionId // us.tractat.kuilt.nw/NwConnectionClosed.connectionId.<get-connectionId>|<get-connectionId>(){}[0]
+    final val reason // us.tractat.kuilt.nw/NwConnectionClosed.reason|{}reason[0]
+        final fun <get-reason>(): kotlin/String? // us.tractat.kuilt.nw/NwConnectionClosed.reason.<get-reason>|<get-reason>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.nw/NwConnectionId // us.tractat.kuilt.nw/NwConnectionClosed.component1|component1(){}[0]
+    final fun component2(): kotlin/String? // us.tractat.kuilt.nw/NwConnectionClosed.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.nw/NwConnectionId = ..., kotlin/String? = ...): us.tractat.kuilt.nw/NwConnectionClosed // us.tractat.kuilt.nw/NwConnectionClosed.copy|copy(us.tractat.kuilt.nw.NwConnectionId;kotlin.String?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwConnectionClosed.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwConnectionClosed.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwConnectionClosed.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nw/NwConnectionOpened { // us.tractat.kuilt.nw/NwConnectionOpened|null[0]
+    constructor <init>(us.tractat.kuilt.nw/NwConnectionId, us.tractat.kuilt.nw/NwEndpoint?) // us.tractat.kuilt.nw/NwConnectionOpened.<init>|<init>(us.tractat.kuilt.nw.NwConnectionId;us.tractat.kuilt.nw.NwEndpoint?){}[0]
+
+    final val connectionId // us.tractat.kuilt.nw/NwConnectionOpened.connectionId|{}connectionId[0]
+        final fun <get-connectionId>(): us.tractat.kuilt.nw/NwConnectionId // us.tractat.kuilt.nw/NwConnectionOpened.connectionId.<get-connectionId>|<get-connectionId>(){}[0]
+    final val endpoint // us.tractat.kuilt.nw/NwConnectionOpened.endpoint|{}endpoint[0]
+        final fun <get-endpoint>(): us.tractat.kuilt.nw/NwEndpoint? // us.tractat.kuilt.nw/NwConnectionOpened.endpoint.<get-endpoint>|<get-endpoint>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.nw/NwConnectionId // us.tractat.kuilt.nw/NwConnectionOpened.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.nw/NwEndpoint? // us.tractat.kuilt.nw/NwConnectionOpened.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.nw/NwConnectionId = ..., us.tractat.kuilt.nw/NwEndpoint? = ...): us.tractat.kuilt.nw/NwConnectionOpened // us.tractat.kuilt.nw/NwConnectionOpened.copy|copy(us.tractat.kuilt.nw.NwConnectionId;us.tractat.kuilt.nw.NwEndpoint?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwConnectionOpened.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwConnectionOpened.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwConnectionOpened.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nw/NwEndpoint { // us.tractat.kuilt.nw/NwEndpoint|null[0]
+    constructor <init>(kotlin/String, kotlin/String, kotlin/Boolean = ...) // us.tractat.kuilt.nw/NwEndpoint.<init>|<init>(kotlin.String;kotlin.String;kotlin.Boolean){}[0]
+
+    final val id // us.tractat.kuilt.nw/NwEndpoint.id|{}id[0]
+        final fun <get-id>(): kotlin/String // us.tractat.kuilt.nw/NwEndpoint.id.<get-id>|<get-id>(){}[0]
+    final val identityResolved // us.tractat.kuilt.nw/NwEndpoint.identityResolved|{}identityResolved[0]
+        final fun <get-identityResolved>(): kotlin/Boolean // us.tractat.kuilt.nw/NwEndpoint.identityResolved.<get-identityResolved>|<get-identityResolved>(){}[0]
+    final val serviceName // us.tractat.kuilt.nw/NwEndpoint.serviceName|{}serviceName[0]
+        final fun <get-serviceName>(): kotlin/String // us.tractat.kuilt.nw/NwEndpoint.serviceName.<get-serviceName>|<get-serviceName>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.nw/NwEndpoint.component1|component1(){}[0]
+    final fun component2(): kotlin/String // us.tractat.kuilt.nw/NwEndpoint.component2|component2(){}[0]
+    final fun component3(): kotlin/Boolean // us.tractat.kuilt.nw/NwEndpoint.component3|component3(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/Boolean = ...): us.tractat.kuilt.nw/NwEndpoint // us.tractat.kuilt.nw/NwEndpoint.copy|copy(kotlin.String;kotlin.String;kotlin.Boolean){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwEndpoint.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwEndpoint.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwEndpoint.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nw/NwFramer { // us.tractat.kuilt.nw/NwFramer|null[0]
+    constructor <init>(kotlin/Int = ...) // us.tractat.kuilt.nw/NwFramer.<init>|<init>(kotlin.Int){}[0]
+
+    final fun decode(kotlin/ByteArray): kotlin.collections/List<kotlin/ByteArray> // us.tractat.kuilt.nw/NwFramer.decode|decode(kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.nw/NwLoom : us.tractat.kuilt.core/Loom { // us.tractat.kuilt.nw/NwLoom|null[0]
+    constructor <init>(us.tractat.kuilt.nw/NwApi, kotlin/String, us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., kotlin.random/Random = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ...) // us.tractat.kuilt.nw/NwLoom.<init>|<init>(us.tractat.kuilt.nw.NwApi;kotlin.String;us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.DeliveryPolicy;kotlin.random.Random;kotlin.time.Duration;kotlin.time.Duration){}[0]
+
+    final val selfId // us.tractat.kuilt.nw/NwLoom.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.nw/NwLoom.selfId.<get-selfId>|<get-selfId>(){}[0]
+    final val visiblePeers // us.tractat.kuilt.nw/NwLoom.visiblePeers|{}visiblePeers[0]
+        final fun <get-visiblePeers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.nw/NwEndpoint>> // us.tractat.kuilt.nw/NwLoom.visiblePeers.<get-visiblePeers>|<get-visiblePeers>(){}[0]
+
+    final fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.nw/NwLoom.capability|capability(){}[0]
+    final fun dumpFormationState(): kotlin/String // us.tractat.kuilt.nw/NwLoom.dumpFormationState|dumpFormationState(){}[0]
+    final suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.nw/NwLoom.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+
+    final object Companion { // us.tractat.kuilt.nw/NwLoom.Companion|null[0]
+        final val DEFAULT_WEAVE_TIMEOUT // us.tractat.kuilt.nw/NwLoom.Companion.DEFAULT_WEAVE_TIMEOUT|{}DEFAULT_WEAVE_TIMEOUT[0]
+            final fun <get-DEFAULT_WEAVE_TIMEOUT>(): kotlin.time/Duration // us.tractat.kuilt.nw/NwLoom.Companion.DEFAULT_WEAVE_TIMEOUT.<get-DEFAULT_WEAVE_TIMEOUT>|<get-DEFAULT_WEAVE_TIMEOUT>(){}[0]
+        final val DEFAULT_WOVEN_PATH_GRACE // us.tractat.kuilt.nw/NwLoom.Companion.DEFAULT_WOVEN_PATH_GRACE|{}DEFAULT_WOVEN_PATH_GRACE[0]
+            final fun <get-DEFAULT_WOVEN_PATH_GRACE>(): kotlin.time/Duration // us.tractat.kuilt.nw/NwLoom.Companion.DEFAULT_WOVEN_PATH_GRACE.<get-DEFAULT_WOVEN_PATH_GRACE>|<get-DEFAULT_WOVEN_PATH_GRACE>(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.nw/NwPathState { // us.tractat.kuilt.nw/NwPathState|null[0]
+    constructor <init>(us.tractat.kuilt.nw/NwPathStatus, kotlin.collections/Set<us.tractat.kuilt.nw/NwInterfaceType>, kotlin/Boolean, kotlin/Boolean, us.tractat.kuilt.nw/NwUnsatisfiedReason?) // us.tractat.kuilt.nw/NwPathState.<init>|<init>(us.tractat.kuilt.nw.NwPathStatus;kotlin.collections.Set<us.tractat.kuilt.nw.NwInterfaceType>;kotlin.Boolean;kotlin.Boolean;us.tractat.kuilt.nw.NwUnsatisfiedReason?){}[0]
+
+    final val interfaces // us.tractat.kuilt.nw/NwPathState.interfaces|{}interfaces[0]
+        final fun <get-interfaces>(): kotlin.collections/Set<us.tractat.kuilt.nw/NwInterfaceType> // us.tractat.kuilt.nw/NwPathState.interfaces.<get-interfaces>|<get-interfaces>(){}[0]
+    final val isConstrained // us.tractat.kuilt.nw/NwPathState.isConstrained|{}isConstrained[0]
+        final fun <get-isConstrained>(): kotlin/Boolean // us.tractat.kuilt.nw/NwPathState.isConstrained.<get-isConstrained>|<get-isConstrained>(){}[0]
+    final val isExpensive // us.tractat.kuilt.nw/NwPathState.isExpensive|{}isExpensive[0]
+        final fun <get-isExpensive>(): kotlin/Boolean // us.tractat.kuilt.nw/NwPathState.isExpensive.<get-isExpensive>|<get-isExpensive>(){}[0]
+    final val status // us.tractat.kuilt.nw/NwPathState.status|{}status[0]
+        final fun <get-status>(): us.tractat.kuilt.nw/NwPathStatus // us.tractat.kuilt.nw/NwPathState.status.<get-status>|<get-status>(){}[0]
+    final val unsatisfiedReason // us.tractat.kuilt.nw/NwPathState.unsatisfiedReason|{}unsatisfiedReason[0]
+        final fun <get-unsatisfiedReason>(): us.tractat.kuilt.nw/NwUnsatisfiedReason? // us.tractat.kuilt.nw/NwPathState.unsatisfiedReason.<get-unsatisfiedReason>|<get-unsatisfiedReason>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.nw/NwPathStatus // us.tractat.kuilt.nw/NwPathState.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/Set<us.tractat.kuilt.nw/NwInterfaceType> // us.tractat.kuilt.nw/NwPathState.component2|component2(){}[0]
+    final fun component3(): kotlin/Boolean // us.tractat.kuilt.nw/NwPathState.component3|component3(){}[0]
+    final fun component4(): kotlin/Boolean // us.tractat.kuilt.nw/NwPathState.component4|component4(){}[0]
+    final fun component5(): us.tractat.kuilt.nw/NwUnsatisfiedReason? // us.tractat.kuilt.nw/NwPathState.component5|component5(){}[0]
+    final fun copy(us.tractat.kuilt.nw/NwPathStatus = ..., kotlin.collections/Set<us.tractat.kuilt.nw/NwInterfaceType> = ..., kotlin/Boolean = ..., kotlin/Boolean = ..., us.tractat.kuilt.nw/NwUnsatisfiedReason? = ...): us.tractat.kuilt.nw/NwPathState // us.tractat.kuilt.nw/NwPathState.copy|copy(us.tractat.kuilt.nw.NwPathStatus;kotlin.collections.Set<us.tractat.kuilt.nw.NwInterfaceType>;kotlin.Boolean;kotlin.Boolean;us.tractat.kuilt.nw.NwUnsatisfiedReason?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwPathState.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwPathState.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwPathState.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nw/NwRoomHost : us.tractat.kuilt.session/RoomHost { // us.tractat.kuilt.nw/NwRoomHost|null[0]
+    constructor <init>(us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/Pattern) // us.tractat.kuilt.nw/NwRoomHost.<init>|<init>(us.tractat.kuilt.core.Loom;us.tractat.kuilt.core.Pattern){}[0]
+
+    final fun close() // us.tractat.kuilt.nw/NwRoomHost.close|close(){}[0]
+    final suspend fun start(kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.session/Room, kotlin/Unit>) // us.tractat.kuilt.nw/NwRoomHost.start|start(kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.session.Room,kotlin.Unit>){}[0]
+}
+
+final class us.tractat.kuilt.nw/NwSendFailedException : kotlin/Exception { // us.tractat.kuilt.nw/NwSendFailedException|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.nw/NwSendFailedException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.nw/NwTag : us.tractat.kuilt.core/Tag { // us.tractat.kuilt.nw/NwTag|null[0]
+    constructor <init>(kotlin/String, kotlin/String, kotlin/String) // us.tractat.kuilt.nw/NwTag.<init>|<init>(kotlin.String;kotlin.String;kotlin.String){}[0]
+
+    final val peerKey // us.tractat.kuilt.nw/NwTag.peerKey|{}peerKey[0]
+        final fun <get-peerKey>(): kotlin/String // us.tractat.kuilt.nw/NwTag.peerKey.<get-peerKey>|<get-peerKey>(){}[0]
+    final val roomKey // us.tractat.kuilt.nw/NwTag.roomKey|{}roomKey[0]
+        final fun <get-roomKey>(): kotlin/String // us.tractat.kuilt.nw/NwTag.roomKey.<get-roomKey>|<get-roomKey>(){}[0]
+    final val sessionName // us.tractat.kuilt.nw/NwTag.sessionName|{}sessionName[0]
+        final fun <get-sessionName>(): kotlin/String // us.tractat.kuilt.nw/NwTag.sessionName.<get-sessionName>|<get-sessionName>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.nw/NwTag.component1|component1(){}[0]
+    final fun component2(): kotlin/String // us.tractat.kuilt.nw/NwTag.component2|component2(){}[0]
+    final fun component3(): kotlin/String // us.tractat.kuilt.nw/NwTag.component3|component3(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.nw/NwTag // us.tractat.kuilt.nw/NwTag.copy|copy(kotlin.String;kotlin.String;kotlin.String){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwTag.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwTag.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwTag.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nw/NwUnreachableException : kotlin/Exception { // us.tractat.kuilt.nw/NwUnreachableException|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.nw/NwUnreachableException.<init>|<init>(kotlin.String){}[0]
+}
+
+final value class us.tractat.kuilt.nw/NwConnectionId { // us.tractat.kuilt.nw/NwConnectionId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.nw/NwConnectionId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.nw/NwConnectionId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.nw/NwConnectionId.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nw/NwConnectionId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nw/NwConnectionId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nw/NwConnectionId.toString|toString(){}[0]
+}
+
+final fun us.tractat.kuilt.nw/encodeFrame(kotlin/ByteArray, kotlin/Int = ...): kotlin/ByteArray // us.tractat.kuilt.nw/encodeFrame|encodeFrame(kotlin.ByteArray;kotlin.Int){}[0]
+
+// Targets: [apple]
+final fun us.tractat.kuilt.nw/appleNwLoom(kotlin/String, kotlin/String, us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ...): us.tractat.kuilt.nw/NwLoom // us.tractat.kuilt.nw/appleNwLoom|appleNwLoom(kotlin.String;kotlin.String;us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.DeliveryPolicy;kotlin.time.Duration;kotlin.time.Duration){}[0]
+
+// Targets: [apple]
+final suspend fun us.tractat.kuilt.nw/nwHost(us.tractat.kuilt.core/Pattern, kotlin/String): us.tractat.kuilt.core/Seam // us.tractat.kuilt.nw/nwHost|nwHost(us.tractat.kuilt.core.Pattern;kotlin.String){}[0]
+
+// Targets: [apple]
+final suspend fun us.tractat.kuilt.nw/nwJoin(us.tractat.kuilt.core/Tag, kotlin/String): us.tractat.kuilt.core/Seam // us.tractat.kuilt.nw/nwJoin|nwJoin(us.tractat.kuilt.core.Tag;kotlin.String){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/kuilt_protocol_version(): kotlin/Int // us.tractat.kuilt.nw.bridge/kuilt_protocol_version|kuilt_protocol_version(){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_connect(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?): kotlin/Int // us.tractat.kuilt.nw.bridge/nw_connect|nw_connect(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_disconnect(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?): kotlin/Int // us.tractat.kuilt.nw.bridge/nw_disconnect|nw_disconnect(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_loopback_rendezvous_create(): kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>? // us.tractat.kuilt.nw.bridge/nw_loopback_rendezvous_create|nw_loopback_rendezvous_create(){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_loopback_rendezvous_destroy(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?) // us.tractat.kuilt.nw.bridge/nw_loopback_rendezvous_destroy|nw_loopback_rendezvous_destroy(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_runtime_create(kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int): kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>? // us.tractat.kuilt.nw.bridge/nw_runtime_create|nw_runtime_create(kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlin.Int;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlin.Int){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_runtime_create_loopback(kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int, kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlin/Int): kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>? // us.tractat.kuilt.nw.bridge/nw_runtime_create_loopback|nw_runtime_create_loopback(kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlin.Int;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlin.Int;kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlin.Int){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_runtime_destroy(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?) // us.tractat.kuilt.nw.bridge/nw_runtime_destroy|nw_runtime_destroy(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_send(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int): kotlin/Int // us.tractat.kuilt.nw.bridge/nw_send|nw_send(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlin.Int){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_set_bytes_received_callback(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/CFunction<kotlin/Function3<kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int, kotlin/Unit>>>?) // us.tractat.kuilt.nw.bridge/nw_set_bytes_received_callback|nw_set_bytes_received_callback(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.CFunction<kotlin.Function3<kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlin.Int,kotlin.Unit>>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_set_connection_closed_callback(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/CFunction<kotlin/Function2<kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Unit>>>?) // us.tractat.kuilt.nw.bridge/nw_set_connection_closed_callback|nw_set_connection_closed_callback(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.CFunction<kotlin.Function2<kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlin.Unit>>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_set_connection_closed_state_callback(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/CFunction<kotlin/Function2<kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Unit>>>?) // us.tractat.kuilt.nw.bridge/nw_set_connection_closed_state_callback|nw_set_connection_closed_state_callback(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.CFunction<kotlin.Function2<kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlin.Unit>>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_set_connection_opened_callback(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/CFunction<kotlin/Function3<kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Unit>>>?) // us.tractat.kuilt.nw.bridge/nw_set_connection_opened_callback|nw_set_connection_opened_callback(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.CFunction<kotlin.Function3<kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlin.Unit>>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_set_connection_viability_callback(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/CFunction<kotlin/Function2<kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int, kotlin/Unit>>>?) // us.tractat.kuilt.nw.bridge/nw_set_connection_viability_callback|nw_set_connection_viability_callback(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.CFunction<kotlin.Function2<kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlin.Int,kotlin.Unit>>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_set_endpoint_found_callback(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/CFunction<kotlin/Function2<kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Unit>>>?) // us.tractat.kuilt.nw.bridge/nw_set_endpoint_found_callback|nw_set_endpoint_found_callback(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.CFunction<kotlin.Function2<kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlin.Unit>>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_start_browsing(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?): kotlin/Int // us.tractat.kuilt.nw.bridge/nw_start_browsing|nw_start_browsing(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_start_listening(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?): kotlin/Int // us.tractat.kuilt.nw.bridge/nw_start_listening|nw_start_listening(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_stop_browsing(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?): kotlin/Int // us.tractat.kuilt.nw.bridge/nw_stop_browsing|nw_stop_browsing(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.nw.bridge/nw_stop_listening(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?): kotlin/Int // us.tractat.kuilt.nw.bridge/nw_stop_listening|nw_stop_listening(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?){}[0]

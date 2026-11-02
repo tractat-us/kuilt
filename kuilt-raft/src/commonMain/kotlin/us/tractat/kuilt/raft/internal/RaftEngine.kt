@@ -830,9 +830,12 @@ internal class RaftEngine(
     // Extracted to ProposalForwarder (§8): it owns the outstanding forwards awaiting a
     // ForwardResponse, the ones parked while no leader is known, and the monotonic
     // correlation nonce; the engine keeps all send/deferred.complete side-effects at the
-    // call site. Drained by flushWaitingForLeader after every non-Close command; failed on
-    // actor teardown.
+    // call site. Drained by flushWaitingForLeader after every non-Close command, released by
+    // EngineCommand.ReapCancelledForwards when a caller cancels; failed on actor teardown.
     private val forwarder = ProposalForwarder()
+
+    /** See [ProposalForwarder.heldCount]: a test's view of retained forwards, confined the same way. */
+    val forwardsHeld: Int get() = forwarder.heldCount
 
     /**
      * The shared consensus core — term/vote, log, commit/snapshot boundary, membership, and the
@@ -939,6 +942,7 @@ internal class RaftEngine(
             // - 1], which assumes the list begins at snapshotIndex + 1) would then silently return the wrong
             // entry for every lookup. Filtering here restores the invariant regardless of the crash window.
             state.log.addAll(checkedRestoredEntries(storage.entries(state.snapshotIndex + 1)))
+            resumeDurableSerials()
             // Recompute effective membershipState from the recovered log + snapshot (restart recovery).
             // This is load-bearing: a node that crashed mid-transition comes back under exactly
             // the config its durable log justifies — no special restart path needed.
@@ -1056,6 +1060,7 @@ internal class RaftEngine(
                         is EngineCommand.TransferLeadership -> onTransferLeadership(c.target, c.response)
                         is EngineCommand.CancelTransfer   -> onCancelTransfer()
                         is EngineCommand.TransferTimeout  -> onTransferTimeout(c.epoch)
+                        is EngineCommand.ReapCancelledForwards -> forwarder.reapCancelled()
                         is EngineCommand.Close            -> { cmd.close(); break }
                     }
                     if (!closing) flushWaitingForLeader()
@@ -1107,7 +1112,8 @@ internal class RaftEngine(
                         is EngineCommand.Close,
                         is EngineCommand.QuorumCheck,
                         is EngineCommand.CancelTransfer,
-                        is EngineCommand.TransferTimeout -> Unit
+                        is EngineCommand.TransferTimeout,
+                        is EngineCommand.ReapCancelledForwards -> Unit
                     }
                 }
             }
@@ -3385,7 +3391,8 @@ internal class RaftEngine(
 
     /**
      * §8 collision check on every committed application entry: a committed entry under [myClientId]
-     * bearing a serial this node never issued proves another live writer shares the identity. A
+     * bearing a serial above everything this node has issued or retained reads as another live writer
+     * sharing the identity (see [resumeDurableSerials] for what a restart can and cannot tell apart). A
      * **durable** id (caller-supplied) is an operational error — throw [ClientIdCollisionException]
      * loud from the actor loop. An **auto** id silently re-mints (fresh suffix, reset serial +
      * detector) and logs a warning; the in-flight writes already committed are unaffected.
@@ -3406,6 +3413,34 @@ internal class RaftEngine(
             "[raft:${transport.selfId}] clientId collision: auto id '${old.value}' seen with a foreign " +
                 "serial ${entry.dedupKey?.requestId} — re-minted as '${myClientId.value}'"
         }
+    }
+
+    /**
+     * Carry a [ClientIdentity.Durable] id's serial space across a restart, from the log it retained.
+     * Runs in the restore, before the actor starts, so no proposal or commit can see the old values.
+     *
+     * A durable id outlives the process, so its own earlier serials are not foreign: without this,
+     * the first replayed entry reads as another writer and [detectCollision] kills the node before it
+     * issues anything (#3060). The auto serial resumes too, or the next one-argument [propose] would
+     * reuse one: a leader that replayed it refuses the new bytes, and otherwise a consumer's
+     * [us.tractat.kuilt.raft.ClientSessionTable] drops the command as a duplicate.
+     *
+     * The retained log is all this knows. A snapshot that covered every entry under this id, or a
+     * node that retained nothing, resumes from zero, and a serial of an earlier incarnation that
+     * reaches this node only by replication still reads as foreign. Closing that needs the serial
+     * persisted, tracked by #3060.
+     *
+     * An [ClientIdentity.Auto] id is exempt: one it finds in its own log came from the same seed,
+     * and re-minting in [detectCollision] is how that incarnation stops aliasing the last.
+     */
+    private fun resumeDurableSerials() {
+        if (!isDurableId) return
+        val highest = state.log.mapNotNull { it.dedupKey }
+            .filter { it.clientId == myClientId }
+            .maxOfOrNull { it.requestId }
+            ?: return
+        serial = highest
+        collisions.issued(highest)
     }
 
     /**
@@ -3522,8 +3557,8 @@ internal class RaftEngine(
         }
         if (_role.value !is RaftRole.Leader) {
             // Follower/Candidate/Learner: forward to the leader (Raft §8). Wait, cancellably,
-            // if none is known yet. Cleanup of cancelled entries is handled on the actor loop
-            // in flushWaitingForLeader (isCompleted check) and forwarder.failAll (finally).
+            // if none is known yet. Cleanup of cancelled entries is handled on the actor loop:
+            // EngineCommand.ReapCancelledForwards, which proposeWithRequestId enqueues on cancel.
             // Do NOT use invokeOnCompletion to mutate the forwarder maps — that runs on the
             // caller's thread and races the actor loop, which is the sole owner of the maps.
             when (val d = forwarder.forward(response, command, dedupKey, _leader.value, transport.selfId)) {
@@ -3745,10 +3780,16 @@ internal class RaftEngine(
         } finally {
             // If this coroutine was cancelled before the deferred completed, mark the deferred
             // cancelled so the actor loop's flushWaitingForLeader sees isCompleted==true and
-            // drops it rather than forwarding a cancelled request. This is the only mutation of
-            // d that touches the caller's thread; all other map/state mutations stay on the actor.
-            // cancel() on an already-completed deferred is a harmless no-op.
-            d.cancel()
+            // drops it rather than forwarding a cancelled request, then ask the actor to release
+            // whatever it still holds for it, since a forward already sent is never flushed (#3054).
+            // This is the only mutation of d that touches the caller's thread; all other map/state
+            // mutations stay on the actor. Losing the race to the actor costs one empty sweep:
+            // cancel() on a completed deferred is a harmless no-op. The channel is unlimited, so
+            // trySend fails only once it is closed, and teardown's failAll then releases everything.
+            if (!d.isCompleted) {
+                d.cancel()
+                cmd.trySend(EngineCommand.ReapCancelledForwards)
+            }
         }
     }
 

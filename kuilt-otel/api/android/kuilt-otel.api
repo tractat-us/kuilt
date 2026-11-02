@@ -1,0 +1,725 @@
+public abstract interface class us/tractat/kuilt/otel/AppliedOpSink {
+	public static final field Companion Lus/tractat/kuilt/otel/AppliedOpSink$Companion;
+	public abstract fun published (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/otel/AppliedOpSink$Companion {
+	public final fun getDiscarding ()Lus/tractat/kuilt/otel/AppliedOpSink;
+}
+
+public final class us/tractat/kuilt/otel/BufferPolicy : java/lang/Enum {
+	public static final field DROP_NEWEST Lus/tractat/kuilt/otel/BufferPolicy;
+	public static final field DROP_OLDEST Lus/tractat/kuilt/otel/BufferPolicy;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/otel/BufferPolicy;
+	public static fun values ()[Lus/tractat/kuilt/otel/BufferPolicy;
+}
+
+public final class us/tractat/kuilt/otel/BufferPolicyKt {
+	public static final field DEFAULT_MAX_SPANS I
+}
+
+public final class us/tractat/kuilt/otel/CausalStamp {
+	public static final field Companion Lus/tractat/kuilt/otel/CausalStamp$Companion;
+	public fun <init> (Lus/tractat/kuilt/crdt/Dot;Ljava/util/Set;)V
+	public final fun component1 ()Lus/tractat/kuilt/crdt/Dot;
+	public final fun component2 ()Ljava/util/Set;
+	public final fun copy (Lus/tractat/kuilt/crdt/Dot;Ljava/util/Set;)Lus/tractat/kuilt/otel/CausalStamp;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/CausalStamp;Lus/tractat/kuilt/crdt/Dot;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/otel/CausalStamp;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDot ()Lus/tractat/kuilt/crdt/Dot;
+	public final fun getPredecessors ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/otel/CausalStamp$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/CausalStamp$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/otel/CausalStamp;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/otel/CausalStamp;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/CausalStamp$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/otel/DrainResult {
+}
+
+public final class us/tractat/kuilt/otel/DrainResult$Failure : us/tractat/kuilt/otel/DrainResult {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/otel/DrainResult$Failure;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/DrainResult$Failure;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/otel/DrainResult$Failure;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFailures ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/DrainResult$Partial : us/tractat/kuilt/otel/DrainResult {
+	public fun <init> (IIILjava/util/List;)V
+	public final fun component1 ()I
+	public final fun component2 ()I
+	public final fun component3 ()I
+	public final fun component4 ()Ljava/util/List;
+	public final fun copy (IIILjava/util/List;)Lus/tractat/kuilt/otel/DrainResult$Partial;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/DrainResult$Partial;IIILjava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/otel/DrainResult$Partial;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFailures ()Ljava/util/List;
+	public final fun getLogsSent ()I
+	public final fun getMetricPointsSent ()I
+	public final fun getSpansSent ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/DrainResult$Success : us/tractat/kuilt/otel/DrainResult {
+	public fun <init> (III)V
+	public synthetic fun <init> (IIIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()I
+	public final fun component3 ()I
+	public final fun copy (III)Lus/tractat/kuilt/otel/DrainResult$Success;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/DrainResult$Success;IIIILjava/lang/Object;)Lus/tractat/kuilt/otel/DrainResult$Success;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLogsSent ()I
+	public final fun getMetricPointsSent ()I
+	public final fun getSpansSent ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/ExponentialHistogramMappingKt {
+	public static final field DEFAULT_OTLP_HISTOGRAM_SCALE I
+	public static final field MAX_OTLP_HISTOGRAM_SCALE I
+	public static final field MIN_OTLP_HISTOGRAM_SCALE I
+	public static final fun alphaForOtlpScale (I)D
+	public static final fun otlpScaleFor (D)I
+}
+
+public abstract interface class us/tractat/kuilt/otel/ExportResult {
+}
+
+public final class us/tractat/kuilt/otel/ExportResult$Failure : us/tractat/kuilt/otel/ExportResult {
+	public fun <init> (Ljava/lang/Throwable;)V
+	public final fun component1 ()Ljava/lang/Throwable;
+	public final fun copy (Ljava/lang/Throwable;)Lus/tractat/kuilt/otel/ExportResult$Failure;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/ExportResult$Failure;Ljava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/otel/ExportResult$Failure;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCause ()Ljava/lang/Throwable;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/ExportResult$Success : us/tractat/kuilt/otel/ExportResult {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/ExportResult$Success;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/ExporterHealth {
+	public fun <init> ()V
+	public fun <init> (JJILjava/lang/Throwable;ZJJ)V
+	public synthetic fun <init> (JJILjava/lang/Throwable;ZJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()I
+	public final fun component4 ()Ljava/lang/Throwable;
+	public final fun component5 ()Z
+	public final fun component6 ()J
+	public final fun component7 ()J
+	public final fun copy (JJILjava/lang/Throwable;ZJJ)Lus/tractat/kuilt/otel/ExporterHealth;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/ExporterHealth;JJILjava/lang/Throwable;ZJJILjava/lang/Object;)Lus/tractat/kuilt/otel/ExporterHealth;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAccepted ()J
+	public final fun getConsecutiveFailures ()I
+	public final fun getDropped ()J
+	public final fun getFailed ()J
+	public final fun getLastFailure ()Ljava/lang/Throwable;
+	public final fun getRecoveryFailed ()Z
+	public final fun getRefused ()J
+	public fun hashCode ()I
+	public final fun isDead ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/LogDigest {
+	public fun <init> (Ljava/util/Set;)V
+	public final fun getRecordIds ()Ljava/util/Set;
+}
+
+public final class us/tractat/kuilt/otel/LogRecord {
+	public static final field Companion Lus/tractat/kuilt/otel/LogRecord$Companion;
+	public fun <init> (Lkotlinx/io/bytestring/ByteString;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/Long;Ljava/lang/Long;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;)V
+	public synthetic fun <init> (Lkotlinx/io/bytestring/ByteString;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/Long;Ljava/lang/Long;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun component2 ()Ljava/lang/Integer;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/util/Map;
+	public final fun component6 ()Ljava/lang/Long;
+	public final fun component7 ()Ljava/lang/Long;
+	public final fun component8 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun component9 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun copy (Lkotlinx/io/bytestring/ByteString;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/Long;Ljava/lang/Long;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;)Lus/tractat/kuilt/otel/LogRecord;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/LogRecord;Lkotlinx/io/bytestring/ByteString;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/Long;Ljava/lang/Long;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;ILjava/lang/Object;)Lus/tractat/kuilt/otel/LogRecord;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttributes ()Ljava/util/Map;
+	public final fun getBody ()Ljava/lang/String;
+	public final fun getObservedEpochNanos ()Ljava/lang/Long;
+	public final fun getRecordId ()Lkotlinx/io/bytestring/ByteString;
+	public final fun getSeverityNumber ()Ljava/lang/Integer;
+	public final fun getSeverityText ()Ljava/lang/String;
+	public final fun getSpanId ()Lkotlinx/io/bytestring/ByteString;
+	public final fun getTimestampEpochNanos ()Ljava/lang/Long;
+	public final fun getTraceId ()Lkotlinx/io/bytestring/ByteString;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/otel/LogRecord$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/LogRecord$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/otel/LogRecord;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/otel/LogRecord;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/LogRecord$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/MetricBufferPolicy : java/lang/Enum {
+	public static final field DROP_NEWEST Lus/tractat/kuilt/otel/MetricBufferPolicy;
+	public static final field DROP_OLDEST Lus/tractat/kuilt/otel/MetricBufferPolicy;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/otel/MetricBufferPolicy;
+	public static fun values ()[Lus/tractat/kuilt/otel/MetricBufferPolicy;
+}
+
+public final class us/tractat/kuilt/otel/MetricBufferPolicyKt {
+	public static final field DEFAULT_MAX_METRICS I
+}
+
+public final class us/tractat/kuilt/otel/MetricCatalog : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/otel/MetricCatalog$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCardinalities ()Ljava/util/Map;
+	public final fun getDoubleSums ()Ljava/util/Map;
+	public final fun getGauges ()Ljava/util/Map;
+	public final fun getHistograms ()Ljava/util/Map;
+	public final fun getSums ()Ljava/util/Map;
+	public fun hashCode ()I
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/otel/MetricCatalog;)Lus/tractat/kuilt/otel/MetricCatalog;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/otel/MetricCatalog$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/MetricCatalog$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/otel/MetricCatalog;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/otel/MetricCatalog;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/MetricCatalog$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/MetricDigest {
+	public fun <init> (Ljava/util/Map;)V
+	public final fun getVersions ()Ljava/util/Map;
+}
+
+public abstract interface class us/tractat/kuilt/otel/MetricExportResult {
+}
+
+public final class us/tractat/kuilt/otel/MetricExportResult$Failure : us/tractat/kuilt/otel/MetricExportResult {
+	public fun <init> (Ljava/lang/Throwable;)V
+	public final fun component1 ()Ljava/lang/Throwable;
+	public final fun copy (Ljava/lang/Throwable;)Lus/tractat/kuilt/otel/MetricExportResult$Failure;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricExportResult$Failure;Ljava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricExportResult$Failure;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCause ()Ljava/lang/Throwable;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/MetricExportResult$Success : us/tractat/kuilt/otel/MetricExportResult {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/MetricExportResult$Success;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/MetricKey {
+	public static final field Companion Lus/tractat/kuilt/otel/MetricKey$Companion;
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/otel/MetricKind;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/otel/MetricKind;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/otel/MetricKind;
+	public final fun component3 ()Ljava/util/Map;
+	public final fun copy (Ljava/lang/String;Lus/tractat/kuilt/otel/MetricKind;Ljava/util/Map;)Lus/tractat/kuilt/otel/MetricKey;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricKey;Ljava/lang/String;Lus/tractat/kuilt/otel/MetricKind;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricKey;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttributes ()Ljava/util/Map;
+	public final fun getKind ()Lus/tractat/kuilt/otel/MetricKind;
+	public final fun getName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/otel/MetricKey$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/MetricKey$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/otel/MetricKey;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/MetricKey$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/MetricKind : java/lang/Enum {
+	public static final field CARDINALITY Lus/tractat/kuilt/otel/MetricKind;
+	public static final field Companion Lus/tractat/kuilt/otel/MetricKind$Companion;
+	public static final field EXPONENTIAL_HISTOGRAM Lus/tractat/kuilt/otel/MetricKind;
+	public static final field GAUGE Lus/tractat/kuilt/otel/MetricKind;
+	public static final field SUM Lus/tractat/kuilt/otel/MetricKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/otel/MetricKind;
+	public static fun values ()[Lus/tractat/kuilt/otel/MetricKind;
+}
+
+public final class us/tractat/kuilt/otel/MetricKind$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/otel/MetricPoint {
+	public abstract fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public abstract fun valueHash ()J
+}
+
+public final class us/tractat/kuilt/otel/MetricPoint$Cardinality : us/tractat/kuilt/otel/MetricPoint {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;JJ)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;JJ)Lus/tractat/kuilt/otel/MetricPoint$Cardinality;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricPoint$Cardinality;Lus/tractat/kuilt/otel/MetricKey;JJILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricPoint$Cardinality;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEstimate ()J
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getTimeEpochNanos ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public fun valueHash ()J
+}
+
+public final class us/tractat/kuilt/otel/MetricPoint$DoubleSum : us/tractat/kuilt/otel/MetricPoint {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;DJJ)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()D
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;DJJ)Lus/tractat/kuilt/otel/MetricPoint$DoubleSum;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricPoint$DoubleSum;Lus/tractat/kuilt/otel/MetricKey;DJJILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricPoint$DoubleSum;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getStartEpochNanos ()J
+	public final fun getTimeEpochNanos ()J
+	public final fun getValue ()D
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public fun valueHash ()J
+}
+
+public final class us/tractat/kuilt/otel/MetricPoint$ExponentialHistogram : us/tractat/kuilt/otel/MetricPoint {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;IJJDILjava/util/List;ILjava/util/List;JJ)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component10 ()J
+	public final fun component11 ()J
+	public final fun component2 ()I
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()D
+	public final fun component6 ()I
+	public final fun component7 ()Ljava/util/List;
+	public final fun component8 ()I
+	public final fun component9 ()Ljava/util/List;
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;IJJDILjava/util/List;ILjava/util/List;JJ)Lus/tractat/kuilt/otel/MetricPoint$ExponentialHistogram;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricPoint$ExponentialHistogram;Lus/tractat/kuilt/otel/MetricKey;IJJDILjava/util/List;ILjava/util/List;JJILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricPoint$ExponentialHistogram;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCount ()J
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getNegativeBucketCounts ()Ljava/util/List;
+	public final fun getNegativeOffset ()I
+	public final fun getPositiveBucketCounts ()Ljava/util/List;
+	public final fun getPositiveOffset ()I
+	public final fun getScale ()I
+	public final fun getStartEpochNanos ()J
+	public final fun getTimeEpochNanos ()J
+	public final fun getZeroCount ()J
+	public final fun getZeroThreshold ()D
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public fun valueHash ()J
+}
+
+public final class us/tractat/kuilt/otel/MetricPoint$Gauge : us/tractat/kuilt/otel/MetricPoint {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;DJ)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()D
+	public final fun component3 ()J
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;DJ)Lus/tractat/kuilt/otel/MetricPoint$Gauge;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricPoint$Gauge;Lus/tractat/kuilt/otel/MetricKey;DJILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricPoint$Gauge;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getTimeEpochNanos ()J
+	public final fun getValue ()D
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public fun valueHash ()J
+}
+
+public final class us/tractat/kuilt/otel/MetricPoint$Sum : us/tractat/kuilt/otel/MetricPoint {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;JJJ)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;JJJ)Lus/tractat/kuilt/otel/MetricPoint$Sum;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricPoint$Sum;Lus/tractat/kuilt/otel/MetricKey;JJJILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricPoint$Sum;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getStartEpochNanos ()J
+	public final fun getTimeEpochNanos ()J
+	public final fun getValue ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public fun valueHash ()J
+}
+
+public abstract interface class us/tractat/kuilt/otel/OtlpEdge {
+	public abstract fun digest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun logDigest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun metricDigest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun send (Ljava/util/Set;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun send$default (Lus/tractat/kuilt/otel/OtlpEdge;Ljava/util/Set;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun sendLogs (Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun sendMetrics (Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/otel/OtlpEdge$DefaultImpls {
+	public static fun logDigest (Lus/tractat/kuilt/otel/OtlpEdge;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun metricDigest (Lus/tractat/kuilt/otel/OtlpEdge;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun send$default (Lus/tractat/kuilt/otel/OtlpEdge;Ljava/util/Set;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static fun sendLogs (Lus/tractat/kuilt/otel/OtlpEdge;Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun sendMetrics (Lus/tractat/kuilt/otel/OtlpEdge;Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/otel/OtlpSignal : java/lang/Enum {
+	public static final field LOGS Lus/tractat/kuilt/otel/OtlpSignal;
+	public static final field METRICS Lus/tractat/kuilt/otel/OtlpSignal;
+	public static final field SPANS Lus/tractat/kuilt/otel/OtlpSignal;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/otel/OtlpSignal;
+	public static fun values ()[Lus/tractat/kuilt/otel/OtlpSignal;
+}
+
+public final class us/tractat/kuilt/otel/PersistenceHealth {
+	public fun <init> ()V
+	public fun <init> (JJJZLjava/lang/Throwable;)V
+	public synthetic fun <init> (JJJZLjava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()Z
+	public final fun component5 ()Ljava/lang/Throwable;
+	public final fun copy (JJJZLjava/lang/Throwable;)Lus/tractat/kuilt/otel/PersistenceHealth;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/PersistenceHealth;JJJZLjava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/otel/PersistenceHealth;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAcknowledged ()J
+	public final fun getFailed ()J
+	public final fun getLastFailure ()Ljava/lang/Throwable;
+	public final fun getOutstandingFailures ()J
+	public final fun getRecoveryFailed ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/SignalFailure {
+	public fun <init> (Lus/tractat/kuilt/otel/OtlpSignal;Ljava/lang/Throwable;)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/OtlpSignal;
+	public final fun component2 ()Ljava/lang/Throwable;
+	public final fun copy (Lus/tractat/kuilt/otel/OtlpSignal;Ljava/lang/Throwable;)Lus/tractat/kuilt/otel/SignalFailure;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/SignalFailure;Lus/tractat/kuilt/otel/OtlpSignal;Ljava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/otel/SignalFailure;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCause ()Ljava/lang/Throwable;
+	public final fun getSignal ()Lus/tractat/kuilt/otel/OtlpSignal;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/SpanDigest {
+	public fun <init> (Ljava/util/Set;)V
+	public final fun getSpanIds ()Ljava/util/Set;
+}
+
+public final class us/tractat/kuilt/otel/SpanKind : java/lang/Enum {
+	public static final field CLIENT Lus/tractat/kuilt/otel/SpanKind;
+	public static final field CONSUMER Lus/tractat/kuilt/otel/SpanKind;
+	public static final field Companion Lus/tractat/kuilt/otel/SpanKind$Companion;
+	public static final field INTERNAL Lus/tractat/kuilt/otel/SpanKind;
+	public static final field PRODUCER Lus/tractat/kuilt/otel/SpanKind;
+	public static final field SERVER Lus/tractat/kuilt/otel/SpanKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/otel/SpanKind;
+	public static fun values ()[Lus/tractat/kuilt/otel/SpanKind;
+}
+
+public final class us/tractat/kuilt/otel/SpanKind$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/SpanLink {
+	public fun <init> (Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Ljava/util/Map;)V
+	public synthetic fun <init> (Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun component2 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun component3 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun component4 ()Ljava/util/Map;
+	public final fun copy (Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Ljava/util/Map;)Lus/tractat/kuilt/otel/SpanLink;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/SpanLink;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/otel/SpanLink;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttributes ()Ljava/util/Map;
+	public final fun getFromSpanId ()Lkotlinx/io/bytestring/ByteString;
+	public final fun getLinkedSpanId ()Lkotlinx/io/bytestring/ByteString;
+	public final fun getLinkedTraceId ()Lkotlinx/io/bytestring/ByteString;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/SpanLinkKt {
+	public static final fun inferCausalLinks (Ljava/util/Collection;)Ljava/util/List;
+}
+
+public final class us/tractat/kuilt/otel/SpanRecord {
+	public static final field Companion Lus/tractat/kuilt/otel/SpanRecord$Companion;
+	public fun <init> (Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Ljava/lang/String;Lus/tractat/kuilt/otel/SpanKind;JJLjava/util/Map;Lus/tractat/kuilt/otel/SpanStatus;Lus/tractat/kuilt/otel/CausalStamp;)V
+	public synthetic fun <init> (Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Ljava/lang/String;Lus/tractat/kuilt/otel/SpanKind;JJLjava/util/Map;Lus/tractat/kuilt/otel/SpanStatus;Lus/tractat/kuilt/otel/CausalStamp;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun component10 ()Lus/tractat/kuilt/otel/CausalStamp;
+	public final fun component2 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun component3 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Lus/tractat/kuilt/otel/SpanKind;
+	public final fun component6 ()J
+	public final fun component7 ()J
+	public final fun component8 ()Ljava/util/Map;
+	public final fun component9 ()Lus/tractat/kuilt/otel/SpanStatus;
+	public final fun copy (Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Ljava/lang/String;Lus/tractat/kuilt/otel/SpanKind;JJLjava/util/Map;Lus/tractat/kuilt/otel/SpanStatus;Lus/tractat/kuilt/otel/CausalStamp;)Lus/tractat/kuilt/otel/SpanRecord;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/SpanRecord;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;Ljava/lang/String;Lus/tractat/kuilt/otel/SpanKind;JJLjava/util/Map;Lus/tractat/kuilt/otel/SpanStatus;Lus/tractat/kuilt/otel/CausalStamp;ILjava/lang/Object;)Lus/tractat/kuilt/otel/SpanRecord;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttributes ()Ljava/util/Map;
+	public final fun getCausalStamp ()Lus/tractat/kuilt/otel/CausalStamp;
+	public final fun getEndEpochNanos ()J
+	public final fun getKind ()Lus/tractat/kuilt/otel/SpanKind;
+	public final fun getName ()Ljava/lang/String;
+	public final fun getParentSpanId ()Lkotlinx/io/bytestring/ByteString;
+	public final fun getSpanId ()Lkotlinx/io/bytestring/ByteString;
+	public final fun getStartEpochNanos ()J
+	public final fun getStatus ()Lus/tractat/kuilt/otel/SpanStatus;
+	public final fun getTraceId ()Lkotlinx/io/bytestring/ByteString;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/otel/SpanRecord$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/SpanRecord$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/otel/SpanRecord;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/otel/SpanRecord;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/SpanRecord$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/otel/SpanStatus {
+	public static final field Companion Lus/tractat/kuilt/otel/SpanStatus$Companion;
+}
+
+public final class us/tractat/kuilt/otel/SpanStatus$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/SpanStatus$Error : us/tractat/kuilt/otel/SpanStatus {
+	public static final field Companion Lus/tractat/kuilt/otel/SpanStatus$Error$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/otel/SpanStatus$Error;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/SpanStatus$Error;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/otel/SpanStatus$Error;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/otel/SpanStatus$Error$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/SpanStatus$Error$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/otel/SpanStatus$Error;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/otel/SpanStatus$Error;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/SpanStatus$Error$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/SpanStatus$Ok : us/tractat/kuilt/otel/SpanStatus {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/SpanStatus$Ok;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/SpanStatus$Unset : us/tractat/kuilt/otel/SpanStatus {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/SpanStatus$Unset;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/TelemetryHealth {
+	public fun <init> (Lus/tractat/kuilt/otel/PersistenceHealth;Lus/tractat/kuilt/otel/PersistenceHealth;Lus/tractat/kuilt/otel/ExporterHealth;)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/PersistenceHealth;
+	public final fun component2 ()Lus/tractat/kuilt/otel/PersistenceHealth;
+	public final fun component3 ()Lus/tractat/kuilt/otel/ExporterHealth;
+	public final fun copy (Lus/tractat/kuilt/otel/PersistenceHealth;Lus/tractat/kuilt/otel/PersistenceHealth;Lus/tractat/kuilt/otel/ExporterHealth;)Lus/tractat/kuilt/otel/TelemetryHealth;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/TelemetryHealth;Lus/tractat/kuilt/otel/PersistenceHealth;Lus/tractat/kuilt/otel/PersistenceHealth;Lus/tractat/kuilt/otel/ExporterHealth;ILjava/lang/Object;)Lus/tractat/kuilt/otel/TelemetryHealth;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLogs ()Lus/tractat/kuilt/otel/ExporterHealth;
+	public final fun getMetrics ()Lus/tractat/kuilt/otel/PersistenceHealth;
+	public final fun getSpans ()Lus/tractat/kuilt/otel/PersistenceHealth;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/WarpCausalClock {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun frontier ()Ljava/util/Set;
+	public final fun observe (Ljava/util/Set;)V
+	public final fun persist (Lus/tractat/kuilt/store/DurableStore;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun recover (Lus/tractat/kuilt/store/DurableStore;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun tick ()Lus/tractat/kuilt/otel/CausalStamp;
+}
+
+public final class us/tractat/kuilt/otel/WarpLogRecordExporter {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/BufferPolicy;ILus/tractat/kuilt/otel/AppliedOpSink;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/BufferPolicy;ILus/tractat/kuilt/otel/AppliedOpSink;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun export (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun export (Lus/tractat/kuilt/otel/LogRecord;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getHealth ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun merge (Lus/tractat/kuilt/crdt/Rga;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun recover (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun snapshot ()Lus/tractat/kuilt/crdt/Rga;
+}
+
+public final class us/tractat/kuilt/otel/WarpLogRecordExporterKt {
+	public static final field DEFAULT_LOG_SEGMENT_OPS I
+	public static final field DEFAULT_MAX_LOG_RECORDS I
+}
+
+public final class us/tractat/kuilt/otel/WarpMetricExporter {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/MetricBufferPolicy;Lus/tractat/kuilt/crdt/DDSketch;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/MetricBufferPolicy;Lus/tractat/kuilt/crdt/DDSketch;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun addCardinality (Lus/tractat/kuilt/otel/MetricKey;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun cardinalityEstimate (Lus/tractat/kuilt/otel/MetricKey;)J
+	public final fun cardinalitySnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/HyperLogLog;
+	public final fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun doubleSumSnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/GCounterDouble;
+	public final fun doubleSumValue (Lus/tractat/kuilt/otel/MetricKey;)D
+	public final fun gaugeSnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/LWWRegister;
+	public final fun gaugeValue (Lus/tractat/kuilt/otel/MetricKey;)Ljava/lang/Double;
+	public final fun getHealth ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun histogramQuantile (Lus/tractat/kuilt/otel/MetricKey;D)Ljava/lang/Double;
+	public final fun histogramSnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/DDSketch;
+	public final fun incrementSum (Lus/tractat/kuilt/otel/MetricKey;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun incrementSum$default (Lus/tractat/kuilt/otel/WarpMetricExporter;Lus/tractat/kuilt/otel/MetricKey;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun incrementSumDouble (Lus/tractat/kuilt/otel/MetricKey;DLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun mergeCardinality (Lus/tractat/kuilt/otel/MetricKey;Lus/tractat/kuilt/crdt/HyperLogLog;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun mergeGauge (Lus/tractat/kuilt/otel/MetricKey;Lus/tractat/kuilt/crdt/LWWRegister;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun mergeHistogram (Lus/tractat/kuilt/otel/MetricKey;Lus/tractat/kuilt/crdt/DDSketch;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun mergeSum (Lus/tractat/kuilt/otel/MetricKey;Lus/tractat/kuilt/crdt/GCounter;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun mergeSumDouble (Lus/tractat/kuilt/otel/MetricKey;Lus/tractat/kuilt/crdt/GCounterDouble;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun metricCount ()I
+	public final fun recordHistogram (Lus/tractat/kuilt/otel/MetricKey;DLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun recover (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setGauge (Lus/tractat/kuilt/otel/MetricKey;DJLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun snapshotAll ()Lus/tractat/kuilt/otel/MetricCatalog;
+	public final fun sumSnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/GCounter;
+	public final fun sumValue (Lus/tractat/kuilt/otel/MetricKey;)J
+}
+
+public final class us/tractat/kuilt/otel/WarpOtlpBridge {
+	public fun <init> (Lus/tractat/kuilt/otel/WarpTelemetry;Lkotlin/time/Clock;)V
+	public final fun drain (Lus/tractat/kuilt/otel/OtlpEdge;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/otel/WarpSpanExporter {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/BufferPolicy;Lus/tractat/kuilt/otel/WarpCausalClock;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/BufferPolicy;Lus/tractat/kuilt/otel/WarpCausalClock;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun export (Lus/tractat/kuilt/otel/SpanRecord;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getHealth ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun merge (Lus/tractat/kuilt/crdt/ORSet;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun recover (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun snapshot ()Lus/tractat/kuilt/crdt/ORSet;
+}
+
+public final class us/tractat/kuilt/otel/WarpTelemetry {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;IILus/tractat/kuilt/otel/BufferPolicy;ILus/tractat/kuilt/otel/MetricBufferPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;IILus/tractat/kuilt/otel/BufferPolicy;ILus/tractat/kuilt/otel/MetricBufferPolicy;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getHealth ()Lus/tractat/kuilt/otel/TelemetryHealth;
+	public final fun getLogs ()Lus/tractat/kuilt/otel/WarpLogRecordExporter;
+	public final fun getMetrics ()Lus/tractat/kuilt/otel/WarpMetricExporter;
+	public final fun getSpans ()Lus/tractat/kuilt/otel/WarpSpanExporter;
+	public final fun recover (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+

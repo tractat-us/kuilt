@@ -254,10 +254,12 @@ public interface RaftNode {
      * - If no leader is known yet (during an election), the call waits, cancellably, until
      *   a leader is elected and then forwards.
      *
-     * **Cancellation is best-effort.** A forward that is still queued when the caller cancels
+     * **Cancellation is best-effort.** A forward still waiting for a leader when the caller cancels
      * is guaranteed not to be sent. However, a command already forwarded to — or appended by —
      * the leader may still commit even if the caller cancels; Raft does not support revocation
-     * of in-flight proposals.
+     * of in-flight proposals. A non-leader releases its forwarding copy of [command] once the caller
+     * cancels, so a timeout-and-retry loop does not accumulate them there. A leader's entries stay in
+     * its log.
      *
      * **A forwarded proposal relies on caller-side timeout for a leader *crash*.** If the leader a
      * proposal was forwarded to *steps down*, its rejection surfaces here as [LeadershipLostException]
@@ -271,7 +273,7 @@ public interface RaftNode {
      * **A torn transport seam does not end the node.** Over a [SeamRaftTransport] whose seam is
      * torn, the node stays up and drops every send, so a follower's forward is never answered and
      * this call suspends until the caller cancels it. Nothing ends the node: the owner must watch
-     * `seam.state` and [close] the node or cancel its scope. Tracked by #3053.
+     * `seam.state` and [close] the node or cancel its scope. This gap is tracked by #3053.
      *
      * @throws LeadershipLostException if a forwarded proposal is rejected by the target leader
      *   (e.g. the leader stepped down); the caller may retry on the new leader.

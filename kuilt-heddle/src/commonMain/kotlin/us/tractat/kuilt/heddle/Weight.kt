@@ -87,14 +87,14 @@ public class Weight private constructor(
  * corrupt or hostile peer could **flip sibling ordering cluster-wide** by encoding `1/2`
  * as `-1/-2`.
  *
- * **Repair where a canonical form exists; refuse only where none does.** Both decode
- * boundaries that carry a `Weight` — [us.tractat.kuilt.quilter.Quilter]'s delta dispatch
- * and the heddle control plane's `applyEntry` — already swallow a decode failure and drop
- * the **entire frame**. Rejecting a merely denormalized encoding would therefore discard
- * every legitimate record travelling with it, and anti-entropy would re-send the same
- * frame forever: a silent, permanent convergence wedge between two peers over a
- * difference with no semantic content. Sign-normalization and reduction have a unique
- * correct answer, so they are applied.
+ * **Repair where a canonical form exists; refuse only where none does.** A decode failure
+ * is expensive at both boundaries that carry a `Weight`.
+ * [us.tractat.kuilt.quilter.Quilter]'s delta dispatch drops the **entire frame**, so rejecting
+ * a merely denormalized encoding would discard every legitimate record travelling with it, and
+ * anti-entropy would re-send the same frame forever: a silent, permanent convergence wedge
+ * between two peers over a difference with no semantic content. The heddle control plane's
+ * `applyEntry` latches on it, which stops the whole group at that entry. Sign-normalization and
+ * reduction have a unique correct answer, so they are applied.
  *
  * Values that name no weight at all — a zero or negative share, a zero denominator — are
  * a different case: there is nothing to repair to, and substituting a default would

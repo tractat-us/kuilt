@@ -76,8 +76,10 @@ public sealed interface ElectionOutcome {
      * so they ack the freeze round immediately and the session forms with no re-discovery.
      *
      * Two obvious alternatives are wrong, and both lose the co-members:
-     * - **Re-running `electLobby(...)` weaves a *fresh* seam.** The co-members are still waiting on the
-     *   old one. Nobody ever freezes them, and the promoted peer ends up hosting an empty lobby.
+     * - **Re-running `electLobby(...)` starts a second lobby beside this one.** On most looms that is a
+     *   *fresh* seam, and the co-members are still waiting on the old one. Nobody ever freezes them, and
+     *   the promoted peer ends up hosting an empty lobby. A loom holding one session may answer with this
+     *   same seam instead, which then has two lobbies reading it.
      * - **Calling [ElectionLobby.leave] first closes the shared seam,** collapsing every co-member that
      *   was waiting on it into a [Torn] of their own.
      *

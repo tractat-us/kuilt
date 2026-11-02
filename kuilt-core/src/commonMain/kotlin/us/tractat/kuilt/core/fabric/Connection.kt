@@ -25,6 +25,12 @@ public interface Connection {
      * Send one whole message. Suspends until the transport accepts it (backpressure).
      *
      * A send failure must **not** be reported as a cancellation — see [us.tractat.kuilt.core.Seam.close].
+     * That includes a link that has died: a transport reporting its own closure as a cancellation is
+     * the commonest way to break this, and Ktor's WebSocket session does it (#3083). Catch the
+     * cancellation, call `currentCoroutineContext().ensureActive()` so the caller's own still
+     * propagates, and throw an ordinary exception.
+     * `ConnectionSendConformanceSuite` holds a transport to this only where that transport subclasses
+     * it; a binding nobody wrote is not checked.
      */
     public suspend fun send(frame: ByteArray)
 

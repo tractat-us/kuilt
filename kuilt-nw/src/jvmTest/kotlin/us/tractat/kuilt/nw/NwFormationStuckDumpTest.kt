@@ -711,7 +711,9 @@ class NwFormationStuckDumpTest {
      *
      * The `formations=none` arm matters because the alternative failure is silent: a loom whose seam has
      * been closed must not keep rendering the dead session's state as if it were live, and the only thing
-     * that removes it is the seam scope's completion.
+     * that removes it is the seam scope's completion. The read filters nothing, so this arm is what pins that
+     * the loom really releases its one session slot. A weave cannot pin it, since it treats a `Torn` holder as
+     * free once [NwSeam.tornDown] completes.
      */
     @Test
     fun theDumpIsCallableOnDemandAndReportsWhenThereIsNoLiveFormation() =

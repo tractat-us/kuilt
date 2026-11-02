@@ -1,0 +1,217 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-nearby>
+final enum class us.tractat.kuilt.nearby/NearbyRadioStatus : kotlin/Enum<us.tractat.kuilt.nearby/NearbyRadioStatus> { // us.tractat.kuilt.nearby/NearbyRadioStatus|null[0]
+    enum entry Off // us.tractat.kuilt.nearby/NearbyRadioStatus.Off|null[0]
+    enum entry On // us.tractat.kuilt.nearby/NearbyRadioStatus.On|null[0]
+    enum entry Unknown // us.tractat.kuilt.nearby/NearbyRadioStatus.Unknown|null[0]
+    enum entry Unsupported // us.tractat.kuilt.nearby/NearbyRadioStatus.Unsupported|null[0]
+
+    final val entries // us.tractat.kuilt.nearby/NearbyRadioStatus.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.nearby/NearbyRadioStatus> // us.tractat.kuilt.nearby/NearbyRadioStatus.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.nearby/NearbyRadioStatus // us.tractat.kuilt.nearby/NearbyRadioStatus.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.nearby/NearbyRadioStatus> // us.tractat.kuilt.nearby/NearbyRadioStatus.values|values#static(){}[0]
+}
+
+abstract interface us.tractat.kuilt.nearby/NearbyApi { // us.tractat.kuilt.nearby/NearbyApi|null[0]
+    abstract val connectionInitiated // us.tractat.kuilt.nearby/NearbyApi.connectionInitiated|{}connectionInitiated[0]
+        abstract fun <get-connectionInitiated>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.nearby/ConnectionInitiated> // us.tractat.kuilt.nearby/NearbyApi.connectionInitiated.<get-connectionInitiated>|<get-connectionInitiated>(){}[0]
+    abstract val connectionResult // us.tractat.kuilt.nearby/NearbyApi.connectionResult|{}connectionResult[0]
+        abstract fun <get-connectionResult>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.nearby/ConnectionResult> // us.tractat.kuilt.nearby/NearbyApi.connectionResult.<get-connectionResult>|<get-connectionResult>(){}[0]
+    abstract val endpointDisconnected // us.tractat.kuilt.nearby/NearbyApi.endpointDisconnected|{}endpointDisconnected[0]
+        abstract fun <get-endpointDisconnected>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.nearby/EndpointDisconnected> // us.tractat.kuilt.nearby/NearbyApi.endpointDisconnected.<get-endpointDisconnected>|<get-endpointDisconnected>(){}[0]
+    abstract val endpointFound // us.tractat.kuilt.nearby/NearbyApi.endpointFound|{}endpointFound[0]
+        abstract fun <get-endpointFound>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.nearby/EndpointFound> // us.tractat.kuilt.nearby/NearbyApi.endpointFound.<get-endpointFound>|<get-endpointFound>(){}[0]
+    abstract val payloadReceived // us.tractat.kuilt.nearby/NearbyApi.payloadReceived|{}payloadReceived[0]
+        abstract fun <get-payloadReceived>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.nearby/PayloadReceived> // us.tractat.kuilt.nearby/NearbyApi.payloadReceived.<get-payloadReceived>|<get-payloadReceived>(){}[0]
+    open val radioState // us.tractat.kuilt.nearby/NearbyApi.radioState|{}radioState[0]
+        open fun <get-radioState>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.nearby/NearbyRadioState?> // us.tractat.kuilt.nearby/NearbyApi.radioState.<get-radioState>|<get-radioState>(){}[0]
+
+    abstract fun availability(): us.tractat.kuilt.core/FabricAvailability // us.tractat.kuilt.nearby/NearbyApi.availability|availability(){}[0]
+    abstract suspend fun acceptConnection(kotlin/String) // us.tractat.kuilt.nearby/NearbyApi.acceptConnection|acceptConnection(kotlin.String){}[0]
+    abstract suspend fun disconnect(kotlin/String) // us.tractat.kuilt.nearby/NearbyApi.disconnect|disconnect(kotlin.String){}[0]
+    abstract suspend fun requestConnection(kotlin/String, kotlin/String) // us.tractat.kuilt.nearby/NearbyApi.requestConnection|requestConnection(kotlin.String;kotlin.String){}[0]
+    abstract suspend fun sendBytesPayload(kotlin/String, kotlin/ByteArray) // us.tractat.kuilt.nearby/NearbyApi.sendBytesPayload|sendBytesPayload(kotlin.String;kotlin.ByteArray){}[0]
+    abstract suspend fun startAdvertising(kotlin/String, kotlin/String) // us.tractat.kuilt.nearby/NearbyApi.startAdvertising|startAdvertising(kotlin.String;kotlin.String){}[0]
+    abstract suspend fun startDiscovery(kotlin/String) // us.tractat.kuilt.nearby/NearbyApi.startDiscovery|startDiscovery(kotlin.String){}[0]
+    abstract suspend fun stopAdvertising() // us.tractat.kuilt.nearby/NearbyApi.stopAdvertising|stopAdvertising(){}[0]
+    abstract suspend fun stopDiscovery() // us.tractat.kuilt.nearby/NearbyApi.stopDiscovery|stopDiscovery(){}[0]
+}
+
+final class us.tractat.kuilt.nearby/ConnectionFailedException : kotlin/Exception { // us.tractat.kuilt.nearby/ConnectionFailedException|null[0]
+    constructor <init>(kotlin/String, kotlin/String?) // us.tractat.kuilt.nearby/ConnectionFailedException.<init>|<init>(kotlin.String;kotlin.String?){}[0]
+}
+
+final class us.tractat.kuilt.nearby/ConnectionInitiated { // us.tractat.kuilt.nearby/ConnectionInitiated|null[0]
+    constructor <init>(kotlin/String, kotlin/String) // us.tractat.kuilt.nearby/ConnectionInitiated.<init>|<init>(kotlin.String;kotlin.String){}[0]
+
+    final val displayName // us.tractat.kuilt.nearby/ConnectionInitiated.displayName|{}displayName[0]
+        final fun <get-displayName>(): kotlin/String // us.tractat.kuilt.nearby/ConnectionInitiated.displayName.<get-displayName>|<get-displayName>(){}[0]
+    final val endpointId // us.tractat.kuilt.nearby/ConnectionInitiated.endpointId|{}endpointId[0]
+        final fun <get-endpointId>(): kotlin/String // us.tractat.kuilt.nearby/ConnectionInitiated.endpointId.<get-endpointId>|<get-endpointId>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.nearby/ConnectionInitiated.component1|component1(){}[0]
+    final fun component2(): kotlin/String // us.tractat.kuilt.nearby/ConnectionInitiated.component2|component2(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.nearby/ConnectionInitiated // us.tractat.kuilt.nearby/ConnectionInitiated.copy|copy(kotlin.String;kotlin.String){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nearby/ConnectionInitiated.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nearby/ConnectionInitiated.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nearby/ConnectionInitiated.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nearby/ConnectionResult { // us.tractat.kuilt.nearby/ConnectionResult|null[0]
+    constructor <init>(kotlin/String, kotlin/Boolean, kotlin/String? = ...) // us.tractat.kuilt.nearby/ConnectionResult.<init>|<init>(kotlin.String;kotlin.Boolean;kotlin.String?){}[0]
+
+    final val endpointId // us.tractat.kuilt.nearby/ConnectionResult.endpointId|{}endpointId[0]
+        final fun <get-endpointId>(): kotlin/String // us.tractat.kuilt.nearby/ConnectionResult.endpointId.<get-endpointId>|<get-endpointId>(){}[0]
+    final val reason // us.tractat.kuilt.nearby/ConnectionResult.reason|{}reason[0]
+        final fun <get-reason>(): kotlin/String? // us.tractat.kuilt.nearby/ConnectionResult.reason.<get-reason>|<get-reason>(){}[0]
+    final val success // us.tractat.kuilt.nearby/ConnectionResult.success|{}success[0]
+        final fun <get-success>(): kotlin/Boolean // us.tractat.kuilt.nearby/ConnectionResult.success.<get-success>|<get-success>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.nearby/ConnectionResult.component1|component1(){}[0]
+    final fun component2(): kotlin/Boolean // us.tractat.kuilt.nearby/ConnectionResult.component2|component2(){}[0]
+    final fun component3(): kotlin/String? // us.tractat.kuilt.nearby/ConnectionResult.component3|component3(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/Boolean = ..., kotlin/String? = ...): us.tractat.kuilt.nearby/ConnectionResult // us.tractat.kuilt.nearby/ConnectionResult.copy|copy(kotlin.String;kotlin.Boolean;kotlin.String?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nearby/ConnectionResult.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nearby/ConnectionResult.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nearby/ConnectionResult.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nearby/DecodedChunk { // us.tractat.kuilt.nearby/DecodedChunk|null[0]
+    constructor <init>(kotlin/Int, kotlin/Int, kotlin/Int, kotlin/ByteArray) // us.tractat.kuilt.nearby/DecodedChunk.<init>|<init>(kotlin.Int;kotlin.Int;kotlin.Int;kotlin.ByteArray){}[0]
+
+    final val chunkCount // us.tractat.kuilt.nearby/DecodedChunk.chunkCount|{}chunkCount[0]
+        final fun <get-chunkCount>(): kotlin/Int // us.tractat.kuilt.nearby/DecodedChunk.chunkCount.<get-chunkCount>|<get-chunkCount>(){}[0]
+    final val chunkIndex // us.tractat.kuilt.nearby/DecodedChunk.chunkIndex|{}chunkIndex[0]
+        final fun <get-chunkIndex>(): kotlin/Int // us.tractat.kuilt.nearby/DecodedChunk.chunkIndex.<get-chunkIndex>|<get-chunkIndex>(){}[0]
+    final val chunkPayload // us.tractat.kuilt.nearby/DecodedChunk.chunkPayload|{}chunkPayload[0]
+        final fun <get-chunkPayload>(): kotlin/ByteArray // us.tractat.kuilt.nearby/DecodedChunk.chunkPayload.<get-chunkPayload>|<get-chunkPayload>(){}[0]
+    final val msgId // us.tractat.kuilt.nearby/DecodedChunk.msgId|{}msgId[0]
+        final fun <get-msgId>(): kotlin/Int // us.tractat.kuilt.nearby/DecodedChunk.msgId.<get-msgId>|<get-msgId>(){}[0]
+
+    final fun component1(): kotlin/Int // us.tractat.kuilt.nearby/DecodedChunk.component1|component1(){}[0]
+    final fun component2(): kotlin/Int // us.tractat.kuilt.nearby/DecodedChunk.component2|component2(){}[0]
+    final fun component3(): kotlin/Int // us.tractat.kuilt.nearby/DecodedChunk.component3|component3(){}[0]
+    final fun component4(): kotlin/ByteArray // us.tractat.kuilt.nearby/DecodedChunk.component4|component4(){}[0]
+    final fun copy(kotlin/Int = ..., kotlin/Int = ..., kotlin/Int = ..., kotlin/ByteArray = ...): us.tractat.kuilt.nearby/DecodedChunk // us.tractat.kuilt.nearby/DecodedChunk.copy|copy(kotlin.Int;kotlin.Int;kotlin.Int;kotlin.ByteArray){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nearby/DecodedChunk.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nearby/DecodedChunk.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nearby/DecodedChunk.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nearby/EndpointDisconnected { // us.tractat.kuilt.nearby/EndpointDisconnected|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.nearby/EndpointDisconnected.<init>|<init>(kotlin.String){}[0]
+
+    final val endpointId // us.tractat.kuilt.nearby/EndpointDisconnected.endpointId|{}endpointId[0]
+        final fun <get-endpointId>(): kotlin/String // us.tractat.kuilt.nearby/EndpointDisconnected.endpointId.<get-endpointId>|<get-endpointId>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.nearby/EndpointDisconnected.component1|component1(){}[0]
+    final fun copy(kotlin/String = ...): us.tractat.kuilt.nearby/EndpointDisconnected // us.tractat.kuilt.nearby/EndpointDisconnected.copy|copy(kotlin.String){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nearby/EndpointDisconnected.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nearby/EndpointDisconnected.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nearby/EndpointDisconnected.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nearby/EndpointFound { // us.tractat.kuilt.nearby/EndpointFound|null[0]
+    constructor <init>(kotlin/String, kotlin/String) // us.tractat.kuilt.nearby/EndpointFound.<init>|<init>(kotlin.String;kotlin.String){}[0]
+
+    final val displayName // us.tractat.kuilt.nearby/EndpointFound.displayName|{}displayName[0]
+        final fun <get-displayName>(): kotlin/String // us.tractat.kuilt.nearby/EndpointFound.displayName.<get-displayName>|<get-displayName>(){}[0]
+    final val endpointId // us.tractat.kuilt.nearby/EndpointFound.endpointId|{}endpointId[0]
+        final fun <get-endpointId>(): kotlin/String // us.tractat.kuilt.nearby/EndpointFound.endpointId.<get-endpointId>|<get-endpointId>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.nearby/EndpointFound.component1|component1(){}[0]
+    final fun component2(): kotlin/String // us.tractat.kuilt.nearby/EndpointFound.component2|component2(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.nearby/EndpointFound // us.tractat.kuilt.nearby/EndpointFound.copy|copy(kotlin.String;kotlin.String){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nearby/EndpointFound.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nearby/EndpointFound.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nearby/EndpointFound.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nearby/NearbyLoom : us.tractat.kuilt.core/Loom { // us.tractat.kuilt.nearby/NearbyLoom|null[0]
+    constructor <init>(us.tractat.kuilt.nearby/NearbyApi, kotlin/String = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., kotlin.time/Duration = ..., kotlin/Int = ...) // us.tractat.kuilt.nearby/NearbyLoom.<init>|<init>(us.tractat.kuilt.nearby.NearbyApi;kotlin.String;us.tractat.kuilt.core.DeliveryPolicy;kotlin.time.Duration;kotlin.Int){}[0]
+
+    final fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.nearby/NearbyLoom.capability|capability(){}[0]
+    final suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.nearby/NearbyLoom.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+
+    final object Companion { // us.tractat.kuilt.nearby/NearbyLoom.Companion|null[0]
+        final const val DEFAULT_SERVICE_ID // us.tractat.kuilt.nearby/NearbyLoom.Companion.DEFAULT_SERVICE_ID|{}DEFAULT_SERVICE_ID[0]
+            final fun <get-DEFAULT_SERVICE_ID>(): kotlin/String // us.tractat.kuilt.nearby/NearbyLoom.Companion.DEFAULT_SERVICE_ID.<get-DEFAULT_SERVICE_ID>|<get-DEFAULT_SERVICE_ID>(){}[0]
+
+        final val DEFAULT_HANDSHAKE_TIMEOUT // us.tractat.kuilt.nearby/NearbyLoom.Companion.DEFAULT_HANDSHAKE_TIMEOUT|{}DEFAULT_HANDSHAKE_TIMEOUT[0]
+            final fun <get-DEFAULT_HANDSHAKE_TIMEOUT>(): kotlin.time/Duration // us.tractat.kuilt.nearby/NearbyLoom.Companion.DEFAULT_HANDSHAKE_TIMEOUT.<get-DEFAULT_HANDSHAKE_TIMEOUT>|<get-DEFAULT_HANDSHAKE_TIMEOUT>(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.nearby/NearbyRadioState { // us.tractat.kuilt.nearby/NearbyRadioState|null[0]
+    constructor <init>(us.tractat.kuilt.nearby/NearbyRadioStatus, us.tractat.kuilt.nearby/NearbyRadioStatus) // us.tractat.kuilt.nearby/NearbyRadioState.<init>|<init>(us.tractat.kuilt.nearby.NearbyRadioStatus;us.tractat.kuilt.nearby.NearbyRadioStatus){}[0]
+
+    final val bluetooth // us.tractat.kuilt.nearby/NearbyRadioState.bluetooth|{}bluetooth[0]
+        final fun <get-bluetooth>(): us.tractat.kuilt.nearby/NearbyRadioStatus // us.tractat.kuilt.nearby/NearbyRadioState.bluetooth.<get-bluetooth>|<get-bluetooth>(){}[0]
+    final val wifi // us.tractat.kuilt.nearby/NearbyRadioState.wifi|{}wifi[0]
+        final fun <get-wifi>(): us.tractat.kuilt.nearby/NearbyRadioStatus // us.tractat.kuilt.nearby/NearbyRadioState.wifi.<get-wifi>|<get-wifi>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.nearby/NearbyRadioStatus // us.tractat.kuilt.nearby/NearbyRadioState.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.nearby/NearbyRadioStatus // us.tractat.kuilt.nearby/NearbyRadioState.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.nearby/NearbyRadioStatus = ..., us.tractat.kuilt.nearby/NearbyRadioStatus = ...): us.tractat.kuilt.nearby/NearbyRadioState // us.tractat.kuilt.nearby/NearbyRadioState.copy|copy(us.tractat.kuilt.nearby.NearbyRadioStatus;us.tractat.kuilt.nearby.NearbyRadioStatus){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nearby/NearbyRadioState.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nearby/NearbyRadioState.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nearby/NearbyRadioState.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nearby/NearbyTag : us.tractat.kuilt.core/Tag { // us.tractat.kuilt.nearby/NearbyTag|null[0]
+    constructor <init>(kotlin/String, kotlin/String) // us.tractat.kuilt.nearby/NearbyTag.<init>|<init>(kotlin.String;kotlin.String){}[0]
+
+    final val peerKey // us.tractat.kuilt.nearby/NearbyTag.peerKey|{}peerKey[0]
+        final fun <get-peerKey>(): kotlin/String // us.tractat.kuilt.nearby/NearbyTag.peerKey.<get-peerKey>|<get-peerKey>(){}[0]
+    final val sessionName // us.tractat.kuilt.nearby/NearbyTag.sessionName|{}sessionName[0]
+        final fun <get-sessionName>(): kotlin/String // us.tractat.kuilt.nearby/NearbyTag.sessionName.<get-sessionName>|<get-sessionName>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.nearby/NearbyTag.component1|component1(){}[0]
+    final fun component2(): kotlin/String // us.tractat.kuilt.nearby/NearbyTag.component2|component2(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.nearby/NearbyTag // us.tractat.kuilt.nearby/NearbyTag.copy|copy(kotlin.String;kotlin.String){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nearby/NearbyTag.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nearby/NearbyTag.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nearby/NearbyTag.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.nearby/PayloadReceived { // us.tractat.kuilt.nearby/PayloadReceived|null[0]
+    constructor <init>(kotlin/String, kotlin/ByteArray) // us.tractat.kuilt.nearby/PayloadReceived.<init>|<init>(kotlin.String;kotlin.ByteArray){}[0]
+
+    final val bytes // us.tractat.kuilt.nearby/PayloadReceived.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // us.tractat.kuilt.nearby/PayloadReceived.bytes.<get-bytes>|<get-bytes>(){}[0]
+    final val endpointId // us.tractat.kuilt.nearby/PayloadReceived.endpointId|{}endpointId[0]
+        final fun <get-endpointId>(): kotlin/String // us.tractat.kuilt.nearby/PayloadReceived.endpointId.<get-endpointId>|<get-endpointId>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.nearby/PayloadReceived.component1|component1(){}[0]
+    final fun component2(): kotlin/ByteArray // us.tractat.kuilt.nearby/PayloadReceived.component2|component2(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/ByteArray = ...): us.tractat.kuilt.nearby/PayloadReceived // us.tractat.kuilt.nearby/PayloadReceived.copy|copy(kotlin.String;kotlin.ByteArray){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.nearby/PayloadReceived.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.nearby/PayloadReceived.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.nearby/PayloadReceived.toString|toString(){}[0]
+}
+
+final object us.tractat.kuilt.nearby/ChunkCodec { // us.tractat.kuilt.nearby/ChunkCodec|null[0]
+    final const val DEFAULT_MAX_PENDING_MESSAGES // us.tractat.kuilt.nearby/ChunkCodec.DEFAULT_MAX_PENDING_MESSAGES|{}DEFAULT_MAX_PENDING_MESSAGES[0]
+        final fun <get-DEFAULT_MAX_PENDING_MESSAGES>(): kotlin/Int // us.tractat.kuilt.nearby/ChunkCodec.DEFAULT_MAX_PENDING_MESSAGES.<get-DEFAULT_MAX_PENDING_MESSAGES>|<get-DEFAULT_MAX_PENDING_MESSAGES>(){}[0]
+    final const val HEADER_SIZE // us.tractat.kuilt.nearby/ChunkCodec.HEADER_SIZE|{}HEADER_SIZE[0]
+        final fun <get-HEADER_SIZE>(): kotlin/Int // us.tractat.kuilt.nearby/ChunkCodec.HEADER_SIZE.<get-HEADER_SIZE>|<get-HEADER_SIZE>(){}[0]
+    final const val MAX_CHUNK_PAYLOAD // us.tractat.kuilt.nearby/ChunkCodec.MAX_CHUNK_PAYLOAD|{}MAX_CHUNK_PAYLOAD[0]
+        final fun <get-MAX_CHUNK_PAYLOAD>(): kotlin/Int // us.tractat.kuilt.nearby/ChunkCodec.MAX_CHUNK_PAYLOAD.<get-MAX_CHUNK_PAYLOAD>|<get-MAX_CHUNK_PAYLOAD>(){}[0]
+
+    final fun decodeChunk(kotlin/ByteArray): us.tractat.kuilt.nearby/DecodedChunk? // us.tractat.kuilt.nearby/ChunkCodec.decodeChunk|decodeChunk(kotlin.ByteArray){}[0]
+    final fun encode(kotlin/ByteArray, kotlin/Int, kotlin/Int = ...): kotlin.collections/List<kotlin/ByteArray> // us.tractat.kuilt.nearby/ChunkCodec.encode|encode(kotlin.ByteArray;kotlin.Int;kotlin.Int){}[0]
+
+    final class Reassembler { // us.tractat.kuilt.nearby/ChunkCodec.Reassembler|null[0]
+        constructor <init>(kotlin/Int = ...) // us.tractat.kuilt.nearby/ChunkCodec.Reassembler.<init>|<init>(kotlin.Int){}[0]
+
+        final fun feed(us.tractat.kuilt.nearby/DecodedChunk): kotlin/ByteArray? // us.tractat.kuilt.nearby/ChunkCodec.Reassembler.feed|feed(us.tractat.kuilt.nearby.DecodedChunk){}[0]
+        final fun reset() // us.tractat.kuilt.nearby/ChunkCodec.Reassembler.reset|reset(){}[0]
+    }
+}

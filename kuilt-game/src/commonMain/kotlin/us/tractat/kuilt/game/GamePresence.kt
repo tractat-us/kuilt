@@ -5,6 +5,7 @@
 
 package us.tractat.kuilt.game
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -170,7 +171,20 @@ public class GamePresence(
      * slot holds [VACATE_DECLARED], overwriting [PRESENT_DECLARED]. The [Quilter] delivers
      * the delta to the host.
      */
-    public fun declareVacate(): Unit = declare(VACATE_DECLARED)
+    public fun declareVacate() {
+        // The latch goes first: "I have left" is a local fact, and answerers read this rather than the board.
+        left.value = true
+        declare(VACATE_DECLARED)
+    }
+
+    private val left = atomic(false)
+
+    /**
+     * `true` once this peer has called [declareVacate]. A local fact, never read off the board: the
+     * board is replicated and any peer can write a vacate under another peer's slot, so a forged one
+     * must not silence a healthy player.
+     */
+    internal fun hasLeft(): Boolean = left.value
 
     /**
      * Publishes the admission-closed signal on the host's presence slot, replacing

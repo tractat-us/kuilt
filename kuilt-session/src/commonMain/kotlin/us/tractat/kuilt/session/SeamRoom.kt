@@ -95,8 +95,9 @@ public typealias JoinerReconnectControllerFactory =
 /**
  * [Loom]-backed implementation of [RoomFactory].
  *
- * Each call to [host] or [join] weaves a new [Seam] via [loom], wraps it in a
- * [SeamRoom], and drives the admit/identify handshake:
+ * Each call to [host] or [join] weaves a [Seam] via [loom] (new on most looms; one holding a live
+ * session may answer a repeat with it), wraps it in a [SeamRoom], and drives the admit/identify
+ * handshake:
  * - **Host** side: passively collects [AdmitMessage.Hello] from new peers and
  *   replies with [AdmitMessage.Welcome], adding the peer to the roster and
  *   broadcasting the welcome to all other admitted members.
@@ -222,7 +223,7 @@ public class SeamRoomFactory(
     /**
      * Adopt an **already-woven** [seam] into a [Room] with an explicit [role] — no re-weave.
      *
-     * Unlike [host]/[join] (which each weave a fresh seam), [adopt] takes ownership of a seam the
+     * Unlike [host]/[join] (which each weave through the loom), [adopt] takes ownership of a seam the
      * caller wove, so the calling layer can weave the mesh once and decide role afterward (the
      * host-election lobby, #1439). The returned [Room] owns the seam's lifetime from here:
      * [Room.leave] closes it — correct, because the seam is handed over exactly once.
@@ -645,7 +646,9 @@ internal class SeamRoom(
      * [seam] instance*: the [Loom] must return a stable, resumable handle whose [Seam.selfId] is
      * frozen and whose underlying channel is re-pointed onto a freshly-woven base. [MuxClientLoom]'s
      * `ResumableChannel` satisfies this: `loom.join(tag)` on a torn base re-weaves the base once and
-     * returns the same handle, so this room's [seam] transitions back out of [SeamState.Torn].
+     * returns the same handle, so this room's [seam] transitions back out of [SeamState.Torn]. A
+     * fabric whose seam re-forms by itself without ever reading `Torn` satisfies it by answering a
+     * repeat of the rendezvous with that live seam, which is what `NwLoom` does.
      *
      * The [JoinerResumeMachine]'s reconnect loop checks exactly that — after re-weave, whether
      * [seam] left `Torn` — to tell a resumable loom from a non-conforming one; the [reweave] lambda
@@ -1937,7 +1940,7 @@ internal class SeamRoom(
      * precisely the reachable set.
      *
      * On a host-relayed **star** (`RoomHubSeam`/`MuxServerLoom`, `MeshSeam` as a hub spoke,
-     * `:kuilt-multipeer`, `:kuilt-nearby`) a joiner has no route to a co-joiner, so its pings
+     * `:kuilt-multipeer`) a joiner has no route to a co-joiner, so its pings
      * could never be answered — and the detector's *timeout* branch is not gated on the peer
      * being in `link.peers` (only its `TransportClosed` branch is). Silence from an unroutable
      * peer therefore matured into [PartitionEvent.PeerLost] and evicted a healthy member. That

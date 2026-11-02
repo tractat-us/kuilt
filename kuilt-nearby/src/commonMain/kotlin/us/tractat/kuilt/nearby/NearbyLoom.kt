@@ -1,21 +1,29 @@
 package us.tractat.kuilt.nearby
 
+import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
-import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
@@ -26,6 +34,8 @@ import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.freshPeerId
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+
+private val log = KotlinLogging.logger("us.tractat.kuilt.nearby.NearbyLoom")
 
 /**
  * [Loom] implementation backed by Google Nearby Connections.
@@ -74,6 +84,38 @@ import kotlin.time.Duration.Companion.seconds
  * convention's `selfId` knob is deliberately **absent** here rather than defaulted (#1430);
  * `NearbyLoomKnobsTest` pins the distinctness the omission rests on.
  *
+ * ## A host accepts for exactly as long as it advertises (#2811)
+ * One coroutine owns both: it takes the first joiner whose handshake succeeds, and advertising stops
+ * when it ends, by a link, by [NearbySeam.close] or by the radio's event stream failing. Nothing else
+ * ends it. In particular time does not: [handshakeTimeout] starts when a joiner initiates, so a host
+ * nobody has come to is `Weaving` and listening indefinitely, and a failed attempt costs that attempt
+ * alone. The failed endpoint is disconnected, advertising carries on untouched, and the next joiner is
+ * taken as if the first had never come.
+ *
+ * It admits **one** joiner, and advertising stops once it has one, because [NearbySeam] relays nothing
+ * between two joiners and the conformance harness claims mesh delivery only vacuously, over one link.
+ * Accepting a second is a different feature with a different capability answer. A joiner arriving
+ * mid-handshake is not queued: it is ignored, and fails on its own clock.
+ *
+ * ## A weave stops only what it started
+ * [NearbyApi.stopAdvertising] and [NearbyApi.stopDiscovery] take no argument because the radio has one
+ * of each, and it turns down a second start (`STATUS_ALREADY_ADVERTISING`,
+ * `STATUS_ALREADY_DISCOVERING`). So a weave whose start was refused stops nothing: there is nothing of
+ * its own to stop, and a stop would land on the weave that holds the radio. A start that was cancelled
+ * rather than refused gets a stop, by [radioCallMayStillBeRunning], and that is the one case this cannot
+ * tell apart: cancelling a start that the radio would have refused still stops the weave holding it.
+ * A cancelled start also keeps running, so a stop can land before it does; only a binding that cancelled
+ * its radio call could close that.
+ *
+ * ## A `join` waits for this loom's host only while that host is mid-handshake
+ * One loom can play both ends of a session, and then `join` returning means the host's roster is
+ * populated as well. So `join` waits for any handshake this loom's host has actually started
+ * ([LocalHandshakes]), which its own bound limits. It does not wait for a host that has no handshake
+ * in flight: such a host owes this `join` nothing, and since acceptance is long-lived, a wait for "the
+ * host's first link" would last until somebody happened to join it. That was the deferred this
+ * replaced, which also never completed if the host's wait ended any other way, so hosting a room,
+ * leaving it and joining somebody else's left the `join` waiting forever.
+ *
  * @param api               [NearbyApi] to use (real GMS or fake for tests).
  * @param serviceId         Nearby Connections service ID. Must match on both devices.
  * @param policy            Delivery policy for every woven seam's inbound buffer.
@@ -92,27 +134,38 @@ public class NearbyLoom(
 
     // No loom-level peer set: each weave owns its own (#1878) — see the class KDoc.
 
-    // Guards loom-level state: hostLinkDeferred.
-    private val loomMutex = Mutex()
-
-    // Stored after open(); used to notify join() when the host side completes.
-    private var hostLinkDeferred: CompletableDeferred<ConnectedLink>? = null
+    private val handshakes = LocalHandshakes()
 
     override fun capability(): TransportCapability =
         TransportCapability(roles = NEARBY_ROLES, availability = api.availability())
 
+    /**
+     * A cancellation leaves here only if it is the caller's own, as [Loom.weave] requires.
+     * [NearbyApi] is consumer-authored and the GMS binding awaits Play services tasks, either of which
+     * can throw one without this job being cancelled, and [currentCoroutineContext]'s `ensureActive` is
+     * what tells them apart: type cannot.
+     */
     override suspend fun weave(rendezvous: Rendezvous): Seam =
-        when (rendezvous) {
-            is Rendezvous.New -> openSession(rendezvous.pattern)
-            is Rendezvous.Existing -> joinSession(rendezvous.tag)
+        try {
+            when (rendezvous) {
+                is Rendezvous.New -> openSession(rendezvous.pattern)
+                is Rendezvous.Existing -> joinSession(rendezvous.tag)
+            }
+        } catch (minted: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            val session = when (rendezvous) {
+                is Rendezvous.New -> rendezvous.pattern.sessionName
+                is Rendezvous.Existing -> rendezvous.tag.sessionName
+            }
+            throw ConnectionFailedException(session, "the radio reported a cancellation: $minted")
         }
 
     /**
      * Start advertising and return a [Seam] immediately.
      *
-     * A background coroutine watches for the first incoming connection. Once the
-     * joiner's handshake completes, the host seam's endpointPeers and weavePeers
-     * are updated and [hostLinkDeferred] resolves so [join] can return.
+     * A background coroutine accepts until a joiner's handshake succeeds, which puts that joiner on
+     * the host seam; see the class KDoc. It subscribes before advertising starts, so there is no gap
+     * in which a joiner could initiate with nobody listening.
      *
      * The background scope is derived from the caller's coroutine context so it
      * inherits the test dispatcher and is cleaned up when the seam is closed.
@@ -135,6 +188,10 @@ public class NearbyLoom(
         val weavePeers = MutableStateFlow(setOf(peerId))
         // Derive from caller so background work runs on the test dispatcher.
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
+        val advertiserRetired = Job()
+        // Whether this seam has anything on the radio to stop. Every exit from the start below completes
+        // it, and only those: the advertiser waits on it, and `close` waits on the advertiser.
+        val startedAdvertising = CompletableDeferred<Boolean>()
 
         val seam = NearbySeam(
             selfId = peerId,
@@ -147,38 +204,117 @@ public class NearbyLoom(
             maxChunkPayload = maxChunkPayload,
             msgIdCounter = MsgIdCounter(),
             policy = policy,
+            advertiserRetired = advertiserRetired,
         )
-        val linkDeferred = CompletableDeferred<ConnectedLink>()
-        loomMutex.withLock {
-            hostLinkDeferred = linkDeferred
+
+        // UNDISPATCHED so the host's handshake collectors subscribe synchronously during open(),
+        // before advertising starts and before any joiner's requestConnection emits events.
+        seamScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            val lost = advertiseUntilLinked(peerId, registry, seam, startedAdvertising, advertiserRetired)
+            // Outside the above, because close() waits for the advertiser that has only now retired.
+            if (lost != null) seam.close(CloseReason.Error(lost))
         }
 
-        api.startAdvertising(config.sessionName, serviceId)
+        try {
+            api.startAdvertising(config.sessionName, serviceId)
+            startedAdvertising.complete(true)
+        } catch (failure: Throwable) {
+            // Before the discard, whose close waits on the advertiser, which waits on this.
+            startedAdvertising.complete(failure.radioCallMayStillBeRunning())
+            discardUnreturnedSeam(seam)
+            throw failure
+        }
+        return seam
+    }
 
-        // Background: accept first joiner, exchange identity, update host seam.
-        // UNDISPATCHED so the host's handshake collectors subscribe synchronously
-        // during open() — before any joiner's requestConnection emits events.
-        seamScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            runCatchingCancellable {
-                val machine = ConnectStateMachine(
+    /**
+     * The lifetime of one host's advertising: accept until linked, then stop what this host started, on
+     * every exit. Returns the failure if the radio's event stream is what ended it.
+     *
+     * The stop waits for [startedAdvertising], for its answer and for its order. This coroutine runs
+     * ahead of the start, so a stream that fails at once reaches here first, and a stop made then would
+     * land before the start: a torn seam advertising with nothing left to stop it, since its `close` is
+     * already a no-op.
+     */
+    private suspend fun CoroutineScope.advertiseUntilLinked(
+        peerId: PeerId,
+        registry: PeerIdentityRegistry<String>,
+        seam: NearbySeam,
+        startedAdvertising: CompletableDeferred<Boolean>,
+        advertiserRetired: CompletableJob,
+    ): NearbyEventStreamLostException? =
+        try {
+            acceptUntilLinked(peerId, registry, seam)
+            null
+        } catch (lost: NearbyEventStreamLostException) {
+            log.error(lost) { "nearby.host.accept-lost self=${peerId.value} — tearing the seam" }
+            lost
+        } finally {
+            withContext(NonCancellable) {
+                if (startedAdvertising.await()) {
+                    try {
+                        api.stopAdvertising()
+                    } catch (failure: Throwable) {
+                        log.debug { "nearby.host.stop-advertising-failed self=${peerId.value} failure=$failure" }
+                    }
+                }
+            }
+            advertiserRetired.complete()
+        }
+
+    /**
+     * One handshake after another until one produces a link. Each pass waits, unbounded, for a joiner,
+     * so this cannot spin: every failure below needs a joiner to have turned up first.
+     *
+     * The `catch` is on the attempt, and it is why a failed attempt costs nothing else. `ensureActive`
+     * first, so that this coroutine's real cancellation ends the loop while a cancellation a callee
+     * minted costs one attempt like anything else (`AGENTS.md`, exception discipline).
+     * [NearbyEventStreamLostException] is the one failure that is not one attempt's, and it passes.
+     */
+    private suspend fun CoroutineScope.acceptUntilLinked(
+        peerId: PeerId,
+        registry: PeerIdentityRegistry<String>,
+        seam: NearbySeam,
+    ) {
+        while (true) {
+            val attempt = handshakes.incomingAttempt()
+            try {
+                val link = ConnectStateMachine(
                     selfId = peerId,
                     api = api,
                     endpointId = null,
                     serviceId = serviceId,
                     handshakeTimeout = handshakeTimeout,
                     registry = registry,
-                )
-                // Advertiser: already advertising, so no kickoff — just await a peer.
-                val link = machine.run(this) {}
-                endpointPeersMutex.withLock {
-                    endpointPeers[link.endpointId] = link.remotePeerId
-                    seam.admitRemote(link.remotePeerId)
-                }
-                linkDeferred.complete(link)
-            }.onFailure { linkDeferred.completeExceptionally(it) }
+                    mayClaim = attempt::tryClaim,
+                ).run(this) {} // already advertising, so no kickoff
+                admitOrRelease(seam, link)
+                return
+            } catch (lost: NearbyEventStreamLostException) {
+                throw lost
+            } catch (failure: Exception) {
+                currentCoroutineContext().ensureActive()
+                log.info { "nearby.host.attempt-failed self=${peerId.value} failure=$failure — still accepting" }
+            } finally {
+                attempt.finish()
+            }
         }
+    }
 
-        return seam
+    /**
+     * Hand a completed handshake's link to [seam], or take it down if the seam closed first. Shielded:
+     * the link exists whether or not this coroutine is cancelled, and it is either on the seam or
+     * disconnected by the time this returns.
+     */
+    private suspend fun admitOrRelease(seam: NearbySeam, link: ConnectedLink) {
+        withContext(NonCancellable) {
+            if (seam.admitEndpoint(link)) return@withContext
+            try {
+                api.disconnect(link.endpointId)
+            } catch (failure: Throwable) {
+                log.debug { "nearby.loom.late-link-release-failed endpoint=${link.endpointId} failure=$failure" }
+            }
+        }
     }
 
     /**
@@ -198,6 +334,7 @@ public class NearbyLoom(
         // This weave's roster — see openSession.
         val weavePeers = MutableStateFlow(setOf(joinerPeerId))
         val seamScope = CoroutineScope(currentCoroutineContext() + SupervisorJob())
+        var ownsDiscovery = false
 
         val seam = NearbySeam(
             selfId = joinerPeerId,
@@ -212,43 +349,72 @@ public class NearbyLoom(
             policy = policy,
         )
 
-        // Subscribe BEFORE starting discovery to avoid the emit-before-subscribe race.
-        // (The fake emits EndpointFound synchronously from startDiscovery on shared flow.)
-        val hostEndpointId = awaitFirstEndpointFoundThen(seamScope) {
-            api.startDiscovery(serviceId)
+        try {
+            // Subscribe BEFORE starting discovery to avoid the emit-before-subscribe race.
+            // (The fake emits EndpointFound synchronously from startDiscovery on shared flow.)
+            val hostEndpointId = awaitFirstEndpointFoundThen(seamScope) {
+                try {
+                    api.startDiscovery(serviceId)
+                    ownsDiscovery = true
+                } catch (failure: Throwable) {
+                    ownsDiscovery = failure.radioCallMayStillBeRunning()
+                    throw failure
+                }
+            }
+
+            val machine = ConnectStateMachine(
+                selfId = joinerPeerId,
+                api = api,
+                endpointId = hostEndpointId,
+                serviceId = serviceId,
+                handshakeTimeout = handshakeTimeout,
+                registry = registry,
+            )
+
+            // run() subscribes the handshake collectors before triggering requestConnection.
+            val joinLink = handshakes.dialling(hostEndpointId) {
+                machine.run(seamScope) {
+                    api.requestConnection(advertisement.sessionName, hostEndpointId)
+                }
+            }
+            admitOrRelease(seam, joinLink)
+
+            // If this loom's own host has a handshake in flight, it may be the other end of this one.
+            handshakes.awaitIncomingSettled()
+            return seam
+        } catch (failure: Throwable) {
+            discardUnreturnedSeam(seam)
+            throw failure
+        } finally {
+            if (ownsDiscovery) stopDiscoveryBestEffort()
         }
+    }
 
-        val machine = ConnectStateMachine(
-            selfId = joinerPeerId,
-            api = api,
-            endpointId = hostEndpointId,
-            serviceId = serviceId,
-            handshakeTimeout = handshakeTimeout,
-            registry = registry,
-        )
-
-        // run() subscribes the handshake collectors before triggering requestConnection.
-        val joinLink = machine.run(seamScope) {
-            api.requestConnection(advertisement.sessionName, hostEndpointId)
+    /**
+     * Close a seam `weave` wove but will never return: its scope is parentless, so nothing else would
+     * ever end its collectors. Shielded, because the throwable being handled may be this coroutine's
+     * own cancellation and `close` suspends, and a plain `catch` for the reason `NwLoom` gives for the
+     * same shape: inside the shield a cancellation can only be one `close` minted, and rethrowing it
+     * would replace the failure the caller is owed.
+     */
+    private suspend fun discardUnreturnedSeam(seam: Seam) {
+        withContext(NonCancellable) {
+            try {
+                seam.close(CloseReason.Unreachable)
+            } catch (failure: Throwable) {
+                log.debug { "nearby.loom.discard-close-failed self=${seam.selfId.value} failure=$failure" }
+            }
         }
-        endpointPeersMutex.withLock {
-            endpointPeers[joinLink.endpointId] = joinLink.remotePeerId
-            // The joiner records the host from its OWN completed handshake. It used to learn the
-            // host's id by reading the loom-wide flow the host had written — which worked only
-            // because the fake harness puts both ends in one process, and is the coupling #1878
-            // removes. `admitRemote` rather than a bare flow write because `join` returns right
-            // after this: the seam it hands back must already carry the peer and already be Woven,
-            // and a flow write alone leaves both owing a dispatch (see NearbySeam.admitRemote).
-            seam.admitRemote(joinLink.remotePeerId)
+    }
+
+    private suspend fun stopDiscoveryBestEffort() {
+        withContext(NonCancellable) {
+            try {
+                api.stopDiscovery()
+            } catch (failure: Throwable) {
+                log.debug { "nearby.loom.stop-discovery-failed failure=$failure" }
+            }
         }
-
-        // Wait for the host side to complete — ensures host.peers is populated.
-        val hostDeferred = loomMutex.withLock { hostLinkDeferred }
-        hostDeferred?.await()
-
-        api.stopDiscovery()
-
-        return seam
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
@@ -308,11 +474,71 @@ public class NearbyLoom(
          * discovery, dialling and handshake — and this one cannot: on the discoverer path
          * [NearbyApi.startDiscovery] and the wait for the first `EndpointFound` complete
          * **before** the clock starts, and on the advertiser path `weave` has already
-         * returned its seam, so nothing the ceiling covers can fail a `weave` call at all.
+         * returned its seam, so nothing the ceiling covers can fail a `weave` call at all, and
+         * the clock starts only when a joiner initiates: the wait for one is unbounded (#2811).
          * Naming it `weaveTimeout` would promise a bound on `weave` that no path delivers
          * (#1430). It belongs with the `handshakeTimeout` family — a ceiling on a single
          * connection — and moves independently of the shared rendezvous default.
          */
         public val DEFAULT_HANDSHAKE_TIMEOUT: Duration = 30.seconds
+    }
+}
+
+/**
+ * What the two roles on one loom need to know about each other, since both read the same radio.
+ *
+ * Two facts, under one lock because a claim reads the first and writes the second:
+ *  - the endpoints this loom's `join` is dialling, which the host must not claim. The radio reports
+ *    those through the same callback as incoming joiners, so a host left to claim first-come weaves
+ *    itself to a device that never asked to join it. An endpoint is listed once per dial, since two
+ *    concurrent joins can dial one endpoint and the first to finish must not unlist the other's.
+ *  - how many incoming handshakes are in flight, which a finishing `join` waits out.
+ */
+private class LocalHandshakes {
+    private val lock = reentrantLock()
+    private val dialled = mutableListOf<String>()
+    private val incomingInFlight = MutableStateFlow(0)
+
+    suspend fun <T> dialling(endpoint: String, handshake: suspend () -> T): T {
+        lock.withLock { dialled += endpoint }
+        return try {
+            handshake()
+        } finally {
+            lock.withLock { dialled -= endpoint }
+        }
+    }
+
+    suspend fun awaitIncomingSettled() {
+        incomingInFlight.first { it == 0 }
+    }
+
+    fun incomingAttempt(): IncomingAttempt = IncomingAttempt()
+
+    /**
+     * One pass of a host's acceptance. Counts as in flight from its claim to [finish], which the host
+     * calls only after the link is on its seam, so a `join` that waited also finds the host's roster
+     * populated. [finish] runs on every exit, cancellation included, or a `join` would wait forever.
+     */
+    inner class IncomingAttempt {
+        private var counted = false
+
+        fun tryClaim(endpoint: String): Boolean =
+            lock.withLock {
+                if (endpoint in dialled) return false
+                if (!counted) {
+                    counted = true
+                    incomingInFlight.update { it + 1 }
+                }
+                true
+            }
+
+        fun finish() {
+            lock.withLock {
+                if (counted) {
+                    counted = false
+                    incomingInFlight.update { it - 1 }
+                }
+            }
+        }
     }
 }

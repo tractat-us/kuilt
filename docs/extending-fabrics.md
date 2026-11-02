@@ -26,6 +26,12 @@ public interface Connection {
      * Send one whole message. Suspends until the transport accepts it (backpressure).
      *
      * A send failure must **not** be reported as a cancellation — see [us.tractat.kuilt.core.Seam.close].
+     * That includes a link that has died: a transport reporting its own closure as a cancellation is
+     * the commonest way to break this, and Ktor's WebSocket session does it (#3083). Catch the
+     * cancellation, call `currentCoroutineContext().ensureActive()` so the caller's own still
+     * propagates, and throw an ordinary exception.
+     * `ConnectionSendConformanceSuite` holds a transport to this only where that transport subclasses
+     * it; a binding nobody wrote is not checked.
      */
     public suspend fun send(frame: ByteArray)
 
@@ -58,6 +64,11 @@ class MyRpcConnection(private val rpc: YourRpcSession) : Connection {
 
 The `incoming` flow from a message-based RPC is already hot (the transport
 delivers frames in the background; you just consume them). No pump needed.
+
+If `rpc.send` can throw a cancellation once the session has closed, as a Ktor session's
+does, this one-line `send` passes it on and breaks the contract above.
+[The send suite](#if-you-wrote-a-connection-connectionsendconformancesuite) shows the
+guard and holds you to it.
 
 ### Step 2 — choose an identity strategy
 
@@ -489,6 +500,22 @@ Key points:
   injector under `withContext(Dispatchers.IO)`, where the delay is real. Keep that wait
   `withTimeoutOrNull` and keep it **out of** the return value: it is a synchronisation
   barrier, not the verdict, so a fabric that stops tearing still reds the obligation.
+
+### If you wrote a `Connection`: `ConnectionSendConformanceSuite`
+
+A transport often reports its own closure as a cancellation, because that is what a
+cancelled channel throws. Your `send` must not pass that on: the guards in `MeshSeam` and
+`LinkSeam` rethrow any `CancellationException`, so the dead link is never evicted and the
+caller is cancelled rather than failed. Catch it, call
+`currentCoroutineContext().ensureActive()` so the caller's own cancellation still
+propagates, and throw an ordinary exception.
+
+`ConnectionSendConformanceSuite` holds a transport to this. Subclass it once for each way
+your link can die, return the dead link from `deadLink()`, and say what your `send` does
+for a cancelled caller in `cancelledCaller()`. `WebSocketConnectionSendConformanceRig` and
+`TcpConnectionSendConformanceRig` are the templates. The suite needs a real transport: an
+in-memory pair that drops a frame sent after a close cannot reach the failure, and the
+suite fails a link that never refuses one.
 
 ---
 

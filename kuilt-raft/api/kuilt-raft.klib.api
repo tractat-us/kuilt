@@ -1,0 +1,1402 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-raft>
+final enum class us.tractat.kuilt.raft/DenyReason : kotlin/Enum<us.tractat.kuilt.raft/DenyReason> { // us.tractat.kuilt.raft/DenyReason|null[0]
+    enum entry AlreadyVoted // us.tractat.kuilt.raft/DenyReason.AlreadyVoted|null[0]
+    enum entry LeaderAlive // us.tractat.kuilt.raft/DenyReason.LeaderAlive|null[0]
+    enum entry LogNotUpToDate // us.tractat.kuilt.raft/DenyReason.LogNotUpToDate|null[0]
+    enum entry StaleTerm // us.tractat.kuilt.raft/DenyReason.StaleTerm|null[0]
+
+    final val entries // us.tractat.kuilt.raft/DenyReason.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.raft/DenyReason> // us.tractat.kuilt.raft/DenyReason.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.raft/DenyReason // us.tractat.kuilt.raft/DenyReason.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.raft/DenyReason> // us.tractat.kuilt.raft/DenyReason.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.raft/LeadershipTransferAbandonReason : kotlin/Enum<us.tractat.kuilt.raft/LeadershipTransferAbandonReason> { // us.tractat.kuilt.raft/LeadershipTransferAbandonReason|null[0]
+    enum entry Cancelled // us.tractat.kuilt.raft/LeadershipTransferAbandonReason.Cancelled|null[0]
+    enum entry Timeout // us.tractat.kuilt.raft/LeadershipTransferAbandonReason.Timeout|null[0]
+
+    final val entries // us.tractat.kuilt.raft/LeadershipTransferAbandonReason.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.raft/LeadershipTransferAbandonReason> // us.tractat.kuilt.raft/LeadershipTransferAbandonReason.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.raft/LeadershipTransferAbandonReason // us.tractat.kuilt.raft/LeadershipTransferAbandonReason.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.raft/LeadershipTransferAbandonReason> // us.tractat.kuilt.raft/LeadershipTransferAbandonReason.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.raft/MembershipRefusal : kotlin/Enum<us.tractat.kuilt.raft/MembershipRefusal> { // us.tractat.kuilt.raft/MembershipRefusal|null[0]
+    enum entry PendingLocalChange // us.tractat.kuilt.raft/MembershipRefusal.PendingLocalChange|null[0]
+    enum entry UncommittedConfigEntry // us.tractat.kuilt.raft/MembershipRefusal.UncommittedConfigEntry|null[0]
+    enum entry UnsettledJointConfig // us.tractat.kuilt.raft/MembershipRefusal.UnsettledJointConfig|null[0]
+
+    final val detail // us.tractat.kuilt.raft/MembershipRefusal.detail|{}detail[0]
+        final fun <get-detail>(): kotlin/String // us.tractat.kuilt.raft/MembershipRefusal.detail.<get-detail>|<get-detail>(){}[0]
+    final val entries // us.tractat.kuilt.raft/MembershipRefusal.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.raft/MembershipRefusal> // us.tractat.kuilt.raft/MembershipRefusal.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.raft/MembershipRefusal // us.tractat.kuilt.raft/MembershipRefusal.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.raft/MembershipRefusal> // us.tractat.kuilt.raft/MembershipRefusal.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.raft/RaftMessageType : kotlin/Enum<us.tractat.kuilt.raft/RaftMessageType> { // us.tractat.kuilt.raft/RaftMessageType|null[0]
+    enum entry AppendEntries // us.tractat.kuilt.raft/RaftMessageType.AppendEntries|null[0]
+    enum entry AppendEntriesResponse // us.tractat.kuilt.raft/RaftMessageType.AppendEntriesResponse|null[0]
+    enum entry Forward // us.tractat.kuilt.raft/RaftMessageType.Forward|null[0]
+    enum entry ForwardResponse // us.tractat.kuilt.raft/RaftMessageType.ForwardResponse|null[0]
+    enum entry InstallSnapshot // us.tractat.kuilt.raft/RaftMessageType.InstallSnapshot|null[0]
+    enum entry InstallSnapshotResponse // us.tractat.kuilt.raft/RaftMessageType.InstallSnapshotResponse|null[0]
+    enum entry PreVote // us.tractat.kuilt.raft/RaftMessageType.PreVote|null[0]
+    enum entry PreVoteResponse // us.tractat.kuilt.raft/RaftMessageType.PreVoteResponse|null[0]
+    enum entry RequestVote // us.tractat.kuilt.raft/RaftMessageType.RequestVote|null[0]
+    enum entry RequestVoteResponse // us.tractat.kuilt.raft/RaftMessageType.RequestVoteResponse|null[0]
+    enum entry TimeoutNow // us.tractat.kuilt.raft/RaftMessageType.TimeoutNow|null[0]
+
+    final val entries // us.tractat.kuilt.raft/RaftMessageType.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.raft/RaftMessageType> // us.tractat.kuilt.raft/RaftMessageType.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.raft/RaftMessageType // us.tractat.kuilt.raft/RaftMessageType.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.raft/RaftMessageType> // us.tractat.kuilt.raft/RaftMessageType.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.raft/RefusalGate : kotlin/Enum<us.tractat.kuilt.raft/RefusalGate> { // us.tractat.kuilt.raft/RefusalGate|null[0]
+    enum entry AppendEntriesEntryTermOutOfRange // us.tractat.kuilt.raft/RefusalGate.AppendEntriesEntryTermOutOfRange|null[0]
+    enum entry AppendEntriesNonContiguousBatch // us.tractat.kuilt.raft/RefusalGate.AppendEntriesNonContiguousBatch|null[0]
+    enum entry AppendEntriesPrevLogIndexOutOfRange // us.tractat.kuilt.raft/RefusalGate.AppendEntriesPrevLogIndexOutOfRange|null[0]
+    enum entry ConfigPayloadEmptyVoterSet // us.tractat.kuilt.raft/RefusalGate.ConfigPayloadEmptyVoterSet|null[0]
+    enum entry ForgedLeaderForTerm // us.tractat.kuilt.raft/RefusalGate.ForgedLeaderForTerm|null[0]
+    enum entry ImplausibleNegativeTerm // us.tractat.kuilt.raft/RefusalGate.ImplausibleNegativeTerm|null[0]
+    enum entry ImplausibleTermJump // us.tractat.kuilt.raft/RefusalGate.ImplausibleTermJump|null[0]
+    enum entry InstallSnapshotBelowCommittedTermFloor // us.tractat.kuilt.raft/RefusalGate.InstallSnapshotBelowCommittedTermFloor|null[0]
+    enum entry InstallSnapshotIndexOutOfRange // us.tractat.kuilt.raft/RefusalGate.InstallSnapshotIndexOutOfRange|null[0]
+    enum entry InstallSnapshotTermOutOfRange // us.tractat.kuilt.raft/RefusalGate.InstallSnapshotTermOutOfRange|null[0]
+    enum entry LeaderAuthority // us.tractat.kuilt.raft/RefusalGate.LeaderAuthority|null[0]
+    enum entry TimeoutNowFutureTerm // us.tractat.kuilt.raft/RefusalGate.TimeoutNowFutureTerm|null[0]
+    enum entry TimeoutNowSelfLeaderOrCandidate // us.tractat.kuilt.raft/RefusalGate.TimeoutNowSelfLeaderOrCandidate|null[0]
+    enum entry TimeoutNowSelfLearner // us.tractat.kuilt.raft/RefusalGate.TimeoutNowSelfLearner|null[0]
+    enum entry TimeoutNowSenderNotEstablishedLeader // us.tractat.kuilt.raft/RefusalGate.TimeoutNowSenderNotEstablishedLeader|null[0]
+    enum entry TimeoutNowStaleTerm // us.tractat.kuilt.raft/RefusalGate.TimeoutNowStaleTerm|null[0]
+
+    final val entries // us.tractat.kuilt.raft/RefusalGate.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.raft/RefusalGate> // us.tractat.kuilt.raft/RefusalGate.entries.<get-entries>|<get-entries>#static(){}[0]
+    final val wedgeGate // us.tractat.kuilt.raft/RefusalGate.wedgeGate|{}wedgeGate[0]
+        final fun <get-wedgeGate>(): us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate? // us.tractat.kuilt.raft/RefusalGate.wedgeGate.<get-wedgeGate>|<get-wedgeGate>(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.raft/RefusalGate // us.tractat.kuilt.raft/RefusalGate.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.raft/RefusalGate> // us.tractat.kuilt.raft/RefusalGate.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.raft/StepDownReason : kotlin/Enum<us.tractat.kuilt.raft/StepDownReason> { // us.tractat.kuilt.raft/StepDownReason|null[0]
+    enum entry AppendEntriesFromLeader // us.tractat.kuilt.raft/StepDownReason.AppendEntriesFromLeader|null[0]
+    enum entry HigherTermObserved // us.tractat.kuilt.raft/StepDownReason.HigherTermObserved|null[0]
+    enum entry LostQuorum // us.tractat.kuilt.raft/StepDownReason.LostQuorum|null[0]
+    enum entry RemovedFromConfig // us.tractat.kuilt.raft/StepDownReason.RemovedFromConfig|null[0]
+
+    final val entries // us.tractat.kuilt.raft/StepDownReason.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.raft/StepDownReason> // us.tractat.kuilt.raft/StepDownReason.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.raft/StepDownReason // us.tractat.kuilt.raft/StepDownReason.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.raft/StepDownReason> // us.tractat.kuilt.raft/StepDownReason.values|values#static(){}[0]
+}
+
+abstract interface us.tractat.kuilt.raft/RaftNode { // us.tractat.kuilt.raft/RaftNode|null[0]
+    abstract val commitIndex // us.tractat.kuilt.raft/RaftNode.commitIndex|{}commitIndex[0]
+        abstract fun <get-commitIndex>(): kotlinx.coroutines.flow/StateFlow<kotlin/Long> // us.tractat.kuilt.raft/RaftNode.commitIndex.<get-commitIndex>|<get-commitIndex>(){}[0]
+    abstract val committed // us.tractat.kuilt.raft/RaftNode.committed|{}committed[0]
+        abstract fun <get-committed>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/Committed> // us.tractat.kuilt.raft/RaftNode.committed.<get-committed>|<get-committed>(){}[0]
+    abstract val compactionFloor // us.tractat.kuilt.raft/RaftNode.compactionFloor|{}compactionFloor[0]
+        abstract fun <get-compactionFloor>(): kotlinx.coroutines.flow/StateFlow<kotlin/Long> // us.tractat.kuilt.raft/RaftNode.compactionFloor.<get-compactionFloor>|<get-compactionFloor>(){}[0]
+    abstract val leader // us.tractat.kuilt.raft/RaftNode.leader|{}leader[0]
+        abstract fun <get-leader>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.raft/NodeId?> // us.tractat.kuilt.raft/RaftNode.leader.<get-leader>|<get-leader>(){}[0]
+    abstract val membership // us.tractat.kuilt.raft/RaftNode.membership|{}membership[0]
+        abstract fun <get-membership>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.raft/ClusterConfig> // us.tractat.kuilt.raft/RaftNode.membership.<get-membership>|<get-membership>(){}[0]
+    abstract val role // us.tractat.kuilt.raft/RaftNode.role|{}role[0]
+        abstract fun <get-role>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.raft/RaftRole> // us.tractat.kuilt.raft/RaftNode.role.<get-role>|<get-role>(){}[0]
+    abstract val snapshots // us.tractat.kuilt.raft/RaftNode.snapshots|{}snapshots[0]
+        abstract fun <get-snapshots>(): kotlinx.coroutines.flow/MutableStateFlow<us.tractat.kuilt.raft/Snapshot?> // us.tractat.kuilt.raft/RaftNode.snapshots.<get-snapshots>|<get-snapshots>(){}[0]
+    abstract val trace // us.tractat.kuilt.raft/RaftNode.trace|{}trace[0]
+        abstract fun <get-trace>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/RaftTraceEvent> // us.tractat.kuilt.raft/RaftNode.trace.<get-trace>|<get-trace>(){}[0]
+
+    abstract fun committedFrom(kotlin/Long): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/Committed> // us.tractat.kuilt.raft/RaftNode.committedFrom|committedFrom(kotlin.Long){}[0]
+    abstract suspend fun close() // us.tractat.kuilt.raft/RaftNode.close|close(){}[0]
+    abstract suspend fun propose(kotlin/ByteArray): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft/RaftNode.propose|propose(kotlin.ByteArray){}[0]
+    abstract suspend fun propose(kotlin/ByteArray, kotlin/Long): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft/RaftNode.propose|propose(kotlin.ByteArray;kotlin.Long){}[0]
+    open fun cancelTransfer() // us.tractat.kuilt.raft/RaftNode.cancelTransfer|cancelTransfer(){}[0]
+    open suspend fun awaitLeadership() // us.tractat.kuilt.raft/RaftNode.awaitLeadership|awaitLeadership(){}[0]
+    open suspend fun changeMembership(us.tractat.kuilt.raft/ClusterConfig): us.tractat.kuilt.raft/ClusterConfig // us.tractat.kuilt.raft/RaftNode.changeMembership|changeMembership(us.tractat.kuilt.raft.ClusterConfig){}[0]
+    open suspend fun readIndex(): kotlin/Long // us.tractat.kuilt.raft/RaftNode.readIndex|readIndex(){}[0]
+    open suspend fun transferLeadership(us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft/RaftNode.transferLeadership|transferLeadership(us.tractat.kuilt.raft.NodeId){}[0]
+}
+
+abstract interface us.tractat.kuilt.raft/RaftStorage { // us.tractat.kuilt.raft/RaftStorage|null[0]
+    abstract suspend fun appendEntries(kotlin.collections/List<us.tractat.kuilt.raft/LogEntry>) // us.tractat.kuilt.raft/RaftStorage.appendEntries|appendEntries(kotlin.collections.List<us.tractat.kuilt.raft.LogEntry>){}[0]
+    abstract suspend fun discardLogPrefix(kotlin/Long) // us.tractat.kuilt.raft/RaftStorage.discardLogPrefix|discardLogPrefix(kotlin.Long){}[0]
+    abstract suspend fun entries(kotlin/Long = ...): kotlin.collections/List<us.tractat.kuilt.raft/LogEntry> // us.tractat.kuilt.raft/RaftStorage.entries|entries(kotlin.Long){}[0]
+    abstract suspend fun leaderForTerm(): us.tractat.kuilt.raft/LeaderForTerm? // us.tractat.kuilt.raft/RaftStorage.leaderForTerm|leaderForTerm(){}[0]
+    abstract suspend fun loadSnapshot(): us.tractat.kuilt.raft/StoredSnapshot? // us.tractat.kuilt.raft/RaftStorage.loadSnapshot|loadSnapshot(){}[0]
+    abstract suspend fun saveLeaderForTerm(kotlin/Long, us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft/RaftStorage.saveLeaderForTerm|saveLeaderForTerm(kotlin.Long;us.tractat.kuilt.raft.NodeId){}[0]
+    abstract suspend fun saveSnapshot(us.tractat.kuilt.raft/SnapshotMeta, kotlin/ByteArray) // us.tractat.kuilt.raft/RaftStorage.saveSnapshot|saveSnapshot(us.tractat.kuilt.raft.SnapshotMeta;kotlin.ByteArray){}[0]
+    abstract suspend fun saveTerm(kotlin/Long) // us.tractat.kuilt.raft/RaftStorage.saveTerm|saveTerm(kotlin.Long){}[0]
+    abstract suspend fun saveTermAndVotedFor(kotlin/Long, us.tractat.kuilt.raft/NodeId?) // us.tractat.kuilt.raft/RaftStorage.saveTermAndVotedFor|saveTermAndVotedFor(kotlin.Long;us.tractat.kuilt.raft.NodeId?){}[0]
+    abstract suspend fun saveVotedFor(us.tractat.kuilt.raft/NodeId?) // us.tractat.kuilt.raft/RaftStorage.saveVotedFor|saveVotedFor(us.tractat.kuilt.raft.NodeId?){}[0]
+    abstract suspend fun term(): kotlin/Long // us.tractat.kuilt.raft/RaftStorage.term|term(){}[0]
+    abstract suspend fun truncateFrom(kotlin/Long) // us.tractat.kuilt.raft/RaftStorage.truncateFrom|truncateFrom(kotlin.Long){}[0]
+    abstract suspend fun votedFor(): us.tractat.kuilt.raft/NodeId? // us.tractat.kuilt.raft/RaftStorage.votedFor|votedFor(){}[0]
+}
+
+abstract interface us.tractat.kuilt.raft/RaftTransport { // us.tractat.kuilt.raft/RaftTransport|null[0]
+    abstract val incoming // us.tractat.kuilt.raft/RaftTransport.incoming|{}incoming[0]
+        abstract fun <get-incoming>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/RaftEnvelope> // us.tractat.kuilt.raft/RaftTransport.incoming.<get-incoming>|<get-incoming>(){}[0]
+    abstract val peers // us.tractat.kuilt.raft/RaftTransport.peers|{}peers[0]
+        abstract fun <get-peers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>> // us.tractat.kuilt.raft/RaftTransport.peers.<get-peers>|<get-peers>(){}[0]
+    abstract val selfId // us.tractat.kuilt.raft/RaftTransport.selfId|{}selfId[0]
+        abstract fun <get-selfId>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTransport.selfId.<get-selfId>|<get-selfId>(){}[0]
+    open val maxPayloadBytes // us.tractat.kuilt.raft/RaftTransport.maxPayloadBytes|{}maxPayloadBytes[0]
+        open fun <get-maxPayloadBytes>(): kotlin/Int? // us.tractat.kuilt.raft/RaftTransport.maxPayloadBytes.<get-maxPayloadBytes>|<get-maxPayloadBytes>(){}[0]
+
+    abstract suspend fun sendTo(us.tractat.kuilt.raft/NodeId, kotlin/ByteArray) // us.tractat.kuilt.raft/RaftTransport.sendTo|sendTo(us.tractat.kuilt.raft.NodeId;kotlin.ByteArray){}[0]
+}
+
+sealed interface us.tractat.kuilt.raft/ClientIdentity { // us.tractat.kuilt.raft/ClientIdentity|null[0]
+    final class Durable : us.tractat.kuilt.raft/ClientIdentity { // us.tractat.kuilt.raft/ClientIdentity.Durable|null[0]
+        constructor <init>(us.tractat.kuilt.raft/ClientId) // us.tractat.kuilt.raft/ClientIdentity.Durable.<init>|<init>(us.tractat.kuilt.raft.ClientId){}[0]
+
+        final val clientId // us.tractat.kuilt.raft/ClientIdentity.Durable.clientId|{}clientId[0]
+            final fun <get-clientId>(): us.tractat.kuilt.raft/ClientId // us.tractat.kuilt.raft/ClientIdentity.Durable.clientId.<get-clientId>|<get-clientId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.raft/ClientId // us.tractat.kuilt.raft/ClientIdentity.Durable.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.raft/ClientId = ...): us.tractat.kuilt.raft/ClientIdentity.Durable // us.tractat.kuilt.raft/ClientIdentity.Durable.copy|copy(us.tractat.kuilt.raft.ClientId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/ClientIdentity.Durable.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/ClientIdentity.Durable.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/ClientIdentity.Durable.toString|toString(){}[0]
+    }
+
+    final object Auto : us.tractat.kuilt.raft/ClientIdentity { // us.tractat.kuilt.raft/ClientIdentity.Auto|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/ClientIdentity.Auto.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/ClientIdentity.Auto.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/ClientIdentity.Auto.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.raft/Committed { // us.tractat.kuilt.raft/Committed|null[0]
+    final class Entry : us.tractat.kuilt.raft/Committed { // us.tractat.kuilt.raft/Committed.Entry|null[0]
+        constructor <init>(us.tractat.kuilt.raft/LogEntry) // us.tractat.kuilt.raft/Committed.Entry.<init>|<init>(us.tractat.kuilt.raft.LogEntry){}[0]
+
+        final val entry // us.tractat.kuilt.raft/Committed.Entry.entry|{}entry[0]
+            final fun <get-entry>(): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft/Committed.Entry.entry.<get-entry>|<get-entry>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft/Committed.Entry.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.raft/LogEntry = ...): us.tractat.kuilt.raft/Committed.Entry // us.tractat.kuilt.raft/Committed.Entry.copy|copy(us.tractat.kuilt.raft.LogEntry){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/Committed.Entry.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/Committed.Entry.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/Committed.Entry.toString|toString(){}[0]
+    }
+
+    final class Install : us.tractat.kuilt.raft/Committed { // us.tractat.kuilt.raft/Committed.Install|null[0]
+        constructor <init>(us.tractat.kuilt.raft/Snapshot) // us.tractat.kuilt.raft/Committed.Install.<init>|<init>(us.tractat.kuilt.raft.Snapshot){}[0]
+
+        final val snapshot // us.tractat.kuilt.raft/Committed.Install.snapshot|{}snapshot[0]
+            final fun <get-snapshot>(): us.tractat.kuilt.raft/Snapshot // us.tractat.kuilt.raft/Committed.Install.snapshot.<get-snapshot>|<get-snapshot>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.raft/Snapshot // us.tractat.kuilt.raft/Committed.Install.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.raft/Snapshot = ...): us.tractat.kuilt.raft/Committed.Install // us.tractat.kuilt.raft/Committed.Install.copy|copy(us.tractat.kuilt.raft.Snapshot){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/Committed.Install.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/Committed.Install.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/Committed.Install.toString|toString(){}[0]
+    }
+
+    final class Internal : us.tractat.kuilt.raft/Committed { // us.tractat.kuilt.raft/Committed.Internal|null[0]
+        constructor <init>(kotlin/Long) // us.tractat.kuilt.raft/Committed.Internal.<init>|<init>(kotlin.Long){}[0]
+
+        final val index // us.tractat.kuilt.raft/Committed.Internal.index|{}index[0]
+            final fun <get-index>(): kotlin/Long // us.tractat.kuilt.raft/Committed.Internal.index.<get-index>|<get-index>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/Committed.Internal.component1|component1(){}[0]
+        final fun copy(kotlin/Long = ...): us.tractat.kuilt.raft/Committed.Internal // us.tractat.kuilt.raft/Committed.Internal.copy|copy(kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/Committed.Internal.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/Committed.Internal.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/Committed.Internal.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric|null[0]
+    final class ElectionStarted : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.ElectionStarted|null[0]
+        constructor <init>(kotlin/Long) // us.tractat.kuilt.raft/RaftMetric.ElectionStarted.<init>|<init>(kotlin.Long){}[0]
+
+        final val term // us.tractat.kuilt.raft/RaftMetric.ElectionStarted.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ElectionStarted.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ElectionStarted.component1|component1(){}[0]
+        final fun copy(kotlin/Long = ...): us.tractat.kuilt.raft/RaftMetric.ElectionStarted // us.tractat.kuilt.raft/RaftMetric.ElectionStarted.copy|copy(kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.ElectionStarted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.ElectionStarted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.ElectionStarted.toString|toString(){}[0]
+    }
+
+    final class ElectionSuppressedTermCeiling : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling|null[0]
+        constructor <init>(kotlin/Long, kotlin/Long) // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
+
+        final val ceiling // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.ceiling|{}ceiling[0]
+            final fun <get-ceiling>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.ceiling.<get-ceiling>|<get-ceiling>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.copy|copy(kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.ElectionSuppressedTermCeiling.toString|toString(){}[0]
+    }
+
+    final class ElectionTimedOut : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.ElectionTimedOut|null[0]
+        constructor <init>(kotlin/Long) // us.tractat.kuilt.raft/RaftMetric.ElectionTimedOut.<init>|<init>(kotlin.Long){}[0]
+
+        final val term // us.tractat.kuilt.raft/RaftMetric.ElectionTimedOut.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ElectionTimedOut.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ElectionTimedOut.component1|component1(){}[0]
+        final fun copy(kotlin/Long = ...): us.tractat.kuilt.raft/RaftMetric.ElectionTimedOut // us.tractat.kuilt.raft/RaftMetric.ElectionTimedOut.copy|copy(kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.ElectionTimedOut.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.ElectionTimedOut.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.ElectionTimedOut.toString|toString(){}[0]
+    }
+
+    final class ElectionWon : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.ElectionWon|null[0]
+        constructor <init>(kotlin/Long, kotlin.time/Duration) // us.tractat.kuilt.raft/RaftMetric.ElectionWon.<init>|<init>(kotlin.Long;kotlin.time.Duration){}[0]
+
+        final val elapsed // us.tractat.kuilt.raft/RaftMetric.ElectionWon.elapsed|{}elapsed[0]
+            final fun <get-elapsed>(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftMetric.ElectionWon.elapsed.<get-elapsed>|<get-elapsed>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftMetric.ElectionWon.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ElectionWon.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ElectionWon.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftMetric.ElectionWon.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin.time/Duration = ...): us.tractat.kuilt.raft/RaftMetric.ElectionWon // us.tractat.kuilt.raft/RaftMetric.ElectionWon.copy|copy(kotlin.Long;kotlin.time.Duration){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.ElectionWon.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.ElectionWon.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.ElectionWon.toString|toString(){}[0]
+    }
+
+    final class LeaderPinDenial : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial|null[0]
+        constructor <init>(us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long, kotlin/Int) // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.<init>|<init>(us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Int){}[0]
+
+        final val pinnedLeader // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.pinnedLeader|{}pinnedLeader[0]
+            final fun <get-pinnedLeader>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.pinnedLeader.<get-pinnedLeader>|<get-pinnedLeader>(){}[0]
+        final val refusedSender // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.refusedSender|{}refusedSender[0]
+            final fun <get-refusedSender>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.refusedSender.<get-refusedSender>|<get-refusedSender>(){}[0]
+        final val run // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.run|{}run[0]
+            final fun <get-run>(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.run.<get-run>|<get-run>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.component3|component3(){}[0]
+        final fun component4(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.component4|component4(){}[0]
+        final fun copy(us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., kotlin/Int = ...): us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.copy|copy(us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.LeaderPinDenial.toString|toString(){}[0]
+    }
+
+    final class ProposeAccepted : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted|null[0]
+        constructor <init>(kotlin/Long, kotlin/Long) // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
+
+        final val logIndex // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.logIndex|{}logIndex[0]
+            final fun <get-logIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.logIndex.<get-logIndex>|<get-logIndex>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftMetric.ProposeAccepted // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.copy|copy(kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.ProposeAccepted.toString|toString(){}[0]
+    }
+
+    final class ProposeApplied : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.ProposeApplied|null[0]
+        constructor <init>(kotlin/Long, kotlin.time/Duration) // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.<init>|<init>(kotlin.Long;kotlin.time.Duration){}[0]
+
+        final val elapsed // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.elapsed|{}elapsed[0]
+            final fun <get-elapsed>(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.elapsed.<get-elapsed>|<get-elapsed>(){}[0]
+        final val logIndex // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.logIndex|{}logIndex[0]
+            final fun <get-logIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.logIndex.<get-logIndex>|<get-logIndex>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin.time/Duration = ...): us.tractat.kuilt.raft/RaftMetric.ProposeApplied // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.copy|copy(kotlin.Long;kotlin.time.Duration){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.ProposeApplied.toString|toString(){}[0]
+    }
+
+    final class ProposeCommitted : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted|null[0]
+        constructor <init>(kotlin/Long, kotlin.time/Duration) // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.<init>|<init>(kotlin.Long;kotlin.time.Duration){}[0]
+
+        final val elapsed // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.elapsed|{}elapsed[0]
+            final fun <get-elapsed>(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.elapsed.<get-elapsed>|<get-elapsed>(){}[0]
+        final val logIndex // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.logIndex|{}logIndex[0]
+            final fun <get-logIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.logIndex.<get-logIndex>|<get-logIndex>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin.time/Duration = ...): us.tractat.kuilt.raft/RaftMetric.ProposeCommitted // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.copy|copy(kotlin.Long;kotlin.time.Duration){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.ProposeCommitted.toString|toString(){}[0]
+    }
+
+    final class SnapshotChunkEnvelopeOverBudget : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget|null[0]
+        constructor <init>(us.tractat.kuilt.raft/NodeId, kotlin/Int, kotlin/Int) // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.<init>|<init>(us.tractat.kuilt.raft.NodeId;kotlin.Int;kotlin.Int){}[0]
+
+        final val budgetBytes // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.budgetBytes|{}budgetBytes[0]
+            final fun <get-budgetBytes>(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.budgetBytes.<get-budgetBytes>|<get-budgetBytes>(){}[0]
+        final val peer // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.peer|{}peer[0]
+            final fun <get-peer>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.peer.<get-peer>|<get-peer>(){}[0]
+        final val reservedBytes // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.reservedBytes|{}reservedBytes[0]
+            final fun <get-reservedBytes>(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.reservedBytes.<get-reservedBytes>|<get-reservedBytes>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.component1|component1(){}[0]
+        final fun component2(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.component2|component2(){}[0]
+        final fun component3(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.raft/NodeId = ..., kotlin/Int = ..., kotlin/Int = ...): us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.copy|copy(us.tractat.kuilt.raft.NodeId;kotlin.Int;kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.SnapshotChunkEnvelopeOverBudget.toString|toString(){}[0]
+    }
+
+    final class SnapshotRejectedSizeCeiling : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling|null[0]
+        constructor <init>(kotlin/Long, kotlin/Int) // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.<init>|<init>(kotlin.Long;kotlin.Int){}[0]
+
+        final val attemptedTotal // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.attemptedTotal|{}attemptedTotal[0]
+            final fun <get-attemptedTotal>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.attemptedTotal.<get-attemptedTotal>|<get-attemptedTotal>(){}[0]
+        final val ceiling // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.ceiling|{}ceiling[0]
+            final fun <get-ceiling>(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.ceiling.<get-ceiling>|<get-ceiling>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.component1|component1(){}[0]
+        final fun component2(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Int = ...): us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.copy|copy(kotlin.Long;kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.SnapshotRejectedSizeCeiling.toString|toString(){}[0]
+    }
+
+    final class WedgeSuspected : us.tractat.kuilt.raft/RaftMetric { // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected|null[0]
+        constructor <init>(us.tractat.kuilt.raft/NodeId, kotlin/Long, kotlin/Long, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>, us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate) // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.<init>|<init>(us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;us.tractat.kuilt.raft.RaftMetric.WedgeSuspected.Gate){}[0]
+
+        final val gate // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.gate|{}gate[0]
+            final fun <get-gate>(): us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.gate.<get-gate>|<get-gate>(){}[0]
+        final val ourTerm // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.ourTerm|{}ourTerm[0]
+            final fun <get-ourTerm>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.ourTerm.<get-ourTerm>|<get-ourTerm>(){}[0]
+        final val ourVoters // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.ourVoters|{}ourVoters[0]
+            final fun <get-ourVoters>(): kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.ourVoters.<get-ourVoters>|<get-ourVoters>(){}[0]
+        final val sender // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.sender|{}sender[0]
+            final fun <get-sender>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.sender.<get-sender>|<get-sender>(){}[0]
+        final val senderTerm // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.senderTerm|{}senderTerm[0]
+            final fun <get-senderTerm>(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.senderTerm.<get-senderTerm>|<get-senderTerm>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.component3|component3(){}[0]
+        final fun component4(): kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.component4|component4(){}[0]
+        final fun component5(): us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.component5|component5(){}[0]
+        final fun copy(us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> = ..., us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate = ...): us.tractat.kuilt.raft/RaftMetric.WedgeSuspected // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.copy|copy(us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;us.tractat.kuilt.raft.RaftMetric.WedgeSuspected.Gate){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.toString|toString(){}[0]
+
+        final enum class Gate : kotlin/Enum<us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate> { // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate|null[0]
+            enum entry LeaderAuthority // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate.LeaderAuthority|null[0]
+            enum entry TermJump // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate.TermJump|null[0]
+
+            final val entries // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate.entries|#static{}entries[0]
+                final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate> // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate.entries.<get-entries>|<get-entries>#static(){}[0]
+
+            final fun valueOf(kotlin/String): us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate.valueOf|valueOf#static(kotlin.String){}[0]
+            final fun values(): kotlin/Array<us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate> // us.tractat.kuilt.raft/RaftMetric.WedgeSuspected.Gate.values|values#static(){}[0]
+        }
+    }
+}
+
+sealed interface us.tractat.kuilt.raft/RaftRole { // us.tractat.kuilt.raft/RaftRole|null[0]
+    final object Candidate : us.tractat.kuilt.raft/RaftRole { // us.tractat.kuilt.raft/RaftRole.Candidate|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftRole.Candidate.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftRole.Candidate.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftRole.Candidate.toString|toString(){}[0]
+    }
+
+    final object Follower : us.tractat.kuilt.raft/RaftRole { // us.tractat.kuilt.raft/RaftRole.Follower|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftRole.Follower.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftRole.Follower.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftRole.Follower.toString|toString(){}[0]
+    }
+
+    final object Leader : us.tractat.kuilt.raft/RaftRole { // us.tractat.kuilt.raft/RaftRole.Leader|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftRole.Leader.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftRole.Leader.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftRole.Leader.toString|toString(){}[0]
+    }
+
+    final object Learner : us.tractat.kuilt.raft/RaftRole { // us.tractat.kuilt.raft/RaftRole.Learner|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftRole.Learner.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftRole.Learner.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftRole.Learner.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent|null[0]
+    abstract val clock // us.tractat.kuilt.raft/RaftTraceEvent.clock|{}clock[0]
+        abstract fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.clock.<get-clock>|<get-clock>(){}[0]
+
+    final class AdvanceCommitIndex : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, kotlin/Long, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.clock.<get-clock>|<get-clock>(){}[0]
+        final val newCommitIndex // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.newCommitIndex|{}newCommitIndex[0]
+            final fun <get-newCommitIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.newCommitIndex.<get-newCommitIndex>|<get-newCommitIndex>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.node.<get-node>|<get-node>(){}[0]
+        final val oldCommitIndex // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.oldCommitIndex|{}oldCommitIndex[0]
+            final fun <get-oldCommitIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.oldCommitIndex.<get-oldCommitIndex>|<get-oldCommitIndex>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.AdvanceCommitIndex.toString|toString(){}[0]
+    }
+
+    final class AppendEntries : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long, kotlin/Long, kotlin/Long, kotlin/Int, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Int;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.clock.<get-clock>|<get-clock>(){}[0]
+        final val entryCount // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.entryCount|{}entryCount[0]
+            final fun <get-entryCount>(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.entryCount.<get-entryCount>|<get-entryCount>(){}[0]
+        final val from // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.from|{}from[0]
+            final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.from.<get-from>|<get-from>(){}[0]
+        final val leaderCommit // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.leaderCommit|{}leaderCommit[0]
+            final fun <get-leaderCommit>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.leaderCommit.<get-leaderCommit>|<get-leaderCommit>(){}[0]
+        final val prevLogIndex // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.prevLogIndex|{}prevLogIndex[0]
+            final fun <get-prevLogIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.prevLogIndex.<get-prevLogIndex>|<get-prevLogIndex>(){}[0]
+        final val prevLogTerm // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.prevLogTerm|{}prevLogTerm[0]
+            final fun <get-prevLogTerm>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.prevLogTerm.<get-prevLogTerm>|<get-prevLogTerm>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.term.<get-term>|<get-term>(){}[0]
+        final val to // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.to|{}to[0]
+            final fun <get-to>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.to.<get-to>|<get-to>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.component4|component4(){}[0]
+        final fun component5(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.component5|component5(){}[0]
+        final fun component6(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.component6|component6(){}[0]
+        final fun component7(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.component7|component7(){}[0]
+        final fun component8(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.component8|component8(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Int;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntries.toString|toString(){}[0]
+    }
+
+    final class AppendEntriesAccepted : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.clock.<get-clock>|<get-clock>(){}[0]
+        final val from // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.from|{}from[0]
+            final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.from.<get-from>|<get-from>(){}[0]
+        final val matchIndex // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.matchIndex|{}matchIndex[0]
+            final fun <get-matchIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.matchIndex.<get-matchIndex>|<get-matchIndex>(){}[0]
+        final val to // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.to|{}to[0]
+            final fun <get-to>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.to.<get-to>|<get-to>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesAccepted.toString|toString(){}[0]
+    }
+
+    final class AppendEntriesRejected : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long?, kotlin/Long?) // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long?;kotlin.Long?){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.clock.<get-clock>|<get-clock>(){}[0]
+        final val conflictIndex // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.conflictIndex|{}conflictIndex[0]
+            final fun <get-conflictIndex>(): kotlin/Long? // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.conflictIndex.<get-conflictIndex>|<get-conflictIndex>(){}[0]
+        final val conflictTerm // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.conflictTerm|{}conflictTerm[0]
+            final fun <get-conflictTerm>(): kotlin/Long? // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.conflictTerm.<get-conflictTerm>|<get-conflictTerm>(){}[0]
+        final val from // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.from|{}from[0]
+            final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.from.<get-from>|<get-from>(){}[0]
+        final val to // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.to|{}to[0]
+            final fun <get-to>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.to.<get-to>|<get-to>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.component3|component3(){}[0]
+        final fun component4(): kotlin/Long? // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.component4|component4(){}[0]
+        final fun component5(): kotlin/Long? // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.component5|component5(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long? = ..., kotlin/Long? = ...): us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long?;kotlin.Long?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.AppendEntriesRejected.toString|toString(){}[0]
+    }
+
+    final class BecomeFollower : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, kotlin/Long, us.tractat.kuilt.raft/StepDownReason) // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long;us.tractat.kuilt.raft.StepDownReason){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.clock.<get-clock>|<get-clock>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.node.<get-node>|<get-node>(){}[0]
+        final val reason // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.raft/StepDownReason // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.reason.<get-reason>|<get-reason>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.component3|component3(){}[0]
+        final fun component4(): us.tractat.kuilt.raft/StepDownReason // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., us.tractat.kuilt.raft/StepDownReason = ...): us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long;us.tractat.kuilt.raft.StepDownReason){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.BecomeFollower.toString|toString(){}[0]
+    }
+
+    final class BecomeLeader : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.clock.<get-clock>|<get-clock>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.node.<get-node>|<get-node>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.component3|component3(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.BecomeLeader.toString|toString(){}[0]
+    }
+
+    final class ClientRequest : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, kotlin/Long, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.clock.<get-clock>|<get-clock>(){}[0]
+        final val index // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.index|{}index[0]
+            final fun <get-index>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.index.<get-index>|<get-index>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.node.<get-node>|<get-node>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.ClientRequest.toString|toString(){}[0]
+    }
+
+    final class Compacted : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.Compacted|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, kotlin/Long, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.clock.<get-clock>|<get-clock>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.node.<get-node>|<get-node>(){}[0]
+        final val throughIndex // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.throughIndex|{}throughIndex[0]
+            final fun <get-throughIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.throughIndex.<get-throughIndex>|<get-throughIndex>(){}[0]
+        final val throughTerm // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.throughTerm|{}throughTerm[0]
+            final fun <get-throughTerm>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.throughTerm.<get-throughTerm>|<get-throughTerm>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.Compacted // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.Compacted.toString|toString(){}[0]
+    }
+
+    final class ConfigChange : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, kotlin/Long, us.tractat.kuilt.raft/ClusterConfig?, us.tractat.kuilt.raft/ClusterConfig) // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long;us.tractat.kuilt.raft.ClusterConfig?;us.tractat.kuilt.raft.ClusterConfig){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.clock.<get-clock>|<get-clock>(){}[0]
+        final val index // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.index|{}index[0]
+            final fun <get-index>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.index.<get-index>|<get-index>(){}[0]
+        final val new // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.new|{}new[0]
+            final fun <get-new>(): us.tractat.kuilt.raft/ClusterConfig // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.new.<get-new>|<get-new>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.node.<get-node>|<get-node>(){}[0]
+        final val old // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.old|{}old[0]
+            final fun <get-old>(): us.tractat.kuilt.raft/ClusterConfig? // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.old.<get-old>|<get-old>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.component3|component3(){}[0]
+        final fun component4(): us.tractat.kuilt.raft/ClusterConfig? // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.component4|component4(){}[0]
+        final fun component5(): us.tractat.kuilt.raft/ClusterConfig // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.component5|component5(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., us.tractat.kuilt.raft/ClusterConfig? = ..., us.tractat.kuilt.raft/ClusterConfig = ...): us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long;us.tractat.kuilt.raft.ClusterConfig?;us.tractat.kuilt.raft.ClusterConfig){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.ConfigChange.toString|toString(){}[0]
+    }
+
+    final class FrameRefused : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/RaftMessageType, us.tractat.kuilt.raft/RefusalGate) // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.RaftMessageType;us.tractat.kuilt.raft.RefusalGate){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.clock.<get-clock>|<get-clock>(){}[0]
+        final val from // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.from|{}from[0]
+            final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.from.<get-from>|<get-from>(){}[0]
+        final val gate // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.gate|{}gate[0]
+            final fun <get-gate>(): us.tractat.kuilt.raft/RefusalGate // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.gate.<get-gate>|<get-gate>(){}[0]
+        final val messageType // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.messageType|{}messageType[0]
+            final fun <get-messageType>(): us.tractat.kuilt.raft/RaftMessageType // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.messageType.<get-messageType>|<get-messageType>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.node.<get-node>|<get-node>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.component3|component3(){}[0]
+        final fun component4(): us.tractat.kuilt.raft/RaftMessageType // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.component4|component4(){}[0]
+        final fun component5(): us.tractat.kuilt.raft/RefusalGate // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.component5|component5(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/RaftMessageType = ..., us.tractat.kuilt.raft/RefusalGate = ...): us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.RaftMessageType;us.tractat.kuilt.raft.RefusalGate){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.FrameRefused.toString|toString(){}[0]
+    }
+
+    final class FrameUndecodable : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Int) // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Int){}[0]
+
+        final val byteCount // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.byteCount|{}byteCount[0]
+            final fun <get-byteCount>(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.byteCount.<get-byteCount>|<get-byteCount>(){}[0]
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.clock.<get-clock>|<get-clock>(){}[0]
+        final val from // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.from|{}from[0]
+            final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.from.<get-from>|<get-from>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.node.<get-node>|<get-node>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.component3|component3(){}[0]
+        final fun component4(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Int = ...): us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.FrameUndecodable.toString|toString(){}[0]
+    }
+
+    final class InstallSnapshot : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long, kotlin/Long, kotlin/Boolean) // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long;kotlin.Boolean){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.clock.<get-clock>|<get-clock>(){}[0]
+        final val done // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.done|{}done[0]
+            final fun <get-done>(): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.done.<get-done>|<get-done>(){}[0]
+        final val from // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.from|{}from[0]
+            final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.from.<get-from>|<get-from>(){}[0]
+        final val lastIncludedIndex // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.lastIncludedIndex|{}lastIncludedIndex[0]
+            final fun <get-lastIncludedIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.lastIncludedIndex.<get-lastIncludedIndex>|<get-lastIncludedIndex>(){}[0]
+        final val offset // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.offset|{}offset[0]
+            final fun <get-offset>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.offset.<get-offset>|<get-offset>(){}[0]
+        final val to // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.to|{}to[0]
+            final fun <get-to>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.to.<get-to>|<get-to>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.component4|component4(){}[0]
+        final fun component5(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.component5|component5(){}[0]
+        final fun component6(): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.component6|component6(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Boolean = ...): us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long;kotlin.Boolean){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshot.toString|toString(){}[0]
+    }
+
+    final class InstallSnapshotAccepted : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.clock.<get-clock>|<get-clock>(){}[0]
+        final val from // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.from|{}from[0]
+            final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.from.<get-from>|<get-from>(){}[0]
+        final val lastIncludedIndex // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.lastIncludedIndex|{}lastIncludedIndex[0]
+            final fun <get-lastIncludedIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.lastIncludedIndex.<get-lastIncludedIndex>|<get-lastIncludedIndex>(){}[0]
+        final val to // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.to|{}to[0]
+            final fun <get-to>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.to.<get-to>|<get-to>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.InstallSnapshotAccepted.toString|toString(){}[0]
+    }
+
+    final class LeadershipTransferAbandoned : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/LeadershipTransferAbandonReason) // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.LeadershipTransferAbandonReason){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.clock.<get-clock>|<get-clock>(){}[0]
+        final val leader // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.leader|{}leader[0]
+            final fun <get-leader>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.leader.<get-leader>|<get-leader>(){}[0]
+        final val reason // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.raft/LeadershipTransferAbandonReason // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.reason.<get-reason>|<get-reason>(){}[0]
+        final val target // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.target|{}target[0]
+            final fun <get-target>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.target.<get-target>|<get-target>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.component3|component3(){}[0]
+        final fun component4(): us.tractat.kuilt.raft/LeadershipTransferAbandonReason // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/LeadershipTransferAbandonReason = ...): us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.LeadershipTransferAbandonReason){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferAbandoned.toString|toString(){}[0]
+    }
+
+    final class LeadershipTransferStarted : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.clock.<get-clock>|<get-clock>(){}[0]
+        final val leader // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.leader|{}leader[0]
+            final fun <get-leader>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.leader.<get-leader>|<get-leader>(){}[0]
+        final val target // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.target|{}target[0]
+            final fun <get-target>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.target.<get-target>|<get-target>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.component3|component3(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ...): us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.LeadershipTransferStarted.toString|toString(){}[0]
+    }
+
+    final class PreVoteDenied : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long, kotlin.collections/Set<us.tractat.kuilt.raft/DenyReason>) // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.collections.Set<us.tractat.kuilt.raft.DenyReason>){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.clock.<get-clock>|<get-clock>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.node.<get-node>|<get-node>(){}[0]
+        final val proposedTerm // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.proposedTerm|{}proposedTerm[0]
+            final fun <get-proposedTerm>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.proposedTerm.<get-proposedTerm>|<get-proposedTerm>(){}[0]
+        final val reason // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.raft/DenyReason // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.reason.<get-reason>|<get-reason>(){}[0]
+        final val reasons // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.reasons|{}reasons[0]
+            final fun <get-reasons>(): kotlin.collections/Set<us.tractat.kuilt.raft/DenyReason> // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.reasons.<get-reasons>|<get-reasons>(){}[0]
+        final val to // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.to|{}to[0]
+            final fun <get-to>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.to.<get-to>|<get-to>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.component4|component4(){}[0]
+        final fun component5(): kotlin.collections/Set<us.tractat.kuilt.raft/DenyReason> // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.component5|component5(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., kotlin.collections/Set<us.tractat.kuilt.raft/DenyReason> = ...): us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.collections.Set<us.tractat.kuilt.raft.DenyReason>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteDenied.toString|toString(){}[0]
+    }
+
+    final class PreVoteGranted : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.clock.<get-clock>|<get-clock>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.node.<get-node>|<get-node>(){}[0]
+        final val proposedTerm // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.proposedTerm|{}proposedTerm[0]
+            final fun <get-proposedTerm>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.proposedTerm.<get-proposedTerm>|<get-proposedTerm>(){}[0]
+        final val to // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.to|{}to[0]
+            final fun <get-to>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.to.<get-to>|<get-to>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteGranted.toString|toString(){}[0]
+    }
+
+    final class PreVoteStarted : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.clock.<get-clock>|<get-clock>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.node.<get-node>|<get-node>(){}[0]
+        final val proposedTerm // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.proposedTerm|{}proposedTerm[0]
+            final fun <get-proposedTerm>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.proposedTerm.<get-proposedTerm>|<get-proposedTerm>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.component3|component3(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.PreVoteStarted.toString|toString(){}[0]
+    }
+
+    final class ReadIndexConfirmed : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed|null[0]
+        constructor <init>(kotlin/Long, kotlin/Long, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.clock.<get-clock>|<get-clock>(){}[0]
+        final val readIndex // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.readIndex|{}readIndex[0]
+            final fun <get-readIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.readIndex.<get-readIndex>|<get-readIndex>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.component3|component3(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.copy|copy(kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.ReadIndexConfirmed.toString|toString(){}[0]
+    }
+
+    final class RequestVote : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long, kotlin/Long, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.clock.<get-clock>|<get-clock>(){}[0]
+        final val from // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.from|{}from[0]
+            final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.from.<get-from>|<get-from>(){}[0]
+        final val lastLogIndex // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.lastLogIndex|{}lastLogIndex[0]
+            final fun <get-lastLogIndex>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.lastLogIndex.<get-lastLogIndex>|<get-lastLogIndex>(){}[0]
+        final val lastLogTerm // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.lastLogTerm|{}lastLogTerm[0]
+            final fun <get-lastLogTerm>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.lastLogTerm.<get-lastLogTerm>|<get-lastLogTerm>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.term.<get-term>|<get-term>(){}[0]
+        final val to // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.to|{}to[0]
+            final fun <get-to>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.to.<get-to>|<get-to>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.component4|component4(){}[0]
+        final fun component5(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.component5|component5(){}[0]
+        final fun component6(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.component6|component6(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.RequestVote // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.RequestVote.toString|toString(){}[0]
+    }
+
+    final class Timeout : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.Timeout|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.clock.<get-clock>|<get-clock>(){}[0]
+        final val newTerm // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.newTerm|{}newTerm[0]
+            final fun <get-newTerm>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.newTerm.<get-newTerm>|<get-newTerm>(){}[0]
+        final val node // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.node|{}node[0]
+            final fun <get-node>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.node.<get-node>|<get-node>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.component3|component3(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.Timeout // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.Timeout.toString|toString(){}[0]
+    }
+
+    final class VoteDenied : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long, kotlin.collections/Set<us.tractat.kuilt.raft/DenyReason>) // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.collections.Set<us.tractat.kuilt.raft.DenyReason>){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.clock.<get-clock>|<get-clock>(){}[0]
+        final val from // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.from|{}from[0]
+            final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.from.<get-from>|<get-from>(){}[0]
+        final val reason // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.raft/DenyReason // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.reason.<get-reason>|<get-reason>(){}[0]
+        final val reasons // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.reasons|{}reasons[0]
+            final fun <get-reasons>(): kotlin.collections/Set<us.tractat.kuilt.raft/DenyReason> // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.reasons.<get-reasons>|<get-reasons>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.term.<get-term>|<get-term>(){}[0]
+        final val to // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.to|{}to[0]
+            final fun <get-to>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.to.<get-to>|<get-to>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.component4|component4(){}[0]
+        final fun component5(): kotlin.collections/Set<us.tractat.kuilt.raft/DenyReason> // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.component5|component5(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ..., kotlin.collections/Set<us.tractat.kuilt.raft/DenyReason> = ...): us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long;kotlin.collections.Set<us.tractat.kuilt.raft.DenyReason>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.VoteDenied.toString|toString(){}[0]
+    }
+
+    final class VoteGranted : us.tractat.kuilt.raft/RaftTraceEvent { // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/Long) // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+
+        final val clock // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.clock|{}clock[0]
+            final fun <get-clock>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.clock.<get-clock>|<get-clock>(){}[0]
+        final val from // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.from|{}from[0]
+            final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.from.<get-from>|<get-from>(){}[0]
+        final val term // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.term|{}term[0]
+            final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.term.<get-term>|<get-term>(){}[0]
+        final val to // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.to|{}to[0]
+            final fun <get-to>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.to.<get-to>|<get-to>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/NodeId = ..., kotlin/Long = ...): us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftTraceEvent.VoteGranted.toString|toString(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.raft/ClientIdCollisionException : kotlin/IllegalStateException { // us.tractat.kuilt.raft/ClientIdCollisionException|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.raft/ClientIdCollisionException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.raft/ClientSessionTable { // us.tractat.kuilt.raft/ClientSessionTable|null[0]
+    constructor <init>() // us.tractat.kuilt.raft/ClientSessionTable.<init>|<init>(){}[0]
+
+    final fun closeSession(us.tractat.kuilt.raft/ClientId) // us.tractat.kuilt.raft/ClientSessionTable.closeSession|closeSession(us.tractat.kuilt.raft.ClientId){}[0]
+    final fun shouldApply(us.tractat.kuilt.raft/DedupKey?): kotlin/Boolean // us.tractat.kuilt.raft/ClientSessionTable.shouldApply|shouldApply(us.tractat.kuilt.raft.DedupKey?){}[0]
+    final fun toBytes(): kotlin/ByteArray // us.tractat.kuilt.raft/ClientSessionTable.toBytes|toBytes(){}[0]
+
+    final object Companion { // us.tractat.kuilt.raft/ClientSessionTable.Companion|null[0]
+        final fun fromBytes(kotlin/ByteArray): us.tractat.kuilt.raft/ClientSessionTable // us.tractat.kuilt.raft/ClientSessionTable.Companion.fromBytes|fromBytes(kotlin.ByteArray){}[0]
+    }
+}
+
+final class us.tractat.kuilt.raft/ClusterConfig { // us.tractat.kuilt.raft/ClusterConfig|null[0]
+    constructor <init>(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> = ...) // us.tractat.kuilt.raft/ClusterConfig.<init>|<init>(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+
+    final val allMembers // us.tractat.kuilt.raft/ClusterConfig.allMembers|{}allMembers[0]
+        final fun <get-allMembers>(): kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.raft/ClusterConfig.allMembers.<get-allMembers>|<get-allMembers>(){}[0]
+    final val learners // us.tractat.kuilt.raft/ClusterConfig.learners|{}learners[0]
+        final fun <get-learners>(): kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.raft/ClusterConfig.learners.<get-learners>|<get-learners>(){}[0]
+    final val quorumSize // us.tractat.kuilt.raft/ClusterConfig.quorumSize|{}quorumSize[0]
+        final fun <get-quorumSize>(): kotlin/Int // us.tractat.kuilt.raft/ClusterConfig.quorumSize.<get-quorumSize>|<get-quorumSize>(){}[0]
+    final val voters // us.tractat.kuilt.raft/ClusterConfig.voters|{}voters[0]
+        final fun <get-voters>(): kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.raft/ClusterConfig.voters.<get-voters>|<get-voters>(){}[0]
+
+    final fun component1(): kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.raft/ClusterConfig.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.raft/ClusterConfig.component2|component2(){}[0]
+    final fun copy(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> = ..., kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> = ...): us.tractat.kuilt.raft/ClusterConfig // us.tractat.kuilt.raft/ClusterConfig.copy|copy(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/ClusterConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/ClusterConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/ClusterConfig.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.raft/ClusterConfig> { // us.tractat.kuilt.raft/ClusterConfig.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.raft/ClusterConfig.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.raft/ClusterConfig.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.raft/ClusterConfig.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.raft/ClusterConfig // us.tractat.kuilt.raft/ClusterConfig.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.raft/ClusterConfig) // us.tractat.kuilt.raft/ClusterConfig.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.raft.ClusterConfig){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.raft/ClusterConfig.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.raft/ClusterConfig.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun ofVoters(kotlin.collections/Collection<us.tractat.kuilt.raft/NodeId>): us.tractat.kuilt.raft/ClusterConfig // us.tractat.kuilt.raft/ClusterConfig.Companion.ofVoters|ofVoters(kotlin.collections.Collection<us.tractat.kuilt.raft.NodeId>){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.raft/ClusterConfig> // us.tractat.kuilt.raft/ClusterConfig.Companion.serializer|serializer(){}[0]
+        final fun withLearner(kotlin.collections/Iterable<us.tractat.kuilt.raft/NodeId>, us.tractat.kuilt.raft/NodeId): us.tractat.kuilt.raft/ClusterConfig // us.tractat.kuilt.raft/ClusterConfig.Companion.withLearner|withLearner(kotlin.collections.Iterable<us.tractat.kuilt.raft.NodeId>;us.tractat.kuilt.raft.NodeId){}[0]
+    }
+}
+
+final class us.tractat.kuilt.raft/ConfigPayload { // us.tractat.kuilt.raft/ConfigPayload|null[0]
+    constructor <init>(us.tractat.kuilt.raft/ClusterConfig?, us.tractat.kuilt.raft/ClusterConfig) // us.tractat.kuilt.raft/ConfigPayload.<init>|<init>(us.tractat.kuilt.raft.ClusterConfig?;us.tractat.kuilt.raft.ClusterConfig){}[0]
+
+    final val new // us.tractat.kuilt.raft/ConfigPayload.new|{}new[0]
+        final fun <get-new>(): us.tractat.kuilt.raft/ClusterConfig // us.tractat.kuilt.raft/ConfigPayload.new.<get-new>|<get-new>(){}[0]
+    final val old // us.tractat.kuilt.raft/ConfigPayload.old|{}old[0]
+        final fun <get-old>(): us.tractat.kuilt.raft/ClusterConfig? // us.tractat.kuilt.raft/ConfigPayload.old.<get-old>|<get-old>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.raft/ClusterConfig? // us.tractat.kuilt.raft/ConfigPayload.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.raft/ClusterConfig // us.tractat.kuilt.raft/ConfigPayload.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.raft/ClusterConfig? = ..., us.tractat.kuilt.raft/ClusterConfig = ...): us.tractat.kuilt.raft/ConfigPayload // us.tractat.kuilt.raft/ConfigPayload.copy|copy(us.tractat.kuilt.raft.ClusterConfig?;us.tractat.kuilt.raft.ClusterConfig){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/ConfigPayload.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/ConfigPayload.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/ConfigPayload.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.raft/ConfigPayload> { // us.tractat.kuilt.raft/ConfigPayload.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.raft/ConfigPayload.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.raft/ConfigPayload.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.raft/ConfigPayload.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.raft/ConfigPayload // us.tractat.kuilt.raft/ConfigPayload.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.raft/ConfigPayload) // us.tractat.kuilt.raft/ConfigPayload.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.raft.ConfigPayload){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.raft/ConfigPayload.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.raft/ConfigPayload> // us.tractat.kuilt.raft/ConfigPayload.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.raft/CorruptDurableStateException : kotlin/IllegalStateException { // us.tractat.kuilt.raft/CorruptDurableStateException|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.raft/CorruptDurableStateException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.raft/DedupKey { // us.tractat.kuilt.raft/DedupKey|null[0]
+    constructor <init>(us.tractat.kuilt.raft/ClientId, kotlin/Long) // us.tractat.kuilt.raft/DedupKey.<init>|<init>(us.tractat.kuilt.raft.ClientId;kotlin.Long){}[0]
+
+    final val clientId // us.tractat.kuilt.raft/DedupKey.clientId|{}clientId[0]
+        final fun <get-clientId>(): us.tractat.kuilt.raft/ClientId // us.tractat.kuilt.raft/DedupKey.clientId.<get-clientId>|<get-clientId>(){}[0]
+    final val requestId // us.tractat.kuilt.raft/DedupKey.requestId|{}requestId[0]
+        final fun <get-requestId>(): kotlin/Long // us.tractat.kuilt.raft/DedupKey.requestId.<get-requestId>|<get-requestId>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.raft/ClientId // us.tractat.kuilt.raft/DedupKey.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.raft/DedupKey.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.raft/ClientId = ..., kotlin/Long = ...): us.tractat.kuilt.raft/DedupKey // us.tractat.kuilt.raft/DedupKey.copy|copy(us.tractat.kuilt.raft.ClientId;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/DedupKey.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/DedupKey.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/DedupKey.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.raft/DedupKey> { // us.tractat.kuilt.raft/DedupKey.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.raft/DedupKey.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.raft/DedupKey.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.raft/DedupKey.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.raft/DedupKey // us.tractat.kuilt.raft/DedupKey.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.raft/DedupKey) // us.tractat.kuilt.raft/DedupKey.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.raft.DedupKey){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.raft/DedupKey.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.raft/DedupKey> // us.tractat.kuilt.raft/DedupKey.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.raft/DurableStoreRaftStorage : us.tractat.kuilt.raft/RaftStorage { // us.tractat.kuilt.raft/DurableStoreRaftStorage|null[0]
+    final suspend fun appendEntries(kotlin.collections/List<us.tractat.kuilt.raft/LogEntry>) // us.tractat.kuilt.raft/DurableStoreRaftStorage.appendEntries|appendEntries(kotlin.collections.List<us.tractat.kuilt.raft.LogEntry>){}[0]
+    final suspend fun discardLogPrefix(kotlin/Long) // us.tractat.kuilt.raft/DurableStoreRaftStorage.discardLogPrefix|discardLogPrefix(kotlin.Long){}[0]
+    final suspend fun entries(kotlin/Long): kotlin.collections/List<us.tractat.kuilt.raft/LogEntry> // us.tractat.kuilt.raft/DurableStoreRaftStorage.entries|entries(kotlin.Long){}[0]
+    final suspend fun leaderForTerm(): us.tractat.kuilt.raft/LeaderForTerm? // us.tractat.kuilt.raft/DurableStoreRaftStorage.leaderForTerm|leaderForTerm(){}[0]
+    final suspend fun loadSnapshot(): us.tractat.kuilt.raft/StoredSnapshot? // us.tractat.kuilt.raft/DurableStoreRaftStorage.loadSnapshot|loadSnapshot(){}[0]
+    final suspend fun saveLeaderForTerm(kotlin/Long, us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft/DurableStoreRaftStorage.saveLeaderForTerm|saveLeaderForTerm(kotlin.Long;us.tractat.kuilt.raft.NodeId){}[0]
+    final suspend fun saveSnapshot(us.tractat.kuilt.raft/SnapshotMeta, kotlin/ByteArray) // us.tractat.kuilt.raft/DurableStoreRaftStorage.saveSnapshot|saveSnapshot(us.tractat.kuilt.raft.SnapshotMeta;kotlin.ByteArray){}[0]
+    final suspend fun saveTerm(kotlin/Long) // us.tractat.kuilt.raft/DurableStoreRaftStorage.saveTerm|saveTerm(kotlin.Long){}[0]
+    final suspend fun saveTermAndVotedFor(kotlin/Long, us.tractat.kuilt.raft/NodeId?) // us.tractat.kuilt.raft/DurableStoreRaftStorage.saveTermAndVotedFor|saveTermAndVotedFor(kotlin.Long;us.tractat.kuilt.raft.NodeId?){}[0]
+    final suspend fun saveVotedFor(us.tractat.kuilt.raft/NodeId?) // us.tractat.kuilt.raft/DurableStoreRaftStorage.saveVotedFor|saveVotedFor(us.tractat.kuilt.raft.NodeId?){}[0]
+    final suspend fun term(): kotlin/Long // us.tractat.kuilt.raft/DurableStoreRaftStorage.term|term(){}[0]
+    final suspend fun truncateFrom(kotlin/Long) // us.tractat.kuilt.raft/DurableStoreRaftStorage.truncateFrom|truncateFrom(kotlin.Long){}[0]
+    final suspend fun votedFor(): us.tractat.kuilt.raft/NodeId? // us.tractat.kuilt.raft/DurableStoreRaftStorage.votedFor|votedFor(){}[0]
+
+    final object Companion { // us.tractat.kuilt.raft/DurableStoreRaftStorage.Companion|null[0]
+        final val LOG_KEY // us.tractat.kuilt.raft/DurableStoreRaftStorage.Companion.LOG_KEY|{}LOG_KEY[0]
+            final fun <get-LOG_KEY>(): us.tractat.kuilt.store/StoreKey // us.tractat.kuilt.raft/DurableStoreRaftStorage.Companion.LOG_KEY.<get-LOG_KEY>|<get-LOG_KEY>(){}[0]
+        final val META_KEY // us.tractat.kuilt.raft/DurableStoreRaftStorage.Companion.META_KEY|{}META_KEY[0]
+            final fun <get-META_KEY>(): us.tractat.kuilt.store/StoreKey // us.tractat.kuilt.raft/DurableStoreRaftStorage.Companion.META_KEY.<get-META_KEY>|<get-META_KEY>(){}[0]
+        final val SNAPSHOT_KEY // us.tractat.kuilt.raft/DurableStoreRaftStorage.Companion.SNAPSHOT_KEY|{}SNAPSHOT_KEY[0]
+            final fun <get-SNAPSHOT_KEY>(): us.tractat.kuilt.store/StoreKey // us.tractat.kuilt.raft/DurableStoreRaftStorage.Companion.SNAPSHOT_KEY.<get-SNAPSHOT_KEY>|<get-SNAPSHOT_KEY>(){}[0]
+
+        final suspend fun open(us.tractat.kuilt.store/DurableStore): us.tractat.kuilt.raft/DurableStoreRaftStorage // us.tractat.kuilt.raft/DurableStoreRaftStorage.Companion.open|open(us.tractat.kuilt.store.DurableStore){}[0]
+    }
+}
+
+final class us.tractat.kuilt.raft/ForwardedProposalFailedException : kotlin/Exception { // us.tractat.kuilt.raft/ForwardedProposalFailedException|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.raft/ForwardedProposalFailedException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.raft/InMemoryRaftStorage : us.tractat.kuilt.raft/RaftStorage { // us.tractat.kuilt.raft/InMemoryRaftStorage|null[0]
+    constructor <init>() // us.tractat.kuilt.raft/InMemoryRaftStorage.<init>|<init>(){}[0]
+
+    final suspend fun appendEntries(kotlin.collections/List<us.tractat.kuilt.raft/LogEntry>) // us.tractat.kuilt.raft/InMemoryRaftStorage.appendEntries|appendEntries(kotlin.collections.List<us.tractat.kuilt.raft.LogEntry>){}[0]
+    final suspend fun discardLogPrefix(kotlin/Long) // us.tractat.kuilt.raft/InMemoryRaftStorage.discardLogPrefix|discardLogPrefix(kotlin.Long){}[0]
+    final suspend fun entries(kotlin/Long): kotlin.collections/List<us.tractat.kuilt.raft/LogEntry> // us.tractat.kuilt.raft/InMemoryRaftStorage.entries|entries(kotlin.Long){}[0]
+    final suspend fun leaderForTerm(): us.tractat.kuilt.raft/LeaderForTerm? // us.tractat.kuilt.raft/InMemoryRaftStorage.leaderForTerm|leaderForTerm(){}[0]
+    final suspend fun loadSnapshot(): us.tractat.kuilt.raft/StoredSnapshot? // us.tractat.kuilt.raft/InMemoryRaftStorage.loadSnapshot|loadSnapshot(){}[0]
+    final suspend fun saveLeaderForTerm(kotlin/Long, us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft/InMemoryRaftStorage.saveLeaderForTerm|saveLeaderForTerm(kotlin.Long;us.tractat.kuilt.raft.NodeId){}[0]
+    final suspend fun saveSnapshot(us.tractat.kuilt.raft/SnapshotMeta, kotlin/ByteArray) // us.tractat.kuilt.raft/InMemoryRaftStorage.saveSnapshot|saveSnapshot(us.tractat.kuilt.raft.SnapshotMeta;kotlin.ByteArray){}[0]
+    final suspend fun saveTerm(kotlin/Long) // us.tractat.kuilt.raft/InMemoryRaftStorage.saveTerm|saveTerm(kotlin.Long){}[0]
+    final suspend fun saveTermAndVotedFor(kotlin/Long, us.tractat.kuilt.raft/NodeId?) // us.tractat.kuilt.raft/InMemoryRaftStorage.saveTermAndVotedFor|saveTermAndVotedFor(kotlin.Long;us.tractat.kuilt.raft.NodeId?){}[0]
+    final suspend fun saveVotedFor(us.tractat.kuilt.raft/NodeId?) // us.tractat.kuilt.raft/InMemoryRaftStorage.saveVotedFor|saveVotedFor(us.tractat.kuilt.raft.NodeId?){}[0]
+    final suspend fun term(): kotlin/Long // us.tractat.kuilt.raft/InMemoryRaftStorage.term|term(){}[0]
+    final suspend fun truncateFrom(kotlin/Long) // us.tractat.kuilt.raft/InMemoryRaftStorage.truncateFrom|truncateFrom(kotlin.Long){}[0]
+    final suspend fun votedFor(): us.tractat.kuilt.raft/NodeId? // us.tractat.kuilt.raft/InMemoryRaftStorage.votedFor|votedFor(){}[0]
+}
+
+final class us.tractat.kuilt.raft/LeaderForTerm { // us.tractat.kuilt.raft/LeaderForTerm|null[0]
+    constructor <init>(kotlin/Long, us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft/LeaderForTerm.<init>|<init>(kotlin.Long;us.tractat.kuilt.raft.NodeId){}[0]
+
+    final val leaderId // us.tractat.kuilt.raft/LeaderForTerm.leaderId|{}leaderId[0]
+        final fun <get-leaderId>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/LeaderForTerm.leaderId.<get-leaderId>|<get-leaderId>(){}[0]
+    final val term // us.tractat.kuilt.raft/LeaderForTerm.term|{}term[0]
+        final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/LeaderForTerm.term.<get-term>|<get-term>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.raft/LeaderForTerm.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/LeaderForTerm.component2|component2(){}[0]
+    final fun copy(kotlin/Long = ..., us.tractat.kuilt.raft/NodeId = ...): us.tractat.kuilt.raft/LeaderForTerm // us.tractat.kuilt.raft/LeaderForTerm.copy|copy(kotlin.Long;us.tractat.kuilt.raft.NodeId){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/LeaderForTerm.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/LeaderForTerm.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/LeaderForTerm.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.raft/LeadershipLostException : kotlin/Exception { // us.tractat.kuilt.raft/LeadershipLostException|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.raft/LeadershipLostException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.raft/LeadershipTransferException : kotlin/Exception { // us.tractat.kuilt.raft/LeadershipTransferException|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.raft/LeadershipTransferException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.raft/LogEntry { // us.tractat.kuilt.raft/LogEntry|null[0]
+    constructor <init>(kotlin/Long, kotlin/Long, kotlin/ByteArray, kotlin/Boolean = ..., us.tractat.kuilt.raft/ConfigPayload? = ..., us.tractat.kuilt.raft/DedupKey? = ...) // us.tractat.kuilt.raft/LogEntry.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.ByteArray;kotlin.Boolean;us.tractat.kuilt.raft.ConfigPayload?;us.tractat.kuilt.raft.DedupKey?){}[0]
+
+    final val command // us.tractat.kuilt.raft/LogEntry.command|{}command[0]
+        final fun <get-command>(): kotlin/ByteArray // us.tractat.kuilt.raft/LogEntry.command.<get-command>|<get-command>(){}[0]
+    final val config // us.tractat.kuilt.raft/LogEntry.config|{}config[0]
+        final fun <get-config>(): us.tractat.kuilt.raft/ConfigPayload? // us.tractat.kuilt.raft/LogEntry.config.<get-config>|<get-config>(){}[0]
+    final val dedupKey // us.tractat.kuilt.raft/LogEntry.dedupKey|{}dedupKey[0]
+        final fun <get-dedupKey>(): us.tractat.kuilt.raft/DedupKey? // us.tractat.kuilt.raft/LogEntry.dedupKey.<get-dedupKey>|<get-dedupKey>(){}[0]
+    final val index // us.tractat.kuilt.raft/LogEntry.index|{}index[0]
+        final fun <get-index>(): kotlin/Long // us.tractat.kuilt.raft/LogEntry.index.<get-index>|<get-index>(){}[0]
+    final val isNoOp // us.tractat.kuilt.raft/LogEntry.isNoOp|{}isNoOp[0]
+        final fun <get-isNoOp>(): kotlin/Boolean // us.tractat.kuilt.raft/LogEntry.isNoOp.<get-isNoOp>|<get-isNoOp>(){}[0]
+    final val term // us.tractat.kuilt.raft/LogEntry.term|{}term[0]
+        final fun <get-term>(): kotlin/Long // us.tractat.kuilt.raft/LogEntry.term.<get-term>|<get-term>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.raft/LogEntry.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.raft/LogEntry.component2|component2(){}[0]
+    final fun component3(): kotlin/ByteArray // us.tractat.kuilt.raft/LogEntry.component3|component3(){}[0]
+    final fun component4(): kotlin/Boolean // us.tractat.kuilt.raft/LogEntry.component4|component4(){}[0]
+    final fun component5(): us.tractat.kuilt.raft/ConfigPayload? // us.tractat.kuilt.raft/LogEntry.component5|component5(){}[0]
+    final fun component6(): us.tractat.kuilt.raft/DedupKey? // us.tractat.kuilt.raft/LogEntry.component6|component6(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/ByteArray = ..., kotlin/Boolean = ..., us.tractat.kuilt.raft/ConfigPayload? = ..., us.tractat.kuilt.raft/DedupKey? = ...): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft/LogEntry.copy|copy(kotlin.Long;kotlin.Long;kotlin.ByteArray;kotlin.Boolean;us.tractat.kuilt.raft.ConfigPayload?;us.tractat.kuilt.raft.DedupKey?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/LogEntry.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/LogEntry.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/LogEntry.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.raft/LogEntry> { // us.tractat.kuilt.raft/LogEntry.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.raft/LogEntry.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.raft/LogEntry.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.raft/LogEntry.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft/LogEntry.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.raft/LogEntry) // us.tractat.kuilt.raft/LogEntry.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.raft.LogEntry){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.raft/LogEntry.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.raft/LogEntry> // us.tractat.kuilt.raft/LogEntry.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.raft/MembershipChangeInProgressException : kotlin/Exception { // us.tractat.kuilt.raft/MembershipChangeInProgressException|null[0]
+    constructor <init>(kotlin/String = ..., us.tractat.kuilt.raft/MembershipRefusal? = ...) // us.tractat.kuilt.raft/MembershipChangeInProgressException.<init>|<init>(kotlin.String;us.tractat.kuilt.raft.MembershipRefusal?){}[0]
+    constructor <init>(us.tractat.kuilt.raft/MembershipRefusal) // us.tractat.kuilt.raft/MembershipChangeInProgressException.<init>|<init>(us.tractat.kuilt.raft.MembershipRefusal){}[0]
+
+    final val reason // us.tractat.kuilt.raft/MembershipChangeInProgressException.reason|{}reason[0]
+        final fun <get-reason>(): us.tractat.kuilt.raft/MembershipRefusal? // us.tractat.kuilt.raft/MembershipChangeInProgressException.reason.<get-reason>|<get-reason>(){}[0]
+}
+
+final class us.tractat.kuilt.raft/NotLeaderException : kotlin/Exception { // us.tractat.kuilt.raft/NotLeaderException|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.raft/NotLeaderException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.raft/RaftConfig { // us.tractat.kuilt.raft/RaftConfig|null[0]
+    constructor <init>(kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Int = ..., kotlin/Long = ..., kotlin.random/Random = ...) // us.tractat.kuilt.raft/RaftConfig.<init>|<init>(kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;kotlin.Boolean;kotlin.Boolean;kotlin.time.Duration;kotlin.Int;kotlin.Int;kotlin.Long;kotlin.random.Random){}[0]
+
+    final val electionTimeoutMax // us.tractat.kuilt.raft/RaftConfig.electionTimeoutMax|{}electionTimeoutMax[0]
+        final fun <get-electionTimeoutMax>(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftConfig.electionTimeoutMax.<get-electionTimeoutMax>|<get-electionTimeoutMax>(){}[0]
+    final val electionTimeoutMin // us.tractat.kuilt.raft/RaftConfig.electionTimeoutMin|{}electionTimeoutMin[0]
+        final fun <get-electionTimeoutMin>(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftConfig.electionTimeoutMin.<get-electionTimeoutMin>|<get-electionTimeoutMin>(){}[0]
+    final val expectVirtualTime // us.tractat.kuilt.raft/RaftConfig.expectVirtualTime|{}expectVirtualTime[0]
+        final fun <get-expectVirtualTime>(): kotlin/Boolean // us.tractat.kuilt.raft/RaftConfig.expectVirtualTime.<get-expectVirtualTime>|<get-expectVirtualTime>(){}[0]
+    final val heartbeatInterval // us.tractat.kuilt.raft/RaftConfig.heartbeatInterval|{}heartbeatInterval[0]
+        final fun <get-heartbeatInterval>(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftConfig.heartbeatInterval.<get-heartbeatInterval>|<get-heartbeatInterval>(){}[0]
+    final val maxTermJump // us.tractat.kuilt.raft/RaftConfig.maxTermJump|{}maxTermJump[0]
+        final fun <get-maxTermJump>(): kotlin/Long // us.tractat.kuilt.raft/RaftConfig.maxTermJump.<get-maxTermJump>|<get-maxTermJump>(){}[0]
+    final val random // us.tractat.kuilt.raft/RaftConfig.random|{}random[0]
+        final fun <get-random>(): kotlin.random/Random // us.tractat.kuilt.raft/RaftConfig.random.<get-random>|<get-random>(){}[0]
+    final val slowProposeThreshold // us.tractat.kuilt.raft/RaftConfig.slowProposeThreshold|{}slowProposeThreshold[0]
+        final fun <get-slowProposeThreshold>(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftConfig.slowProposeThreshold.<get-slowProposeThreshold>|<get-slowProposeThreshold>(){}[0]
+    final val snapshotChunkCeiling // us.tractat.kuilt.raft/RaftConfig.snapshotChunkCeiling|{}snapshotChunkCeiling[0]
+        final fun <get-snapshotChunkCeiling>(): kotlin/Int // us.tractat.kuilt.raft/RaftConfig.snapshotChunkCeiling.<get-snapshotChunkCeiling>|<get-snapshotChunkCeiling>(){}[0]
+    final val snapshotTotalCeiling // us.tractat.kuilt.raft/RaftConfig.snapshotTotalCeiling|{}snapshotTotalCeiling[0]
+        final fun <get-snapshotTotalCeiling>(): kotlin/Int // us.tractat.kuilt.raft/RaftConfig.snapshotTotalCeiling.<get-snapshotTotalCeiling>|<get-snapshotTotalCeiling>(){}[0]
+    final val strictTestGuard // us.tractat.kuilt.raft/RaftConfig.strictTestGuard|{}strictTestGuard[0]
+        final fun <get-strictTestGuard>(): kotlin/Boolean // us.tractat.kuilt.raft/RaftConfig.strictTestGuard.<get-strictTestGuard>|<get-strictTestGuard>(){}[0]
+
+    final fun component1(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftConfig.component1|component1(){}[0]
+    final fun component10(): kotlin.random/Random // us.tractat.kuilt.raft/RaftConfig.component10|component10(){}[0]
+    final fun component2(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftConfig.component2|component2(){}[0]
+    final fun component3(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftConfig.component3|component3(){}[0]
+    final fun component4(): kotlin/Boolean // us.tractat.kuilt.raft/RaftConfig.component4|component4(){}[0]
+    final fun component5(): kotlin/Boolean // us.tractat.kuilt.raft/RaftConfig.component5|component5(){}[0]
+    final fun component6(): kotlin.time/Duration // us.tractat.kuilt.raft/RaftConfig.component6|component6(){}[0]
+    final fun component7(): kotlin/Int // us.tractat.kuilt.raft/RaftConfig.component7|component7(){}[0]
+    final fun component8(): kotlin/Int // us.tractat.kuilt.raft/RaftConfig.component8|component8(){}[0]
+    final fun component9(): kotlin/Long // us.tractat.kuilt.raft/RaftConfig.component9|component9(){}[0]
+    final fun copy(kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin.time/Duration = ..., kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Int = ..., kotlin/Long = ..., kotlin.random/Random = ...): us.tractat.kuilt.raft/RaftConfig // us.tractat.kuilt.raft/RaftConfig.copy|copy(kotlin.time.Duration;kotlin.time.Duration;kotlin.time.Duration;kotlin.Boolean;kotlin.Boolean;kotlin.time.Duration;kotlin.Int;kotlin.Int;kotlin.Long;kotlin.random.Random){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftConfig.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.raft/RaftEnvelope { // us.tractat.kuilt.raft/RaftEnvelope|null[0]
+    constructor <init>(us.tractat.kuilt.raft/NodeId, kotlin/ByteArray) // us.tractat.kuilt.raft/RaftEnvelope.<init>|<init>(us.tractat.kuilt.raft.NodeId;kotlin.ByteArray){}[0]
+
+    final val bytes // us.tractat.kuilt.raft/RaftEnvelope.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // us.tractat.kuilt.raft/RaftEnvelope.bytes.<get-bytes>|<get-bytes>(){}[0]
+    final val from // us.tractat.kuilt.raft/RaftEnvelope.from|{}from[0]
+        final fun <get-from>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftEnvelope.from.<get-from>|<get-from>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/RaftEnvelope.component1|component1(){}[0]
+    final fun component2(): kotlin/ByteArray // us.tractat.kuilt.raft/RaftEnvelope.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.raft/NodeId = ..., kotlin/ByteArray = ...): us.tractat.kuilt.raft/RaftEnvelope // us.tractat.kuilt.raft/RaftEnvelope.copy|copy(us.tractat.kuilt.raft.NodeId;kotlin.ByteArray){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/RaftEnvelope.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/RaftEnvelope.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/RaftEnvelope.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.raft/RequestIdConflictException : kotlin/IllegalArgumentException { // us.tractat.kuilt.raft/RequestIdConflictException|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.raft/RequestIdConflictException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.raft/SeamRaftTransport : us.tractat.kuilt.raft/RaftTransport { // us.tractat.kuilt.raft/SeamRaftTransport|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam) // us.tractat.kuilt.raft/SeamRaftTransport.<init>|<init>(us.tractat.kuilt.core.Seam){}[0]
+
+    final val incoming // us.tractat.kuilt.raft/SeamRaftTransport.incoming|{}incoming[0]
+        final fun <get-incoming>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/RaftEnvelope> // us.tractat.kuilt.raft/SeamRaftTransport.incoming.<get-incoming>|<get-incoming>(){}[0]
+    final val maxPayloadBytes // us.tractat.kuilt.raft/SeamRaftTransport.maxPayloadBytes|{}maxPayloadBytes[0]
+        final fun <get-maxPayloadBytes>(): kotlin/Int? // us.tractat.kuilt.raft/SeamRaftTransport.maxPayloadBytes.<get-maxPayloadBytes>|<get-maxPayloadBytes>(){}[0]
+    final val peers // us.tractat.kuilt.raft/SeamRaftTransport.peers|{}peers[0]
+        final fun <get-peers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>> // us.tractat.kuilt.raft/SeamRaftTransport.peers.<get-peers>|<get-peers>(){}[0]
+    final val selfId // us.tractat.kuilt.raft/SeamRaftTransport.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/SeamRaftTransport.selfId.<get-selfId>|<get-selfId>(){}[0]
+
+    final suspend fun sendTo(us.tractat.kuilt.raft/NodeId, kotlin/ByteArray) // us.tractat.kuilt.raft/SeamRaftTransport.sendTo|sendTo(us.tractat.kuilt.raft.NodeId;kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.raft/Snapshot { // us.tractat.kuilt.raft/Snapshot|null[0]
+    constructor <init>(kotlin/Long, kotlin/ByteArray) // us.tractat.kuilt.raft/Snapshot.<init>|<init>(kotlin.Long;kotlin.ByteArray){}[0]
+
+    final val state // us.tractat.kuilt.raft/Snapshot.state|{}state[0]
+        final fun <get-state>(): kotlin/ByteArray // us.tractat.kuilt.raft/Snapshot.state.<get-state>|<get-state>(){}[0]
+    final val throughIndex // us.tractat.kuilt.raft/Snapshot.throughIndex|{}throughIndex[0]
+        final fun <get-throughIndex>(): kotlin/Long // us.tractat.kuilt.raft/Snapshot.throughIndex.<get-throughIndex>|<get-throughIndex>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/Snapshot.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/Snapshot.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/Snapshot.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.raft/SnapshotMeta { // us.tractat.kuilt.raft/SnapshotMeta|null[0]
+    constructor <init>(kotlin/Long, kotlin/Long, us.tractat.kuilt.raft/ConfigPayload? = ...) // us.tractat.kuilt.raft/SnapshotMeta.<init>|<init>(kotlin.Long;kotlin.Long;us.tractat.kuilt.raft.ConfigPayload?){}[0]
+
+    final val config // us.tractat.kuilt.raft/SnapshotMeta.config|{}config[0]
+        final fun <get-config>(): us.tractat.kuilt.raft/ConfigPayload? // us.tractat.kuilt.raft/SnapshotMeta.config.<get-config>|<get-config>(){}[0]
+    final val lastIncludedIndex // us.tractat.kuilt.raft/SnapshotMeta.lastIncludedIndex|{}lastIncludedIndex[0]
+        final fun <get-lastIncludedIndex>(): kotlin/Long // us.tractat.kuilt.raft/SnapshotMeta.lastIncludedIndex.<get-lastIncludedIndex>|<get-lastIncludedIndex>(){}[0]
+    final val lastIncludedTerm // us.tractat.kuilt.raft/SnapshotMeta.lastIncludedTerm|{}lastIncludedTerm[0]
+        final fun <get-lastIncludedTerm>(): kotlin/Long // us.tractat.kuilt.raft/SnapshotMeta.lastIncludedTerm.<get-lastIncludedTerm>|<get-lastIncludedTerm>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.raft/SnapshotMeta.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.raft/SnapshotMeta.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.raft/ConfigPayload? // us.tractat.kuilt.raft/SnapshotMeta.component3|component3(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ..., us.tractat.kuilt.raft/ConfigPayload? = ...): us.tractat.kuilt.raft/SnapshotMeta // us.tractat.kuilt.raft/SnapshotMeta.copy|copy(kotlin.Long;kotlin.Long;us.tractat.kuilt.raft.ConfigPayload?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/SnapshotMeta.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/SnapshotMeta.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/SnapshotMeta.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.raft/StoredSnapshot { // us.tractat.kuilt.raft/StoredSnapshot|null[0]
+    constructor <init>(us.tractat.kuilt.raft/SnapshotMeta, kotlin/ByteArray) // us.tractat.kuilt.raft/StoredSnapshot.<init>|<init>(us.tractat.kuilt.raft.SnapshotMeta;kotlin.ByteArray){}[0]
+
+    final val meta // us.tractat.kuilt.raft/StoredSnapshot.meta|{}meta[0]
+        final fun <get-meta>(): us.tractat.kuilt.raft/SnapshotMeta // us.tractat.kuilt.raft/StoredSnapshot.meta.<get-meta>|<get-meta>(){}[0]
+    final val state // us.tractat.kuilt.raft/StoredSnapshot.state|{}state[0]
+        final fun <get-state>(): kotlin/ByteArray // us.tractat.kuilt.raft/StoredSnapshot.state.<get-state>|<get-state>(){}[0]
+}
+
+final value class us.tractat.kuilt.raft/ClientId { // us.tractat.kuilt.raft/ClientId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.raft/ClientId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.raft/ClientId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.raft/ClientId.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/ClientId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/ClientId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/ClientId.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.raft/ClientId> { // us.tractat.kuilt.raft/ClientId.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.raft/ClientId.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.raft/ClientId.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.raft/ClientId.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.raft/ClientId // us.tractat.kuilt.raft/ClientId.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.raft/ClientId) // us.tractat.kuilt.raft/ClientId.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.raft.ClientId){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.raft/ClientId.Companion|null[0]
+        final fun auto(us.tractat.kuilt.raft/NodeId, kotlin.random/Random): us.tractat.kuilt.raft/ClientId // us.tractat.kuilt.raft/ClientId.Companion.auto|auto(us.tractat.kuilt.raft.NodeId;kotlin.random.Random){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.raft/ClientId> // us.tractat.kuilt.raft/ClientId.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.raft/NodeId { // us.tractat.kuilt.raft/NodeId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.raft/NodeId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.raft/NodeId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.raft/NodeId.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/NodeId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/NodeId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.raft/NodeId.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.raft/NodeId> { // us.tractat.kuilt.raft/NodeId.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.raft/NodeId.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.raft/NodeId.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.raft/NodeId.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft/NodeId.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft/NodeId.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.raft.NodeId){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.raft/NodeId.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.raft/NodeId.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.raft/raftNode(us.tractat.kuilt.raft/ClusterConfig, us.tractat.kuilt.raft/RaftTransport, us.tractat.kuilt.raft/RaftStorage, us.tractat.kuilt.raft/RaftConfig = ..., us.tractat.kuilt.raft/ClientIdentity = ..., kotlin/Function1<us.tractat.kuilt.raft/RaftMetric, kotlin/Unit>? = ...): us.tractat.kuilt.raft/RaftNode // us.tractat.kuilt.raft/raftNode|raftNode@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.raft.ClusterConfig;us.tractat.kuilt.raft.RaftTransport;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;us.tractat.kuilt.raft.ClientIdentity;kotlin.Function1<us.tractat.kuilt.raft.RaftMetric,kotlin.Unit>?){}[0]
+final fun (us.tractat.kuilt.raft/LogEntry).us.tractat.kuilt.raft/asCommitted(): us.tractat.kuilt.raft/Committed // us.tractat.kuilt.raft/asCommitted|asCommitted@us.tractat.kuilt.raft.LogEntry(){}[0]
+final suspend fun (us.tractat.kuilt.raft/RaftNode).us.tractat.kuilt.raft/awaitRead(kotlinx.coroutines.flow/StateFlow<kotlin/Long>): kotlin/Long // us.tractat.kuilt.raft/awaitRead|awaitRead@us.tractat.kuilt.raft.RaftNode(kotlinx.coroutines.flow.StateFlow<kotlin.Long>){}[0]
+final suspend fun (us.tractat.kuilt.raft/RaftNode).us.tractat.kuilt.raft/changeMembershipWithRetry(us.tractat.kuilt.raft/ClusterConfig, kotlin/Int = ..., kotlin.time/Duration = ...) // us.tractat.kuilt.raft/changeMembershipWithRetry|changeMembershipWithRetry@us.tractat.kuilt.raft.RaftNode(us.tractat.kuilt.raft.ClusterConfig;kotlin.Int;kotlin.time.Duration){}[0]

@@ -39,7 +39,11 @@ public interface NearbyApi {
 
     // ── advertising ──────────────────────────────────────────────────────────
 
-    /** Begin advertising under [displayName] with service id [serviceId]. */
+    /**
+     * Begin advertising under [displayName] with service id [serviceId]. Throws, with anything but a
+     * cancellation, if the radio turns this down, as it does when already advertising: [NearbyLoom] reads
+     * that as nothing started, and so as nothing of its own to stop.
+     */
     public suspend fun startAdvertising(displayName: String, serviceId: String)
 
     /** Stop advertising. No-op if not advertising. */
@@ -47,7 +51,10 @@ public interface NearbyApi {
 
     // ── discovery ────────────────────────────────────────────────────────────
 
-    /** Begin discovering endpoints with the given [serviceId]. */
+    /**
+     * Begin discovering endpoints with the given [serviceId]. Throws as [startAdvertising] does, and
+     * means the same by it.
+     */
     public suspend fun startDiscovery(serviceId: String)
 
     /** Stop discovery. No-op if not discovering. */
@@ -57,7 +64,9 @@ public interface NearbyApi {
 
     /**
      * Request a connection to a discovered [endpointId].
-     * The local [displayName] is sent to the remote during the handshake.
+     * The local [displayName] is sent to the remote during the handshake. Throws, with anything but a
+     * cancellation, if the radio turns this down, as it does for an endpoint already connected:
+     * [NearbyLoom] reads that as no attempt of its own to disconnect.
      */
     public suspend fun requestConnection(displayName: String, endpointId: String)
 

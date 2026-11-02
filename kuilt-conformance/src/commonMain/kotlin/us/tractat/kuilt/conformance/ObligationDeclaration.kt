@@ -116,8 +116,8 @@ public sealed interface ObligationDeclaration {
          *
          * The in-tree instance is `kuilt-nw`: since #1513 an `NwSeam` that loses its last remote
          * re-forms `Woven`→`Weaving` and keeps `incoming` open so `NwLoom` can redial. `Torn` there
-         * means an explicit `close()` or a weave timeout, never peer loss — so the both-ends-latch-`Torn`
-         * obligation is unprovable on that fabric by design.
+         * means an explicit `close()`, a weave timeout or a failed byte stream, never peer loss — so the
+         * both-ends-latch-`Torn` obligation is unprovable on that fabric by design.
          *
          * @property reason what the fabric does instead, and why that is the intended contract.
          */

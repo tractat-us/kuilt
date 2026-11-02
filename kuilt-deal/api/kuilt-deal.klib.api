@@ -1,0 +1,469 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-deal>
+final enum class us.tractat.kuilt.deal/CardPhase : kotlin/Enum<us.tractat.kuilt.deal/CardPhase> { // us.tractat.kuilt.deal/CardPhase|null[0]
+    enum entry FULLY_ENCRYPTED // us.tractat.kuilt.deal/CardPhase.FULLY_ENCRYPTED|null[0]
+    enum entry REVEALED // us.tractat.kuilt.deal/CardPhase.REVEALED|null[0]
+    enum entry REVEALING // us.tractat.kuilt.deal/CardPhase.REVEALING|null[0]
+    enum entry SHUFFLING // us.tractat.kuilt.deal/CardPhase.SHUFFLING|null[0]
+    enum entry UNENCRYPTED // us.tractat.kuilt.deal/CardPhase.UNENCRYPTED|null[0]
+
+    final val entries // us.tractat.kuilt.deal/CardPhase.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.deal/CardPhase> // us.tractat.kuilt.deal/CardPhase.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.deal/CardPhase // us.tractat.kuilt.deal/CardPhase.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.deal/CardPhase> // us.tractat.kuilt.deal/CardPhase.values|values#static(){}[0]
+}
+
+abstract interface us.tractat.kuilt.deal/CommutativeScheme { // us.tractat.kuilt.deal/CommutativeScheme|null[0]
+    abstract fun encrypt(kotlin/ByteArray, us.tractat.kuilt.deal/SchemeKey): kotlin/Pair<kotlin/ByteArray, us.tractat.kuilt.deal/EncryptProof> // us.tractat.kuilt.deal/CommutativeScheme.encrypt|encrypt(kotlin.ByteArray;us.tractat.kuilt.deal.SchemeKey){}[0]
+    abstract fun generateKey(): us.tractat.kuilt.deal/SchemeKeyPair // us.tractat.kuilt.deal/CommutativeScheme.generateKey|generateKey(){}[0]
+    abstract fun strip(kotlin/ByteArray, us.tractat.kuilt.deal/SchemeKey): kotlin/Pair<kotlin/ByteArray, us.tractat.kuilt.deal/StripProof> // us.tractat.kuilt.deal/CommutativeScheme.strip|strip(kotlin.ByteArray;us.tractat.kuilt.deal.SchemeKey){}[0]
+    abstract fun verifyEncrypt(kotlin/ByteArray, kotlin/ByteArray, us.tractat.kuilt.deal/EncryptProof, us.tractat.kuilt.deal/SchemeKey): kotlin/Boolean // us.tractat.kuilt.deal/CommutativeScheme.verifyEncrypt|verifyEncrypt(kotlin.ByteArray;kotlin.ByteArray;us.tractat.kuilt.deal.EncryptProof;us.tractat.kuilt.deal.SchemeKey){}[0]
+    abstract fun verifyStrip(kotlin/ByteArray, kotlin/ByteArray, us.tractat.kuilt.deal/StripProof, us.tractat.kuilt.deal/SchemeKey): kotlin/Boolean // us.tractat.kuilt.deal/CommutativeScheme.verifyStrip|verifyStrip(kotlin.ByteArray;kotlin.ByteArray;us.tractat.kuilt.deal.StripProof;us.tractat.kuilt.deal.SchemeKey){}[0]
+}
+
+abstract interface us.tractat.kuilt.deal/KeyEscrow { // us.tractat.kuilt.deal/KeyEscrow|null[0]
+    abstract suspend fun deposit(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.deal/EncryptedKey) // us.tractat.kuilt.deal/KeyEscrow.deposit|deposit(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.deal.EncryptedKey){}[0]
+}
+
+final class us.tractat.kuilt.deal/CardState { // us.tractat.kuilt.deal/CardState|null[0]
+    constructor <init>(kotlin/ByteArray, us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId>, us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId>, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.deal/QuorumTrack> = ...) // us.tractat.kuilt.deal/CardState.<init>|<init>(kotlin.ByteArray;us.tractat.kuilt.crdt.GSet<us.tractat.kuilt.core.PeerId>;us.tractat.kuilt.crdt.GSet<us.tractat.kuilt.core.PeerId>;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.collections.Map<us.tractat.kuilt.core.PeerId,us.tractat.kuilt.deal.QuorumTrack>){}[0]
+
+    final val allPlayers // us.tractat.kuilt.deal/CardState.allPlayers|{}allPlayers[0]
+        final fun <get-allPlayers>(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardState.allPlayers.<get-allPlayers>|<get-allPlayers>(){}[0]
+    final val ciphertext // us.tractat.kuilt.deal/CardState.ciphertext|{}ciphertext[0]
+        final fun <get-ciphertext>(): kotlin/ByteArray // us.tractat.kuilt.deal/CardState.ciphertext.<get-ciphertext>|<get-ciphertext>(){}[0]
+    final val encryptedBy // us.tractat.kuilt.deal/CardState.encryptedBy|{}encryptedBy[0]
+        final fun <get-encryptedBy>(): us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardState.encryptedBy.<get-encryptedBy>|<get-encryptedBy>(){}[0]
+    final val quorumTracks // us.tractat.kuilt.deal/CardState.quorumTracks|{}quorumTracks[0]
+        final fun <get-quorumTracks>(): kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.deal/QuorumTrack> // us.tractat.kuilt.deal/CardState.quorumTracks.<get-quorumTracks>|<get-quorumTracks>(){}[0]
+    final val strippedBy // us.tractat.kuilt.deal/CardState.strippedBy|{}strippedBy[0]
+        final fun <get-strippedBy>(): us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardState.strippedBy.<get-strippedBy>|<get-strippedBy>(){}[0]
+    final val visibilityQuorum // us.tractat.kuilt.deal/CardState.visibilityQuorum|{}visibilityQuorum[0]
+        final fun <get-visibilityQuorum>(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardState.visibilityQuorum.<get-visibilityQuorum>|<get-visibilityQuorum>(){}[0]
+
+    final fun component1(): kotlin/ByteArray // us.tractat.kuilt.deal/CardState.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardState.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardState.component3|component3(){}[0]
+    final fun component4(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardState.component4|component4(){}[0]
+    final fun component5(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardState.component5|component5(){}[0]
+    final fun component6(): kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.deal/QuorumTrack> // us.tractat.kuilt.deal/CardState.component6|component6(){}[0]
+    final fun copy(kotlin/ByteArray = ..., us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId> = ..., us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId> = ..., kotlin.collections/Set<us.tractat.kuilt.core/PeerId> = ..., kotlin.collections/Set<us.tractat.kuilt.core/PeerId> = ..., kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.deal/QuorumTrack> = ...): us.tractat.kuilt.deal/CardState // us.tractat.kuilt.deal/CardState.copy|copy(kotlin.ByteArray;us.tractat.kuilt.crdt.GSet<us.tractat.kuilt.core.PeerId>;us.tractat.kuilt.crdt.GSet<us.tractat.kuilt.core.PeerId>;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.collections.Map<us.tractat.kuilt.core.PeerId,us.tractat.kuilt.deal.QuorumTrack>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/CardState.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/CardState.hashCode|hashCode(){}[0]
+    final fun isPartialQuorum(): kotlin/Boolean // us.tractat.kuilt.deal/CardState.isPartialQuorum|isPartialQuorum(){}[0]
+    final fun merge(us.tractat.kuilt.deal/CardState): us.tractat.kuilt.deal/CardState // us.tractat.kuilt.deal/CardState.merge|merge(us.tractat.kuilt.deal.CardState){}[0]
+    final fun phase(): us.tractat.kuilt.deal/CardPhase // us.tractat.kuilt.deal/CardState.phase|phase(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.deal/CardState.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/CardState> { // us.tractat.kuilt.deal/CardState.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.deal/CardState.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/CardState.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/CardState.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/CardState // us.tractat.kuilt.deal/CardState.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/CardState) // us.tractat.kuilt.deal/CardState.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.CardState){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.deal/CardState.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.deal/CardState.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/CardState> // us.tractat.kuilt.deal/CardState.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.deal/CommitmentViolation : kotlin/Exception { // us.tractat.kuilt.deal/CommitmentViolation|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId, kotlin/ByteArray, kotlin/ByteArray) // us.tractat.kuilt.deal/CommitmentViolation.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.ByteArray;kotlin.ByteArray){}[0]
+
+    final val actualHash // us.tractat.kuilt.deal/CommitmentViolation.actualHash|{}actualHash[0]
+        final fun <get-actualHash>(): kotlin/ByteArray // us.tractat.kuilt.deal/CommitmentViolation.actualHash.<get-actualHash>|<get-actualHash>(){}[0]
+    final val expectedHash // us.tractat.kuilt.deal/CommitmentViolation.expectedHash|{}expectedHash[0]
+        final fun <get-expectedHash>(): kotlin/ByteArray // us.tractat.kuilt.deal/CommitmentViolation.expectedHash.<get-expectedHash>|<get-expectedHash>(){}[0]
+    final val peer // us.tractat.kuilt.deal/CommitmentViolation.peer|{}peer[0]
+        final fun <get-peer>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CommitmentViolation.peer.<get-peer>|<get-peer>(){}[0]
+}
+
+final class us.tractat.kuilt.deal/DealSession : us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.deal/DealSession|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, us.tractat.kuilt.deal/CommutativeScheme, us.tractat.kuilt.deal/SchemeKeyPair, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, us.tractat.kuilt.core/PeerId, kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.deal/DealSession.<init>|<init>(us.tractat.kuilt.core.Seam;us.tractat.kuilt.deal.CommutativeScheme;us.tractat.kuilt.deal.SchemeKeyPair;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;us.tractat.kuilt.core.PeerId;kotlinx.coroutines.CoroutineScope){}[0]
+
+    final val state // us.tractat.kuilt.deal/DealSession.state|{}state[0]
+        final fun <get-state>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.deal/DeckState> // us.tractat.kuilt.deal/DealSession.state.<get-state>|<get-state>(){}[0]
+
+    final fun assignQuorums(kotlin.collections/Map<kotlin/Int, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>>) // us.tractat.kuilt.deal/DealSession.assignQuorums|assignQuorums(kotlin.collections.Map<kotlin.Int,kotlin.collections.Set<us.tractat.kuilt.core.PeerId>>){}[0]
+    final fun decrypt(kotlin/Int): kotlin/ByteArray // us.tractat.kuilt.deal/DealSession.decrypt|decrypt(kotlin.Int){}[0]
+    final suspend fun depositKey(us.tractat.kuilt.deal/KeyEscrow) // us.tractat.kuilt.deal/DealSession.depositKey|depositKey(us.tractat.kuilt.deal.KeyEscrow){}[0]
+    final suspend fun shuffle(kotlin.collections/List<kotlin/ByteArray>) // us.tractat.kuilt.deal/DealSession.shuffle|shuffle(kotlin.collections.List<kotlin.ByteArray>){}[0]
+    final suspend fun strip() // us.tractat.kuilt.deal/DealSession.strip|strip(){}[0]
+}
+
+final class us.tractat.kuilt.deal/DeckState { // us.tractat.kuilt.deal/DeckState|null[0]
+    constructor <init>(kotlin.collections/List<us.tractat.kuilt.deal/CardState>) // us.tractat.kuilt.deal/DeckState.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.deal.CardState>){}[0]
+
+    final val cards // us.tractat.kuilt.deal/DeckState.cards|{}cards[0]
+        final fun <get-cards>(): kotlin.collections/List<us.tractat.kuilt.deal/CardState> // us.tractat.kuilt.deal/DeckState.cards.<get-cards>|<get-cards>(){}[0]
+
+    final fun component1(): kotlin.collections/List<us.tractat.kuilt.deal/CardState> // us.tractat.kuilt.deal/DeckState.component1|component1(){}[0]
+    final fun copy(kotlin.collections/List<us.tractat.kuilt.deal/CardState> = ...): us.tractat.kuilt.deal/DeckState // us.tractat.kuilt.deal/DeckState.copy|copy(kotlin.collections.List<us.tractat.kuilt.deal.CardState>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/DeckState.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/DeckState.hashCode|hashCode(){}[0]
+    final fun isFullyShuffled(): kotlin/Boolean // us.tractat.kuilt.deal/DeckState.isFullyShuffled|isFullyShuffled(){}[0]
+    final fun isRevealed(kotlin/Int): kotlin/Boolean // us.tractat.kuilt.deal/DeckState.isRevealed|isRevealed(kotlin.Int){}[0]
+    final fun merge(us.tractat.kuilt.deal/DeckState): us.tractat.kuilt.deal/DeckState // us.tractat.kuilt.deal/DeckState.merge|merge(us.tractat.kuilt.deal.DeckState){}[0]
+    final fun phase(kotlin/Int): us.tractat.kuilt.deal/CardPhase // us.tractat.kuilt.deal/DeckState.phase|phase(kotlin.Int){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.deal/DeckState.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/DeckState> { // us.tractat.kuilt.deal/DeckState.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.deal/DeckState.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/DeckState.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/DeckState.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/DeckState // us.tractat.kuilt.deal/DeckState.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/DeckState) // us.tractat.kuilt.deal/DeckState.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.DeckState){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.deal/DeckState.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.deal/DeckState.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/DeckState> // us.tractat.kuilt.deal/DeckState.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.deal/EncryptProof { // us.tractat.kuilt.deal/EncryptProof|null[0]
+    constructor <init>(kotlin/ByteArray) // us.tractat.kuilt.deal/EncryptProof.<init>|<init>(kotlin.ByteArray){}[0]
+
+    final val bytes // us.tractat.kuilt.deal/EncryptProof.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // us.tractat.kuilt.deal/EncryptProof.bytes.<get-bytes>|<get-bytes>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/EncryptProof.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/EncryptProof.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.deal/EncryptProof.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/EncryptProof> { // us.tractat.kuilt.deal/EncryptProof.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.deal/EncryptProof.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/EncryptProof.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/EncryptProof.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/EncryptProof // us.tractat.kuilt.deal/EncryptProof.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/EncryptProof) // us.tractat.kuilt.deal/EncryptProof.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.EncryptProof){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.deal/EncryptProof.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/EncryptProof> // us.tractat.kuilt.deal/EncryptProof.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.deal/EncryptedKey { // us.tractat.kuilt.deal/EncryptedKey|null[0]
+    constructor <init>(kotlin/ByteArray) // us.tractat.kuilt.deal/EncryptedKey.<init>|<init>(kotlin.ByteArray){}[0]
+
+    final val bytes // us.tractat.kuilt.deal/EncryptedKey.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // us.tractat.kuilt.deal/EncryptedKey.bytes.<get-bytes>|<get-bytes>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/EncryptedKey.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/EncryptedKey.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.deal/EncryptedKey.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/EncryptedKey> { // us.tractat.kuilt.deal/EncryptedKey.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.deal/EncryptedKey.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/EncryptedKey.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/EncryptedKey.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/EncryptedKey // us.tractat.kuilt.deal/EncryptedKey.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/EncryptedKey) // us.tractat.kuilt.deal/EncryptedKey.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.EncryptedKey){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.deal/EncryptedKey.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/EncryptedKey> // us.tractat.kuilt.deal/EncryptedKey.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.deal/FairRandom { // us.tractat.kuilt.deal/FairRandom|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin/Boolean = ..., kotlin/ByteArray? = ..., kotlin/ByteArray? = ...) // us.tractat.kuilt.deal/FairRandom.<init>|<init>(us.tractat.kuilt.core.Seam;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.Boolean;kotlin.ByteArray?;kotlin.ByteArray?){}[0]
+
+    final val malformedFrameCounts // us.tractat.kuilt.deal/FairRandom.malformedFrameCounts|{}malformedFrameCounts[0]
+        final fun <get-malformedFrameCounts>(): kotlin.collections/Map<us.tractat.kuilt.core/PeerId, kotlin/Long>? // us.tractat.kuilt.deal/FairRandom.malformedFrameCounts.<get-malformedFrameCounts>|<get-malformedFrameCounts>(){}[0]
+
+    final suspend fun roll(): kotlin/Long // us.tractat.kuilt.deal/FairRandom.roll|roll(){}[0]
+    final suspend fun rollWithReport(): us.tractat.kuilt.deal/FairRandomReport // us.tractat.kuilt.deal/FairRandom.rollWithReport|rollWithReport(){}[0]
+}
+
+final class us.tractat.kuilt.deal/FairRandomReport { // us.tractat.kuilt.deal/FairRandomReport|null[0]
+    final val malformedFrameCounts // us.tractat.kuilt.deal/FairRandomReport.malformedFrameCounts|{}malformedFrameCounts[0]
+        final fun <get-malformedFrameCounts>(): kotlin.collections/Map<us.tractat.kuilt.core/PeerId, kotlin/Long> // us.tractat.kuilt.deal/FairRandomReport.malformedFrameCounts.<get-malformedFrameCounts>|<get-malformedFrameCounts>(){}[0]
+    final val seed // us.tractat.kuilt.deal/FairRandomReport.seed|{}seed[0]
+        final fun <get-seed>(): kotlin/Long // us.tractat.kuilt.deal/FairRandomReport.seed.<get-seed>|<get-seed>(){}[0]
+}
+
+final class us.tractat.kuilt.deal/QuorumTrack { // us.tractat.kuilt.deal/QuorumTrack|null[0]
+    constructor <init>(kotlin/ByteArray, us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId>) // us.tractat.kuilt.deal/QuorumTrack.<init>|<init>(kotlin.ByteArray;us.tractat.kuilt.crdt.GSet<us.tractat.kuilt.core.PeerId>){}[0]
+
+    final val ciphertext // us.tractat.kuilt.deal/QuorumTrack.ciphertext|{}ciphertext[0]
+        final fun <get-ciphertext>(): kotlin/ByteArray // us.tractat.kuilt.deal/QuorumTrack.ciphertext.<get-ciphertext>|<get-ciphertext>(){}[0]
+    final val strippedBy // us.tractat.kuilt.deal/QuorumTrack.strippedBy|{}strippedBy[0]
+        final fun <get-strippedBy>(): us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/QuorumTrack.strippedBy.<get-strippedBy>|<get-strippedBy>(){}[0]
+
+    final fun component1(): kotlin/ByteArray // us.tractat.kuilt.deal/QuorumTrack.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/QuorumTrack.component2|component2(){}[0]
+    final fun copy(kotlin/ByteArray = ..., us.tractat.kuilt.crdt/GSet<us.tractat.kuilt.core/PeerId> = ...): us.tractat.kuilt.deal/QuorumTrack // us.tractat.kuilt.deal/QuorumTrack.copy|copy(kotlin.ByteArray;us.tractat.kuilt.crdt.GSet<us.tractat.kuilt.core.PeerId>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/QuorumTrack.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/QuorumTrack.hashCode|hashCode(){}[0]
+    final fun merge(us.tractat.kuilt.deal/QuorumTrack): us.tractat.kuilt.deal/QuorumTrack // us.tractat.kuilt.deal/QuorumTrack.merge|merge(us.tractat.kuilt.deal.QuorumTrack){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.deal/QuorumTrack.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/QuorumTrack> { // us.tractat.kuilt.deal/QuorumTrack.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.deal/QuorumTrack.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/QuorumTrack.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/QuorumTrack.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/QuorumTrack // us.tractat.kuilt.deal/QuorumTrack.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/QuorumTrack) // us.tractat.kuilt.deal/QuorumTrack.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.QuorumTrack){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.deal/QuorumTrack.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.deal/QuorumTrack.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/QuorumTrack> // us.tractat.kuilt.deal/QuorumTrack.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.deal/SchemeKey { // us.tractat.kuilt.deal/SchemeKey|null[0]
+    constructor <init>(kotlin/ByteArray) // us.tractat.kuilt.deal/SchemeKey.<init>|<init>(kotlin.ByteArray){}[0]
+
+    final val raw // us.tractat.kuilt.deal/SchemeKey.raw|{}raw[0]
+        final fun <get-raw>(): kotlin/ByteArray // us.tractat.kuilt.deal/SchemeKey.raw.<get-raw>|<get-raw>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/SchemeKey.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/SchemeKey.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.deal/SchemeKey.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/SchemeKey> { // us.tractat.kuilt.deal/SchemeKey.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.deal/SchemeKey.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/SchemeKey.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/SchemeKey.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/SchemeKey // us.tractat.kuilt.deal/SchemeKey.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/SchemeKey) // us.tractat.kuilt.deal/SchemeKey.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.SchemeKey){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.deal/SchemeKey.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/SchemeKey> // us.tractat.kuilt.deal/SchemeKey.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.deal/SchemeKeyPair { // us.tractat.kuilt.deal/SchemeKeyPair|null[0]
+    constructor <init>(us.tractat.kuilt.deal/SchemeKey, us.tractat.kuilt.deal/SchemeKey) // us.tractat.kuilt.deal/SchemeKeyPair.<init>|<init>(us.tractat.kuilt.deal.SchemeKey;us.tractat.kuilt.deal.SchemeKey){}[0]
+
+    final val encryptKey // us.tractat.kuilt.deal/SchemeKeyPair.encryptKey|{}encryptKey[0]
+        final fun <get-encryptKey>(): us.tractat.kuilt.deal/SchemeKey // us.tractat.kuilt.deal/SchemeKeyPair.encryptKey.<get-encryptKey>|<get-encryptKey>(){}[0]
+    final val stripKey // us.tractat.kuilt.deal/SchemeKeyPair.stripKey|{}stripKey[0]
+        final fun <get-stripKey>(): us.tractat.kuilt.deal/SchemeKey // us.tractat.kuilt.deal/SchemeKeyPair.stripKey.<get-stripKey>|<get-stripKey>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.deal/SchemeKey // us.tractat.kuilt.deal/SchemeKeyPair.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.deal/SchemeKey // us.tractat.kuilt.deal/SchemeKeyPair.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.deal/SchemeKey = ..., us.tractat.kuilt.deal/SchemeKey = ...): us.tractat.kuilt.deal/SchemeKeyPair // us.tractat.kuilt.deal/SchemeKeyPair.copy|copy(us.tractat.kuilt.deal.SchemeKey;us.tractat.kuilt.deal.SchemeKey){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/SchemeKeyPair.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/SchemeKeyPair.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.deal/SchemeKeyPair.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.deal/SraScheme : us.tractat.kuilt.deal/CommutativeScheme { // us.tractat.kuilt.deal/SraScheme|null[0]
+    constructor <init>() // us.tractat.kuilt.deal/SraScheme.<init>|<init>(){}[0]
+
+    final fun encrypt(kotlin/ByteArray, us.tractat.kuilt.deal/SchemeKey): kotlin/Pair<kotlin/ByteArray, us.tractat.kuilt.deal/EncryptProof> // us.tractat.kuilt.deal/SraScheme.encrypt|encrypt(kotlin.ByteArray;us.tractat.kuilt.deal.SchemeKey){}[0]
+    final fun generateKey(): us.tractat.kuilt.deal/SchemeKeyPair // us.tractat.kuilt.deal/SraScheme.generateKey|generateKey(){}[0]
+    final fun strip(kotlin/ByteArray, us.tractat.kuilt.deal/SchemeKey): kotlin/Pair<kotlin/ByteArray, us.tractat.kuilt.deal/StripProof> // us.tractat.kuilt.deal/SraScheme.strip|strip(kotlin.ByteArray;us.tractat.kuilt.deal.SchemeKey){}[0]
+    final fun verifyEncrypt(kotlin/ByteArray, kotlin/ByteArray, us.tractat.kuilt.deal/EncryptProof, us.tractat.kuilt.deal/SchemeKey): kotlin/Boolean // us.tractat.kuilt.deal/SraScheme.verifyEncrypt|verifyEncrypt(kotlin.ByteArray;kotlin.ByteArray;us.tractat.kuilt.deal.EncryptProof;us.tractat.kuilt.deal.SchemeKey){}[0]
+    final fun verifyStrip(kotlin/ByteArray, kotlin/ByteArray, us.tractat.kuilt.deal/StripProof, us.tractat.kuilt.deal/SchemeKey): kotlin/Boolean // us.tractat.kuilt.deal/SraScheme.verifyStrip|verifyStrip(kotlin.ByteArray;kotlin.ByteArray;us.tractat.kuilt.deal.StripProof;us.tractat.kuilt.deal.SchemeKey){}[0]
+
+    final object Companion // us.tractat.kuilt.deal/SraScheme.Companion|null[0]
+}
+
+final class us.tractat.kuilt.deal/StripProof { // us.tractat.kuilt.deal/StripProof|null[0]
+    constructor <init>(kotlin/ByteArray) // us.tractat.kuilt.deal/StripProof.<init>|<init>(kotlin.ByteArray){}[0]
+
+    final val bytes // us.tractat.kuilt.deal/StripProof.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // us.tractat.kuilt.deal/StripProof.bytes.<get-bytes>|<get-bytes>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/StripProof.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/StripProof.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.deal/StripProof.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/StripProof> { // us.tractat.kuilt.deal/StripProof.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.deal/StripProof.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/StripProof.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/StripProof.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/StripProof // us.tractat.kuilt.deal/StripProof.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/StripProof) // us.tractat.kuilt.deal/StripProof.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.StripProof){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.deal/StripProof.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/StripProof> // us.tractat.kuilt.deal/StripProof.Companion.serializer|serializer(){}[0]
+    }
+}
+
+sealed class us.tractat.kuilt.deal/CardOp { // us.tractat.kuilt.deal/CardOp|null[0]
+    final class DepositKey : us.tractat.kuilt.deal/CardOp { // us.tractat.kuilt.deal/CardOp.DepositKey|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.deal/EncryptedKey) // us.tractat.kuilt.deal/CardOp.DepositKey.<init>|<init>(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.deal.EncryptedKey){}[0]
+
+        final val escrowedKey // us.tractat.kuilt.deal/CardOp.DepositKey.escrowedKey|{}escrowedKey[0]
+            final fun <get-escrowedKey>(): us.tractat.kuilt.deal/EncryptedKey // us.tractat.kuilt.deal/CardOp.DepositKey.escrowedKey.<get-escrowedKey>|<get-escrowedKey>(){}[0]
+        final val player // us.tractat.kuilt.deal/CardOp.DepositKey.player|{}player[0]
+            final fun <get-player>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CardOp.DepositKey.player.<get-player>|<get-player>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CardOp.DepositKey.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.deal/EncryptedKey // us.tractat.kuilt.deal/CardOp.DepositKey.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.deal/EncryptedKey = ...): us.tractat.kuilt.deal/CardOp.DepositKey // us.tractat.kuilt.deal/CardOp.DepositKey.copy|copy(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.deal.EncryptedKey){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/CardOp.DepositKey.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/CardOp.DepositKey.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.deal/CardOp.DepositKey.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/CardOp.DepositKey> { // us.tractat.kuilt.deal/CardOp.DepositKey.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.deal/CardOp.DepositKey.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/CardOp.DepositKey.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/CardOp.DepositKey.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/CardOp.DepositKey // us.tractat.kuilt.deal/CardOp.DepositKey.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/CardOp.DepositKey) // us.tractat.kuilt.deal/CardOp.DepositKey.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.CardOp.DepositKey){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.deal/CardOp.DepositKey.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/CardOp.DepositKey> // us.tractat.kuilt.deal/CardOp.DepositKey.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Encrypt : us.tractat.kuilt.deal/CardOp { // us.tractat.kuilt.deal/CardOp.Encrypt|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin/ByteArray, us.tractat.kuilt.deal/EncryptProof, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>) // us.tractat.kuilt.deal/CardOp.Encrypt.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.ByteArray;us.tractat.kuilt.deal.EncryptProof;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+
+        final val baseEncryptedBy // us.tractat.kuilt.deal/CardOp.Encrypt.baseEncryptedBy|{}baseEncryptedBy[0]
+            final fun <get-baseEncryptedBy>(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardOp.Encrypt.baseEncryptedBy.<get-baseEncryptedBy>|<get-baseEncryptedBy>(){}[0]
+        final val baseStrippedBy // us.tractat.kuilt.deal/CardOp.Encrypt.baseStrippedBy|{}baseStrippedBy[0]
+            final fun <get-baseStrippedBy>(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardOp.Encrypt.baseStrippedBy.<get-baseStrippedBy>|<get-baseStrippedBy>(){}[0]
+        final val newCiphertext // us.tractat.kuilt.deal/CardOp.Encrypt.newCiphertext|{}newCiphertext[0]
+            final fun <get-newCiphertext>(): kotlin/ByteArray // us.tractat.kuilt.deal/CardOp.Encrypt.newCiphertext.<get-newCiphertext>|<get-newCiphertext>(){}[0]
+        final val player // us.tractat.kuilt.deal/CardOp.Encrypt.player|{}player[0]
+            final fun <get-player>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CardOp.Encrypt.player.<get-player>|<get-player>(){}[0]
+        final val proof // us.tractat.kuilt.deal/CardOp.Encrypt.proof|{}proof[0]
+            final fun <get-proof>(): us.tractat.kuilt.deal/EncryptProof // us.tractat.kuilt.deal/CardOp.Encrypt.proof.<get-proof>|<get-proof>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CardOp.Encrypt.component1|component1(){}[0]
+        final fun component2(): kotlin/ByteArray // us.tractat.kuilt.deal/CardOp.Encrypt.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.deal/EncryptProof // us.tractat.kuilt.deal/CardOp.Encrypt.component3|component3(){}[0]
+        final fun component4(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardOp.Encrypt.component4|component4(){}[0]
+        final fun component5(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardOp.Encrypt.component5|component5(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin/ByteArray = ..., us.tractat.kuilt.deal/EncryptProof = ..., kotlin.collections/Set<us.tractat.kuilt.core/PeerId> = ..., kotlin.collections/Set<us.tractat.kuilt.core/PeerId> = ...): us.tractat.kuilt.deal/CardOp.Encrypt // us.tractat.kuilt.deal/CardOp.Encrypt.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.ByteArray;us.tractat.kuilt.deal.EncryptProof;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/CardOp.Encrypt.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/CardOp.Encrypt.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.deal/CardOp.Encrypt.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/CardOp.Encrypt> { // us.tractat.kuilt.deal/CardOp.Encrypt.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.deal/CardOp.Encrypt.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/CardOp.Encrypt.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/CardOp.Encrypt.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/CardOp.Encrypt // us.tractat.kuilt.deal/CardOp.Encrypt.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/CardOp.Encrypt) // us.tractat.kuilt.deal/CardOp.Encrypt.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.CardOp.Encrypt){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.deal/CardOp.Encrypt.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.deal/CardOp.Encrypt.Companion.$childSerializers|{}$childSerializers[0]
+
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/CardOp.Encrypt> // us.tractat.kuilt.deal/CardOp.Encrypt.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class QuorumStrip : us.tractat.kuilt.deal/CardOp { // us.tractat.kuilt.deal/CardOp.QuorumStrip|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/PeerId, kotlin/ByteArray, us.tractat.kuilt.deal/StripProof, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>) // us.tractat.kuilt.deal/CardOp.QuorumStrip.<init>|<init>(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.PeerId;kotlin.ByteArray;us.tractat.kuilt.deal.StripProof;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+
+        final val baseTrackStrippedBy // us.tractat.kuilt.deal/CardOp.QuorumStrip.baseTrackStrippedBy|{}baseTrackStrippedBy[0]
+            final fun <get-baseTrackStrippedBy>(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardOp.QuorumStrip.baseTrackStrippedBy.<get-baseTrackStrippedBy>|<get-baseTrackStrippedBy>(){}[0]
+        final val forMember // us.tractat.kuilt.deal/CardOp.QuorumStrip.forMember|{}forMember[0]
+            final fun <get-forMember>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CardOp.QuorumStrip.forMember.<get-forMember>|<get-forMember>(){}[0]
+        final val newCiphertext // us.tractat.kuilt.deal/CardOp.QuorumStrip.newCiphertext|{}newCiphertext[0]
+            final fun <get-newCiphertext>(): kotlin/ByteArray // us.tractat.kuilt.deal/CardOp.QuorumStrip.newCiphertext.<get-newCiphertext>|<get-newCiphertext>(){}[0]
+        final val player // us.tractat.kuilt.deal/CardOp.QuorumStrip.player|{}player[0]
+            final fun <get-player>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CardOp.QuorumStrip.player.<get-player>|<get-player>(){}[0]
+        final val proof // us.tractat.kuilt.deal/CardOp.QuorumStrip.proof|{}proof[0]
+            final fun <get-proof>(): us.tractat.kuilt.deal/StripProof // us.tractat.kuilt.deal/CardOp.QuorumStrip.proof.<get-proof>|<get-proof>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CardOp.QuorumStrip.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CardOp.QuorumStrip.component2|component2(){}[0]
+        final fun component3(): kotlin/ByteArray // us.tractat.kuilt.deal/CardOp.QuorumStrip.component3|component3(){}[0]
+        final fun component4(): us.tractat.kuilt.deal/StripProof // us.tractat.kuilt.deal/CardOp.QuorumStrip.component4|component4(){}[0]
+        final fun component5(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardOp.QuorumStrip.component5|component5(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.core/PeerId = ..., kotlin/ByteArray = ..., us.tractat.kuilt.deal/StripProof = ..., kotlin.collections/Set<us.tractat.kuilt.core/PeerId> = ...): us.tractat.kuilt.deal/CardOp.QuorumStrip // us.tractat.kuilt.deal/CardOp.QuorumStrip.copy|copy(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.PeerId;kotlin.ByteArray;us.tractat.kuilt.deal.StripProof;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/CardOp.QuorumStrip.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/CardOp.QuorumStrip.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.deal/CardOp.QuorumStrip.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/CardOp.QuorumStrip> { // us.tractat.kuilt.deal/CardOp.QuorumStrip.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.deal/CardOp.QuorumStrip.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/CardOp.QuorumStrip.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/CardOp.QuorumStrip.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/CardOp.QuorumStrip // us.tractat.kuilt.deal/CardOp.QuorumStrip.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/CardOp.QuorumStrip) // us.tractat.kuilt.deal/CardOp.QuorumStrip.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.CardOp.QuorumStrip){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.deal/CardOp.QuorumStrip.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.deal/CardOp.QuorumStrip.Companion.$childSerializers|{}$childSerializers[0]
+
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/CardOp.QuorumStrip> // us.tractat.kuilt.deal/CardOp.QuorumStrip.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Strip : us.tractat.kuilt.deal/CardOp { // us.tractat.kuilt.deal/CardOp.Strip|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin/ByteArray, us.tractat.kuilt.deal/StripProof, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>) // us.tractat.kuilt.deal/CardOp.Strip.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.ByteArray;us.tractat.kuilt.deal.StripProof;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+
+        final val baseEncryptedBy // us.tractat.kuilt.deal/CardOp.Strip.baseEncryptedBy|{}baseEncryptedBy[0]
+            final fun <get-baseEncryptedBy>(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardOp.Strip.baseEncryptedBy.<get-baseEncryptedBy>|<get-baseEncryptedBy>(){}[0]
+        final val baseStrippedBy // us.tractat.kuilt.deal/CardOp.Strip.baseStrippedBy|{}baseStrippedBy[0]
+            final fun <get-baseStrippedBy>(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardOp.Strip.baseStrippedBy.<get-baseStrippedBy>|<get-baseStrippedBy>(){}[0]
+        final val newCiphertext // us.tractat.kuilt.deal/CardOp.Strip.newCiphertext|{}newCiphertext[0]
+            final fun <get-newCiphertext>(): kotlin/ByteArray // us.tractat.kuilt.deal/CardOp.Strip.newCiphertext.<get-newCiphertext>|<get-newCiphertext>(){}[0]
+        final val player // us.tractat.kuilt.deal/CardOp.Strip.player|{}player[0]
+            final fun <get-player>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CardOp.Strip.player.<get-player>|<get-player>(){}[0]
+        final val proof // us.tractat.kuilt.deal/CardOp.Strip.proof|{}proof[0]
+            final fun <get-proof>(): us.tractat.kuilt.deal/StripProof // us.tractat.kuilt.deal/CardOp.Strip.proof.<get-proof>|<get-proof>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.deal/CardOp.Strip.component1|component1(){}[0]
+        final fun component2(): kotlin/ByteArray // us.tractat.kuilt.deal/CardOp.Strip.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.deal/StripProof // us.tractat.kuilt.deal/CardOp.Strip.component3|component3(){}[0]
+        final fun component4(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardOp.Strip.component4|component4(){}[0]
+        final fun component5(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.deal/CardOp.Strip.component5|component5(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin/ByteArray = ..., us.tractat.kuilt.deal/StripProof = ..., kotlin.collections/Set<us.tractat.kuilt.core/PeerId> = ..., kotlin.collections/Set<us.tractat.kuilt.core/PeerId> = ...): us.tractat.kuilt.deal/CardOp.Strip // us.tractat.kuilt.deal/CardOp.Strip.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.ByteArray;us.tractat.kuilt.deal.StripProof;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal/CardOp.Strip.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal/CardOp.Strip.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.deal/CardOp.Strip.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.deal/CardOp.Strip> { // us.tractat.kuilt.deal/CardOp.Strip.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.deal/CardOp.Strip.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.deal/CardOp.Strip.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.deal/CardOp.Strip.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.deal/CardOp.Strip // us.tractat.kuilt.deal/CardOp.Strip.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.deal/CardOp.Strip) // us.tractat.kuilt.deal/CardOp.Strip.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.deal.CardOp.Strip){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.deal/CardOp.Strip.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.deal/CardOp.Strip.Companion.$childSerializers|{}$childSerializers[0]
+
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/CardOp.Strip> // us.tractat.kuilt.deal/CardOp.Strip.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.deal/CardOp.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.deal/CardOp> // us.tractat.kuilt.deal/CardOp.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.deal/CardOp.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+final fun (us.tractat.kuilt.deal/CardState).us.tractat.kuilt.deal/applyOp(us.tractat.kuilt.deal/CardOp): us.tractat.kuilt.deal/CardState? // us.tractat.kuilt.deal/applyOp|applyOp@us.tractat.kuilt.deal.CardState(us.tractat.kuilt.deal.CardOp){}[0]
+final fun (us.tractat.kuilt.deal/CardState).us.tractat.kuilt.deal/canApply(us.tractat.kuilt.deal/CardOp): kotlin/Boolean // us.tractat.kuilt.deal/canApply|canApply@us.tractat.kuilt.deal.CardState(us.tractat.kuilt.deal.CardOp){}[0]
+final fun us.tractat.kuilt.deal/decodePlaintext(kotlin/ByteArray): kotlin/ByteArray // us.tractat.kuilt.deal/decodePlaintext|decodePlaintext(kotlin.ByteArray){}[0]
+final fun us.tractat.kuilt.deal/encodePlaintext(kotlin/ByteArray): kotlin/ByteArray // us.tractat.kuilt.deal/encodePlaintext|encodePlaintext(kotlin.ByteArray){}[0]

@@ -1,0 +1,103 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-cluster>
+final class us.tractat.kuilt.cluster/AttachmentDirectory { // us.tractat.kuilt.cluster/AttachmentDirectory|null[0]
+    final val entries // us.tractat.kuilt.cluster/AttachmentDirectory.entries|{}entries[0]
+        final fun <get-entries>(): kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.cluster/AttachmentDirectory.entries.<get-entries>|<get-entries>(){}[0]
+
+    final fun attach(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.cluster/AttachmentDirectory.attach|attach(us.tractat.kuilt.core.PeerId){}[0]
+    final fun close() // us.tractat.kuilt.cluster/AttachmentDirectory.close|close(){}[0]
+    final fun detach(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.cluster/AttachmentDirectory.detach|detach(us.tractat.kuilt.core.PeerId){}[0]
+    final fun lookup(us.tractat.kuilt.core/PeerId): us.tractat.kuilt.core/PeerId? // us.tractat.kuilt.cluster/AttachmentDirectory.lookup|lookup(us.tractat.kuilt.core.PeerId){}[0]
+    final fun twoTier(kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): us.tractat.kuilt.gossip/TwoTier // us.tractat.kuilt.cluster/AttachmentDirectory.twoTier|twoTier(kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+}
+
+final class us.tractat.kuilt.cluster/ClusterClient { // us.tractat.kuilt.cluster/ClusterClient|null[0]
+    final val committed // us.tractat.kuilt.cluster/ClusterClient.committed|{}committed[0]
+        final fun <get-committed>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/Committed> // us.tractat.kuilt.cluster/ClusterClient.committed.<get-committed>|<get-committed>(){}[0]
+    final val role // us.tractat.kuilt.cluster/ClusterClient.role|{}role[0]
+        final fun <get-role>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.raft/RaftRole> // us.tractat.kuilt.cluster/ClusterClient.role.<get-role>|<get-role>(){}[0]
+
+    final suspend fun close() // us.tractat.kuilt.cluster/ClusterClient.close|close(){}[0]
+    final suspend fun propose(kotlin/ByteArray): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.cluster/ClusterClient.propose|propose(kotlin.ByteArray){}[0]
+    final suspend fun propose(kotlin/ByteArray, kotlin/Long): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.cluster/ClusterClient.propose|propose(kotlin.ByteArray;kotlin.Long){}[0]
+}
+
+final class us.tractat.kuilt.cluster/ClusterEndpoints { // us.tractat.kuilt.cluster/ClusterEndpoints|null[0]
+    constructor <init>(kotlin.collections/List<us.tractat.kuilt.core/Tag>, us.tractat.kuilt.session.partition/EndpointSelector = ...) // us.tractat.kuilt.cluster/ClusterEndpoints.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.core.Tag>;us.tractat.kuilt.session.partition.EndpointSelector){}[0]
+
+    final val endpoints // us.tractat.kuilt.cluster/ClusterEndpoints.endpoints|{}endpoints[0]
+        final fun <get-endpoints>(): kotlin.collections/List<us.tractat.kuilt.core/Tag> // us.tractat.kuilt.cluster/ClusterEndpoints.endpoints.<get-endpoints>|<get-endpoints>(){}[0]
+    final val selector // us.tractat.kuilt.cluster/ClusterEndpoints.selector|{}selector[0]
+        final fun <get-selector>(): us.tractat.kuilt.session.partition/EndpointSelector // us.tractat.kuilt.cluster/ClusterEndpoints.selector.<get-selector>|<get-selector>(){}[0]
+
+    final fun component1(): kotlin.collections/List<us.tractat.kuilt.core/Tag> // us.tractat.kuilt.cluster/ClusterEndpoints.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.session.partition/EndpointSelector // us.tractat.kuilt.cluster/ClusterEndpoints.component2|component2(){}[0]
+    final fun copy(kotlin.collections/List<us.tractat.kuilt.core/Tag> = ..., us.tractat.kuilt.session.partition/EndpointSelector = ...): us.tractat.kuilt.cluster/ClusterEndpoints // us.tractat.kuilt.cluster/ClusterEndpoints.copy|copy(kotlin.collections.List<us.tractat.kuilt.core.Tag>;us.tractat.kuilt.session.partition.EndpointSelector){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.cluster/ClusterEndpoints.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.cluster/ClusterEndpoints.hashCode|hashCode(){}[0]
+    final fun toReconnect(): us.tractat.kuilt.session.partition/ServerClusterReconnect // us.tractat.kuilt.cluster/ClusterEndpoints.toReconnect|toReconnect(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.cluster/ClusterEndpoints.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.cluster/OverlayServer { // us.tractat.kuilt.cluster/OverlayServer|null[0]
+    final fun admit(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam) // us.tractat.kuilt.cluster/OverlayServer.admit|admit(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.Seam){}[0]
+    final fun attachDirectoryOnly(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.cluster/OverlayServer.attachDirectoryOnly|attachDirectoryOnly(us.tractat.kuilt.core.PeerId){}[0]
+    final fun close() // us.tractat.kuilt.cluster/OverlayServer.close|close(){}[0]
+    final fun detachDirectoryOnly(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.cluster/OverlayServer.detachDirectoryOnly|detachDirectoryOnly(us.tractat.kuilt.core.PeerId){}[0]
+    final fun evict(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.cluster/OverlayServer.evict|evict(us.tractat.kuilt.core.PeerId){}[0]
+    final fun lookup(us.tractat.kuilt.core/PeerId): us.tractat.kuilt.core/PeerId? // us.tractat.kuilt.cluster/OverlayServer.lookup|lookup(us.tractat.kuilt.core.PeerId){}[0]
+    final suspend fun route(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.cluster/OverlayServer.route|route(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.cluster/RoutedRaftTransport : us.tractat.kuilt.raft/RaftTransport { // us.tractat.kuilt.cluster/RoutedRaftTransport|null[0]
+    final val incoming // us.tractat.kuilt.cluster/RoutedRaftTransport.incoming|{}incoming[0]
+        final fun <get-incoming>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/RaftEnvelope> // us.tractat.kuilt.cluster/RoutedRaftTransport.incoming.<get-incoming>|<get-incoming>(){}[0]
+    final val maxPayloadBytes // us.tractat.kuilt.cluster/RoutedRaftTransport.maxPayloadBytes|{}maxPayloadBytes[0]
+        final fun <get-maxPayloadBytes>(): kotlin/Int? // us.tractat.kuilt.cluster/RoutedRaftTransport.maxPayloadBytes.<get-maxPayloadBytes>|<get-maxPayloadBytes>(){}[0]
+    final val peers // us.tractat.kuilt.cluster/RoutedRaftTransport.peers|{}peers[0]
+        final fun <get-peers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>> // us.tractat.kuilt.cluster/RoutedRaftTransport.peers.<get-peers>|<get-peers>(){}[0]
+    final val selfId // us.tractat.kuilt.cluster/RoutedRaftTransport.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.cluster/RoutedRaftTransport.selfId.<get-selfId>|<get-selfId>(){}[0]
+
+    final fun close() // us.tractat.kuilt.cluster/RoutedRaftTransport.close|close(){}[0]
+    final suspend fun sendTo(us.tractat.kuilt.raft/NodeId, kotlin/ByteArray) // us.tractat.kuilt.cluster/RoutedRaftTransport.sendTo|sendTo(us.tractat.kuilt.raft.NodeId;kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.cluster/RoutedUnicastRouter { // us.tractat.kuilt.cluster/RoutedUnicastRouter|null[0]
+    final fun close() // us.tractat.kuilt.cluster/RoutedUnicastRouter.close|close(){}[0]
+    final fun registerLocalSpoke(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam) // us.tractat.kuilt.cluster/RoutedUnicastRouter.registerLocalSpoke|registerLocalSpoke(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.Seam){}[0]
+    final fun removeLocalSpoke(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.cluster/RoutedUnicastRouter.removeLocalSpoke|removeLocalSpoke(us.tractat.kuilt.core.PeerId){}[0]
+    final suspend fun route(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.cluster/RoutedUnicastRouter.route|route(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.cluster/VoterMesh { // us.tractat.kuilt.cluster/VoterMesh|null[0]
+    final val committed // us.tractat.kuilt.cluster/VoterMesh.committed|{}committed[0]
+        final fun <get-committed>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/Committed> // us.tractat.kuilt.cluster/VoterMesh.committed.<get-committed>|<get-committed>(){}[0]
+    final val voterNodes // us.tractat.kuilt.cluster/VoterMesh.voterNodes|{}voterNodes[0]
+        final fun <get-voterNodes>(): kotlin.collections/Map<us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/RaftNode> // us.tractat.kuilt.cluster/VoterMesh.voterNodes.<get-voterNodes>|<get-voterNodes>(){}[0]
+
+    final suspend fun awaitLeader(): us.tractat.kuilt.raft/RaftNode // us.tractat.kuilt.cluster/VoterMesh.awaitLeader|awaitLeader(){}[0]
+    final suspend fun close() // us.tractat.kuilt.cluster/VoterMesh.close|close(){}[0]
+}
+
+final const val us.tractat.kuilt.cluster/OVERLAY_UNICAST_CHANNEL // us.tractat.kuilt.cluster/OVERLAY_UNICAST_CHANNEL|{}OVERLAY_UNICAST_CHANNEL[0]
+    final fun <get-OVERLAY_UNICAST_CHANNEL>(): kotlin/String // us.tractat.kuilt.cluster/OVERLAY_UNICAST_CHANNEL.<get-OVERLAY_UNICAST_CHANNEL>|<get-OVERLAY_UNICAST_CHANNEL>(){}[0]
+
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.cluster/attachConnections(kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>>, us.tractat.kuilt.cluster/OverlayServer, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>) // us.tractat.kuilt.cluster/attachConnections|attachConnections@kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.flow.StateFlow<kotlin.collections.Set<us.tractat.kuilt.core.PeerId>>;us.tractat.kuilt.cluster.OverlayServer;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.cluster/clusterClient(us.tractat.kuilt.core/Loom, us.tractat.kuilt.cluster/ClusterEndpoints, us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/ClusterConfig, us.tractat.kuilt.raft/RaftConfig, us.tractat.kuilt.raft/ClientIdentity = ..., kotlin/Function0<kotlin.time/Instant>): us.tractat.kuilt.cluster/ClusterClient // us.tractat.kuilt.cluster/clusterClient|clusterClient@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Loom;us.tractat.kuilt.cluster.ClusterEndpoints;us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.ClusterConfig;us.tractat.kuilt.raft.RaftConfig;us.tractat.kuilt.raft.ClientIdentity;kotlin.Function0<kotlin.time.Instant>){}[0]
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.cluster/launchCoreLearnerAdmission(us.tractat.kuilt.raft/RaftNode, us.tractat.kuilt.core/Seam, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>) // us.tractat.kuilt.cluster/launchCoreLearnerAdmission|launchCoreLearnerAdmission@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.raft.RaftNode;us.tractat.kuilt.core.Seam;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.cluster/launchFederatedCoreAdmission(us.tractat.kuilt.raft/RaftNode, us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/Seam, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>) // us.tractat.kuilt.cluster/launchFederatedCoreAdmission|launchFederatedCoreAdmission@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.raft.RaftNode;us.tractat.kuilt.core.Seam;us.tractat.kuilt.core.Seam;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.cluster/voterMeshOverSeams(kotlin.collections/Map<us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.core/Seam>, us.tractat.kuilt.raft/RaftConfig, kotlin/Function1<us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/RaftStorage> = ...): us.tractat.kuilt.cluster/VoterMesh // us.tractat.kuilt.cluster/voterMeshOverSeams|voterMeshOverSeams@kotlinx.coroutines.CoroutineScope(kotlin.collections.Map<us.tractat.kuilt.raft.NodeId,us.tractat.kuilt.core.Seam>;us.tractat.kuilt.raft.RaftConfig;kotlin.Function1<us.tractat.kuilt.raft.NodeId,us.tractat.kuilt.raft.RaftStorage>){}[0]
+final fun us.tractat.kuilt.cluster/attachmentDirectory(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope, kotlin/Function0<kotlin/Long>, us.tractat.kuilt.crdt/ReplicaId = ..., us.tractat.kuilt.quilter/QuilterConfig = ...): us.tractat.kuilt.cluster/AttachmentDirectory // us.tractat.kuilt.cluster/attachmentDirectory|attachmentDirectory(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.Seam;kotlinx.coroutines.CoroutineScope;kotlin.Function0<kotlin.Long>;us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.quilter.QuilterConfig){}[0]
+final fun us.tractat.kuilt.cluster/clusterClientWithNode(us.tractat.kuilt.raft/RaftNode): us.tractat.kuilt.cluster/ClusterClient // us.tractat.kuilt.cluster/clusterClientWithNode|clusterClientWithNode(us.tractat.kuilt.raft.RaftNode){}[0]
+final fun us.tractat.kuilt.cluster/overlayServer(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope, kotlin/Function0<kotlin/Long>, us.tractat.kuilt.crdt/ReplicaId = ..., us.tractat.kuilt.quilter/QuilterConfig = ...): us.tractat.kuilt.cluster/OverlayServer // us.tractat.kuilt.cluster/overlayServer|overlayServer(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.Seam;us.tractat.kuilt.core.Seam;kotlinx.coroutines.CoroutineScope;kotlin.Function0<kotlin.Long>;us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.quilter.QuilterConfig){}[0]
+final fun us.tractat.kuilt.cluster/playerRelayTransport(us.tractat.kuilt.raft/RaftTransport, us.tractat.kuilt.core/Seam, kotlin/Function0<kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>>, kotlinx.coroutines/CoroutineScope): us.tractat.kuilt.cluster/RoutedRaftTransport // us.tractat.kuilt.cluster/playerRelayTransport|playerRelayTransport(us.tractat.kuilt.raft.RaftTransport;us.tractat.kuilt.core.Seam;kotlin.Function0<kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>>;kotlinx.coroutines.CoroutineScope){}[0]
+final fun us.tractat.kuilt.cluster/routedUnicastRouter(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam, kotlin/Function1<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/PeerId?>, kotlinx.coroutines/CoroutineScope): us.tractat.kuilt.cluster/RoutedUnicastRouter // us.tractat.kuilt.cluster/routedUnicastRouter|routedUnicastRouter(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.Seam;kotlin.Function1<us.tractat.kuilt.core.PeerId,us.tractat.kuilt.core.PeerId?>;kotlinx.coroutines.CoroutineScope){}[0]
+final fun us.tractat.kuilt.cluster/serverRelayTransport(us.tractat.kuilt.raft/RaftTransport, us.tractat.kuilt.core/Seam, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>, kotlinx.coroutines/CoroutineScope, kotlin/Function1<us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId?>): us.tractat.kuilt.cluster/RoutedRaftTransport // us.tractat.kuilt.cluster/serverRelayTransport|serverRelayTransport(us.tractat.kuilt.raft.RaftTransport;us.tractat.kuilt.core.Seam;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;kotlinx.coroutines.CoroutineScope;kotlin.Function1<us.tractat.kuilt.raft.NodeId,us.tractat.kuilt.raft.NodeId?>){}[0]
+final fun us.tractat.kuilt.cluster/voterMeshFromNodes(kotlin.collections/Map<us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/RaftNode>, kotlinx.coroutines/CoroutineScope): us.tractat.kuilt.cluster/VoterMesh // us.tractat.kuilt.cluster/voterMeshFromNodes|voterMeshFromNodes(kotlin.collections.Map<us.tractat.kuilt.raft.NodeId,us.tractat.kuilt.raft.RaftNode>;kotlinx.coroutines.CoroutineScope){}[0]

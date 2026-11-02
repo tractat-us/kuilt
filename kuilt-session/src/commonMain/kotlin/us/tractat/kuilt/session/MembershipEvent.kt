@@ -122,8 +122,13 @@ public sealed interface MembershipEvent {
     /**
      * The host's transport link was permanently lost (joiner perspective only).
      *
-     * Terminal state — no further events follow. [Room.broadcast] and [Room.sendTo]
-     * become silent no-ops after this event.
+     * Terminal state. [Room.broadcast] and [Room.sendTo] become silent no-ops after this event.
+     *
+     * Treat it as the last word, even though it may not arrive last. An event racing it on another
+     * thread can land just after it, so ignore everything that follows: a [Partitioned] or
+     * [WindowOpened] would start a countdown no event ends, and a [Resumed] would claim a recovery
+     * the room cannot use. Stop any countdown already running too, since no [Recovered] or [Left]
+     * will come for it.
      *
      * The room then ends itself as [Room.leave] does: [Room.roster] empties and every
      * [Room.incomingFrom] flow completes. The event comes first and the room does not wait for a
@@ -198,8 +203,9 @@ public sealed interface MembershipEvent {
      * The joiner's admit handshake failed terminally — it never entered a roster
      * (joiner perspective only).
      *
-     * Terminal state — no further events follow. [Room.broadcast] and [Room.sendTo]
-     * become silent no-ops after this event.
+     * Terminal state. [Room.broadcast] and [Room.sendTo] become silent no-ops after this event.
+     * As with [HostLost], an event racing it on another thread can land just after it: ignore
+     * everything that follows.
      *
      * Distinct from [HostLost]: [HostLost] means an *already-admitted* joiner lost its host;
      * [AdmissionFailed] means admission never completed at all. Emitting it is the loud

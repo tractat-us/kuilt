@@ -1,0 +1,37 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-warp-planning>
+final class us.tractat.kuilt.warp/CoordinationCost : kotlin/Comparable<us.tractat.kuilt.warp/CoordinationCost> { // us.tractat.kuilt.warp/CoordinationCost|null[0]
+    constructor <init>(kotlin/Int, kotlin/Int, kotlin/Long) // us.tractat.kuilt.warp/CoordinationCost.<init>|<init>(kotlin.Int;kotlin.Int;kotlin.Long){}[0]
+
+    final val coordinatedVolume // us.tractat.kuilt.warp/CoordinationCost.coordinatedVolume|{}coordinatedVolume[0]
+        final fun <get-coordinatedVolume>(): kotlin/Long // us.tractat.kuilt.warp/CoordinationCost.coordinatedVolume.<get-coordinatedVolume>|<get-coordinatedVolume>(){}[0]
+    final val coupling // us.tractat.kuilt.warp/CoordinationCost.coupling|{}coupling[0]
+        final fun <get-coupling>(): kotlin/Int // us.tractat.kuilt.warp/CoordinationCost.coupling.<get-coupling>|<get-coupling>(){}[0]
+    final val rounds // us.tractat.kuilt.warp/CoordinationCost.rounds|{}rounds[0]
+        final fun <get-rounds>(): kotlin/Int // us.tractat.kuilt.warp/CoordinationCost.rounds.<get-rounds>|<get-rounds>(){}[0]
+
+    final fun compareTo(us.tractat.kuilt.warp/CoordinationCost): kotlin/Int // us.tractat.kuilt.warp/CoordinationCost.compareTo|compareTo(us.tractat.kuilt.warp.CoordinationCost){}[0]
+    final fun component1(): kotlin/Int // us.tractat.kuilt.warp/CoordinationCost.component1|component1(){}[0]
+    final fun component2(): kotlin/Int // us.tractat.kuilt.warp/CoordinationCost.component2|component2(){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.warp/CoordinationCost.component3|component3(){}[0]
+    final fun copy(kotlin/Int = ..., kotlin/Int = ..., kotlin/Long = ...): us.tractat.kuilt.warp/CoordinationCost // us.tractat.kuilt.warp/CoordinationCost.copy|copy(kotlin.Int;kotlin.Int;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/CoordinationCost.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/CoordinationCost.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/CoordinationCost.toString|toString(){}[0]
+}
+
+final fun <#A: kotlin/Any?> (us.tractat.kuilt.warp/Draft<#A>).us.tractat.kuilt.warp/consolidateEmbroideries(): us.tractat.kuilt.warp/Draft<#A> // us.tractat.kuilt.warp/consolidateEmbroideries|consolidateEmbroideries@us.tractat.kuilt.warp.Draft<0:0>(){0§<kotlin.Any?>}[0]
+final fun <#A: kotlin/Any?> (us.tractat.kuilt.warp/Draft<#A>).us.tractat.kuilt.warp/coordinationCost(us.tractat.kuilt.warp/WarpStats): us.tractat.kuilt.warp/CoordinationCost // us.tractat.kuilt.warp/coordinationCost|coordinationCost@us.tractat.kuilt.warp.Draft<0:0>(us.tractat.kuilt.warp.WarpStats){0§<kotlin.Any?>}[0]
+final fun <#A: kotlin/Any?> (us.tractat.kuilt.warp/Draft<#A>).us.tractat.kuilt.warp/deferEmbroidery(): us.tractat.kuilt.warp/Draft<#A> // us.tractat.kuilt.warp/deferEmbroidery|deferEmbroidery@us.tractat.kuilt.warp.Draft<0:0>(){0§<kotlin.Any?>}[0]
+final fun <#A: kotlin/Any?> (us.tractat.kuilt.warp/Draft<#A>).us.tractat.kuilt.warp/fuseAdjacent(): us.tractat.kuilt.warp/Draft<#A> // us.tractat.kuilt.warp/fuseAdjacent|fuseAdjacent@us.tractat.kuilt.warp.Draft<0:0>(){0§<kotlin.Any?>}[0]
+final fun <#A: kotlin/Any?> (us.tractat.kuilt.warp/Draft<#A>).us.tractat.kuilt.warp/isEquivalentTo(us.tractat.kuilt.warp/Draft<#A>): kotlin/Boolean // us.tractat.kuilt.warp/isEquivalentTo|isEquivalentTo@us.tractat.kuilt.warp.Draft<0:0>(us.tractat.kuilt.warp.Draft<0:0>){0§<kotlin.Any?>}[0]
+final fun <#A: kotlin/Any?> (us.tractat.kuilt.warp/Draft<#A>).us.tractat.kuilt.warp/optimize(): us.tractat.kuilt.warp/Draft<#A> // us.tractat.kuilt.warp/optimize|optimize@us.tractat.kuilt.warp.Draft<0:0>(){0§<kotlin.Any?>}[0]
+final fun <#A: kotlin/Any?> (us.tractat.kuilt.warp/Draft<#A>).us.tractat.kuilt.warp/plan(us.tractat.kuilt.warp/WarpStats): us.tractat.kuilt.warp/Draft<#A> // us.tractat.kuilt.warp/plan|plan@us.tractat.kuilt.warp.Draft<0:0>(us.tractat.kuilt.warp.WarpStats){0§<kotlin.Any?>}[0]
+final fun <#A: kotlin/Any?> (us.tractat.kuilt.warp/Draft<#A>).us.tractat.kuilt.warp/pushdownFilters(): us.tractat.kuilt.warp/Draft<#A> // us.tractat.kuilt.warp/pushdownFilters|pushdownFilters@us.tractat.kuilt.warp.Draft<0:0>(){0§<kotlin.Any?>}[0]
+final suspend fun (us.tractat.kuilt.warp/Draft<*>).us.tractat.kuilt.warp/executeCoordinated(kotlin.coroutines/SuspendFunction1<kotlin/ByteArray, kotlin/Unit>): kotlin/Int // us.tractat.kuilt.warp/executeCoordinated|executeCoordinated@us.tractat.kuilt.warp.Draft<*>(kotlin.coroutines.SuspendFunction1<kotlin.ByteArray,kotlin.Unit>){}[0]

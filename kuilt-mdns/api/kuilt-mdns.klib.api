@@ -1,0 +1,133 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Alias: ios => [iosArm64, iosSimulatorArm64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-mdns>
+final class us.tractat.kuilt.mdns/MDNSAdvertisement : us.tractat.kuilt.core/Tag { // us.tractat.kuilt.mdns/MDNSAdvertisement|null[0]
+    constructor <init>(kotlin/String, kotlin/Int, us.tractat.kuilt.core/PeerId, kotlin/String, kotlin/String = ..., us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs? = ..., kotlin/String? = ..., kotlin/String? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ..., kotlin/String? = ...) // us.tractat.kuilt.mdns/MDNSAdvertisement.<init>|<init>(kotlin.String;kotlin.Int;us.tractat.kuilt.core.PeerId;kotlin.String;kotlin.String;us.tractat.kuilt.mdns.MDNSAdvertisement.HostOs?;kotlin.String?;kotlin.String?;kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.String?){}[0]
+
+    final val fabrics // us.tractat.kuilt.mdns/MDNSAdvertisement.fabrics|{}fabrics[0]
+        final fun <get-fabrics>(): kotlin/String? // us.tractat.kuilt.mdns/MDNSAdvertisement.fabrics.<get-fabrics>|<get-fabrics>(){}[0]
+    final val host // us.tractat.kuilt.mdns/MDNSAdvertisement.host|{}host[0]
+        final fun <get-host>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.host.<get-host>|<get-host>(){}[0]
+    final val hostOs // us.tractat.kuilt.mdns/MDNSAdvertisement.hostOs|{}hostOs[0]
+        final fun <get-hostOs>(): us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs? // us.tractat.kuilt.mdns/MDNSAdvertisement.hostOs.<get-hostOs>|<get-hostOs>(){}[0]
+    final val mcPeer // us.tractat.kuilt.mdns/MDNSAdvertisement.mcPeer|{}mcPeer[0]
+        final fun <get-mcPeer>(): kotlin/String? // us.tractat.kuilt.mdns/MDNSAdvertisement.mcPeer.<get-mcPeer>|<get-mcPeer>(){}[0]
+    final val peerKey // us.tractat.kuilt.mdns/MDNSAdvertisement.peerKey|{}peerKey[0]
+        final fun <get-peerKey>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.peerKey.<get-peerKey>|<get-peerKey>(){}[0]
+    final val port // us.tractat.kuilt.mdns/MDNSAdvertisement.port|{}port[0]
+        final fun <get-port>(): kotlin/Int // us.tractat.kuilt.mdns/MDNSAdvertisement.port.<get-port>|<get-port>(){}[0]
+    final val roomKey // us.tractat.kuilt.mdns/MDNSAdvertisement.roomKey|{}roomKey[0]
+        final fun <get-roomKey>(): kotlin/String? // us.tractat.kuilt.mdns/MDNSAdvertisement.roomKey.<get-roomKey>|<get-roomKey>(){}[0]
+    final val serverPeerId // us.tractat.kuilt.mdns/MDNSAdvertisement.serverPeerId|{}serverPeerId[0]
+        final fun <get-serverPeerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.mdns/MDNSAdvertisement.serverPeerId.<get-serverPeerId>|<get-serverPeerId>(){}[0]
+    final val sessionName // us.tractat.kuilt.mdns/MDNSAdvertisement.sessionName|{}sessionName[0]
+        final fun <get-sessionName>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.sessionName.<get-sessionName>|<get-sessionName>(){}[0]
+    final val txtExtensions // us.tractat.kuilt.mdns/MDNSAdvertisement.txtExtensions|{}txtExtensions[0]
+        final fun <get-txtExtensions>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.mdns/MDNSAdvertisement.txtExtensions.<get-txtExtensions>|<get-txtExtensions>(){}[0]
+    final val wsPath // us.tractat.kuilt.mdns/MDNSAdvertisement.wsPath|{}wsPath[0]
+        final fun <get-wsPath>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.wsPath.<get-wsPath>|<get-wsPath>(){}[0]
+    final val wsUrl // us.tractat.kuilt.mdns/MDNSAdvertisement.wsUrl|{}wsUrl[0]
+        final fun <get-wsUrl>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.wsUrl.<get-wsUrl>|<get-wsUrl>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.component1|component1(){}[0]
+    final fun component10(): kotlin/String? // us.tractat.kuilt.mdns/MDNSAdvertisement.component10|component10(){}[0]
+    final fun component2(): kotlin/Int // us.tractat.kuilt.mdns/MDNSAdvertisement.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.mdns/MDNSAdvertisement.component3|component3(){}[0]
+    final fun component4(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.component4|component4(){}[0]
+    final fun component5(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.component5|component5(){}[0]
+    final fun component6(): us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs? // us.tractat.kuilt.mdns/MDNSAdvertisement.component6|component6(){}[0]
+    final fun component7(): kotlin/String? // us.tractat.kuilt.mdns/MDNSAdvertisement.component7|component7(){}[0]
+    final fun component8(): kotlin/String? // us.tractat.kuilt.mdns/MDNSAdvertisement.component8|component8(){}[0]
+    final fun component9(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.mdns/MDNSAdvertisement.component9|component9(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/Int = ..., us.tractat.kuilt.core/PeerId = ..., kotlin/String = ..., kotlin/String = ..., us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs? = ..., kotlin/String? = ..., kotlin/String? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ..., kotlin/String? = ...): us.tractat.kuilt.mdns/MDNSAdvertisement // us.tractat.kuilt.mdns/MDNSAdvertisement.copy|copy(kotlin.String;kotlin.Int;us.tractat.kuilt.core.PeerId;kotlin.String;kotlin.String;us.tractat.kuilt.mdns.MDNSAdvertisement.HostOs?;kotlin.String?;kotlin.String?;kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.String?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.mdns/MDNSAdvertisement.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.mdns/MDNSAdvertisement.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.toString|toString(){}[0]
+
+    final enum class HostOs : kotlin/Enum<us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs> { // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs|null[0]
+        enum entry Android // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.Android|null[0]
+        enum entry Apple // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.Apple|null[0]
+        enum entry Jvm // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.Jvm|null[0]
+
+        final val entries // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs> // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.entries.<get-entries>|<get-entries>#static(){}[0]
+        final val txtValue // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.txtValue|{}txtValue[0]
+            final fun <get-txtValue>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.txtValue.<get-txtValue>|<get-txtValue>(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs> // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.values|values#static(){}[0]
+
+        final object Companion { // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.Companion|null[0]
+            final fun fromTxt(kotlin/String): us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs? // us.tractat.kuilt.mdns/MDNSAdvertisement.HostOs.Companion.fromTxt|fromTxt(kotlin.String){}[0]
+        }
+    }
+
+    final object Companion { // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion|null[0]
+        final const val DEFAULT_WS_PATH // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.DEFAULT_WS_PATH|{}DEFAULT_WS_PATH[0]
+            final fun <get-DEFAULT_WS_PATH>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.DEFAULT_WS_PATH.<get-DEFAULT_WS_PATH>|<get-DEFAULT_WS_PATH>(){}[0]
+        final const val FABRIC_MC // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.FABRIC_MC|{}FABRIC_MC[0]
+            final fun <get-FABRIC_MC>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.FABRIC_MC.<get-FABRIC_MC>|<get-FABRIC_MC>(){}[0]
+        final const val FABRIC_NEARBY // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.FABRIC_NEARBY|{}FABRIC_NEARBY[0]
+            final fun <get-FABRIC_NEARBY>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.FABRIC_NEARBY.<get-FABRIC_NEARBY>|<get-FABRIC_NEARBY>(){}[0]
+        final const val FABRIC_WS // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.FABRIC_WS|{}FABRIC_WS[0]
+            final fun <get-FABRIC_WS>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.FABRIC_WS.<get-FABRIC_WS>|<get-FABRIC_WS>(){}[0]
+        final const val PROTOCOL_VERSION // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.PROTOCOL_VERSION|{}PROTOCOL_VERSION[0]
+            final fun <get-PROTOCOL_VERSION>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.PROTOCOL_VERSION.<get-PROTOCOL_VERSION>|<get-PROTOCOL_VERSION>(){}[0]
+        final const val TXT_KEY_FABRICS // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_FABRICS|{}TXT_KEY_FABRICS[0]
+            final fun <get-TXT_KEY_FABRICS>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_FABRICS.<get-TXT_KEY_FABRICS>|<get-TXT_KEY_FABRICS>(){}[0]
+        final const val TXT_KEY_HOST_OS // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_HOST_OS|{}TXT_KEY_HOST_OS[0]
+            final fun <get-TXT_KEY_HOST_OS>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_HOST_OS.<get-TXT_KEY_HOST_OS>|<get-TXT_KEY_HOST_OS>(){}[0]
+        final const val TXT_KEY_MC_PEER // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_MC_PEER|{}TXT_KEY_MC_PEER[0]
+            final fun <get-TXT_KEY_MC_PEER>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_MC_PEER.<get-TXT_KEY_MC_PEER>|<get-TXT_KEY_MC_PEER>(){}[0]
+        final const val TXT_KEY_PEER_ID // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_PEER_ID|{}TXT_KEY_PEER_ID[0]
+            final fun <get-TXT_KEY_PEER_ID>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_PEER_ID.<get-TXT_KEY_PEER_ID>|<get-TXT_KEY_PEER_ID>(){}[0]
+        final const val TXT_KEY_PROTOCOL_VERSION // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_PROTOCOL_VERSION|{}TXT_KEY_PROTOCOL_VERSION[0]
+            final fun <get-TXT_KEY_PROTOCOL_VERSION>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_PROTOCOL_VERSION.<get-TXT_KEY_PROTOCOL_VERSION>|<get-TXT_KEY_PROTOCOL_VERSION>(){}[0]
+        final const val TXT_KEY_ROOM // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_ROOM|{}TXT_KEY_ROOM[0]
+            final fun <get-TXT_KEY_ROOM>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_ROOM.<get-TXT_KEY_ROOM>|<get-TXT_KEY_ROOM>(){}[0]
+        final const val TXT_KEY_WS_PATH // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_WS_PATH|{}TXT_KEY_WS_PATH[0]
+            final fun <get-TXT_KEY_WS_PATH>(): kotlin/String // us.tractat.kuilt.mdns/MDNSAdvertisement.Companion.TXT_KEY_WS_PATH.<get-TXT_KEY_WS_PATH>|<get-TXT_KEY_WS_PATH>(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.mdns/PeerRoster { // us.tractat.kuilt.mdns/PeerRoster|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/ReplicaId) // us.tractat.kuilt.mdns/PeerRoster.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId){}[0]
+
+    final val peers // us.tractat.kuilt.mdns/PeerRoster.peers|{}peers[0]
+        final fun <get-peers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.mdns/PeerRoster.peers.<get-peers>|<get-peers>(){}[0]
+
+    final fun announce(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.mdns/PeerRoster.announce|announce(us.tractat.kuilt.core.PeerId){}[0]
+    final fun goodbye(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.mdns/PeerRoster.goodbye|goodbye(us.tractat.kuilt.core.PeerId){}[0]
+    final fun merge(us.tractat.kuilt.mdns/PeerRoster) // us.tractat.kuilt.mdns/PeerRoster.merge|merge(us.tractat.kuilt.mdns.PeerRoster){}[0]
+}
+
+final value class us.tractat.kuilt.mdns/MDNSServiceType { // us.tractat.kuilt.mdns/MDNSServiceType|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.mdns/MDNSServiceType.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.mdns/MDNSServiceType.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.mdns/MDNSServiceType.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.mdns/MDNSServiceType.equals|equals(kotlin.Any?){}[0]
+    final fun forJmDns(): kotlin/String // us.tractat.kuilt.mdns/MDNSServiceType.forJmDns|forJmDns(){}[0]
+    final fun forNsNetServiceBrowser(): kotlin/String // us.tractat.kuilt.mdns/MDNSServiceType.forNsNetServiceBrowser|forNsNetServiceBrowser(){}[0]
+    final fun forNsd(): kotlin/String // us.tractat.kuilt.mdns/MDNSServiceType.forNsd|forNsd(){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.mdns/MDNSServiceType.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.mdns/MDNSServiceType.toString|toString(){}[0]
+}
+
+// Targets: [ios]
+final class us.tractat.kuilt.mdns/MDNSServiceDiscoverer : us.tractat.kuilt.core.discovery/PeerDiscoverySource { // us.tractat.kuilt.mdns/MDNSServiceDiscoverer|null[0]
+    constructor <init>(us.tractat.kuilt.mdns/MDNSServiceType) // us.tractat.kuilt.mdns/MDNSServiceDiscoverer.<init>|<init>(us.tractat.kuilt.mdns.MDNSServiceType){}[0]
+
+    final val kind // us.tractat.kuilt.mdns/MDNSServiceDiscoverer.kind|{}kind[0]
+        final fun <get-kind>(): us.tractat.kuilt.core.discovery/DiscoveryKind // us.tractat.kuilt.mdns/MDNSServiceDiscoverer.kind.<get-kind>|<get-kind>(){}[0]
+
+    final fun departures(): kotlinx.coroutines.flow/Flow<kotlin/String> // us.tractat.kuilt.mdns/MDNSServiceDiscoverer.departures|departures(){}[0]
+    final fun discoveries(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.mdns/MDNSAdvertisement> // us.tractat.kuilt.mdns/MDNSServiceDiscoverer.discoveries|discoveries(){}[0]
+}

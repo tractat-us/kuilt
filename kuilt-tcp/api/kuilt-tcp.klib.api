@@ -1,0 +1,28 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-tcp>
+final class us.tractat.kuilt.tcp/TcpAddress : us.tractat.kuilt.core/Tag { // us.tractat.kuilt.tcp/TcpAddress|null[0]
+    constructor <init>(kotlin/String, kotlin/Int, kotlin/String = ...) // us.tractat.kuilt.tcp/TcpAddress.<init>|<init>(kotlin.String;kotlin.Int;kotlin.String){}[0]
+
+    final val host // us.tractat.kuilt.tcp/TcpAddress.host|{}host[0]
+        final fun <get-host>(): kotlin/String // us.tractat.kuilt.tcp/TcpAddress.host.<get-host>|<get-host>(){}[0]
+    final val peerKey // us.tractat.kuilt.tcp/TcpAddress.peerKey|{}peerKey[0]
+        final fun <get-peerKey>(): kotlin/String // us.tractat.kuilt.tcp/TcpAddress.peerKey.<get-peerKey>|<get-peerKey>(){}[0]
+    final val port // us.tractat.kuilt.tcp/TcpAddress.port|{}port[0]
+        final fun <get-port>(): kotlin/Int // us.tractat.kuilt.tcp/TcpAddress.port.<get-port>|<get-port>(){}[0]
+    final val sessionName // us.tractat.kuilt.tcp/TcpAddress.sessionName|{}sessionName[0]
+        final fun <get-sessionName>(): kotlin/String // us.tractat.kuilt.tcp/TcpAddress.sessionName.<get-sessionName>|<get-sessionName>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.tcp/TcpAddress.component1|component1(){}[0]
+    final fun component2(): kotlin/Int // us.tractat.kuilt.tcp/TcpAddress.component2|component2(){}[0]
+    final fun component3(): kotlin/String // us.tractat.kuilt.tcp/TcpAddress.component3|component3(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/Int = ..., kotlin/String = ...): us.tractat.kuilt.tcp/TcpAddress // us.tractat.kuilt.tcp/TcpAddress.copy|copy(kotlin.String;kotlin.Int;kotlin.String){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.tcp/TcpAddress.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.tcp/TcpAddress.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.tcp/TcpAddress.toString|toString(){}[0]
+}

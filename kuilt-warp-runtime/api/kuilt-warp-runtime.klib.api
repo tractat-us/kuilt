@@ -1,0 +1,28 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Alias: apple => [iosArm64, iosSimulatorArm64, macosArm64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-warp-runtime>
+// Targets: [apple]
+final class us.tractat.kuilt.warp/Wasm3WasmRuntime : us.tractat.kuilt.warp/WasmRuntime { // us.tractat.kuilt.warp/Wasm3WasmRuntime|null[0]
+    constructor <init>(us.tractat.kuilt.warp/WasmSandboxConfig = ...) // us.tractat.kuilt.warp/Wasm3WasmRuntime.<init>|<init>(us.tractat.kuilt.warp.WasmSandboxConfig){}[0]
+
+    final val config // us.tractat.kuilt.warp/Wasm3WasmRuntime.config|{}config[0]
+        final fun <get-config>(): us.tractat.kuilt.warp/WasmSandboxConfig // us.tractat.kuilt.warp/Wasm3WasmRuntime.config.<get-config>|<get-config>(){}[0]
+
+    final fun load(kotlin/ByteArray): us.tractat.kuilt.warp/Op // us.tractat.kuilt.warp/Wasm3WasmRuntime.load|load(kotlin.ByteArray){}[0]
+}
+
+// Targets: [wasmJs]
+final class us.tractat.kuilt.warp/BrowserWasmRuntime : us.tractat.kuilt.warp/WasmRuntime { // us.tractat.kuilt.warp/BrowserWasmRuntime|null[0]
+    constructor <init>(us.tractat.kuilt.warp/WasmSandboxConfig = ...) // us.tractat.kuilt.warp/BrowserWasmRuntime.<init>|<init>(us.tractat.kuilt.warp.WasmSandboxConfig){}[0]
+
+    final val config // us.tractat.kuilt.warp/BrowserWasmRuntime.config|{}config[0]
+        final fun <get-config>(): us.tractat.kuilt.warp/WasmSandboxConfig // us.tractat.kuilt.warp/BrowserWasmRuntime.config.<get-config>|<get-config>(){}[0]
+
+    final fun load(kotlin/ByteArray): us.tractat.kuilt.warp/Op // us.tractat.kuilt.warp/BrowserWasmRuntime.load|load(kotlin.ByteArray){}[0]
+}
