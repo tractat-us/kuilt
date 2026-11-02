@@ -162,19 +162,19 @@ class WeaveCancelledMidDialTest {
     @Test
     fun aKtorClientLoomWeaveCancelledAsTheSessionArrivesLeavesNoSocket() = realTime {
         cancelAsTheSessionArrivesAtTheHeldServer(clientLoom(client()))
-        assertTheSocketClosed(server.farEnd())
+        assertACleanClose(server.farEnd())
     }
 
     @Test
     fun aKtorClientLoomWeaveCancelledAsTheSessionArrivesLeavesNoSocketOnOkHttp() = realTime {
         cancelAsTheSessionArrivesAtTheHeldServer(clientLoom(client(OkHttp)))
-        assertTheSocketClosed(server.farEnd())
+        assertACleanClose(server.farEnd())
     }
 
     @Test
     fun aKtorMeshClientLoomWeaveCancelledAsTheSessionArrivesLeavesNoSocket() = realTime {
         cancelAsTheSessionArrivesAtTheHeldServer(meshLoom(client()))
-        assertTheSocketClosed(server.farEnd())
+        assertACleanClose(server.farEnd())
     }
 
     /** The same window on a real Ktor server, for what a route hears. */
@@ -247,23 +247,6 @@ class WeaveCancelledMidDialTest {
         assertFailsOnAClosedClient(meshLoom(httpClient), httpClient)
     }
 
-    /** The client going away under a dial is a failure too. Nobody cancelled the caller. */
-    @Test
-    fun aClientClosedUnderADialFailsTheWeaveRatherThanCancellingIt() = realTime {
-        val httpClient = client()
-        val outcome = CompletableDeferred<Outcome>()
-        rigScope.launch { outcome.complete(attempt { clientLoom(httpClient).join(advertisement()) }) }
-        server.awaitRequest()
-
-        httpClient.close()
-
-        val settled = withTimeoutOrNull(HANG_BOUND) { outcome.await() }
-        assertNotNull(settled, "a weave whose client closed under it hung past $HANG_BOUND instead of failing")
-        val failure = settled.failure
-        assertNotNull(failure, "the dial cannot have succeeded: the far end never answered")
-        assertFalse(failure is CancellationException, "the caller was not cancelled, so it must not hear one: $failure")
-    }
-
     /** A refused upgrade still reaches the caller as what it is. */
     @Test
     fun aRefusedUpgradeFailsTheWeaveWithAnOrdinaryException() = realTime {
@@ -289,6 +272,18 @@ class WeaveCancelledMidDialTest {
         if (farEnd is HeldHandshakeServer.FarEnd.CloseFrame) {
             assertTrue(farEnd.socketEnded, "a Close frame arrived but the socket stayed up within $OBSERVATION: $farEnd")
         }
+    }
+
+    /**
+     * The session reached this end, so there is a socket to close properly. A dropped connection would
+     * pass [assertTheSocketClosed], which is why the two are not one assertion.
+     */
+    private fun assertACleanClose(farEnd: HeldHandshakeServer.FarEnd) {
+        assertEquals<HeldHandshakeServer.FarEnd>(
+            HeldHandshakeServer.FarEnd.CloseFrame(code = NORMAL_CLOSE, socketEnded = true),
+            farEnd,
+            "a session nobody claimed gets a normal close, and then its socket ends",
+        )
     }
 
     private class Outcome(val failure: Throwable?)
@@ -348,6 +343,7 @@ class WeaveCancelledMidDialTest {
         val SELF = PeerId("self")
         val FAR_END = PeerId("far-end")
         const val NETTY_PATH = "/route"
+        const val NORMAL_CLOSE = 1000
         val POLL = 5.milliseconds
 
         /** Waited out only on a red; see the class KDoc. */

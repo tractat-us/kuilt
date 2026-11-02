@@ -11,6 +11,7 @@ import io.ktor.http.takeFrom
 import io.ktor.websocket.close
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -23,10 +24,10 @@ import kotlin.time.Duration.Companion.seconds
 /**
  * Open a WebSocket to [urlString] and hand the session to the caller, or leave nothing behind.
  *
- * Walk away from a dial and the socket goes with it. Cancel this call while the far end is still
- * answering, and the request is aborted. Cancel it in the instant the session arrives, and that
- * session is closed with a normal close, since nobody will ever hold it. Only a return makes the
- * session yours, and from then on closing it is your job.
+ * Walk away from a dial and the socket goes with it, before the cancellation reaches you. Cancel this
+ * call while the far end is still answering, and the request is aborted. Cancel it in the instant the
+ * session arrives, and that session gets a normal close, since nobody will ever hold it. Only a return
+ * makes the session yours, and from then on closing it is your job.
  *
  * Use this in place of Ktor's `webSocketSession`, which does not make that promise. That one runs the
  * handshake on the [HttpClient]'s scope and only waits for it, so a cancel ends the wait and nothing
@@ -46,8 +47,7 @@ import kotlin.time.Duration.Companion.seconds
  * does not end it. Put a ceiling on the client with `install(HttpTimeout)`, or wrap this call in a
  * timeout, which is an ordinary cancel and leaves no socket either.
  *
- * The session's close is the caller's only obligation once this returns. Wrap it in
- * [WebSocketConnection] to build a seam on it.
+ * Wrap the returned session in [WebSocketConnection] to build a seam on it.
  *
  * @param urlString The `ws://` or `wss://` URL to dial.
  * @param block Further request configuration, such as headers.
@@ -81,12 +81,7 @@ public suspend fun HttpClient.ownedWebSocketSession(
                     if (cause == null) ended.complete(Unit) else ended.completeExceptionally(cause)
                 }
                 arrived.complete(session)
-                try {
-                    ended.await()
-                } catch (abandoned: CancellationException) {
-                    closeUnclaimed(session, ended)
-                    throw abandoned
-                }
+                ended.await()
             }
         } catch (failure: Throwable) {
             arrived.completeExceptionally(failure)
@@ -99,33 +94,38 @@ public suspend fun HttpClient.ownedWebSocketSession(
     try {
         return arrived.await()
     } catch (abandoned: CancellationException) {
-        // Whichever window the cancel landed in, this reaches it. Mid-handshake, it aborts the request.
-        // With the session already delivered, the caller has taken this exception instead of the session
-        // (a cancelled coroutine does not resume with a value), and `dial` closes it.
-        dial.cancel()
+        // Shielded because the cancel is what brought us here, and the socket is gone before it goes on.
+        withContext(NonCancellable) { abandonDial(arrived, dial) }
         currentCoroutineContext().ensureActive()
         throw IOException("the WebSocket dial ended without a session", abandoned)
     }
 }
 
 /**
- * Close a session the caller will never hold, with a normal close the far end can read.
+ * End a dial whose caller has gone, on whichever side of the session's arrival that happened.
  *
- * Shielded because the cancel is what brought us here. Bounded because the shield removes the only
- * other way out, and a far end that has stopped reading can hold a Close frame up for as long as it
- * likes. Giving up costs only the courtesy: leaving `body` cancels the call, and that ends the socket.
+ * With no session yet, cancelling [dial] aborts the request. Once one has arrived, cancelling is the
+ * wrong tool: it takes the session down with the call, and the far end hears a dropped connection. So
+ * that session gets an ordinary close instead, and [dial] ends by itself when the session does. A
+ * caller reaches this with a session delivered because a cancelled coroutine does not resume with a
+ * value, even one that was already on its way.
  *
- * Nothing here is caught. [close] swallows its own failures, and anything else lands in the dial's
- * catch-all, which has nobody left to tell and still leaves `body`.
+ * [arrived]'s `cancel` settles which side this is, since from then on it cannot take a session. If the
+ * dial finishes in that same instant, its `complete` loses and it is simply cancelled below.
+ *
+ * Bounded because the shield around this removes the only other way out, and a far end that has
+ * stopped reading can hold a Close frame up for as long as it likes. Giving up costs only the courtesy:
+ * the last line cuts the call. Nothing here is caught, because `close` swallows its own failures and a
+ * cancelled dial reports nothing to `join`.
  */
-private suspend fun closeUnclaimed(session: DefaultClientWebSocketSession, ended: CompletableDeferred<Unit>) {
-    withContext(NonCancellable) {
-        withTimeoutOrNull(UNCLAIMED_CLOSE_BOUND) {
-            session.close()
-            ended.join()
-        }
+private suspend fun abandonDial(arrived: CompletableDeferred<DefaultClientWebSocketSession>, dial: Job) {
+    arrived.cancel()
+    withTimeoutOrNull(ABANDON_BOUND) {
+        if (arrived.isCancelled) dial.cancel() else arrived.await().close()
+        dial.join()
     }
+    dial.cancel()
 }
 
-/** How long an unclaimed session gets to say goodbye before its socket is cut. */
-private val UNCLAIMED_CLOSE_BOUND = 2.seconds
+/** How long an abandoned dial gets to end politely before its call is cut. */
+private val ABANDON_BOUND = 2.seconds

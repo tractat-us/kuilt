@@ -3,6 +3,7 @@ package us.tractat.kuilt.websocket
 import kotlinx.coroutines.CompletableDeferred
 import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
@@ -93,7 +94,7 @@ internal class HeldHandshakeServer(private val observation: Duration) : AutoClos
                 } catch (_: IOException) {
                     // The client is already gone, and the read below will say so.
                 }
-                verdict.complete(observe(input))
+                verdict.complete(observe(input, socket.getOutputStream()))
             }
         } catch (_: IOException) {
             // The listener closed in teardown, with nobody left to report to.
@@ -107,12 +108,15 @@ internal class HeldHandshakeServer(private val observation: Duration) : AutoClos
         else -> "$answerLine\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     }
 
-    private fun observe(input: InputStream): FarEnd {
+    private fun observe(input: InputStream, output: OutputStream): FarEnd {
         try {
             while (true) {
                 val frame = readFrame(input) ?: return FarEnd.SocketEnded
                 when (frame.opcode) {
-                    OPCODE_CLOSE -> return FarEnd.CloseFrame(frame.closeCode(), socketEnded = endsAfterClose(input))
+                    OPCODE_CLOSE -> {
+                        answerClose(output)
+                        return FarEnd.CloseFrame(frame.closeCode(), socketEnded = endsAfterClose(input))
+                    }
                     OPCODE_BINARY, OPCODE_TEXT -> dataFrameSeen.complete(Unit)
                 }
             }
@@ -120,6 +124,16 @@ internal class HeldHandshakeServer(private val observation: Duration) : AutoClos
             return FarEnd.StillOpen
         } catch (_: IOException) {
             return FarEnd.SocketEnded
+        }
+    }
+
+    /** What any live peer does, and what OkHttp waits on before it lets go of the socket. */
+    private fun answerClose(output: OutputStream) {
+        try {
+            output.write(byteArrayOf(0x88.toByte(), 0x00))
+            output.flush()
+        } catch (_: IOException) {
+            // The client did not wait for it, and the read after this will say so.
         }
     }
 
