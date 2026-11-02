@@ -191,7 +191,7 @@ class ProposeEnvelopeReserveTest {
                     transport,
                     storage,
                     config,
-                    ClientIdentity.Durable(ClientId(durableId)),
+                    ClientIdentity.Durable(ClientId(durableId), issuedThrough = 0L),
                 )
             },
         )
@@ -217,7 +217,7 @@ class ProposeEnvelopeReserveTest {
             wireBytes(command),
             "premise: the command must sit exactly ON the published limit, not under it",
         )
-        val outcome = runCatchingCancellable { leader.propose(command) }
+        val outcome = runCatchingCancellable { leader.propose(command, requestId = 1L) }
         sim.settle()
 
         assertAll(
@@ -268,14 +268,14 @@ class ProposeEnvelopeReserveTest {
                     transport,
                     storage,
                     config,
-                    ClientIdentity.Durable(ClientId(durableId)),
+                    ClientIdentity.Durable(ClientId(durableId), issuedThrough = 0L),
                 )
             },
         )
         val leader = awaitLeader(sim)
         // A command far past any plausible limit, so the refusal reports the engine's own arithmetic
         // rather than being sized against a number this test picked.
-        val refusal = assertFailsWith<PayloadTooLarge> { leader.propose(ByteArray(budget)) }
+        val refusal = assertFailsWith<PayloadTooLarge> { leader.propose(ByteArray(budget), requestId = 1L) }
         val needed = worstCaseOverhead(durableId)
 
         assertAll(

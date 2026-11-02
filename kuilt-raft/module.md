@@ -111,10 +111,13 @@ three rungs of guarantee:
    (a bare random GUID would alias) and is readable in logs. Auto serials are
    monotonic; this gives at-least-once forwarding with best-effort dedup, but no
    guarantee across a process restart (the suffix changes).
-2. **Durable.** Pass a **stable** `ClientId` the caller persists itself and replay
-   the *same* `requestId` (the `propose(command, requestId)` overload) on a
-   post-crash retry. The key survives the crash, so the consumer skips the entry
-   it already applied — exactly-once end-to-end.
+2. **Durable.** Pass a **stable** `ClientId` the caller persists itself, plus the
+   highest `requestId` it has issued, and replay the *same* `requestId` (the
+   `propose(command, requestId)` overload) on a post-crash retry. The key survives
+   the crash, so the consumer skips the entry it already applied — exactly-once
+   end-to-end. The one-argument `propose` is refused here, with an
+   `AutoSerialRefusedException`: a serial the node drew for itself could not be on
+   disk before it was issued.
 3. **Ignore.** Treat the key as absent (internal no-op/config entries carry a
    `null` `dedupKey`); the entry always applies.
 
@@ -138,14 +141,57 @@ the identity. A **durable** id fails loud with `ClientIdCollisionException` (two
 processes were handed one id — an operational error; do not retry under it). An
 **auto** id silently re-mints a fresh suffix and logs a warning.
 
-A durable id outlives its process, so on boot the node also counts the highest serial
-its retained log holds under that id, and its auto serial resumes above it. Replaying
-its own entries is then not a collision. The retained log is all it has to go on: a node
-that kept no log, or one that crashed with a forwarded proposal in flight, reads its own
-history as a collision when replication brings it back, and a snapshot covering every
-entry under the id loses the floor. The same log also hides a genuine second writer once
-it holds that writer's serial, so a clean boot says nothing about whether the id is
-shared. `ClientIdentity.Durable` spells all of this out, and closing it is tracked by #3060.
+A durable id outlives its process, so the caller hands over a floor:
+`ClientIdentity.Durable(clientId, issuedThrough)`. Serials at or below it are the id's
+own, so its history is not a collision however it comes back, whether replayed from
+storage, replicated to a node that kept no log, or committed after the crash that lost
+the forward. The log cannot do this job, because a snapshot can cut the last entry
+under the id and a forward can be in flight at the crash. It also cannot say who wrote
+a serial, which is why a retained foreign serial no longer raises the mark: the next
+boot dies on it again rather than passing it off as its own.
+
+The caller commits each new `requestId` as the new floor **before** proposing it, in its
+own store, with the command's bytes, and reads them back at boot. A retry resends the same
+bytes only if the caller kept them.
+
+**A higher serial abandons every lower one.** The table keeps one high-water serial per id,
+so once a higher serial commits, a retry of a lower one returns success, commits, and is
+dropped. A crash can get there and so can a caller's own timeout. Do not issue a serial
+while a lower one is unresolved: retry first. Tracked by #3107.
+
+**A floor behind the truth has three outcomes.** It fails with the same exception on every
+boot that walks the serial. If a proposal raises the mark over the gap first, it reuses a
+serial and a consumer's table drops the command. If a snapshot already covers the serial,
+the node never walks it and boots clean, and its next serial is a reuse with the same
+ending. So a clean boot does not prove a floor true. A serial at or below the mark goes
+unseen whoever wrote it, tracked by #3081, and so does a second writer's serial inside a
+snapshot. `ClientIdentity.Durable` spells this out.
+
+<!-- verbatim from kuilt-raft/src/commonSamples/kotlin/us/tractat/kuilt/raft/RaftSamples.kt#sampleDurableClientIdentity -->
+```kotlin
+// The floor lives in your own store, beside the id, with the command it was issued for. They share
+// one record because a store commits one key at a time. A sample uses the in-memory store.
+val store: DurableStore = InMemoryDurableStore()
+val lastIssued = StoreKey("client/last-issued")
+suspend fun readFloor(): Long = store.read(lastIssued)?.decodeToString()?.substringBefore(' ')?.toLong() ?: 0L
+suspend fun readCommand(): String? = store.read(lastIssued)?.decodeToString()?.substringAfter(' ')
+
+// Boot: read the floor and hand it over — `scope.raftNode(cluster, transport, storage, identity = identity)`.
+val identity = ClientIdentity.Durable(ClientId("checkout-client"), issuedThrough = readFloor())
+
+// A new command, once the last one has returned. Read the floor afresh each time: `identity` is
+// fixed at boot, so taking it from there would reuse a serial from the second command on.
+// Commit the serial and the bytes FIRST, then `node.propose(command, requestId)`.
+val requestId = readFloor() + 1
+store.write(lastIssued, "$requestId charge-card".encodeToByteArray())
+
+// After a crash the floor covers that serial, so its entry coming back is not a collision. Its
+// outcome is unknown, so retry this serial with these bytes BEFORE issuing another: a higher serial
+// abandons this one, and a retry after that is acknowledged and then dropped.
+val restarted = ClientIdentity.Durable(identity.clientId, issuedThrough = readFloor())
+check(restarted.issuedThrough == requestId)
+check(readCommand() == "charge-card")
+```
 
 **Bounding (v2 — supersession prune).** The table is self-bounding without any
 clock, horizon, or heuristic. A `NodeId` is cluster-unique, so two incarnations

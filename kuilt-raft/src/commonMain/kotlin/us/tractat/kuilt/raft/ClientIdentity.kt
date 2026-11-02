@@ -18,32 +18,71 @@ public sealed interface ClientIdentity {
     public data object Auto : ClientIdentity
 
     /**
-     * Use the caller-supplied stable [clientId], persisted by the caller across restarts. Replaying
-     * the same `requestId` on a post-crash retry yields cross-crash exactly-once. A collision under a
-     * durable id is an operational error (two live writers sharing one id) and surfaces as a
-     * [ClientIdCollisionException] rather than a silent re-mint.
+     * Use the caller-supplied stable [clientId] and the serial floor [issuedThrough], both persisted
+     * by the caller across restarts. Replaying the same `requestId` on a post-crash retry yields
+     * cross-crash exactly-once. A serial under this id above everything the node knows of is an
+     * operational error and surfaces as a [ClientIdCollisionException] rather than a silent re-mint.
      *
-     * **A restart picks its serials up from the log the node retained.** Replaying its own entries
-     * is not a collision, and the auto-serial `propose(command)` resumes above the highest serial it
-     * finds. Four cases are not covered, all tracked by #3060:
+     * [issuedThrough] is the highest `requestId` this id has issued, across every incarnation, or `0`
+     * for an id that has issued nothing. The node takes any serial at or below it as its own, so its
+     * own history is not a collision however it arrives: replayed from retained storage, sent by
+     * replication to a node that kept no log (`clusterClient` keeps its log in memory), or committed
+     * by a leader after the crash that lost the forward. Nothing in the node's own storage can stand
+     * in for it, since a snapshot can cut the last entry under the id and a forward can be in flight
+     * when the process dies.
      *
-     * - A node that retained no log (`InMemoryRaftStorage` across a process restart) reads its own
-     *   history as a collision when replication brings that history back.
-     * - A node that crashed with a forwarded proposal in flight has two outcomes. When the leader's
-     *   commit reaches it first, it reads that entry as a collision, and its next boot has the entry
-     *   in its log and recovers. When a one-argument `propose` comes first, that call draws the
-     *   in-flight serial, so nothing throws. A leader that committed the old entry in its own tenure
-     *   refuses the call with [RequestIdConflictException]. Any later leader appends it and the call
-     *   returns success, yet a consumer's [ClientSessionTable] drops the command as a duplicate.
-     * - If a snapshot covered every entry under this id, nothing records the floor, and the auto
-     *   serial restarts at 1. A consumer's [ClientSessionTable] then drops those commands as
-     *   duplicates, so use the `propose(command, requestId)` form with a serial you persist.
-     * - The retained log cannot say who wrote a serial. A node killed by a genuine
-     *   [ClientIdCollisionException] retains the foreign entry, so its next boot takes that serial as
-     *   its own floor, replays cleanly and stays up beside the other writer. Only a serial above the
-     *   floor is caught: another writer's serial at or below it goes unseen, and its command is
-     *   dropped in the same way. So "the next boot recovers" means the node is up, not that the id is
-     *   unshared.
+     * **Where it must be durable: your own store, written ahead.** Commit each new `requestId` as the
+     * new floor **before** calling `propose(command, requestId)`, and read it back on every boot. The
+     * other order leaves the stale floor described below. A retry resends the same bytes only if you
+     * stored them, so keep the command in the same record as its serial: nothing else hands them back
+     * after a crash.
+     *
+     * **One command at a time: a higher serial abandons every lower one.** Do not issue a serial while
+     * a lower one is unresolved, meaning its `propose` has not returned. [ClientSessionTable] keeps one
+     * high-water serial per id, so once a higher serial commits, a retry of a lower one returns
+     * success, commits, and is dropped. Nothing throws, and it takes no crash: a caller's own timeout
+     * does the same. The rule covers the serial in hand when the process died, whether or not its call
+     * ever began: the floor makes that serial safe for the id, not for the command, and a gap in the
+     * serials protects nothing. So retry it first, with the bytes you stored, and only then issue the
+     * next. Issuing the next instead gives that command up without learning its fate: it applied if
+     * it committed first, and no retry brings it back. That gap is tracked by #3107.
+     *
+     * **A stale floor, one behind what the id really issued, is not caught for you.** Three things can
+     * follow, and the node cannot tell any of them from a second writer:
+     *
+     * - An own serial above the floor reaches the node, and it fails with
+     *   [ClientIdCollisionException]. It does so on every boot that walks that serial.
+     * - A `propose` raises the node's mark over that serial first, so nothing throws, and the call
+     *   reuses a serial. A leader still holding the old entry refuses other bytes with
+     *   [RequestIdConflictException]. Any other leader appends them and the call returns success,
+     *   yet a consumer's [ClientSessionTable] drops the command.
+     * - A snapshot already covers that serial, so the node never walks it: its own snapshot, or one
+     *   the voters install on a node that is behind them or kept no log. It boots clean, and the next
+     *   serial above the floor is a reuse, with the same two endings as above.
+     *
+     * So a clean boot does not prove a floor true. A floor set too high only leaves a gap in the
+     * serials, but widens the blind spot below.
+     *
+     * **`propose(command)` is refused under this identity**, with an [AutoSerialRefusedException]
+     * before anything is drawn or sent. A serial the node drew for itself cannot be on disk before it
+     * is issued, so it could never be covered by a floor: the crash in between reads as a collision on
+     * catch-up, or reuses the serial and loses the next command silently. Use `propose(command,
+     * requestId)`, or [Auto] where at-least-once is enough.
+     *
+     * **A second writer is caught only above the mark, and only in an entry this node walks.** The
+     * mark is the higher of [issuedThrough] and whatever this incarnation has proposed. Another
+     * writer's serial above it throws, on every boot that walks it, since the retained log no longer
+     * raises the mark. Once a snapshot covers that serial, a node catching up from the snapshot never
+     * sees it: it boots clean, and its next serial can reuse the other writer's. A serial at or below
+     * the mark goes unseen too, and so does a serial two writers draw at once: `propose` returns
+     * success and a consumer's [ClientSessionTable] drops the command. That gap is tracked by #3081.
+     *
+     * @throws IllegalArgumentException if [issuedThrough] is negative.
+     * @sample us.tractat.kuilt.raft.sampleDurableClientIdentity
      */
-    public data class Durable(public val clientId: ClientId) : ClientIdentity
+    public data class Durable(public val clientId: ClientId, public val issuedThrough: Long) : ClientIdentity {
+        init {
+            require(issuedThrough >= 0L) { "issuedThrough must not be negative: $issuedThrough" }
+        }
+    }
 }

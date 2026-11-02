@@ -26,6 +26,7 @@ import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PayloadTooLarge
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.raft.AutoSerialRefusedException
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientIdCollisionException
 import us.tractat.kuilt.raft.ClientIdentity
@@ -237,6 +238,12 @@ internal class RaftEngine(
     /** Whether the caller supplied a stable durable id (collision ⇒ fail loud) vs an auto id (re-mint). */
     private val isDurableId: Boolean = identity is ClientIdentity.Durable
 
+    /** What the caller says this id has issued. It only ever seeds [collisions]. `0` for an auto id. */
+    private val issuedFloor: Long = when (identity) {
+        is ClientIdentity.Durable -> identity.issuedThrough
+        ClientIdentity.Auto -> 0L
+    }
+
     /** This node's dedup identity. `var` because an auto id re-mints on a detected collision. */
     private var myClientId: ClientId = when (identity) {
         is ClientIdentity.Durable -> identity.clientId
@@ -263,14 +270,17 @@ internal class RaftEngine(
      */
     private val clientIdProbe: ClientId = myClientId
 
-    /** Monotonic per-client serial for the auto [propose] form. Confined to the actor loop. */
+    /**
+     * Monotonic per-client serial for the auto [propose] form, so an auto id's alone: a durable id
+     * refuses that form. Confined to the actor loop.
+     */
     private var serial: Long = 0L
 
     /** Best-effort, non-durable leader-side dedup of recently-committed proposals. */
     private val dedupCache = LeaderDedupCache()
 
     /** Detects another live writer committing under [myClientId]. Replaced on auto-id re-mint. */
-    private var collisions = CollisionDetector(myClientId)
+    private var collisions = CollisionDetector(myClientId, issuedFloor)
 
     private val cmd = Channel<EngineCommand>(Channel.UNLIMITED)
 
@@ -942,7 +952,6 @@ internal class RaftEngine(
             // - 1], which assumes the list begins at snapshotIndex + 1) would then silently return the wrong
             // entry for every lookup. Filtering here restores the invariant regardless of the crash window.
             state.log.addAll(checkedRestoredEntries(storage.entries(state.snapshotIndex + 1)))
-            resumeDurableSerials()
             // Recompute effective membershipState from the recovered log + snapshot (restart recovery).
             // This is load-bearing: a node that crashed mid-transition comes back under exactly
             // the config its durable log justifies — no special restart path needed.
@@ -3391,56 +3400,30 @@ internal class RaftEngine(
 
     /**
      * §8 collision check on every committed application entry: a committed entry under [myClientId]
-     * bearing a serial above everything this node has issued or retained reads as another live writer
-     * sharing the identity (see [resumeDurableSerials] for what a restart can and cannot tell apart). A
-     * **durable** id (caller-supplied) is an operational error — throw [ClientIdCollisionException]
+     * bearing a serial above the caller's floor and everything this node has issued reads as another
+     * live writer sharing the identity. A **durable** id (caller-supplied) is an operational error, or
+     * a stale floor, which this node cannot tell apart from one: throw [ClientIdCollisionException]
      * loud from the actor loop. An **auto** id silently re-mints (fresh suffix, reset serial +
-     * detector) and logs a warning; the in-flight writes already committed are unaffected.
+     * detector) and logs a warning; the in-flight writes already committed are unaffected. A same-seed
+     * restart reaching its own earlier key is how an auto id stops aliasing the last incarnation.
      */
     private fun detectCollision(entry: LogEntry) {
         if (!collisions.isForeign(entry.dedupKey)) return
         if (isDurableId) {
             throw ClientIdCollisionException(
                 "another writer committed under durable clientId '${myClientId.value}' " +
-                    "(foreign serial ${entry.dedupKey?.requestId} at index ${entry.index}); two processes share one id",
+                    "(foreign serial ${entry.dedupKey?.requestId} at index ${entry.index}, booted with " +
+                    "issuedThrough $issuedFloor): two processes share one id, or the floor is stale",
             )
         }
         val old = myClientId
         myClientId = ClientId.auto(transport.selfId, raftConfig.random)
         serial = 0L
-        collisions = CollisionDetector(myClientId)
+        collisions = CollisionDetector(myClientId, issuedThrough = 0L)
         logger.warn {
             "[raft:${transport.selfId}] clientId collision: auto id '${old.value}' seen with a foreign " +
                 "serial ${entry.dedupKey?.requestId} — re-minted as '${myClientId.value}'"
         }
-    }
-
-    /**
-     * Carry a [ClientIdentity.Durable] id's serial space across a restart, from the log it retained.
-     * Runs in the restore, before the actor starts, so no proposal or commit can see the old values.
-     *
-     * A durable id outlives the process, so its own earlier serials are not foreign: without this,
-     * the first replayed entry reads as another writer and [detectCollision] kills the node before it
-     * issues anything (#3060). The auto serial resumes too, or the next one-argument [propose] would
-     * reuse one: a leader that replayed it refuses the new bytes, and otherwise a consumer's
-     * [us.tractat.kuilt.raft.ClientSessionTable] drops the command as a duplicate.
-     *
-     * The retained log is all this knows. A snapshot that covered every entry under this id, or a
-     * node that retained nothing, resumes from zero, and a serial of an earlier incarnation that
-     * reaches this node only by replication still reads as foreign. Closing that needs the serial
-     * persisted, tracked by #3060.
-     *
-     * An [ClientIdentity.Auto] id is exempt: one it finds in its own log came from the same seed,
-     * and re-minting in [detectCollision] is how that incarnation stops aliasing the last.
-     */
-    private fun resumeDurableSerials() {
-        if (!isDurableId) return
-        val highest = state.log.mapNotNull { it.dedupKey }
-            .filter { it.clientId == myClientId }
-            .maxOfOrNull { it.requestId }
-            ?: return
-        serial = highest
-        collisions.issued(highest)
     }
 
     /**
@@ -3582,7 +3565,24 @@ internal class RaftEngine(
         tryAdvanceLeaderCommit()
     }
 
-    override suspend fun propose(command: ByteArray): LogEntry = proposeWithRequestId(command, null)
+    /**
+     * A serial this node drew for itself can never be on disk before it is issued, so a durable id's
+     * floor could not cover it. Measured with the auto serial resuming from the floor, and the caller
+     * holding the highest serial any call had returned: the serial in flight at a crash either read
+     * as a collision on catch-up, or was drawn again and the next command was acknowledged and then
+     * dropped. A caller with no floor lost a command to a snapshot past its last entry, and mixing
+     * the forms reused a serial with no crash at all. Refused here, before anything is drawn.
+     */
+    override suspend fun propose(command: ByteArray): LogEntry {
+        if (isDurableId) {
+            throw AutoSerialRefusedException(
+                "propose(command) is refused under ClientIdentity.Durable ('${clientIdProbe.value}'): a serial the " +
+                    "node draws cannot be persisted before it is issued. Commit a requestId as the new issuedThrough, " +
+                    "then call propose(command, requestId), or use ClientIdentity.Auto.",
+            )
+        }
+        return proposeWithRequestId(command, null)
+    }
 
     override suspend fun propose(command: ByteArray, requestId: Long): LogEntry =
         proposeWithRequestId(command, requestId)

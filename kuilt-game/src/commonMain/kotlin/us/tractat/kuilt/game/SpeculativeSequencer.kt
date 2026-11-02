@@ -191,6 +191,9 @@ public class SpeculativeSequencer<S, A>(
      * snapshot plus any remaining pending inputs. If [SpeculativeGame.apply] rejects [action], its
      * exception is rethrown here and nothing is proposed.
      *
+     * @throws [us.tractat.kuilt.raft.AutoSerialRefusedException] if the backing node has a
+     *   [us.tractat.kuilt.raft.ClientIdentity.Durable] id, which refuses this form. The speculative
+     *   apply is rolled back.
      * @throws [us.tractat.kuilt.raft.LeadershipLostException] if the leader steps down while
      *   awaiting commit. The action is removed from the pending buffer and speculative state
      *   is rolled back. The outcome of the underlying proposal is unknown — the caller must

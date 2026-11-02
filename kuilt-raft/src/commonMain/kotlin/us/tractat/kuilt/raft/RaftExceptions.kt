@@ -59,6 +59,23 @@ public class RequestIdConflictException(
 ) : IllegalArgumentException(message)
 
 /**
+ * Thrown by the one-argument `RaftNode.propose(command)` on a node under [ClientIdentity.Durable],
+ * before anything is drawn or sent. A serial the node drew for itself cannot be on disk before it is
+ * issued, so that identity's floor could never cover it.
+ *
+ * It is a caller mistake, not a transient failure, so a retry fails the same way. Commit a `requestId`
+ * as the new `issuedThrough` and call `propose(command, requestId)`, or build the node with
+ * [ClientIdentity.Auto] where at-least-once is enough.
+ *
+ * It extends [Exception] rather than [IllegalStateException] on purpose. A `CancellationException` is
+ * an [IllegalStateException], so a `catch` written for this refusal under that type would swallow a
+ * cancellation too, and a test asserting that type cannot tell the two apart.
+ */
+public class AutoSerialRefusedException(
+    message: String = "propose(command) is refused under ClientIdentity.Durable: use propose(command, requestId)",
+) : Exception(message)
+
+/**
  * Thrown by [RaftNode.changeMembership] when a membership change is already in progress
  * (a config entry is uncommitted), and by [RaftNode.transferLeadership] for the reverse
  * direction of the same §3.10 exclusion.
