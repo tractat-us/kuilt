@@ -8,10 +8,12 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.DeliveryPolicy
@@ -207,6 +209,91 @@ class LinkSeamFlushTest {
         seam.close()
     }
 
+    /**
+     * A close from elsewhere ends a flush whose marker has passed and which is now asking the connection.
+     *
+     * A `Connection.flush` owes the same ending, but a seam cannot lean on that: this stage has to answer
+     * for a connection that does not keep it. Unbounded on purpose, so a flush that waits on the
+     * connection alone stays parked rather than timing out into a pass.
+     */
+    @Test
+    fun aCloseEndsAFlushWaitingOnTheConnection() = runTest {
+        val asked = CompletableDeferred<Unit>()
+        val seam = seamOver(FlushTestConnection(flushWith = { asked.complete(Unit); awaitCancellation() }))
+        val flush = async { seam.flush(Duration.INFINITE) }
+        testScheduler.advanceUntilIdle()
+        assertAll(
+            { assertTrue(asked.isCompleted, "rig: the marker passed and the connection is being asked") },
+            { assertTrue(flush.isActive, "rig: the connection has not answered") },
+        )
+
+        seam.close()
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(flush.isCompleted, "the close must end the flush; it is still waiting on the connection")
+        assertIs<FlushOutcome.Failed>(flush.await(), "a close from elsewhere cannot leave a flush saying Drained")
+    }
+
+    /**
+     * A send minting a cancellation kills the writer without a tear, and a flush must not wait for a
+     * writer that has gone. `Connection.send` is not allowed to do this, but a flush with no timeout is
+     * the one place it would turn into a caller stuck forever.
+     */
+    @Test
+    fun aWriterKilledByAMintedCancellationEndsAFlush() = runTest {
+        val minted = CancellationException("a send's own withTimeout")
+        val seam = seamOver(FlushTestConnection(sendWith = { throw minted }, flushWith = { FlushOutcome.Drained }))
+        seam.broadcast(byteArrayOf(1))
+        testScheduler.advanceUntilIdle()
+        assertIs<SeamState.Woven>(seam.state.value, "rig: the writer died and nothing tore the seam")
+
+        val flush = async { seam.flush(Duration.INFINITE) }
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(flush.isCompleted, "the flush is waiting on a writer that has gone")
+        val outcome = assertIs<FlushOutcome.Failed>(flush.await())
+        assertEquals(minted.message, outcome.cause.message, "and it says what killed the writer")
+        seam.close()
+    }
+
+    /**
+     * Two paths tearing at once: the one that lost the latch closes the connection while the winner is
+     * still between publishing `Torn` and finishing up. The frames ahead of the marker are gone by then,
+     * so a flush must already be able to see the tear.
+     *
+     * The window is real only across threads, but it can be forced on one: an unconfined collector runs
+     * on the winner's own stack, inside the state write. `LinkSeamFlushConcurrencyTest` is the same race
+     * unforced, on real threads. Reds with the signal after the state write rather than before it.
+     */
+    @Test
+    fun aFlushCannotConfirmInsideAnotherPathsTear() = runTest {
+        val writerStuck = CompletableDeferred<Unit>()
+        val conn = FlushTestConnection(sendWith = { writerStuck.await() }, flushWith = { FlushOutcome.Drained })
+        val seam = seamOver(conn)
+        seam.broadcast(byteArrayOf(1))
+        val flush = async { seam.flush(Duration.INFINITE) }
+        testScheduler.advanceUntilIdle()
+        assertTrue(flush.isActive, "rig: the marker is behind a frame the writer is stuck on")
+
+        var ranInsideTheTear = false
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            seam.state.first { it is SeamState.Torn }
+            ranInsideTheTear = true
+            // The losing path: the remote ends too, so `readLoop` loses the latch and closes the link.
+            conn.remoteEnds()
+            writerStuck.complete(Unit)
+            testScheduler.advanceUntilIdle()
+        }
+        seam.close()
+        testScheduler.advanceUntilIdle()
+
+        assertAll(
+            { assertTrue(ranInsideTheTear, "rig: the collector never ran") },
+            { assertEquals(1, conn.written, "rig: the writer walked past the close to the marker") },
+        )
+        assertIs<FlushOutcome.Failed>(flush.await(), "those frames went nowhere, so this cannot be Drained")
+    }
+
     /** A flush on a torn seam answers without touching the connection. */
     @Test
     fun aFlushOnATornSeamNeverAsksTheConnection() = runTest {
@@ -252,6 +339,11 @@ private class FlushTestConnection(
         flushWith?.invoke() ?: super.flush(timeout)
 
     override suspend fun close() {
+        inbound.close()
+    }
+
+    /** The far end going away, as `incoming` sees it. */
+    fun remoteEnds() {
         inbound.close()
     }
 }
