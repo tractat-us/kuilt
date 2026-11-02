@@ -49,8 +49,8 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.multipeer.internal.Brid
  * (lossy at the JNA boundary) before reaching the spool's own policy.
  *
  * The callback objects are held as fields so JNA's trampoline survives the
- * lifetime of the link. Nothing releases them early: they go when the link does,
- * and `mc_session_close` has by then waited for any callback in flight and removed both.
+ * lifetime of the link. Nothing releases them early: they go when the link does.
+ * `mc_session_close` waits for any callback in flight and removes both.
  *
  * @param policy Governs the inbound [Spool]'s capacity and overflow behaviour.
  *   Defaults to [DeliveryPolicy.Reliable] (bounded, backpressured, lossless).
