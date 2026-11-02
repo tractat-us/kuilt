@@ -2,9 +2,12 @@
 
 package us.tractat.kuilt.nw
 
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -27,7 +30,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -186,10 +189,16 @@ class NwSecondCollectorTest {
             }
         }
 
-    private class FormedRooms(val hostFactory: SeamRoomFactory, val factory: SeamRoomFactory, val host: Room, val first: Room)
-
-    /** A host and an admitted joiner, handed to [block], and left whatever [block] does. */
-    private suspend fun TestScope.withAdmittedJoiner(block: suspend (FormedRooms) -> Unit) {
+    /**
+     * A host and an admitted joiner over rooms whose factory reports what escapes it into [escaped], handed to
+     * [block], and left whatever [block] does. What escapes a room's coroutine ends up in the scope it was
+     * built with, so that is where a second room's refusal is loud. This scope has a handler so the test can
+     * read it. An application's scope with no handler aborts on Kotlin/Native instead.
+     */
+    private suspend fun TestScope.withAdmittedJoiner(
+        escaped: MutableList<Throwable>,
+        block: suspend (factory: SeamRoomFactory, host: Room, first: Room) -> Unit,
+    ) {
         val radio = FakeNwRadio()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         val hostFactory = SeamRoomFactory(
@@ -198,9 +207,14 @@ class NwSecondCollectorTest {
             clock,
             heartbeat,
         )
+        val joinerScope = CoroutineScope(
+            backgroundScope.coroutineContext +
+                SupervisorJob(backgroundScope.coroutineContext[Job]) +
+                CoroutineExceptionHandler { _, failure -> escaped += failure },
+        )
         val factory = SeamRoomFactory(
             NwLoom(FakeNwApi(radio, "joiner", "joiner"), SERVICE, random = Random(1)),
-            backgroundScope,
+            joinerScope,
             clock,
             heartbeat,
         )
@@ -212,7 +226,7 @@ class NwSecondCollectorTest {
         try {
             host.roster.first { it.size == 1 }
             first.roster.first { it.size == 1 }
-            block(FormedRooms(hostFactory, factory, host, first))
+            block(factory, host, first)
         } finally {
             withContext(NonCancellable) {
                 first.leave()
@@ -230,32 +244,27 @@ class NwSecondCollectorTest {
     }
 
     @Test
-    fun aSecondJoinOverTheSameTagWhileTheFirstRoomIsLiveIsRefusedAtItsCaller() =
+    fun aSecondRoomOverTheSameTagIsRefusedLoudlyAndTheFirstRoomKeepsEveryFrame() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            withAdmittedJoiner { rooms ->
-                val read = framesOf(rooms.first)
+            val escaped = mutableListOf<Throwable>()
+            withAdmittedJoiner(escaped) { factory, host, first ->
+                val read = framesOf(first)
 
-                var second: Room? = null
-                val refusal: IllegalStateException? = try {
-                    second = rooms.factory.join(tag)
-                    null
-                } catch (refused: IllegalStateException) {
-                    currentCoroutineContext().ensureActive()
-                    refused
-                }
+                val second = factory.join(tag)
                 testScheduler.advanceTimeBy(50.milliseconds)
                 testScheduler.runCurrent()
+                val heardBeforeFrames = escaped.toList()
 
-                repeat(FRAMES) { index -> rooms.host.broadcast(byteArrayOf(index.toByte())) }
+                repeat(FRAMES) { index -> host.broadcast(byteArrayOf(index.toByte())) }
                 testScheduler.advanceTimeBy(50.milliseconds)
                 testScheduler.runCurrent()
 
                 assertAll(
-                    { assertNotNull(refusal, "a second room was built over the live seam") },
-                    { assertFalse(rooms.first.roster.value.isEmpty(), "the first room is still in the session") },
+                    { assertIs<IllegalStateException>(heardBeforeFrames.singleOrNull(), "heard: $heardBeforeFrames") },
+                    { assertEquals(1, first.roster.value.size, "the first room is still in the session") },
                     { assertEquals((0 until FRAMES).toList(), read, "the first room reads every frame") },
                 )
-                second?.leave()
+                second.leave()
             }
         }
 
