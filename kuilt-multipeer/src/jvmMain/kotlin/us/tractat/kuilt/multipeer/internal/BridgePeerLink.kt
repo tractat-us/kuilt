@@ -339,8 +339,8 @@ internal class BridgePeerLink(
      * how `Seam.close()` / factory close interleave.
      *
      * `mc_session_close` waits for callbacks in flight, so nothing a callback takes may be held across it:
-     * [peersLock] is released inside [tearDown]. A call from inside a callback is safe too, since the native
-     * side tells that case apart and does not wait for the callback making it.
+     * [peersLock] is released inside [tearDown]. A call from inside a callback is safe too: the native side
+     * does not wait for the callback making it.
      */
     internal fun closeNow(reason: CloseReason) {
         // Set closing before mc_session_close so the peer-state callback sees it
