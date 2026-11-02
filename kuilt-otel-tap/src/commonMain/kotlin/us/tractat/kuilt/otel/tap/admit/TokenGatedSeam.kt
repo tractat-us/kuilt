@@ -259,7 +259,7 @@ internal class TokenGatedSeam(
     private suspend fun maybeChallenge(peer: PeerId) {
         val verifier = role as GateRole.Verifier
         val nonce = lock.withLock {
-            if (peer in pendingNonces || peer in answering || peer in verified.value) return
+            if (peer in pendingNonces || peer in verified.value) return
             ByteString(verifier.random.nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES))
                 .also { pendingNonces[peer] = it }
         }
@@ -269,6 +269,9 @@ internal class TokenGatedSeam(
 
     private suspend fun handleFrame(swatch: Swatch) {
         val sender = swatch.sender ?: return
+        // `verified` always holds selfId, so without this a frame stamped with the receiver's own id
+        // would pass the relay check below with no admission. No honest fabric delivers one.
+        if (sender == inner.selfId) return
         val bytes = swatch.toByteArray()
         val admit = TapAdmitMessage.decode(bytes)
         if (admit == null && TapAdmitMessage.isAdmitFrame(bytes)) {
