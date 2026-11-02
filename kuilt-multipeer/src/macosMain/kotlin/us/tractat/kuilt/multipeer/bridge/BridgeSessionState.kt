@@ -32,8 +32,14 @@ private class CallbackGate<T> {
 
     fun deliver(item: T) = lock.withLock { callback?.invoke(item) }
 
+    /** [deliver], but only while [to] is still the callback, for a pump that belongs to that one. */
+    fun deliver(item: T, to: (T) -> Unit) = lock.withLock { if (callback === to) to(item) }
+
     fun replace(next: ((T) -> Unit)?) = lock.withLock { callback = next }
 }
+
+/** One peer arriving at or leaving a session, as one call into the JVM. */
+internal class PeerChange(val peer: PeerId, val connected: Boolean)
 
 /**
  * What lives behind a session-handle pointer in the JVM ↔ macOS MC bridge.
@@ -53,6 +59,9 @@ private class CallbackGate<T> {
  * that callback, and a pump cannot join itself. `link.incoming` is single-collection by the `Seam` contract,
  * so the data callback is replaced behind one pump rather than by starting a second collector.
  *
+ * The gate is passed once per call into the JVM. One roster update can name several peers, so the pump works
+ * out what changed and delivers each change on its own: a close from inside the first ends the rest.
+ *
  * Internal-only; the JVM never sees this type.
  *
  * @param dispatcher Dispatcher for the [scope]. Production default is
@@ -66,7 +75,7 @@ internal class BridgeSessionState(
 
     private val lock = reentrantLock()
     private val data = CallbackGate<Swatch>()
-    private val peerState = CallbackGate<Set<PeerId>>()
+    private val peerState = CallbackGate<PeerChange>()
     private var dataPump: Job? = null
     private var peerStatePump: Job? = null
 
@@ -74,20 +83,26 @@ internal class BridgeSessionState(
     fun replaceDataCallback(callback: (Swatch) -> Unit) {
         data.replace(callback)
         lock.withLock {
-            if (dataPump == null) dataPump = pump("mc-session-data", link.incoming, data)
+            if (dataPump == null) dataPump = pump("mc-session-data", link.incoming) { frame -> data.deliver(frame) }
         }
     }
 
     /**
      * Attaches the peer-state callback, and restarts its pump so a new callback hears the current roster:
      * `link.peers` holds a state and replays it to a new collector, where an unchanged pump would say nothing
-     * until the roster next moved. An old pump that outlives its cancel reaches only this gate.
+     * until the roster next moved. An old pump that outlives its cancel delivers nothing: what it has left to
+     * say, the new pump says too.
      */
-    fun replacePeerStateCallback(callback: (Set<PeerId>) -> Unit) {
+    fun replacePeerStateCallback(callback: (PeerChange) -> Unit) {
         peerState.replace(callback)
         lock.withLock {
             peerStatePump?.cancel()
-            peerStatePump = pump("mc-session-peer-state", link.peers, peerState)
+            var seen = setOf(link.selfId)
+            peerStatePump = pump("mc-session-peer-state", link.peers) { current ->
+                for (peer in current - seen - link.selfId) peerState.deliver(PeerChange(peer, connected = true), callback)
+                for (peer in seen - current - link.selfId) peerState.deliver(PeerChange(peer, connected = false), callback)
+                seen = current
+            }
         }
     }
 
@@ -102,7 +117,7 @@ internal class BridgeSessionState(
         peerState.replace(null)
     }
 
-    private fun <T> pump(name: String, items: Flow<T>, gate: CallbackGate<T>): Job =
+    private fun <T> pump(name: String, items: Flow<T>, body: (T) -> Unit): Job =
         items.pumpIn(
             scope = scope,
             onFailure = { phase, failure ->
@@ -110,5 +125,5 @@ internal class BridgeSessionState(
                 PumpVerdict.CONTINUE
             },
             name = name,
-        ) { item -> gate.deliver(item) }
+        ) { item -> body(item) }
 }

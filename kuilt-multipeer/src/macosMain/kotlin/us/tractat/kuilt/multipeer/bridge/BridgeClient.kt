@@ -143,19 +143,8 @@ public fun mc_session_set_peer_state_callback(
 ) {
     if (session == null || cb == null) return
     val state = session.asStableRef<BridgeSessionState>().get()
-    var seen: Set<PeerId> = setOf(state.link.selfId)
-    state.replacePeerStateCallback { current ->
-        val added = current - seen
-        val removed = seen - current
-        for (peer in added) {
-            if (peer == state.link.selfId) continue
-            memScoped { cb.invoke(peer.value.cstr.ptr, 1) }
-        }
-        for (peer in removed) {
-            if (peer == state.link.selfId) continue
-            memScoped { cb.invoke(peer.value.cstr.ptr, 0) }
-        }
-        seen = current
+    state.replacePeerStateCallback { change ->
+        memScoped { cb.invoke(change.peer.value.cstr.ptr, if (change.connected) 1 else 0) }
     }
 }
 
