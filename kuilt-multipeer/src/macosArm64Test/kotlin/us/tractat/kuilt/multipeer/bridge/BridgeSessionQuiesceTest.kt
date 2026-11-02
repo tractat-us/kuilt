@@ -165,8 +165,8 @@ class BridgeSessionQuiesceTest {
     /**
      * A second frame is already queued when the replacement starts. With no wait the next callback takes it
      * at once, while the old one is still held: the overlap is forced rather than raced. Either callback may
-     * legally get that frame, since the replacement has not returned, so the frames are counted across both:
-     * a pump cancelled to make way would eat it, and the count would never arrive.
+     * legally get that frame, since the replacement has not returned, so the frames are counted across both.
+     * The third frame comes after the return, so a replacement that left no pump running never reaches three.
      */
     @Test
     fun replacingTheDataCallbackWaitsForTheOldOneAndLosesNoFrame() = withLink { link, session ->

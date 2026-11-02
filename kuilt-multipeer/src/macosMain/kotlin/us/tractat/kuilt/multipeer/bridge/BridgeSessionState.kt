@@ -48,11 +48,10 @@ private class CallbackGate<T> {
  * would return with a callback possibly still running, and the caller may then release that callback's JNA
  * trampoline. A callback that never returns therefore hangs the call.
  *
- * This is not the join `mc_browser_stop` uses, for two reasons. `BridgePeerLink` can close a session from
- * inside its own peer-state callback: a consumer's unconfined collector closing a seam it sees go `Torn`
- * runs inside that callback, and a pump cannot join itself. And `link.incoming` is single-collection, so
- * the data callback is replaced behind one pump: a pump cancelled to make way for another takes the next
- * queued frame and loses it at the `emit`.
+ * This is not the join `mc_browser_stop` uses, because `BridgePeerLink` can close a session from inside its
+ * own peer-state callback: a consumer's unconfined collector closing a seam it sees go `Torn` runs inside
+ * that callback, and a pump cannot join itself. `link.incoming` is single-collection by the `Seam` contract,
+ * so the data callback is replaced behind one pump rather than by starting a second collector.
  *
  * Internal-only; the JVM never sees this type.
  *
