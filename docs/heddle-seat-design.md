@@ -17,7 +17,7 @@
 >   deletion as undecodable historical `Prepare` entries being **silently skipped** on
 >   replay, which was the behaviour then. That price has since changed: under #1738 such an
 >   entry **halts the node**, so a log holding one stops there and refuses writes until a
->   compatible build or an offline migration recovers it.
+>   compatible build reads it or the group starts a fresh log. There is no migrator.
 > - **§9's fork is decided, the same way.** "Is a breaking `EntitlementLedger` wire change
 >   acceptable?" — yes; the relocation design's precedent held.
 > - **§5.4's deletions all happened**, including `prepareNeutral`'s `readIndex()` fence and
