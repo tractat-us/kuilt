@@ -132,22 +132,28 @@ gets in first, reuses a serial whose command a consumer's table then drops:
 
 <!-- verbatim from kuilt-raft/src/commonSamples/kotlin/us/tractat/kuilt/raft/RaftSamples.kt#sampleDurableClientIdentity -->
 ```kotlin
-// The floor lives in your own store, beside the id. A sample uses the in-memory store.
+// The floor lives in your own store, beside the id, with the command it was issued for. They share
+// one record because a store commits one key at a time. A sample uses the in-memory store.
 val store: DurableStore = InMemoryDurableStore()
-val floor = StoreKey("client/issued-through")
-suspend fun readFloor(): Long = store.read(floor)?.decodeToString()?.toLong() ?: 0L
+val lastIssued = StoreKey("client/last-issued")
+suspend fun readFloor(): Long = store.read(lastIssued)?.decodeToString()?.substringBefore(' ')?.toLong() ?: 0L
+suspend fun readCommand(): String? = store.read(lastIssued)?.decodeToString()?.substringAfter(' ')
 
 // Boot: read the floor and hand it over — `scope.raftNode(cluster, transport, storage, identity = identity)`.
 val identity = ClientIdentity.Durable(ClientId("checkout-client"), issuedThrough = readFloor())
 
-// A new command: commit its serial as the new floor FIRST, then `node.propose(command, requestId)`.
-val requestId = identity.issuedThrough + 1
-store.write(floor, requestId.toString().encodeToByteArray())
+// A new command, once the last one has returned. Read the floor afresh each time: `identity` is
+// fixed at boot, so taking it from there would reuse a serial from the second command on.
+// Commit the serial and the bytes FIRST, then `node.propose(command, requestId)`.
+val requestId = readFloor() + 1
+store.write(lastIssued, "$requestId charge-card".encodeToByteArray())
 
-// A crash from here on loses nothing: the next boot's floor already covers that serial, so its
-// entry coming back is not a collision, and the retry resends the same bytes under the same id.
+// After a crash the floor covers that serial, so its entry coming back is not a collision. Its
+// outcome is unknown, so retry this serial with these bytes BEFORE issuing another: a higher serial
+// abandons this one, and a retry after that is acknowledged and then dropped.
 val restarted = ClientIdentity.Durable(identity.clientId, issuedThrough = readFloor())
 check(restarted.issuedThrough == requestId)
+check(readCommand() == "charge-card")
 ```
 
 Server side: `CoroutineScope.serverCluster(host, voterIds, raftConfig)` stands the voter mesh up and
