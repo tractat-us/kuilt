@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -21,8 +22,9 @@ import us.tractat.kuilt.core.discovery.PeerDiscoverySource
  * the macOS K/N `libkuilt.dylib`.
  *
  * Both feeds share one collection-owned MC browse session. The first collector
- * starts it and the last stops it. Each subscriber is registered before native
- * callbacks can fire. On non-macOS hosts both feeds remain silent.
+ * starts it and the last stops it. The feed that starts a session is registered
+ * before that session's callbacks can fire; a feed joining an open session misses
+ * anything fired before it subscribes (#3091). On non-macOS hosts both feeds remain silent.
  *
  * **Threading:** each feed collects its shared flow on `Dispatchers.IO`. A native
  * callback only enqueues an event; the IO coroutine emits it downstream. This keeps
@@ -65,6 +67,13 @@ public actual class MultipeerServiceBrowser actual constructor(
     private var collectors = 0
     private var session: BrowseSession? = null
     private val departuresFlow = MutableSharedFlow<String>(extraBufferCapacity = 16)
+
+    /**
+     * How many collectors [departures] has registered. It has no replay, so a loss fired at zero is gone.
+     * A collection subscribes from its `Dispatchers.IO` producer, some time after `onStart` runs
+     * downstream, and only this count shows that it has. Exposed for tests.
+     */
+    internal val departureSubscribers: StateFlow<Int> get() = departuresFlow.subscriptionCount
 
     /** Emits the dylib peer handle, also used by [MultipeerAdvertisement.peerKey]. */
     public actual override fun departures(): Flow<String> = sessionFeed(departuresFlow)
