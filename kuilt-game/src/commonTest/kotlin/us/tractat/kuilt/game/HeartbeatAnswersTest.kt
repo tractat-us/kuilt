@@ -65,7 +65,7 @@ class HeartbeatAnswersTest {
         val forger: Quilter<EphemeralMap<String>>,
     )
 
-    private fun TestScope.rig(): Rig {
+    private suspend fun TestScope.rig(): Rig {
         val (pingerRaw, answererRaw, forgerRaw) = seats(InMemoryLoom(), 3)
         val pinger = MuxSeam(pingerRaw, backgroundScope).channel(HEARTBEAT_TAG)
         val pongs = atomic(0)
