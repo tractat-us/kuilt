@@ -1,0 +1,12 @@
+public final class us/tractat/kuilt/otel/logback/InstallLogbackCaptureKt {
+	public static final field APPENDER_NAME Ljava/lang/String;
+	public static final fun installLogbackCapture (Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lus/tractat/kuilt/otel/logging/CaptureConfig;Lkotlin/time/Clock;Lkotlin/random/Random;Lkotlinx/coroutines/CoroutineScope;Lch/qos/logback/classic/LoggerContext;Lus/tractat/kuilt/otel/logging/TraceContextProvider;)Lus/tractat/kuilt/otel/logback/KuiltLogbackAppender;
+	public static synthetic fun installLogbackCapture$default (Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lus/tractat/kuilt/otel/logging/CaptureConfig;Lkotlin/time/Clock;Lkotlin/random/Random;Lkotlinx/coroutines/CoroutineScope;Lch/qos/logback/classic/LoggerContext;Lus/tractat/kuilt/otel/logging/TraceContextProvider;ILjava/lang/Object;)Lus/tractat/kuilt/otel/logback/KuiltLogbackAppender;
+}
+
+public final class us/tractat/kuilt/otel/logback/KuiltLogbackAppender : ch/qos/logback/core/AppenderBase {
+	public fun <init> (Lus/tractat/kuilt/otel/logging/LogCapture;Lkotlinx/coroutines/CoroutineScope;)V
+	public synthetic fun append (Ljava/lang/Object;)V
+	public fun stop ()V
+}
+

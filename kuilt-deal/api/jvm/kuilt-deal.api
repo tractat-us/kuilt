@@ -1,0 +1,431 @@
+public abstract class us/tractat/kuilt/deal/CardOp {
+	public static final field Companion Lus/tractat/kuilt/deal/CardOp$Companion;
+	public synthetic fun <init> (ILkotlinx/serialization/internal/SerializationConstructorMarker;)V
+	public static final synthetic fun write$Self (Lus/tractat/kuilt/deal/CardOp;Lkotlinx/serialization/encoding/CompositeEncoder;Lkotlinx/serialization/descriptors/SerialDescriptor;)V
+}
+
+public final class us/tractat/kuilt/deal/CardOp$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CardOp$DepositKey : us/tractat/kuilt/deal/CardOp {
+	public static final field Companion Lus/tractat/kuilt/deal/CardOp$DepositKey$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/deal/EncryptedKey;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/deal/EncryptedKey;
+	public final fun copy-t5-yf_A (Ljava/lang/String;Lus/tractat/kuilt/deal/EncryptedKey;)Lus/tractat/kuilt/deal/CardOp$DepositKey;
+	public static synthetic fun copy-t5-yf_A$default (Lus/tractat/kuilt/deal/CardOp$DepositKey;Ljava/lang/String;Lus/tractat/kuilt/deal/EncryptedKey;ILjava/lang/Object;)Lus/tractat/kuilt/deal/CardOp$DepositKey;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEscrowedKey ()Lus/tractat/kuilt/deal/EncryptedKey;
+	public final fun getPlayer-PaHlmAU ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/CardOp$DepositKey$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/CardOp$DepositKey$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/CardOp$DepositKey;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/CardOp$DepositKey;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CardOp$DepositKey$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CardOp$Encrypt : us/tractat/kuilt/deal/CardOp {
+	public static final field Companion Lus/tractat/kuilt/deal/CardOp$Encrypt$Companion;
+	public synthetic fun <init> (Ljava/lang/String;[BLus/tractat/kuilt/deal/EncryptProof;Ljava/util/Set;Ljava/util/Set;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()[B
+	public final fun component3 ()Lus/tractat/kuilt/deal/EncryptProof;
+	public final fun component4 ()Ljava/util/Set;
+	public final fun component5 ()Ljava/util/Set;
+	public final fun copy-IclkiQY (Ljava/lang/String;[BLus/tractat/kuilt/deal/EncryptProof;Ljava/util/Set;Ljava/util/Set;)Lus/tractat/kuilt/deal/CardOp$Encrypt;
+	public static synthetic fun copy-IclkiQY$default (Lus/tractat/kuilt/deal/CardOp$Encrypt;Ljava/lang/String;[BLus/tractat/kuilt/deal/EncryptProof;Ljava/util/Set;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/deal/CardOp$Encrypt;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBaseEncryptedBy ()Ljava/util/Set;
+	public final fun getBaseStrippedBy ()Ljava/util/Set;
+	public final fun getNewCiphertext ()[B
+	public final fun getPlayer-PaHlmAU ()Ljava/lang/String;
+	public final fun getProof ()Lus/tractat/kuilt/deal/EncryptProof;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/CardOp$Encrypt$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/CardOp$Encrypt$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/CardOp$Encrypt;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/CardOp$Encrypt;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CardOp$Encrypt$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CardOp$QuorumStrip : us/tractat/kuilt/deal/CardOp {
+	public static final field Companion Lus/tractat/kuilt/deal/CardOp$QuorumStrip$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;[BLus/tractat/kuilt/deal/StripProof;Ljava/util/Set;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2-PaHlmAU ()Ljava/lang/String;
+	public final fun component3 ()[B
+	public final fun component4 ()Lus/tractat/kuilt/deal/StripProof;
+	public final fun component5 ()Ljava/util/Set;
+	public final fun copy-FeqR5Kc (Ljava/lang/String;Ljava/lang/String;[BLus/tractat/kuilt/deal/StripProof;Ljava/util/Set;)Lus/tractat/kuilt/deal/CardOp$QuorumStrip;
+	public static synthetic fun copy-FeqR5Kc$default (Lus/tractat/kuilt/deal/CardOp$QuorumStrip;Ljava/lang/String;Ljava/lang/String;[BLus/tractat/kuilt/deal/StripProof;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/deal/CardOp$QuorumStrip;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBaseTrackStrippedBy ()Ljava/util/Set;
+	public final fun getForMember-PaHlmAU ()Ljava/lang/String;
+	public final fun getNewCiphertext ()[B
+	public final fun getPlayer-PaHlmAU ()Ljava/lang/String;
+	public final fun getProof ()Lus/tractat/kuilt/deal/StripProof;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/CardOp$QuorumStrip$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/CardOp$QuorumStrip$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/CardOp$QuorumStrip;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/CardOp$QuorumStrip;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CardOp$QuorumStrip$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CardOp$Strip : us/tractat/kuilt/deal/CardOp {
+	public static final field Companion Lus/tractat/kuilt/deal/CardOp$Strip$Companion;
+	public synthetic fun <init> (Ljava/lang/String;[BLus/tractat/kuilt/deal/StripProof;Ljava/util/Set;Ljava/util/Set;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-PaHlmAU ()Ljava/lang/String;
+	public final fun component2 ()[B
+	public final fun component3 ()Lus/tractat/kuilt/deal/StripProof;
+	public final fun component4 ()Ljava/util/Set;
+	public final fun component5 ()Ljava/util/Set;
+	public final fun copy-IclkiQY (Ljava/lang/String;[BLus/tractat/kuilt/deal/StripProof;Ljava/util/Set;Ljava/util/Set;)Lus/tractat/kuilt/deal/CardOp$Strip;
+	public static synthetic fun copy-IclkiQY$default (Lus/tractat/kuilt/deal/CardOp$Strip;Ljava/lang/String;[BLus/tractat/kuilt/deal/StripProof;Ljava/util/Set;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/deal/CardOp$Strip;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBaseEncryptedBy ()Ljava/util/Set;
+	public final fun getBaseStrippedBy ()Ljava/util/Set;
+	public final fun getNewCiphertext ()[B
+	public final fun getPlayer-PaHlmAU ()Ljava/lang/String;
+	public final fun getProof ()Lus/tractat/kuilt/deal/StripProof;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/CardOp$Strip$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/CardOp$Strip$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/CardOp$Strip;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/CardOp$Strip;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CardOp$Strip$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CardOpKt {
+	public static final fun applyOp (Lus/tractat/kuilt/deal/CardState;Lus/tractat/kuilt/deal/CardOp;)Lus/tractat/kuilt/deal/CardState;
+	public static final fun canApply (Lus/tractat/kuilt/deal/CardState;Lus/tractat/kuilt/deal/CardOp;)Z
+}
+
+public final class us/tractat/kuilt/deal/CardPhase : java/lang/Enum {
+	public static final field FULLY_ENCRYPTED Lus/tractat/kuilt/deal/CardPhase;
+	public static final field REVEALED Lus/tractat/kuilt/deal/CardPhase;
+	public static final field REVEALING Lus/tractat/kuilt/deal/CardPhase;
+	public static final field SHUFFLING Lus/tractat/kuilt/deal/CardPhase;
+	public static final field UNENCRYPTED Lus/tractat/kuilt/deal/CardPhase;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/deal/CardPhase;
+	public static fun values ()[Lus/tractat/kuilt/deal/CardPhase;
+}
+
+public final class us/tractat/kuilt/deal/CardState {
+	public static final field Companion Lus/tractat/kuilt/deal/CardState$Companion;
+	public fun <init> ([BLus/tractat/kuilt/crdt/GSet;Lus/tractat/kuilt/crdt/GSet;Ljava/util/Set;Ljava/util/Set;Ljava/util/Map;)V
+	public synthetic fun <init> ([BLus/tractat/kuilt/crdt/GSet;Lus/tractat/kuilt/crdt/GSet;Ljava/util/Set;Ljava/util/Set;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()[B
+	public final fun component2 ()Lus/tractat/kuilt/crdt/GSet;
+	public final fun component3 ()Lus/tractat/kuilt/crdt/GSet;
+	public final fun component4 ()Ljava/util/Set;
+	public final fun component5 ()Ljava/util/Set;
+	public final fun component6 ()Ljava/util/Map;
+	public final fun copy ([BLus/tractat/kuilt/crdt/GSet;Lus/tractat/kuilt/crdt/GSet;Ljava/util/Set;Ljava/util/Set;Ljava/util/Map;)Lus/tractat/kuilt/deal/CardState;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/deal/CardState;[BLus/tractat/kuilt/crdt/GSet;Lus/tractat/kuilt/crdt/GSet;Ljava/util/Set;Ljava/util/Set;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/deal/CardState;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllPlayers ()Ljava/util/Set;
+	public final fun getCiphertext ()[B
+	public final fun getEncryptedBy ()Lus/tractat/kuilt/crdt/GSet;
+	public final fun getQuorumTracks ()Ljava/util/Map;
+	public final fun getStrippedBy ()Lus/tractat/kuilt/crdt/GSet;
+	public final fun getVisibilityQuorum ()Ljava/util/Set;
+	public fun hashCode ()I
+	public final fun isPartialQuorum ()Z
+	public final fun merge (Lus/tractat/kuilt/deal/CardState;)Lus/tractat/kuilt/deal/CardState;
+	public final fun phase ()Lus/tractat/kuilt/deal/CardPhase;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/CardState$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/CardState$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/CardState;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/CardState;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CardState$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/CommitmentViolation : java/lang/Exception {
+	public synthetic fun <init> (Ljava/lang/String;[B[BLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getActualHash ()[B
+	public final fun getExpectedHash ()[B
+	public final fun getPeer-PaHlmAU ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/deal/CommutativeScheme {
+	public abstract fun encrypt ([BLus/tractat/kuilt/deal/SchemeKey;)Lkotlin/Pair;
+	public abstract fun generateKey ()Lus/tractat/kuilt/deal/SchemeKeyPair;
+	public abstract fun strip ([BLus/tractat/kuilt/deal/SchemeKey;)Lkotlin/Pair;
+	public abstract fun verifyEncrypt ([B[BLus/tractat/kuilt/deal/EncryptProof;Lus/tractat/kuilt/deal/SchemeKey;)Z
+	public abstract fun verifyStrip ([B[BLus/tractat/kuilt/deal/StripProof;Lus/tractat/kuilt/deal/SchemeKey;)Z
+}
+
+public final class us/tractat/kuilt/deal/DealSession : us/tractat/kuilt/core/ScopedCloseable {
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/deal/CommutativeScheme;Lus/tractat/kuilt/deal/SchemeKeyPair;Ljava/util/Set;Ljava/lang/String;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun assignQuorums (Ljava/util/Map;)V
+	public final fun decrypt (I)[B
+	public final fun depositKey (Lus/tractat/kuilt/deal/KeyEscrow;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun shuffle (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun strip (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/deal/DeckState {
+	public static final field Companion Lus/tractat/kuilt/deal/DeckState$Companion;
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/deal/DeckState;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/deal/DeckState;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/deal/DeckState;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCards ()Ljava/util/List;
+	public fun hashCode ()I
+	public final fun isFullyShuffled ()Z
+	public final fun isRevealed (I)Z
+	public final fun merge (Lus/tractat/kuilt/deal/DeckState;)Lus/tractat/kuilt/deal/DeckState;
+	public final fun phase (I)Lus/tractat/kuilt/deal/CardPhase;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/DeckState$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/DeckState$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/DeckState;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/DeckState;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/DeckState$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/EncryptProof {
+	public static final field Companion Lus/tractat/kuilt/deal/EncryptProof$Companion;
+	public fun <init> ([B)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBytes ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/EncryptProof$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/EncryptProof$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/EncryptProof;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/EncryptProof;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/EncryptProof$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/EncryptedKey {
+	public static final field Companion Lus/tractat/kuilt/deal/EncryptedKey$Companion;
+	public fun <init> ([B)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBytes ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/EncryptedKey$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/EncryptedKey$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/EncryptedKey;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/EncryptedKey;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/EncryptedKey$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/FairRandom {
+	public fun <init> (Lus/tractat/kuilt/core/Seam;Ljava/util/Set;Z[B[B)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Ljava/util/Set;Z[B[BILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getMalformedFrameCounts ()Ljava/util/Map;
+	public final fun roll (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun rollWithReport (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/deal/FairRandomReport {
+	public final fun getMalformedFrameCounts ()Ljava/util/Map;
+	public final fun getSeed ()J
+}
+
+public abstract interface class us/tractat/kuilt/deal/KeyEscrow {
+	public abstract fun deposit-PW_baCY (Ljava/lang/String;Lus/tractat/kuilt/deal/EncryptedKey;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/deal/QuorumTrack {
+	public static final field Companion Lus/tractat/kuilt/deal/QuorumTrack$Companion;
+	public fun <init> ([BLus/tractat/kuilt/crdt/GSet;)V
+	public final fun component1 ()[B
+	public final fun component2 ()Lus/tractat/kuilt/crdt/GSet;
+	public final fun copy ([BLus/tractat/kuilt/crdt/GSet;)Lus/tractat/kuilt/deal/QuorumTrack;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/deal/QuorumTrack;[BLus/tractat/kuilt/crdt/GSet;ILjava/lang/Object;)Lus/tractat/kuilt/deal/QuorumTrack;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCiphertext ()[B
+	public final fun getStrippedBy ()Lus/tractat/kuilt/crdt/GSet;
+	public fun hashCode ()I
+	public final fun merge (Lus/tractat/kuilt/deal/QuorumTrack;)Lus/tractat/kuilt/deal/QuorumTrack;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/QuorumTrack$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/QuorumTrack$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/QuorumTrack;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/QuorumTrack;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/QuorumTrack$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/SchemeKey {
+	public static final field Companion Lus/tractat/kuilt/deal/SchemeKey$Companion;
+	public fun <init> ([B)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRaw ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/SchemeKey$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/SchemeKey$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/SchemeKey;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/SchemeKey;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/SchemeKey$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/SchemeKeyPair {
+	public fun <init> (Lus/tractat/kuilt/deal/SchemeKey;Lus/tractat/kuilt/deal/SchemeKey;)V
+	public final fun component1 ()Lus/tractat/kuilt/deal/SchemeKey;
+	public final fun component2 ()Lus/tractat/kuilt/deal/SchemeKey;
+	public final fun copy (Lus/tractat/kuilt/deal/SchemeKey;Lus/tractat/kuilt/deal/SchemeKey;)Lus/tractat/kuilt/deal/SchemeKeyPair;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/deal/SchemeKeyPair;Lus/tractat/kuilt/deal/SchemeKey;Lus/tractat/kuilt/deal/SchemeKey;ILjava/lang/Object;)Lus/tractat/kuilt/deal/SchemeKeyPair;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEncryptKey ()Lus/tractat/kuilt/deal/SchemeKey;
+	public final fun getStripKey ()Lus/tractat/kuilt/deal/SchemeKey;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/deal/SraScheme : us/tractat/kuilt/deal/CommutativeScheme {
+	public static final field Companion Lus/tractat/kuilt/deal/SraScheme$Companion;
+	public fun <init> ()V
+	public fun encrypt ([BLus/tractat/kuilt/deal/SchemeKey;)Lkotlin/Pair;
+	public fun generateKey ()Lus/tractat/kuilt/deal/SchemeKeyPair;
+	public fun strip ([BLus/tractat/kuilt/deal/SchemeKey;)Lkotlin/Pair;
+	public fun verifyEncrypt ([B[BLus/tractat/kuilt/deal/EncryptProof;Lus/tractat/kuilt/deal/SchemeKey;)Z
+	public fun verifyStrip ([B[BLus/tractat/kuilt/deal/StripProof;Lus/tractat/kuilt/deal/SchemeKey;)Z
+}
+
+public final class us/tractat/kuilt/deal/SraScheme$Companion {
+}
+
+public final class us/tractat/kuilt/deal/SraSchemeKt {
+	public static final fun decodePlaintext ([B)[B
+	public static final fun encodePlaintext ([B)[B
+}
+
+public final class us/tractat/kuilt/deal/StripProof {
+	public static final field Companion Lus/tractat/kuilt/deal/StripProof$Companion;
+	public fun <init> ([B)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBytes ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/deal/StripProof$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/deal/StripProof$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/deal/StripProof;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/deal/StripProof;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/deal/StripProof$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+

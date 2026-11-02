@@ -1,0 +1,125 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Alias: apple => [iosArm64, iosSimulatorArm64, macosArm64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-websocket>
+final enum class us.tractat.kuilt.websocket/NetworkReachability : kotlin/Enum<us.tractat.kuilt.websocket/NetworkReachability> { // us.tractat.kuilt.websocket/NetworkReachability|null[0]
+    enum entry Indeterminate // us.tractat.kuilt.websocket/NetworkReachability.Indeterminate|null[0]
+    enum entry Reachable // us.tractat.kuilt.websocket/NetworkReachability.Reachable|null[0]
+    enum entry Unreachable // us.tractat.kuilt.websocket/NetworkReachability.Unreachable|null[0]
+
+    final val entries // us.tractat.kuilt.websocket/NetworkReachability.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.websocket/NetworkReachability> // us.tractat.kuilt.websocket/NetworkReachability.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.websocket/NetworkReachability // us.tractat.kuilt.websocket/NetworkReachability.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.websocket/NetworkReachability> // us.tractat.kuilt.websocket/NetworkReachability.values|values#static(){}[0]
+}
+
+abstract interface us.tractat.kuilt.websocket/ConnectivityObserver { // us.tractat.kuilt.websocket/ConnectivityObserver|null[0]
+    abstract val reachability // us.tractat.kuilt.websocket/ConnectivityObserver.reachability|{}reachability[0]
+        abstract fun <get-reachability>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.websocket/NetworkReachability?> // us.tractat.kuilt.websocket/ConnectivityObserver.reachability.<get-reachability>|<get-reachability>(){}[0]
+}
+
+final class us.tractat.kuilt.websocket/KtorClientLoom : us.tractat.kuilt.core/Loom { // us.tractat.kuilt.websocket/KtorClientLoom|null[0]
+    constructor <init>(io.ktor.client/HttpClient, kotlinx.coroutines/CoroutineDispatcher = ..., us.tractat.kuilt.core/PeerId = ..., kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.websocket/WebSocketDialContext> = ..., us.tractat.kuilt.websocket/ConnectivityObserver = ..., us.tractat.kuilt.core/DeliveryPolicy = ...) // us.tractat.kuilt.websocket/KtorClientLoom.<init>|<init>(io.ktor.client.HttpClient;kotlinx.coroutines.CoroutineDispatcher;us.tractat.kuilt.core.PeerId;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.websocket.WebSocketDialContext>;us.tractat.kuilt.websocket.ConnectivityObserver;us.tractat.kuilt.core.DeliveryPolicy){}[0]
+
+    final val selfPeerId // us.tractat.kuilt.websocket/KtorClientLoom.selfPeerId|{}selfPeerId[0]
+        final fun <get-selfPeerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.websocket/KtorClientLoom.selfPeerId.<get-selfPeerId>|<get-selfPeerId>(){}[0]
+
+    final fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.websocket/KtorClientLoom.capability|capability(){}[0]
+    final suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.websocket/KtorClientLoom.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+}
+
+final class us.tractat.kuilt.websocket/KtorMeshClientLoom : us.tractat.kuilt.core/Loom { // us.tractat.kuilt.websocket/KtorMeshClientLoom|null[0]
+    constructor <init>(io.ktor.client/HttpClient, kotlinx.coroutines/CoroutineDispatcher = ..., us.tractat.kuilt.core/PeerId = ..., kotlin.random/Random = ..., us.tractat.kuilt.core/DeliveryPolicy = ...) // us.tractat.kuilt.websocket/KtorMeshClientLoom.<init>|<init>(io.ktor.client.HttpClient;kotlinx.coroutines.CoroutineDispatcher;us.tractat.kuilt.core.PeerId;kotlin.random.Random;us.tractat.kuilt.core.DeliveryPolicy){}[0]
+
+    final val selfPeerId // us.tractat.kuilt.websocket/KtorMeshClientLoom.selfPeerId|{}selfPeerId[0]
+        final fun <get-selfPeerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.websocket/KtorMeshClientLoom.selfPeerId.<get-selfPeerId>|<get-selfPeerId>(){}[0]
+
+    final fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.websocket/KtorMeshClientLoom.capability|capability(){}[0]
+    final suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.websocket/KtorMeshClientLoom.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+}
+
+final class us.tractat.kuilt.websocket/WebSocketAdvertisement : us.tractat.kuilt.core/Tag { // us.tractat.kuilt.websocket/WebSocketAdvertisement|null[0]
+    constructor <init>(kotlin/String, us.tractat.kuilt.core/PeerId, kotlin/String, kotlin/String? = ...) // us.tractat.kuilt.websocket/WebSocketAdvertisement.<init>|<init>(kotlin.String;us.tractat.kuilt.core.PeerId;kotlin.String;kotlin.String?){}[0]
+
+    final val peerKey // us.tractat.kuilt.websocket/WebSocketAdvertisement.peerKey|{}peerKey[0]
+        final fun <get-peerKey>(): kotlin/String // us.tractat.kuilt.websocket/WebSocketAdvertisement.peerKey.<get-peerKey>|<get-peerKey>(){}[0]
+    final val roomKey // us.tractat.kuilt.websocket/WebSocketAdvertisement.roomKey|{}roomKey[0]
+        final fun <get-roomKey>(): kotlin/String? // us.tractat.kuilt.websocket/WebSocketAdvertisement.roomKey.<get-roomKey>|<get-roomKey>(){}[0]
+    final val serverPeerId // us.tractat.kuilt.websocket/WebSocketAdvertisement.serverPeerId|{}serverPeerId[0]
+        final fun <get-serverPeerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.websocket/WebSocketAdvertisement.serverPeerId.<get-serverPeerId>|<get-serverPeerId>(){}[0]
+    final val sessionName // us.tractat.kuilt.websocket/WebSocketAdvertisement.sessionName|{}sessionName[0]
+        final fun <get-sessionName>(): kotlin/String // us.tractat.kuilt.websocket/WebSocketAdvertisement.sessionName.<get-sessionName>|<get-sessionName>(){}[0]
+    final val url // us.tractat.kuilt.websocket/WebSocketAdvertisement.url|{}url[0]
+        final fun <get-url>(): kotlin/String // us.tractat.kuilt.websocket/WebSocketAdvertisement.url.<get-url>|<get-url>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.websocket/WebSocketAdvertisement.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.websocket/WebSocketAdvertisement.component2|component2(){}[0]
+    final fun component3(): kotlin/String // us.tractat.kuilt.websocket/WebSocketAdvertisement.component3|component3(){}[0]
+    final fun component4(): kotlin/String? // us.tractat.kuilt.websocket/WebSocketAdvertisement.component4|component4(){}[0]
+    final fun copy(kotlin/String = ..., us.tractat.kuilt.core/PeerId = ..., kotlin/String = ..., kotlin/String? = ...): us.tractat.kuilt.websocket/WebSocketAdvertisement // us.tractat.kuilt.websocket/WebSocketAdvertisement.copy|copy(kotlin.String;us.tractat.kuilt.core.PeerId;kotlin.String;kotlin.String?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.websocket/WebSocketAdvertisement.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.websocket/WebSocketAdvertisement.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.websocket/WebSocketAdvertisement.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.websocket/WebSocketConnection : us.tractat.kuilt.core.fabric/Connection { // us.tractat.kuilt.websocket/WebSocketConnection|null[0]
+    constructor <init>(io.ktor.websocket/DefaultWebSocketSession) // us.tractat.kuilt.websocket/WebSocketConnection.<init>|<init>(io.ktor.websocket.DefaultWebSocketSession){}[0]
+
+    final val incoming // us.tractat.kuilt.websocket/WebSocketConnection.incoming|{}incoming[0]
+        final fun <get-incoming>(): kotlinx.coroutines.flow/Flow<kotlin/ByteArray> // us.tractat.kuilt.websocket/WebSocketConnection.incoming.<get-incoming>|<get-incoming>(){}[0]
+
+    final suspend fun close() // us.tractat.kuilt.websocket/WebSocketConnection.close|close(){}[0]
+    final suspend fun send(kotlin/ByteArray) // us.tractat.kuilt.websocket/WebSocketConnection.send|send(kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.websocket/WebSocketDialContext { // us.tractat.kuilt.websocket/WebSocketDialContext|null[0]
+    constructor <init>(kotlin.collections/Map<kotlin/String, kotlin/String> = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...) // us.tractat.kuilt.websocket/WebSocketDialContext.<init>|<init>(kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
+
+    final val headers // us.tractat.kuilt.websocket/WebSocketDialContext.headers|{}headers[0]
+        final fun <get-headers>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.websocket/WebSocketDialContext.headers.<get-headers>|<get-headers>(){}[0]
+    final val queryParams // us.tractat.kuilt.websocket/WebSocketDialContext.queryParams|{}queryParams[0]
+        final fun <get-queryParams>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.websocket/WebSocketDialContext.queryParams.<get-queryParams>|<get-queryParams>(){}[0]
+
+    final fun component1(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.websocket/WebSocketDialContext.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.websocket/WebSocketDialContext.component2|component2(){}[0]
+    final fun copy(kotlin.collections/Map<kotlin/String, kotlin/String> = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...): us.tractat.kuilt.websocket/WebSocketDialContext // us.tractat.kuilt.websocket/WebSocketDialContext.copy|copy(kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.websocket/WebSocketDialContext.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.websocket/WebSocketDialContext.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.websocket/WebSocketDialContext.toString|toString(){}[0]
+}
+
+final object us.tractat.kuilt.websocket/UnobservedConnectivity : us.tractat.kuilt.websocket/ConnectivityObserver { // us.tractat.kuilt.websocket/UnobservedConnectivity|null[0]
+    final val reachability // us.tractat.kuilt.websocket/UnobservedConnectivity.reachability|{}reachability[0]
+        final fun <get-reachability>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.websocket/NetworkReachability?> // us.tractat.kuilt.websocket/UnobservedConnectivity.reachability.<get-reachability>|<get-reachability>(){}[0]
+}
+
+final fun us.tractat.kuilt.websocket/webSocketLoomJoin(io.ktor.client/HttpClient, us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., kotlinx.coroutines/CoroutineDispatcher = ..., kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.websocket/WebSocketDialContext> = ..., us.tractat.kuilt.websocket/ConnectivityObserver = ...): us.tractat.kuilt.websocket/KtorClientLoom // us.tractat.kuilt.websocket/webSocketLoomJoin|webSocketLoomJoin(io.ktor.client.HttpClient;us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.DeliveryPolicy;kotlinx.coroutines.CoroutineDispatcher;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.websocket.WebSocketDialContext>;us.tractat.kuilt.websocket.ConnectivityObserver){}[0]
+final fun us.tractat.kuilt.websocket/webSocketMeshLoomJoin(io.ktor.client/HttpClient, us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., kotlinx.coroutines/CoroutineDispatcher = ..., kotlin.random/Random = ...): us.tractat.kuilt.websocket/KtorMeshClientLoom // us.tractat.kuilt.websocket/webSocketMeshLoomJoin|webSocketMeshLoomJoin(io.ktor.client.HttpClient;us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.DeliveryPolicy;kotlinx.coroutines.CoroutineDispatcher;kotlin.random.Random){}[0]
+
+// Targets: [apple]
+final class us.tractat.kuilt.websocket/AppleConnectivityObserver : kotlin/AutoCloseable, us.tractat.kuilt.websocket/ConnectivityObserver { // us.tractat.kuilt.websocket/AppleConnectivityObserver|null[0]
+    final val reachability // us.tractat.kuilt.websocket/AppleConnectivityObserver.reachability|{}reachability[0]
+        final fun <get-reachability>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.websocket/NetworkReachability?> // us.tractat.kuilt.websocket/AppleConnectivityObserver.reachability.<get-reachability>|<get-reachability>(){}[0]
+
+    final fun close() // us.tractat.kuilt.websocket/AppleConnectivityObserver.close|close(){}[0]
+}
+
+// Targets: [apple]
+final fun us.tractat.kuilt.websocket/appleConnectivityObserver(): us.tractat.kuilt.websocket/AppleConnectivityObserver // us.tractat.kuilt.websocket/appleConnectivityObserver|appleConnectivityObserver(){}[0]
+
+// Targets: [wasmJs]
+final class us.tractat.kuilt.websocket/BrowserConnectivityObserver : us.tractat.kuilt.websocket/ConnectivityObserver { // us.tractat.kuilt.websocket/BrowserConnectivityObserver|null[0]
+    final val reachability // us.tractat.kuilt.websocket/BrowserConnectivityObserver.reachability|{}reachability[0]
+        final fun <get-reachability>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.websocket/NetworkReachability?> // us.tractat.kuilt.websocket/BrowserConnectivityObserver.reachability.<get-reachability>|<get-reachability>(){}[0]
+
+    final fun close() // us.tractat.kuilt.websocket/BrowserConnectivityObserver.close|close(){}[0]
+}
+
+// Targets: [wasmJs]
+final fun us.tractat.kuilt.websocket/browserConnectivityObserver(): us.tractat.kuilt.websocket/BrowserConnectivityObserver // us.tractat.kuilt.websocket/browserConnectivityObserver|browserConnectivityObserver(){}[0]

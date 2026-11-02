@@ -46,9 +46,9 @@ Three answers are possible:
 ### The middle category had no members until #1994
 
 It was defined here from the start and stood empty — every fabric fell
-elsewhere. Four moved into it together, and the route they gained lives **one
+elsewhere. Three moved into it together, and the route they gained lives **one
 layer up**: `Room.broadcast` / `Room.sendTo` wrap the frame and hand it to the host,
-which forwards it. The fabric's own `Seam.sendTo` is unchanged — on all four it
+which forwards it. The fabric's own `Seam.sendTo` is unchanged — on all three it
 still throws `PeerNotConnected` for a co-spoke, and that is correct, because the
 fabric genuinely holds no such link and a `Seam` must not claim one.
 
@@ -73,7 +73,7 @@ fabric itself decides.
 | `:kuilt-websocket` — `KtorClientLoom` | 2-peer link | **N/A** | `WebSocketSeam` → `LinkSeam` | Point-to-point. `KtorMeshClientLoom` is the hub-spoke variant and inherits the `hubMesh` answer (**star with relay**). |
 | `:kuilt-mdns` | Discovery only | Inherits | — | Discovery is orthogonal to topology; feeds a WebSocket connection. |
 | `:kuilt-multipeer` | **Star with relay** | **Yes, via the host** (Room layer) | [`MCSessionLink.kt:153`](../kuilt-multipeer/src/appleMain/kotlin/us/tractat/kuilt/multipeer/internal/MCSessionLink.kt#L153), [`MultipeerPeerLinkFactory.apple.kt` `joinSession`](../kuilt-multipeer/src/appleMain/kotlin/us/tractat/kuilt/multipeer/MultipeerPeerLinkFactory.apple.kt) | Decisive: each joiner creates its **own** `MCSession` and invites only the host. Two joiners are in different sessions, so a co-joiner never appears in `session.connectedPeers`. The Room relays (#1994). Not hardware-verified. |
-| `:kuilt-nearby` | **Star with relay** | **Yes, via the host** (Room layer) | [`NearbySeam.kt:165`](../kuilt-nearby/src/commonMain/kotlin/us/tractat/kuilt/nearby/NearbySeam.kt#L165), [`GmsNearbyApi.kt:62`](../kuilt-nearby/src/androidMain/kotlin/us/tractat/kuilt/nearby/GmsNearbyApi.kt#L62) | Strategy is `P2P_STAR`, and `endpointIdFor` scans only directly-connected endpoints. A discoverer holds one endpoint — the advertiser. The Room relays (#1994). Not hardware-verified. |
+| `:kuilt-nearby` | 2-peer link, one joiner per host | **N/A** | [`NearbyLoom.kt` `acceptUntilLinked`](../kuilt-nearby/src/commonMain/kotlin/us/tractat/kuilt/nearby/NearbyLoom.kt) | A host takes the first joiner whose handshake succeeds and then stops advertising, so a session holds two peers and there is no co-joiner to route to. The radio's strategy is `P2P_STAR`, which could carry more, but nothing here admits a second joiner. Not hardware-verified. |
 | `:kuilt-webrtc` | 2-peer data channel | **N/A** | [`WebRTCPeerLink.kt:116`](../kuilt-webrtc/src/wasmJsMain/kotlin/us/tractat/kuilt/webrtc/internal/WebRTCPeerLink.kt#L116) | `resolvedRoster()` is literally `setOf(selfId, remote)`. Point-to-point. |
 | `:kuilt-tcp` | 2-peer link | **N/A** | [`TcpLoom.kt` `weave`](../kuilt-tcp/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/tcp/TcpLoom.kt) | `handshaking(...)` yields a `LinkSeam`. Multi-peer TCP is assembled by the *caller* out of `hubMesh`/`peerMesh`, which then decides the answer. |
 | `:kuilt-nw` | Full mesh | **Yes** | [`NwSeam.kt:865`](../kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt#L865), [`NwLoom.kt:50`](../kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwLoom.kt#L50) | Every peer advertises, browses **and** auto-dials every other, so each pair forms its own connection; `registry[peer]` always resolves for a peer in the roster. |

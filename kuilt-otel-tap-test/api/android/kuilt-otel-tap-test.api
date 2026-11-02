@@ -1,0 +1,22 @@
+public final class us/tractat/kuilt/otel/tap/test/LogArtifactKt {
+	public static final fun logArtifactLines (Ljava/util/List;)Lkotlin/sequences/Sequence;
+	public static final fun parseStampedLogArtifactLines (Lkotlin/sequences/Sequence;)Ljava/util/List;
+	public static final fun readStampedLogArtifact (Lkotlinx/io/Source;)Ljava/util/List;
+	public static final fun stampedLogArtifactLines (Ljava/util/List;)Lkotlin/sequences/Sequence;
+	public static final fun writeLogArtifact (Ljava/util/List;Lkotlinx/io/Sink;)V
+	public static final fun writeStampedLogArtifact (Ljava/util/List;Lkotlinx/io/Sink;)V
+}
+
+public final class us/tractat/kuilt/otel/tap/test/LogAssertionsKt {
+	public static final fun awaitLog-dWUq8MI (Lus/tractat/kuilt/otel/tap/LogTapClient;JLkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static final fun awaitLogBodyContaining-dWUq8MI (Lus/tractat/kuilt/otel/tap/LogTapClient;JLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/otel/tap/test/LogDumpKt {
+	public static final fun describe (Lus/tractat/kuilt/otel/LogRecord;)Ljava/lang/String;
+	public static final fun dumpLogs (Lus/tractat/kuilt/otel/tap/LogTapClient;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun dumpLogs$default (Lus/tractat/kuilt/otel/tap/LogTapClient;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun dumpingOnFailure (Lus/tractat/kuilt/otel/tap/LogTapClient;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun dumpingOnFailure$default (Lus/tractat/kuilt/otel/tap/LogTapClient;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
