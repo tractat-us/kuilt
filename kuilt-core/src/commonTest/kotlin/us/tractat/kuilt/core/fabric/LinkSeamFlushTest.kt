@@ -273,8 +273,9 @@ class LinkSeamFlushTest {
      * so a flush must already be able to see the tear.
      *
      * The window is real only across threads, but it can be forced on one: an unconfined collector runs
-     * on the winner's own stack, inside the state write. `LinkSeamFlushConcurrencyTest` is the same race
-     * unforced, on real threads. Reds with the signal after the state write rather than before it.
+     * on the winner's own stack, inside the state write, where `torn` is still open. So the only thing
+     * left to say this flush failed is its read of `state`, and this reds without that read.
+     * `LinkSeamFlushConcurrencyTest` is the same race unforced, on real threads.
      */
     @Test
     fun aFlushCannotConfirmInsideAnotherPathsTear() = runTest {
