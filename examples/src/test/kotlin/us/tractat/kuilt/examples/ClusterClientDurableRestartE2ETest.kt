@@ -23,6 +23,7 @@ import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.raft.ClientId
+import us.tractat.kuilt.raft.AutoSerialRefusedException
 import us.tractat.kuilt.raft.ClientIdCollisionException
 import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.ClusterConfig
@@ -80,7 +81,7 @@ class ClusterClientDurableRestartE2ETest {
         assertNull(failure, "no failure across the catch-up: $failure")
 
         // The one-argument form cannot be covered by a floor, and the client surfaces the node's refusal.
-        val refusal = assertFailsWith<IllegalStateException> { rig.client.propose("not-pinned".encodeToByteArray()) }
+        val refusal = assertFailsWith<AutoSerialRefusedException> { rig.client.propose("not-pinned".encodeToByteArray()) }
         val next = withTimeout(backstop) { rig.client.propose("cmd-3".encodeToByteArray(), requestId = 3L) }
 
         assertAll(
