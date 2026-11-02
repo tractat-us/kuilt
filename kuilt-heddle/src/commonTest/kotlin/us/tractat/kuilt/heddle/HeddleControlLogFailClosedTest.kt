@@ -15,6 +15,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
@@ -34,12 +35,11 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
- * A node that meets a control act it cannot read stops there and refuses writes; a node that meets
- * an entry heddle never wrote steps over it (#1738).
+ * A node that meets a log entry it cannot read stops there and refuses writes, whether the entry is an
+ * act from another version or bytes heddle never wrote (#1738). Nothing is stepped over.
  *
  * Every halt below asserts the entry the codec actually classified as [ControlEntry.Unreadable], so
- * a fixture that merely fails to reach the decoder cannot pass. Every skip asserts the entry was
- * delivered, by the node carrying on past it.
+ * a fixture that merely fails to reach the decoder cannot pass.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class HeddleControlLogFailClosedTest {
@@ -110,6 +110,41 @@ class HeddleControlLogFailClosedTest {
                     GateClosed(SELF, GateClosed.Reason.UnreadableControlEntry(entry.index, version)),
                     governed.reserve(ROOT, 1L),
                     name,
+                )
+            }
+        }
+
+    /**
+     * Bytes heddle never wrote stop the log exactly as an act it cannot read does. The readable mint
+     * behind each one is what makes the stop observable: a node that stepped over the entry would apply
+     * it, and would answer the later calls as a healthy node.
+     */
+    @Test
+    fun anEntryHeddleNeverWroteStopsTheLogThereAndClosesTheGate() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            for ((name, bytes) in ControlLogVectors.foreign) {
+                val raft = FakeRaftNode(initialRole = RaftRole.Leader)
+                val governed = boot(raft, "foreign-$name")
+                assertIs<ControlOutcome.Applied>(governed.enroll(SELF), name)
+                assertIs<ControlOutcome.Applied>(governed.mint(SELF, 5L), name)
+                assertTrue(governed.isWritable, "rig: open before the entry arrives: $name")
+                assertIs<ControlEntry.Unreadable>(ControlLogCodec.decode(bytes), "rig: the codec has no other answer: $name")
+
+                val entry = raft.pushCommitted(bytes)
+                val later = raft.pushCommitted(actBytes("after#0", ControlCommand.Mint(ROOT, SELF, 40L)))
+                runCurrent()
+                val proposalsBefore = raft.proposals.size
+                val refused = assertIs<ControlOutcome.Conflict>(governed.mint(SELF, 1L), name)
+
+                val closed = GateClosed(SELF, GateClosed.Reason.UnreadableControlEntry(entry.index, ControlLogCodec.UNTAGGED_VERSION))
+                assertAll(
+                    { assertTrue(later.index > entry.index, "rig: a readable act lands past it: $name") },
+                    { assertFalse(governed.isWritable, name) },
+                    { assertEquals(closed, governed.reserve(ROOT, 1L), "reserve names the entry: $name") },
+                    { assertEquals(closed, governed.schedule(ROOT), "schedule names the entry: $name") },
+                    { assertEquals(5L, governed.ledger.value.mintedTotal(), "the later mint must not apply: $name") },
+                    { assertEquals(ControlOutcome.NOT_COMMITTED, refused.index, "refused before the log: $name") },
+                    { assertEquals(proposalsBefore, raft.proposals.size, "the refused call wrote nothing: $name") },
                 )
             }
         }
@@ -294,12 +329,20 @@ class HeddleControlLogFailClosedTest {
 
     /** A restart replays the same log to the same entry, so restarting cannot clear the latch either. */
     @Test
-    fun aRestartReplaysToTheSameEntryAndClosesAgain() =
+    fun aRestartReplaysToTheSameActAndClosesAgain() =
+        aRestartLatchesAgainAt(ControlLogVectors.V0_7_3_MINT.hexToByteArray())
+
+    /** So a log that picked up another writer's entry under an older build stops at it on upgrade. */
+    @Test
+    fun aRestartReplaysToTheSameForeignEntryAndClosesAgain() =
+        aRestartLatchesAgainAt("set x=1".encodeToByteArray())
+
+    private fun aRestartLatchesAgainAt(bytes: ByteArray) =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val raft = FakeRaftNode(initialRole = RaftRole.Leader)
             val runScope = CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext[Job]))
             val earlier = runScope.governedOn(this, raft, "before-restart")
-            val entry = raft.pushCommitted(ControlLogVectors.V0_7_3_MINT.hexToByteArray())
+            val entry = raft.pushCommitted(bytes)
             runCurrent()
             val closed = GateClosed(SELF, GateClosed.Reason.UnreadableControlEntry(entry.index, 0))
             assertEquals(closed, earlier.reserve(ROOT, 1L), "rig: the earlier run latched")
@@ -313,33 +356,6 @@ class HeddleControlLogFailClosedTest {
                 { assertEquals(closed, restarted.reserve(ROOT, 1L), "the new run latches at the same entry") },
                 { assertIs<ControlOutcome.Conflict>(enroll, "and refuses its enroll") },
                 { assertFalse(restarted.isWritable) },
-            )
-        }
-
-    /**
-     * A non-heddle entry stays non-fatal: the node steps over it and the log goes on. The acts after
-     * it applying are what show it was delivered, not merely dropped ahead of the decoder.
-     */
-    @Test
-    fun anEntryHeddleNeverWroteIsSkippedAndTheNodeCarriesOn() =
-        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
-            val raft = FakeRaftNode(initialRole = RaftRole.Leader)
-            val governed = boot(raft, "foreign")
-            assertIs<ControlOutcome.Applied>(governed.enroll(SELF))
-
-            val foreign = listOf("ff0042".hexToByteArray(), "a1616101".hexToByteArray(), "set x=1".encodeToByteArray())
-            for (bytes in foreign) {
-                assertEquals(ControlEntry.NotHeddle, ControlLogCodec.decode(bytes), "rig: positively not heddle's")
-                raft.pushCommitted(bytes)
-            }
-            runCurrent()
-
-            val mint = assertIs<ControlOutcome.Applied>(governed.mint(SELF, 5L))
-            assertAll(
-                { assertEquals(5L, governed.ledger.value.mintedTotal(), "the log kept applying") },
-                { assertEquals(4L, mint.index - 1L, "rig: the mint landed past all three entries") },
-                { assertTrue(governed.isWritable, "the gate stays open") },
-                { assertEquals(ReserveOutcome.NoHoldings, governed.reserve(ROOT, 1L)) },
             )
         }
 
@@ -358,11 +374,18 @@ class HeddleControlLogFailClosedTest {
 
     /**
      * Every peer stops at the same index for the same reason, on the real engine: the control log is
-     * consensus state, so this has to hold across the cluster and not just on one node. A non-heddle
-     * entry ahead of it is stepped over by all of them.
+     * consensus state, so this has to hold across the cluster and not just on one node.
      */
     @Test
-    fun everyNodeOfARealClusterSkipsTheSameEntriesAndLatchesTheSameOne() =
+    fun everyNodeOfARealClusterLatchesTheSameUnreadableAct() =
+        everyNodeOfARealClusterLatchesAt(ControlLogVectors.taggedAtVersion(99), 99)
+
+    /** One proposal from anything else sharing the Raft node is enough to stop the whole group. */
+    @Test
+    fun everyNodeOfARealClusterLatchesTheSameEntryHeddleNeverWrote() =
+        everyNodeOfARealClusterLatchesAt("set x=1".encodeToByteArray(), ControlLogCodec.UNTAGGED_VERSION)
+
+    private fun everyNodeOfARealClusterLatchesAt(bytes: ByteArray, version: Int) =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))
             val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
@@ -371,22 +394,61 @@ class HeddleControlLogFailClosedTest {
                 backgroundScope.governedOn(this, sim.nodes.getValue(id), "real-${id.value}", ReplicaId(id.value))
             }
 
-            leader.propose("set x=1".encodeToByteArray())
             for ((id, node) in governed) assertIs<ControlOutcome.Applied>(node.enroll(ReplicaId(id.value)))
-            sim.awaitTrue("every node stepped over the foreign entry and applied every enroll") {
+            sim.awaitTrue("every node applied every enroll") {
                 governed.values.all { it.enrolledReplicas().size == ids.size }
             }
             // Without this the wait below passes on a node that never opened.
             assertTrue(governed.values.all { it.isWritable }, "rig: all open before the entry arrives")
 
-            val unreadable = leader.propose(ControlLogVectors.taggedAtVersion(99))
+            val unreadable = leader.propose(bytes)
             sim.awaitTrue("every node latched") { governed.values.none { it.isWritable } }
 
-            val reason = GateClosed.Reason.UnreadableControlEntry(unreadable.index, 99)
+            val reason = GateClosed.Reason.UnreadableControlEntry(unreadable.index, version)
             assertEquals(
                 ids.associateWith { id -> GateClosed(ReplicaId(id.value), reason) },
                 ids.associateWith { id -> governed.getValue(id).reserve(ROOT, 1L) },
                 "the same index and version on every node",
+            )
+        }
+
+    /**
+     * What the latch now rests on: raft's own no-ops and membership entries never arrive as log entries
+     * to decode. If they did, every election and membership change would stop the group, because neither
+     * carries bytes heddle can read. Both happen here on the real engine, and an act after them applies.
+     */
+    @Test
+    fun raftsOwnEntriesNeverReachTheLatch() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val ids = listOf(NodeId("a"), NodeId("b"), NodeId("c"))
+            val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
+            val leader = sim.awaitLeader()
+            val governed = ids.associateWith { id ->
+                backgroundScope.governedOn(this, sim.nodes.getValue(id), "real-${id.value}", ReplicaId(id.value))
+            }
+            for ((id, node) in governed) assertIs<ControlOutcome.Applied>(node.enroll(ReplicaId(id.value)))
+            sim.awaitTrue("every node applied every enroll") {
+                governed.values.all { it.enrolledReplicas().size == ids.size }
+            }
+
+            val leaderId = sim.nodes.entries.first { it.value === leader }.key
+            val (removed, successor) = ids.filter { it != leaderId }
+            val commitBeforeChange = leader.commitIndex.value
+            leader.changeMembership(ClusterConfig(voters = setOf(leaderId, successor)))
+            val commitAfterChange = leader.commitIndex.value
+            leader.transferLeadership(successor)
+            val newLeader = sim.awaitLeader(among = setOf(successor))
+
+            val kept = listOf(leaderId, successor).map { governed.getValue(it) }
+            assertIs<ControlOutcome.Applied>(governed.getValue(successor).mint(ReplicaId(successor.value), 5L))
+            sim.awaitTrue("both remaining nodes applied the mint") {
+                kept.all { it.ledger.value.mintedTotal() == 5L }
+            }
+
+            assertAll(
+                { assertTrue(commitAfterChange > commitBeforeChange, "rig: membership entries committed") },
+                { assertTrue(newLeader !== leader, "rig: a new leader took over, and appended its no-op") },
+                { assertTrue(kept.all { it.isWritable }, "neither stopped a node: removed ${removed.value}") },
             )
         }
 
