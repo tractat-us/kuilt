@@ -22,6 +22,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.otel.tap.LogTapAdmission
 import us.tractat.kuilt.otel.tap.TapCbor
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -185,10 +186,14 @@ class TapAdmissionAttackTest {
 
     /**
      * A tag harvested earlier, shown to the device later, against the very nonce it was harvested for.
+     * The frame is replayed byte for byte, so this does not depend on its shape.
      *
-     * A real verifier's nonce should never repeat, so this seeds the device's source to make it repeat:
-     * this is the worst the replay can be, and the fix has to hold there rather than lean on the nonce
-     * being fresh. The frame is replayed byte for byte, so this does not depend on its shape.
+     * A real verifier's nonce should never repeat, so this seeds the device's source to make it repeat.
+     * What refuses the replay here is the ids and nothing else: the harvester asked as itself, so the
+     * tag names the harvester as verifier, and the device expects to be named. The prover's nonce adds
+     * nothing, since it travels in the frame and the device keeps no record of the ones it has seen. A
+     * harvester wearing the right ids gets past this, so a fresh challenge nonce is what a replay really
+     * rests on. `aTagHarvestedWearingBothIdsIsAdmittedIfTheNonceRepeats` shows that.
      */
     @Test
     fun aHarvestedTagDoesNotReplayAgainstALaterChallengeForTheSameNonce() = runTest(UnconfinedTestDispatcher()) {
@@ -343,6 +348,80 @@ class TapAdmissionAttackTest {
     fun aRelayWearingOnlyThePullersIdIsRefused() = runTest(UnconfinedTestDispatcher()) {
         val relay = relayAcrossTwoSessions(wearsDevicesIdToPuller = false, wearsPullersIdToDevice = true)
         assertFalse(relay.attackerAdmitted, "the tag names the verifier, and the attacker is not the device at the puller")
+    }
+
+    /**
+     * A known limit, and the honest account of what stops a replay. Wearing the ids the device will
+     * see, a harvested tag is good at the device for exactly the nonce it was harvested under, because
+     * nothing else in the input can tell the exchanges apart. So [LogTapAdmission.Verify]'s secure
+     * `random` is load-bearing here, and a repeated nonce is a working replay.
+     *
+     * If this reds because the replay is now refused, the handshake got stronger: delete it and say so.
+     */
+    @Test
+    fun aTagHarvestedWearingBothIdsIsAdmittedIfTheNonceRepeats() = runTest(UnconfinedTestDispatcher()) {
+        val replay = replayWearingBothIds(harvestedUnderSeed = VERIFIER_SEED)
+        assertAll(
+            { assertTrue(replay.nonceRepeated, "rig: the device must have issued the very nonce the tag was harvested for") },
+            { assertTrue(replay.attackerAdmitted, "a repeated nonce is a working replay, and the docs must keep saying so") },
+        )
+    }
+
+    /** The same replay with the device's nonce fresh, which is what a secure source gives it. */
+    @Test
+    fun aTagHarvestedWearingBothIdsIsRefusedAgainstAFreshNonce() = runTest(UnconfinedTestDispatcher()) {
+        val replay = replayWearingBothIds(harvestedUnderSeed = VERIFIER_SEED + 1)
+        assertAll(
+            { assertFalse(replay.nonceRepeated, "rig: the device's nonce must not be the harvested one") },
+            { assertFalse(replay.attackerAdmitted, "a tag for another nonce must not admit, whatever ids are worn") },
+            { assertEquals(listOf(replay.device), replay.rejectedBy, "the device must refuse the replay out loud") },
+        )
+    }
+
+    private class WornIdReplay(
+        val device: PeerId,
+        val nonceRepeated: Boolean,
+        val attackerAdmitted: Boolean,
+        val rejectedBy: List<PeerId>,
+    )
+
+    /**
+     * Harvest a tag from the puller while wearing the device's id, then replay it at the device while
+     * wearing the puller's. Numbering works as in [relayAcrossTwoSessions], and the rig asserts it.
+     */
+    private suspend fun TestScope.replayWearingBothIds(harvestedUnderSeed: Int): WornIdReplay {
+        val harvestedNonce = Random(harvestedUnderSeed).nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES)
+        val pullerSession = InMemoryLoom()
+        val pullerGate = pullerSession.host(Pattern("puller-session")).tokenGated(prover(), backgroundScope)
+        val harvester = Harvester(pullerSession.join(InMemoryTag("attacker")), backgroundScope)
+
+        harvester.challenge(pullerGate.selfId, harvestedNonce)
+        runCurrent()
+        val harvestedFrame = assertNotNull(harvester.proofFrames.singleOrNull(), "rig: the puller must have answered")
+        val pullerId = pullerGate.selfId
+        pullerGate.close()
+
+        val deviceSession = InMemoryLoom()
+        val replayer = Harvester(deviceSession.host(Pattern("device-session")), backgroundScope)
+        val deviceGate = deviceSession.join(InMemoryTag("device")).tokenGated(verifier(), backgroundScope)
+        runCurrent()
+        val challenge = assertNotNull(
+            replayer.challengesFrom(deviceGate.selfId).singleOrNull(),
+            "rig: the device must have challenged the replayer",
+        )
+        replayer.seam.sendTo(deviceGate.selfId, harvestedFrame)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(deviceGate.selfId, harvester.seam.selfId, "rig: the harvester must wear the device's id") },
+            { assertEquals(pullerId, replayer.seam.selfId, "rig: the replayer must wear the puller's id") },
+        )
+        return WornIdReplay(
+            device = deviceGate.selfId,
+            nonceRepeated = challenge.nonce.toByteArray().contentEquals(harvestedNonce),
+            attackerAdmitted = replayer.seam.selfId in deviceGate.peers.value,
+            rejectedBy = replayer.rejectedBy,
+        )
     }
 
     private class TwoSessionRelay(val attackerAdmitted: Boolean)

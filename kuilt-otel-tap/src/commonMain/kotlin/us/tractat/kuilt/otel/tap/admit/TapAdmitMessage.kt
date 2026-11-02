@@ -31,8 +31,11 @@ import us.tractat.kuilt.otel.tap.TapCbor
  * verifier → prover : Reject(reason)   // on mismatch/expiry; otherwise the peer is surfaced
  * ```
  * The code never appears on the wire — only the [Proof] tag derived from it does. The tag covers a
- * nonce from each side and both peers' ids, so a captured or forwarded [Proof] is good for no other
- * exchange, and the prover's nonce means a challenger cannot compute the input ahead of time.
+ * nonce from each side and both peers' ids. A captured [Proof] is good for no later exchange because
+ * the verifier's nonce is fresh each time, a forwarded one names the wrong verifier unless the
+ * forwarder wears the right ids, and the prover's nonce means a challenger cannot compute the input
+ * ahead of time. It does not stop a replay: it travels in the frame and the verifier keeps no record
+ * of the ones it has seen.
  *
  * The frames carry no direction and no role. Which way a proof runs is in the ids the tag covers, so
  * two peers could run the exchange at each other at once with no change to this format.

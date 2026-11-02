@@ -30,10 +30,11 @@ public sealed interface LogTapAdmission {
      * for that exchange while [token] is valid.
      *
      * **[random] MUST be cryptographically secure in production** — pass
-     * [us.tractat.kuilt.otel.tap.admit.cryptoRandom]. It sources the per-challenge nonces,
-     * whose unpredictability is what makes each challenge fresh (replay resistance); a
-     * predictable source weakens that. The `Random` parameter is injectable **only so tests
-     * can supply a seeded, deterministic source**, never as licence for `Random.Default`.
+     * [us.tractat.kuilt.otel.tap.admit.cryptoRandom]. It sources the per-challenge nonces, and a
+     * fresh one each time is the whole of the replay defence: a peer wearing the right ids can replay
+     * a recorded proof against any nonce that repeats, so a predictable source breaks it. The `Random`
+     * parameter is injectable **only so tests can supply a seeded, deterministic source**, never as
+     * licence for `Random.Default`.
      */
     public class Verify(
         public val token: LogTapJoinToken,
