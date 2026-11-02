@@ -44,12 +44,14 @@ public final class us/tractat/kuilt/raft/ClientIdentity$Auto : us/tractat/kuilt/
 }
 
 public final class us/tractat/kuilt/raft/ClientIdentity$Durable : us/tractat/kuilt/raft/ClientIdentity {
-	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1--8sRXKM ()Ljava/lang/String;
-	public final fun copy-neJCpmw (Ljava/lang/String;)Lus/tractat/kuilt/raft/ClientIdentity$Durable;
-	public static synthetic fun copy-neJCpmw$default (Lus/tractat/kuilt/raft/ClientIdentity$Durable;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/raft/ClientIdentity$Durable;
+	public final fun component2 ()J
+	public final fun copy-MEp4kK8 (Ljava/lang/String;J)Lus/tractat/kuilt/raft/ClientIdentity$Durable;
+	public static synthetic fun copy-MEp4kK8$default (Lus/tractat/kuilt/raft/ClientIdentity$Durable;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/raft/ClientIdentity$Durable;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getClientId--8sRXKM ()Ljava/lang/String;
+	public final fun getIssuedThrough ()J
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

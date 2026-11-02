@@ -164,13 +164,16 @@ abstract interface us.tractat.kuilt.raft/RaftTransport { // us.tractat.kuilt.raf
 
 sealed interface us.tractat.kuilt.raft/ClientIdentity { // us.tractat.kuilt.raft/ClientIdentity|null[0]
     final class Durable : us.tractat.kuilt.raft/ClientIdentity { // us.tractat.kuilt.raft/ClientIdentity.Durable|null[0]
-        constructor <init>(us.tractat.kuilt.raft/ClientId) // us.tractat.kuilt.raft/ClientIdentity.Durable.<init>|<init>(us.tractat.kuilt.raft.ClientId){}[0]
+        constructor <init>(us.tractat.kuilt.raft/ClientId, kotlin/Long) // us.tractat.kuilt.raft/ClientIdentity.Durable.<init>|<init>(us.tractat.kuilt.raft.ClientId;kotlin.Long){}[0]
 
         final val clientId // us.tractat.kuilt.raft/ClientIdentity.Durable.clientId|{}clientId[0]
             final fun <get-clientId>(): us.tractat.kuilt.raft/ClientId // us.tractat.kuilt.raft/ClientIdentity.Durable.clientId.<get-clientId>|<get-clientId>(){}[0]
+        final val issuedThrough // us.tractat.kuilt.raft/ClientIdentity.Durable.issuedThrough|{}issuedThrough[0]
+            final fun <get-issuedThrough>(): kotlin/Long // us.tractat.kuilt.raft/ClientIdentity.Durable.issuedThrough.<get-issuedThrough>|<get-issuedThrough>(){}[0]
 
         final fun component1(): us.tractat.kuilt.raft/ClientId // us.tractat.kuilt.raft/ClientIdentity.Durable.component1|component1(){}[0]
-        final fun copy(us.tractat.kuilt.raft/ClientId = ...): us.tractat.kuilt.raft/ClientIdentity.Durable // us.tractat.kuilt.raft/ClientIdentity.Durable.copy|copy(us.tractat.kuilt.raft.ClientId){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.raft/ClientIdentity.Durable.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.raft/ClientId = ..., kotlin/Long = ...): us.tractat.kuilt.raft/ClientIdentity.Durable // us.tractat.kuilt.raft/ClientIdentity.Durable.copy|copy(us.tractat.kuilt.raft.ClientId;kotlin.Long){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.raft/ClientIdentity.Durable.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.raft/ClientIdentity.Durable.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.raft/ClientIdentity.Durable.toString|toString(){}[0]
