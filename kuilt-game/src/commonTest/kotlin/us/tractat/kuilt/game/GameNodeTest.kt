@@ -35,6 +35,7 @@ import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -55,18 +56,23 @@ class GameNodeTest {
             seam,
             voterIds = setOf(self), // single voter ⇒ this node is always leader
             raftConfig = fastRaftConfig(seed = 1L),
-            identity = ClientIdentity.Durable(ClientId("durable-x")),
+            identity = ClientIdentity.Durable(ClientId("durable-x"), issuedThrough = 0L),
         )
         session.node.awaitLeadership()
 
-        val indexed = TurnSequencer(session.node, Int.serializer()).propose(7)
+        val moves = TurnSequencer(session.node, Int.serializer())
+        val indexed = moves.propose(7, requestId = 1L)
         assertEquals(ClientId("durable-x"), indexed.dedupKey.clientId)
+
+        // The one-argument form draws a serial nobody could have persisted, so it never reaches the node.
+        val refusal = assertFailsWith<IllegalStateException> { moves.propose(8) }
+        assertContains(refusal.message.orEmpty(), "propose(command, requestId)")
     }
 
     /**
      * The route a consumer takes to retained storage: `gameNode(storage = …, identity = Durable(…))`
-     * and the one-argument [TurnSequencer.propose]. A fresh [InMemoryLoom] reuses the seam id, so the
-     * second incarnation is the same voter (#3060).
+     * and the pinned [TurnSequencer.propose], with the floor the caller keeps beside it. A fresh
+     * [InMemoryLoom] reuses the seam id, so the second incarnation is the same voter (#3060).
      */
     @Test
     fun aDurableGameNodeOverRetainedStorageSurvivesARestart() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
@@ -77,7 +83,7 @@ class GameNodeTest {
                 CoroutineExceptionHandler { _, e -> failures += e },
         )
         val store = InMemoryDurableStore()
-        val identity = ClientIdentity.Durable(ClientId("durable-x"))
+        var issuedThrough = 0L
         val session: suspend CoroutineScope.(Long) -> GameSession = { seed ->
             val seam = InMemoryLoom().host(Pattern("solo"))
             gameNode(
@@ -85,7 +91,7 @@ class GameNodeTest {
                 voterIds = setOf(NodeId(seam.selfId.value)),
                 storage = DurableStoreRaftStorage.open(store),
                 raftConfig = fastRaftConfig(seed = seed),
-                identity = identity,
+                identity = ClientIdentity.Durable(ClientId("durable-x"), issuedThrough),
             )
         }
 
@@ -93,7 +99,7 @@ class GameNodeTest {
         val first = firstScope.session(1L)
         first.node.awaitLeadership()
         val moves = TurnSequencer(first.node, Int.serializer())
-        repeat(3) { moves.propose(it) }
+        repeat(3) { moves.propose(it, requestId = ++issuedThrough) }
         firstScope.cancel()
 
         val secondScope = CoroutineScope(capturing.coroutineContext + Job(capturing.coroutineContext[Job]))
@@ -109,13 +115,13 @@ class GameNodeTest {
         val replayed = walked.toList()
         val failuresAtReplay = failures.map { it.toString() }
         val scopeSurvivedReplay = secondScope.isActive
-        val next = if (scopeSurvivedReplay) TurnSequencer(second.node, Int.serializer()).propose(99) else null
+        val next = if (scopeSurvivedReplay) TurnSequencer(second.node, Int.serializer()).propose(99, ++issuedThrough) else null
 
         assertAll(
             { assertEquals(emptyList(), failuresAtReplay, "no failure across the replay") },
             { assertTrue(scopeSurvivedReplay, "the node's scope must still be active") },
             { assertEquals(listOf(1L, 2L, 3L), replayed, "the rig: replay re-walked the old serials") },
-            { assertEquals(4L, next?.dedupKey?.requestId, "the next move's serial resumes above them") },
+            { assertEquals(4L, next?.dedupKey?.requestId, "the next move's serial sits above them") },
         )
     }
 

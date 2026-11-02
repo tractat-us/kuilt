@@ -7,12 +7,13 @@ import kotlin.test.assertTrue
 class RaftEngineDedupStampTest {
     @Test
     fun singleNodeLeaderStampsAutoSerialOnTheCommittedEntry() = raftRunTest {
-        val h = singleVoterNode(backgroundScope, identity = ClientIdentity.Durable(ClientId("c"), issuedThrough = 0L))
+        val h = singleVoterNode(backgroundScope)
         h.node.awaitLeadership()
         val first = h.node.propose("x".encodeToByteArray())
         val second = h.node.propose("y".encodeToByteArray())
-        assertEquals(DedupKey(ClientId("c"), 1), first.dedupKey)
-        assertEquals(DedupKey(ClientId("c"), 2), second.dedupKey)
+        assertEquals(1L, first.dedupKey?.requestId)
+        assertEquals(2L, second.dedupKey?.requestId)
+        assertEquals(first.dedupKey?.clientId, second.dedupKey?.clientId)
     }
 
     @Test
