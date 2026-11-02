@@ -3,8 +3,12 @@ package us.tractat.kuilt.websocket
 import io.ktor.websocket.DefaultWebSocketSession
 import io.ktor.websocket.close
 import io.ktor.websocket.readBytes
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.io.IOException
 import us.tractat.kuilt.core.fabric.Connection
 import io.ktor.websocket.Frame as KtorFrame
 
@@ -41,6 +45,12 @@ import io.ktor.websocket.Frame as KtorFrame
  * (the seam collects it exactly once). Close/EOF/error end the channel, completing the
  * flow so the seam transitions to `Torn`.
  *
+ * **send:** a session that has closed throws [IOException] with the session's own exception as its
+ * cause. Ktor reports a closed session as a [CancellationException]: Netty and CIO sessions cancel
+ * their outgoing queue when the socket closes, and an OkHttp session closes its queue with one. A
+ * caller nobody cancelled must not hear that as a cancellation (see [Connection.send]), so this tells
+ * the two apart by asking whether the caller's own job is cancelled.
+ *
  * **close:** closes the underlying session. Idempotent — Ktor's
  * [io.ktor.websocket.close] is a no-op once the session is already closing.
  */
@@ -48,7 +58,12 @@ public class WebSocketConnection(
     private val session: DefaultWebSocketSession,
 ) : Connection {
     override suspend fun send(frame: ByteArray) {
-        session.send(KtorFrame.Binary(fin = true, data = frame))
+        try {
+            session.send(KtorFrame.Binary(fin = true, data = frame))
+        } catch (closed: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            throw IOException("the WebSocket session is closed", closed)
+        }
     }
 
     override val incoming: Flow<ByteArray> = flow {

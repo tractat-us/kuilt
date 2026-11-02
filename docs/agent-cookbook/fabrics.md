@@ -130,6 +130,8 @@ private suspend fun weaveSeam(socket: Socket, selfId: PeerId): Seam =
     handshaking(rpcConnection(socket), selfId, Dispatchers.IO)
 ```
 
+If you write your own `Connection`, subclass `ConnectionSendConformanceSuite` (`:kuilt-conformance`) once per way your link can die: it holds `send` to throwing an ordinary exception into a live caller rather than a `CancellationException`, and to leaving a cancelled caller cancelled.
+
 **The size ceiling is symmetric, and publishing it matters as much as enforcing it.**
 `maxFrameSize` (default `DEFAULT_MAX_FRAME_SIZE`, 16 MiB) is checked in both directions: an oversize
 `send` throws `FrameTooLargeException` before writing a byte, and a hostile length prefix on the wire
