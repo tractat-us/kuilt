@@ -443,17 +443,24 @@ public interface Room {
     public suspend fun leave(reason: LeaveReason = LeaveReason.Normal)
 
     /**
-     * Wait, up to [timeout], until what this room accepted before this call has left this device's
-     * queues: the frames it was waiting to forward or announce, then the fabric's own.
+     * Wait, up to [timeout], until a [leave] cannot throw away what this room accepted before this call:
+     * the frames it was waiting to forward or announce, then the fabric's own.
      *
      * Send a last frame, flush, then [leave]: without the flush the last frame can be lost to the leave,
      * and a `delay` only guesses at how long that takes.
      *
+     * **Most rooms answer [us.tractat.kuilt.core.FlushOutcome.Unsupported] today**, having drained their
+     * own queues, because the fabric under them cannot tell: a room on `RoomHubSeam`, `MeshSeam` or
+     * `NwSeam` among them. Deleting a working `delay` there just loses the frame sooner, so keep it or an
+     * acknowledgement until your fabric answers. What confirms a drain, a list that only grows: `LinkSeam`
+     * over a WebSocket except an OkHttp client, `LinkSeam` over `framed()` (so TCP), and `InMemoryLoom`.
+     *
      * @sample us.tractat.kuilt.session.flushThenLeaveSample
      *
      * [us.tractat.kuilt.core.FlushOutcome.Drained] **never means another member received anything.** It
-     * says this room handed the frames to the fabric and the fabric handed them to the transport. For
-     * receipt, have the other member answer.
+     * says this room handed the frames to the fabric, and a fabric close that follows goes out behind
+     * them, with the limits [us.tractat.kuilt.core.FlushOutcome.Drained] lists. For receipt, have the
+     * other member answer.
      *
      * A barrier, as [us.tractat.kuilt.core.Seam.flush] describes: a frame sent after this call begins is
      * not waited for, and neither is an announcement the room raises after it begins.

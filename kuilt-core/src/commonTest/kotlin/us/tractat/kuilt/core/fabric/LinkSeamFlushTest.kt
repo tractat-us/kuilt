@@ -56,13 +56,24 @@ class LinkSeamFlushTest {
         seam.close()
     }
 
-    /** An unaware third-party seam or connection answers honestly by inheriting the default. */
+    /** An unaware seam or connection, implemented member by member, answers by inheriting the default. */
     @Test
     fun anUnawareImplementationInheritsUnsupportedRatherThanDrained() = runTest {
         val unaware = FlushTestConnection()
         val seam = seamOver(unaware)
         val outcomes = listOf(unaware.flush(Duration.INFINITE), InterfaceDefaultSeam(seam).flush(Duration.INFINITE))
         assertEquals(listOf<FlushOutcome>(FlushOutcome.Unsupported, FlushOutcome.Unsupported), outcomes)
+        seam.close()
+    }
+
+    /**
+     * Class delegation is not that case. Recompiled, `Seam by inner` forwards `inner`'s answer, so a
+     * decorator with a queue of its own has to override `flush` or it claims a drain above that queue.
+     */
+    @Test
+    fun aDecoratorByClassDelegationForwardsTheInnerAnswer() = runTest {
+        val seam = seamOver(FlushTestConnection(flushWith = { FlushOutcome.Drained }))
+        assertEquals(FlushOutcome.Drained, ClassDelegatingSeam(seam).flush(Duration.INFINITE))
         seam.close()
     }
 
@@ -303,6 +314,8 @@ class LinkSeamFlushTest {
         assertIs<FlushOutcome.Failed>(seam.flush(Duration.INFINITE))
         assertEquals(0, asked.value)
     }
+
+    private class ClassDelegatingSeam(inner: Seam) : Seam by inner
 
     /** A decorator written before `flush` existed: it overrides nothing, so it inherits the default. */
     private class InterfaceDefaultSeam(private val inner: Seam) : Seam {

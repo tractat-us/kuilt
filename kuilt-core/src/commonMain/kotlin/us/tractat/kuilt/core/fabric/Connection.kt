@@ -62,8 +62,8 @@ public interface Connection {
     public val maxFrameBytes: Int? get() = null
 
     /**
-     * Wait, up to [timeout], until every frame whose [send] returned before this call has been handed
-     * to the transport beneath this link, so an orderly [close] after this cannot be what loses it.
+     * Wait, up to [timeout], until a [close] of this link goes out behind every frame whose [send] returned
+     * before this call, so it cannot be what throws one away on this device.
      *
      * The link-level half of [us.tractat.kuilt.core.Seam.flush], with the same outcomes. **The default
      * is [FlushOutcome.Unsupported]:** this interface cannot know what a returning [send] means on a
@@ -75,6 +75,8 @@ public interface Connection {
      *   completion): report [FlushOutcome.Drained], or [FlushOutcome.Failed] once the link has closed.
      * - [send] returns with the frame still queued in the transport: ask the transport to wait, under
      *   [us.tractat.kuilt.core.flushWithin].
+     * - The transport can drop a queued frame without saying so, as an OkHttp WebSocket session does:
+     *   keep [FlushOutcome.Unsupported], however orderly its close looks.
      *
      * **This may run while another coroutine is inside [send]**, because the seam's writer moves on to
      * the next frame once it passes the barrier. A sink or stream that is not thread-safe must not be

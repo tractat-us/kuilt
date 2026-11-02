@@ -206,7 +206,7 @@ public suspend fun flushWithinSample(timeout: Duration, queueDrained: Completabl
     }
 ```
 
-Report `Drained` only when an orderly close after it cannot be what loses the frames. If your `send` returns only once the frame is handed over, that is true at once: answer `Drained`, or `Failed` after a close. Otherwise ask the transport to wait. A decorator with no queue of its own delegates, and class delegation already does; one with a queue drains it first. To hold your fabric to it, take a `FlushFixture` arm in its `SeamConformanceSuite` harness. Only `FlushFixture.Holdable` can prove a flush waits, so prefer it where a test can reach the point a send blocks.
+Report `Drained` only when a close after it goes out behind the frames, so it cannot be what throws them away on this device. If your `send` returns only once the frame is handed over, that is true at once: answer `Drained`, or `Failed` after a close. Otherwise ask the transport to wait. If the transport can drop a queued frame without saying so, as an OkHttp WebSocket session does, keep `Unsupported`. A decorator with no queue of its own delegates, and class delegation already does; one with a queue drains it first. To hold your fabric to it, take a `FlushFixture` arm in its `SeamConformanceSuite` harness. Only `FlushFixture.Holdable` can prove a flush waits, so prefer it where a test can reach the point a send blocks.
 
 ## Sending to yourself
 

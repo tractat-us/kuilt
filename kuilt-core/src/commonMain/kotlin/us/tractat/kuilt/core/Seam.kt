@@ -360,11 +360,17 @@ public interface Seam {
     public suspend fun close(reason: CloseReason = CloseReason.Normal)
 
     /**
-     * Wait, up to [timeout], for every send this seam accepted before this call to be handed to the
-     * transport.
+     * Wait, up to [timeout], until a [close] from this end cannot throw away any send this seam accepted
+     * before this call.
      *
      * The call for "send, then close": without it a frame still queued on this device is lost to the
      * close, and a `delay` only guesses at how long the queue takes.
+     *
+     * **Most seams answer [FlushOutcome.Unsupported] at once today**, `RoomHubSeam`, `MeshSeam` and
+     * `NwSeam` among them. On those, deleting a working `delay` just loses the frame sooner, so keep it or
+     * an acknowledgement until your fabric answers. What confirms a drain, a list that only grows:
+     * `LinkSeam` over a WebSocket except an OkHttp client, `LinkSeam` over `framed()` (so TCP), and
+     * `InMemoryLoom`.
      *
      * @sample us.tractat.kuilt.core.flushThenCloseSample
      *
@@ -377,11 +383,12 @@ public interface Seam {
      *
      * ## What each outcome means
      *
-     * - [FlushOutcome.Drained]: handed to the transport, so an orderly [close] after this cannot be
-     *   what loses those frames. **Never a statement about the remote peer.** It did not necessarily
-     *   receive them, and the link can still die on the way.
-     * - [FlushOutcome.Unsupported]: this seam cannot tell. **The interface default**, so a seam written
-     *   before this method existed answers honestly rather than claiming a drain it never looked for.
+     * - [FlushOutcome.Drained]: a [close] after this goes out behind those frames, so it cannot be what
+     *   throws them away here. **Never a statement about the remote peer**, and it has limits worth
+     *   reading: [FlushOutcome.Drained] lists them.
+     * - [FlushOutcome.Unsupported]: this seam cannot tell. **The interface default**, so a seam
+     *   implemented member by member before this method existed answers honestly rather than claiming a
+     *   drain it never looked for.
      * - [FlushOutcome.TimedOut]: not confirmed in time. A stalled writer ends up here: the seam stays up,
      *   no frame is dropped, the writer stays where it is, and the next flush starts a new wait. Calling
      *   [close] is what unsticks the writer.
@@ -398,9 +405,9 @@ public interface Seam {
      * A decorator adding **no queue of its own** delegates; class delegation (`Seam by inner`) already
      * does. A decorator that **does** queue must not rely on that, because the delegate's answer says
      * nothing about frames still waiting above it. Drain your own queue first, then ask the delegate,
-     * and report [FlushOutcome.Unsupported] if the delegate does. A decorator that cannot tell inherits
-     * the default rather than guessing: reporting [FlushOutcome.Drained] for a queue nobody checked is
-     * the failure this contract exists to prevent.
+     * and report [FlushOutcome.Unsupported] if the delegate does. A decorator that cannot tell answers
+     * that too, rather than guessing, and under class delegation it has to override to say so: reporting
+     * [FlushOutcome.Drained] for a queue nobody checked is the failure this contract exists to prevent.
      *
      * The answer is a value. Implementations must not throw for a failure or a timeout, and the only
      * `CancellationException` allowed out is the caller's own — the obligation on [close], and

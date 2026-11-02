@@ -17,6 +17,7 @@ import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.random.Random
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 // Minimal, compile-checked snippets quoted verbatim by docs/agent-cookbook/session.md (most) and
@@ -313,14 +314,21 @@ public suspend fun arbitraryRoomPayloadSample(room: Room, peer: PeerId, payload:
 }
 
 /**
- * Send a last frame and leave, without a `delay` guessing how long the queue takes.
+ * Send a last frame and leave, using a `delay` only where the fabric cannot do better.
  *
- * Returns `true` when the frame left this device before the leave. That is not the member receiving
- * it: a sender that needs receipt has the member answer.
+ * Returns `true` when the leave cannot have thrown the frame away. That is not the member receiving it:
+ * a sender that needs receipt has the member answer.
  */
-public suspend fun flushThenLeaveSample(room: Room, member: PeerId, lastFrame: ByteArray): Boolean {
+public suspend fun flushThenLeaveSample(
+    room: Room,
+    member: PeerId,
+    lastFrame: ByteArray,
+    delayYouHadBefore: Duration,
+): Boolean {
     room.sendTo(member, lastFrame)
     val outcome = room.flush(2.seconds)
+    // Most rooms answer Unsupported today, at once. Keep your delay or an ack until your fabric answers.
+    if (outcome == FlushOutcome.Unsupported) delay(delayYouHadBefore)
     room.leave()
     return when (outcome) {
         FlushOutcome.Drained -> true

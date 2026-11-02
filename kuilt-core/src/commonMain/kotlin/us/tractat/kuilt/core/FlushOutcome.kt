@@ -6,16 +6,14 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Duration
 
 /**
- * What a `flush` found: whether the frames you already sent have left this device's queues.
+ * What a `flush` found: whether a close from this end can still throw away the frames you already sent.
  *
  * A send that returned has only been *accepted*. It may still be waiting in a queue on this device,
  * and a `close` straight after it can throw it away. `flush` is how a caller waits for that queue to
  * pass the frames it already sent, without paying that wait on every close.
  *
- * **[Drained] never means the other peer received anything.** It says this end handed the frames to
- * the transport, so an orderly close that follows cannot be what loses them. A link can still die on
- * the way, and the far side can still crash before reading. A caller that needs receipt needs an
- * acknowledgement of its own.
+ * **[Drained] never means the other peer received anything.** See it for the one thing it does say. A
+ * caller that needs receipt needs an acknowledgement of its own.
  *
  * Every arm except [Drained] means "not proven". None of them says a frame was lost, and [TimedOut]
  * in particular leaves every frame queued and still on its way.
@@ -24,15 +22,33 @@ import kotlin.time.Duration
  * @see us.tractat.kuilt.core.fabric.Connection.flush
  */
 public sealed interface FlushOutcome {
-    /** Every send accepted before `flush` was called has been handed to the transport. */
+    /**
+     * A `close` of this seam or connection that follows goes out behind every send accepted before
+     * `flush` was called, so it cannot be what throws those frames away on this device. That is the whole
+     * promise, and three things stay outside it:
+     *
+     * - **The frames may not have left this process.** They can still be in the transport library's own
+     *   queue: a WebSocket frame can sit in Ktor's. So close the seam itself. Closing the `HttpClient`,
+     *   cancelling the session or exiting straight after can still lose them (read from Ktor's source,
+     *   not run).
+     * - **The link can still die on the way**, and the far side can still crash before reading.
+     * - **A far side that is still sending can lose them after they arrive.** Its own send fails on the
+     *   link your close ended, that tears its seam, and a torn seam stops reading what it had not got to.
+     *   Measured with a slow consumer sending 1 frame per 100 ms: lost frames in 32 of 32 WebSocket
+     *   trials, and 0 of 24 with nothing coming back. TCP lost them 6 of 6.
+     */
     public data object Drained : FlushOutcome
 
     /**
      * This implementation has no way to tell, so nothing was proven and nothing should be inferred.
      *
-     * The interface default: a [Seam] or [us.tractat.kuilt.core.fabric.Connection] written before
-     * `flush` existed answers this, because the alternative is reporting success for a queue it never
-     * looked at. A decorator that adds no queue of its own should delegate rather than inherit this.
+     * The interface default: a [Seam] or [us.tractat.kuilt.core.fabric.Connection] implemented member by
+     * member before `flush` existed answers this, because the alternative is reporting success for a
+     * queue it never looked at.
+     *
+     * **Class delegation is different.** `Seam by inner`, once recompiled against this version, forwards
+     * `inner`'s answer, and that can be [Drained]. That is right for a decorator with no queue of its own,
+     * and wrong for one with a queue, which has to override `flush` (see [Seam.flush]).
      */
     public data object Unsupported : FlushOutcome
 

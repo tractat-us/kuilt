@@ -629,8 +629,11 @@ it is honest, and it costs the caller nothing but a fallback. Override it this w
 - `send` returns with the frame still queued in the transport: ask the transport to
   wait, inside `flushWithin`, which handles the timeout and the cancellation rules.
 
-`Drained` promises one thing: an orderly close after it cannot be what loses those
-frames. It says nothing about the remote peer. A flush can run while the seam's
+If the transport can drop a queued frame without saying so, keep `Unsupported`, however
+orderly its close looks. An OkHttp WebSocket session is the example.
+
+`Drained` promises one thing: a close after it goes out behind those frames, so it cannot
+be what throws them away on this device. It says nothing about the remote peer. A flush can run while the seam's
 writer is inside `send`, so a sink that is not thread-safe stays out of it, and a
 close must end a pending flush.
 
