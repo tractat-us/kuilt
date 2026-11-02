@@ -41,12 +41,12 @@ internal class MetricCatalogConvergenceTest : LatticeLawSuite<MetricCatalog>() {
     override fun newHarness(): LatticeLawHarness<MetricCatalog> = LatticeLawHarness(
         initial = MetricCatalog(),
         alphabet = listOf(
-            LatticeOp("sum", OpKind.ASSERT) { state, replicaIndex, random ->
+            LatticeOp<MetricCatalog>("sum", OpKind.ASSERT) { state, replicaIndex, random ->
                 val key = random.key(MetricKind.SUM)
                 val cell = state.sums[key] ?: GCounter.ZERO
                 state.piece(MetricCatalog(sums = mapOf(key to cell.inc(replica(replicaIndex)).delta)))
             },
-            LatticeOp("labelled", OpKind.ASSERT) { state, replicaIndex, _ ->
+            LatticeOp<MetricCatalog>("labelled", OpKind.ASSERT) { state, replicaIndex, _ ->
                 val pairs = listOf("a" to "1", "b" to "2")
                 val key = MetricKey(
                     "labelled",
@@ -56,12 +56,12 @@ internal class MetricCatalogConvergenceTest : LatticeLawSuite<MetricCatalog>() {
                 val cell = state.sums[key] ?: GCounter.ZERO
                 state.piece(MetricCatalog(sums = mapOf(key to cell.inc(replica(replicaIndex)).delta)))
             },
-            LatticeOp("doubleSum", OpKind.ASSERT) { state, replicaIndex, random ->
+            LatticeOp<MetricCatalog>("doubleSum", OpKind.ASSERT) { state, replicaIndex, random ->
                 val key = random.key(MetricKind.SUM)
                 val cell = state.doubleSums[key] ?: GCounterDouble.of()
                 state.piece(MetricCatalog(doubleSums = mapOf(key to cell.inc(replica(replicaIndex), 1.5).delta)))
             },
-            LatticeOp("gauge", OpKind.ASSERT) { state, replicaIndex, random ->
+            LatticeOp<MetricCatalog>("gauge", OpKind.ASSERT) { state, replicaIndex, random ->
                 val key = random.key(MetricKind.GAUGE)
                 val cell = LWWRegister.empty<Double>().set(
                     replica(replicaIndex),
@@ -70,12 +70,12 @@ internal class MetricCatalogConvergenceTest : LatticeLawSuite<MetricCatalog>() {
                 )
                 state.piece(MetricCatalog(gauges = mapOf(key to cell)))
             },
-            LatticeOp("cardinality", OpKind.ASSERT) { state, _, random ->
+            LatticeOp<MetricCatalog>("cardinality", OpKind.ASSERT) { state, _, random ->
                 val key = random.key(MetricKind.CARDINALITY)
                 val cell = state.cardinalities[key] ?: HyperLogLog.empty(precision = 4)
                 state.piece(MetricCatalog(cardinalities = mapOf(key to cell.piece(cell.add("u${random.nextLong()}")))))
             },
-            LatticeOp("histogram", OpKind.ASSERT) { state, replicaIndex, random ->
+            LatticeOp<MetricCatalog>("histogram", OpKind.ASSERT) { state, replicaIndex, random ->
                 val key = random.key(MetricKind.EXPONENTIAL_HISTOGRAM)
                 val cell = state.histograms[key] ?: DDSketch.empty()
                 val value = random.nextInt(1, 1_000).toDouble()
