@@ -32,34 +32,50 @@ public sealed interface ClientIdentity {
      * when the process dies.
      *
      * **Where it must be durable: your own store, written ahead.** Commit each new `requestId` as the
-     * new floor **before** calling `propose(command, requestId)`, and read it back on every boot. If
-     * the process dies between the write and the call, the floor sits above a serial that was never
-     * issued, which costs nothing: serials may have gaps. The other order is the one that loses a
-     * command.
+     * new floor **before** calling `propose(command, requestId)`, and read it back on every boot. The
+     * other order is the one that reads your own history as a collision. A retry resends the same
+     * bytes only if you stored them, so keep the command in the same record as its serial: nothing
+     * else hands them back after a crash.
      *
-     * **A stale floor, one behind what the id really issued, is not caught for you.** Two things can
-     * follow, and the node cannot tell either from a second writer:
+     * **One command at a time: a higher serial abandons every lower one.** Do not issue a serial while
+     * a lower one is unresolved, meaning its `propose` has not returned. [ClientSessionTable] keeps one
+     * high-water serial per id, so once a higher serial commits, a retry of a lower one returns
+     * success, commits, and is dropped. Nothing throws, and it takes no crash: a caller's own timeout
+     * does the same. The rule covers the serial in hand when the process died, whether or not its call
+     * ever began: the floor makes that serial safe for the id, not for the command, and a gap in the
+     * serials protects nothing. So retry it first, with the bytes you stored, and only then issue the
+     * next. Issuing the next instead gives that command up without learning its fate: it applied if
+     * it committed first, and no retry brings it back. That gap is tracked by #3107.
+     *
+     * **A stale floor, one behind what the id really issued, is not caught for you.** Three things can
+     * follow, and the node cannot tell any of them from a second writer:
      *
      * - An own serial above the floor reaches the node, and it fails with
-     *   [ClientIdCollisionException]. It does so on every boot until it is given a true floor.
+     *   [ClientIdCollisionException]. It does so on every boot that walks that serial.
      * - A `propose` raises the node's mark over that serial first, so nothing throws, and the call
      *   reuses a serial. A leader still holding the old entry refuses other bytes with
      *   [RequestIdConflictException]. Any other leader appends them and the call returns success,
-     *   yet a consumer's [ClientSessionTable] drops the command as a duplicate.
+     *   yet a consumer's [ClientSessionTable] drops the command.
+     * - A snapshot already covers that serial, so the node never walks it: its own snapshot, or one
+     *   the voters install on a node that is behind them or kept no log. It boots clean, and the next
+     *   serial above the floor is a reuse, with the same two endings as above.
      *
-     * A floor set too high costs nothing for this id's own commands, but widens the blind spot below.
+     * So a clean boot does not prove a floor true. A floor set too high only leaves a gap in the
+     * serials, but widens the blind spot below.
      *
-     * **`propose(command)` is refused under this identity**, with an [IllegalStateException] before
-     * anything is drawn or sent. A serial the node drew for itself cannot be on disk before it is
-     * issued, so it could never be covered by a floor: the crash in between reads as a collision on
+     * **`propose(command)` is refused under this identity**, with an [AutoSerialRefusedException]
+     * before anything is drawn or sent. A serial the node drew for itself cannot be on disk before it
+     * is issued, so it could never be covered by a floor: the crash in between reads as a collision on
      * catch-up, or reuses the serial and loses the next command silently. Use `propose(command,
      * requestId)`, or [Auto] where at-least-once is enough.
      *
-     * **A second writer is caught only above the mark.** The mark is the higher of [issuedThrough]
-     * and whatever this incarnation has proposed. Another writer's serial above it throws, on every
-     * boot, since the retained log no longer raises the mark. Its serial at or below the mark goes
-     * unseen, and so does a serial two writers draw at once: `propose` returns success and a
-     * consumer's [ClientSessionTable] drops the command. That gap is tracked by #3081.
+     * **A second writer is caught only above the mark, and only in an entry this node walks.** The
+     * mark is the higher of [issuedThrough] and whatever this incarnation has proposed. Another
+     * writer's serial above it throws, on every boot that walks it, since the retained log no longer
+     * raises the mark. Once a snapshot covers that serial, a node catching up from the snapshot never
+     * sees it: it boots clean, and its next serial can reuse the other writer's. A serial at or below
+     * the mark goes unseen too, and so does a serial two writers draw at once: `propose` returns
+     * success and a consumer's [ClientSessionTable] drops the command. That gap is tracked by #3081.
      *
      * @throws IllegalArgumentException if [issuedThrough] is negative.
      * @sample us.tractat.kuilt.raft.sampleDurableClientIdentity
