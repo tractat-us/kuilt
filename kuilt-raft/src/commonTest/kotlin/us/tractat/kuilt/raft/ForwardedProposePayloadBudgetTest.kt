@@ -143,7 +143,7 @@ class ForwardedProposePayloadBudgetTest {
             nodeScope = backgroundScope,
             maxPayloadBytes = leaderBudget,
             nodeFactory = { id, transport, storage, childScope ->
-                val identity = if (id == longIdNode) ClientIdentity.Durable(ClientId(longDurableId)) else ClientIdentity.Auto
+                val identity = if (id == longIdNode) ClientIdentity.Durable(ClientId(longDurableId), issuedThrough = 0L) else ClientIdentity.Auto
                 childScope.raftNode(cluster, transport, storage, config, identity)
             },
         )

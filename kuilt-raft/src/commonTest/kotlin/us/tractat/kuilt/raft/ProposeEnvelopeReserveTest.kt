@@ -191,7 +191,7 @@ class ProposeEnvelopeReserveTest {
                     transport,
                     storage,
                     config,
-                    ClientIdentity.Durable(ClientId(durableId)),
+                    ClientIdentity.Durable(ClientId(durableId), issuedThrough = 0L),
                 )
             },
         )
@@ -268,7 +268,7 @@ class ProposeEnvelopeReserveTest {
                     transport,
                     storage,
                     config,
-                    ClientIdentity.Durable(ClientId(durableId)),
+                    ClientIdentity.Durable(ClientId(durableId), issuedThrough = 0L),
                 )
             },
         )

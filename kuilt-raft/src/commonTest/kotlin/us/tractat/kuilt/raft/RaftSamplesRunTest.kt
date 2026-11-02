@@ -27,4 +27,7 @@ class RaftSamplesRunTest {
 
     @Test
     fun durableRaftStorageHolds(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) { sampleDurableRaftStorage() }
+
+    @Test
+    fun durableClientIdentityHolds(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) { sampleDurableClientIdentity() }
 }

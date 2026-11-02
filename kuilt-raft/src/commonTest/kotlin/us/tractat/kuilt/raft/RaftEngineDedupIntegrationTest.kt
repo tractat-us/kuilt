@@ -21,7 +21,7 @@ import kotlin.time.Duration.Companion.seconds
 class RaftEngineDedupIntegrationTest {
     @Test
     fun retryWithSameRequestIdOnSameLeaderAppendsOnce() = raftRunTest {
-        val h = singleVoterNode(backgroundScope, identity = ClientIdentity.Durable(ClientId("c")))
+        val h = singleVoterNode(backgroundScope, identity = ClientIdentity.Durable(ClientId("c"), issuedThrough = 0L))
         h.node.awaitLeadership()
 
         val first = h.node.propose("x".encodeToByteArray(), requestId = 1)
@@ -54,7 +54,7 @@ class RaftEngineDedupIntegrationTest {
             scope = this,
             nodeScope = nodeScope,
             nodeFactory = { _, transport, storage, childScope ->
-                childScope.raftNode(cluster, transport, storage, raftCfg, ClientIdentity.Durable(shared))
+                childScope.raftNode(cluster, transport, storage, raftCfg, ClientIdentity.Durable(shared, issuedThrough = 0L))
             },
         )
         val leader = awaitLeader(sim)

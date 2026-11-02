@@ -52,7 +52,7 @@ class CachedResultClusterE2ETest {
                     scope.raftNode(
                         config, bounded, storage,
                         MULTI_NODE_SIM_BASE_CONFIG.copy(random = Random(MULTI_NODE_SIM_SEED + ids.indexOf(id))),
-                        ClientIdentity.Durable(ClientId(id.value)),
+                        ClientIdentity.Durable(ClientId(id.value), issuedThrough = 0L),
                     )
                 },
             )
