@@ -1,0 +1,13 @@
+public final class us/tractat/kuilt/warp/ChicoryWasmRuntime : java/lang/AutoCloseable, us/tractat/kuilt/warp/WasmRuntime {
+	public fun <init> ()V
+	public fun <init> (Lus/tractat/kuilt/warp/WasmSandboxConfig;Lus/tractat/kuilt/warp/TimedGuestRunner;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/warp/WasmSandboxConfig;Lus/tractat/kuilt/warp/TimedGuestRunner;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun close ()V
+	public final fun getConfig ()Lus/tractat/kuilt/warp/WasmSandboxConfig;
+	public fun load ([B)Lus/tractat/kuilt/warp/Op;
+}
+
+public abstract interface class us/tractat/kuilt/warp/TimedGuestRunner {
+	public abstract fun run-VtjQ1oo (JLjava/util/concurrent/Callable;)[B
+}
+

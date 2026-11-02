@@ -1,0 +1,106 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-multipeer>
+final class us.tractat.kuilt.multipeer/MultipeerAdvertisement : us.tractat.kuilt.core/Tag { // us.tractat.kuilt.multipeer/MultipeerAdvertisement|null[0]
+    constructor <init>(kotlin/String, kotlin/String, kotlin/String, kotlin/String? = ...) // us.tractat.kuilt.multipeer/MultipeerAdvertisement.<init>|<init>(kotlin.String;kotlin.String;kotlin.String;kotlin.String?){}[0]
+
+    final val handle // us.tractat.kuilt.multipeer/MultipeerAdvertisement.handle|{}handle[0]
+        final fun <get-handle>(): kotlin/String // us.tractat.kuilt.multipeer/MultipeerAdvertisement.handle.<get-handle>|<get-handle>(){}[0]
+    final val peerKey // us.tractat.kuilt.multipeer/MultipeerAdvertisement.peerKey|{}peerKey[0]
+        final fun <get-peerKey>(): kotlin/String // us.tractat.kuilt.multipeer/MultipeerAdvertisement.peerKey.<get-peerKey>|<get-peerKey>(){}[0]
+    final val roomKey // us.tractat.kuilt.multipeer/MultipeerAdvertisement.roomKey|{}roomKey[0]
+        final fun <get-roomKey>(): kotlin/String? // us.tractat.kuilt.multipeer/MultipeerAdvertisement.roomKey.<get-roomKey>|<get-roomKey>(){}[0]
+    final val serviceType // us.tractat.kuilt.multipeer/MultipeerAdvertisement.serviceType|{}serviceType[0]
+        final fun <get-serviceType>(): kotlin/String // us.tractat.kuilt.multipeer/MultipeerAdvertisement.serviceType.<get-serviceType>|<get-serviceType>(){}[0]
+    final val sessionName // us.tractat.kuilt.multipeer/MultipeerAdvertisement.sessionName|{}sessionName[0]
+        final fun <get-sessionName>(): kotlin/String // us.tractat.kuilt.multipeer/MultipeerAdvertisement.sessionName.<get-sessionName>|<get-sessionName>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.multipeer/MultipeerAdvertisement.component1|component1(){}[0]
+    final fun component2(): kotlin/String // us.tractat.kuilt.multipeer/MultipeerAdvertisement.component2|component2(){}[0]
+    final fun component3(): kotlin/String // us.tractat.kuilt.multipeer/MultipeerAdvertisement.component3|component3(){}[0]
+    final fun component4(): kotlin/String? // us.tractat.kuilt.multipeer/MultipeerAdvertisement.component4|component4(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/String = ..., kotlin/String? = ...): us.tractat.kuilt.multipeer/MultipeerAdvertisement // us.tractat.kuilt.multipeer/MultipeerAdvertisement.copy|copy(kotlin.String;kotlin.String;kotlin.String;kotlin.String?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.multipeer/MultipeerAdvertisement.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.multipeer/MultipeerAdvertisement.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.multipeer/MultipeerAdvertisement.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory : us.tractat.kuilt.core/Loom { // us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory|null[0]
+    constructor <init>(kotlin/String, kotlin/String, us.tractat.kuilt.core/PeerId = ...) // us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory.<init>|<init>(kotlin.String;kotlin.String;us.tractat.kuilt.core.PeerId){}[0]
+
+    final val visiblePeers // us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory.visiblePeers|{}visiblePeers[0]
+        final fun <get-visiblePeers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.multipeer/MultipeerAdvertisement>> // us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory.visiblePeers.<get-visiblePeers>|<get-visiblePeers>(){}[0]
+
+    final fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory.capability|capability(){}[0]
+    final fun close() // us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory.close|close(){}[0]
+    final suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+}
+
+final class us.tractat.kuilt.multipeer/MultipeerRoomHost : us.tractat.kuilt.session/RoomHost { // us.tractat.kuilt.multipeer/MultipeerRoomHost|null[0]
+    constructor <init>(us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/Pattern) // us.tractat.kuilt.multipeer/MultipeerRoomHost.<init>|<init>(us.tractat.kuilt.core.Loom;us.tractat.kuilt.core.Pattern){}[0]
+
+    final fun close() // us.tractat.kuilt.multipeer/MultipeerRoomHost.close|close(){}[0]
+    final suspend fun start(kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.session/Room, kotlin/Unit>) // us.tractat.kuilt.multipeer/MultipeerRoomHost.start|start(kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.session.Room,kotlin.Unit>){}[0]
+}
+
+final class us.tractat.kuilt.multipeer/MultipeerServiceBrowser : us.tractat.kuilt.core.discovery/PeerDiscoverySource { // us.tractat.kuilt.multipeer/MultipeerServiceBrowser|null[0]
+    constructor <init>(us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory) // us.tractat.kuilt.multipeer/MultipeerServiceBrowser.<init>|<init>(us.tractat.kuilt.multipeer.MultipeerPeerLinkFactory){}[0]
+
+    final val kind // us.tractat.kuilt.multipeer/MultipeerServiceBrowser.kind|{}kind[0]
+        final fun <get-kind>(): us.tractat.kuilt.core.discovery/DiscoveryKind // us.tractat.kuilt.multipeer/MultipeerServiceBrowser.kind.<get-kind>|<get-kind>(){}[0]
+
+    final fun departures(): kotlinx.coroutines.flow/Flow<kotlin/String> // us.tractat.kuilt.multipeer/MultipeerServiceBrowser.departures|departures(){}[0]
+    final fun discoveries(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.core/Tag> // us.tractat.kuilt.multipeer/MultipeerServiceBrowser.discoveries|discoveries(){}[0]
+}
+
+final fun us.tractat.kuilt.multipeer/multipeerLoom(kotlin/String, kotlin/String, us.tractat.kuilt.core/PeerId = ...): us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory // us.tractat.kuilt.multipeer/multipeerLoom|multipeerLoom(kotlin.String;kotlin.String;us.tractat.kuilt.core.PeerId){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/kuilt_protocol_version(): kotlin/Int // us.tractat.kuilt.multipeer.bridge/kuilt_protocol_version|kuilt_protocol_version(){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_browser_set_peer_lost_callback(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/CFunction<kotlin/Function1<kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Unit>>>?) // us.tractat.kuilt.multipeer.bridge/mc_browser_set_peer_lost_callback|mc_browser_set_peer_lost_callback(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.CFunction<kotlin.Function1<kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlin.Unit>>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_browser_start(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/CFunction<kotlin/Function2<kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Unit>>>?): kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>? // us.tractat.kuilt.multipeer.bridge/mc_browser_start|mc_browser_start(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.CFunction<kotlin.Function2<kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlin.Unit>>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_browser_stop(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?) // us.tractat.kuilt.multipeer.bridge/mc_browser_stop|mc_browser_stop(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_runtime_close(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?) // us.tractat.kuilt.multipeer.bridge/mc_runtime_close|mc_runtime_close(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_runtime_create(kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?): kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>? // us.tractat.kuilt.multipeer.bridge/mc_runtime_create|mc_runtime_create(kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_runtime_destroy(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?) // us.tractat.kuilt.multipeer.bridge/mc_runtime_destroy|mc_runtime_destroy(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_runtime_display_name(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int): kotlin/Int // us.tractat.kuilt.multipeer.bridge/mc_runtime_display_name|mc_runtime_display_name(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlin.Int){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_runtime_join(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?): kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>? // us.tractat.kuilt.multipeer.bridge/mc_runtime_join|mc_runtime_join(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_runtime_open(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?): kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>? // us.tractat.kuilt.multipeer.bridge/mc_runtime_open|mc_runtime_open(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_session_broadcast(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int): kotlin/Int // us.tractat.kuilt.multipeer.bridge/mc_session_broadcast|mc_session_broadcast(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlin.Int){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_session_close(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?) // us.tractat.kuilt.multipeer.bridge/mc_session_close|mc_session_close(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_session_send_to(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int): kotlin/Int // us.tractat.kuilt.multipeer.bridge/mc_session_send_to|mc_session_send_to(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?;kotlin.Int){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_session_set_data_callback(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/CFunction<kotlin/Function3<kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int, kotlin/Unit>>>?) // us.tractat.kuilt.multipeer.bridge/mc_session_set_data_callback|mc_session_set_data_callback(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.CFunction<kotlin.Function3<kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlin.Int,kotlin.Unit>>>?){}[0]
+
+// Targets: [macosArm64]
+final fun us.tractat.kuilt.multipeer.bridge/mc_session_set_peer_state_callback(kotlinx.cinterop/CPointer<out kotlinx.cinterop/CPointed>?, kotlinx.cinterop/CPointer<kotlinx.cinterop/CFunction<kotlin/Function2<kotlinx.cinterop/CPointer<kotlinx.cinterop/ByteVarOf<kotlin/Byte>>?, kotlin/Int, kotlin/Unit>>>?) // us.tractat.kuilt.multipeer.bridge/mc_session_set_peer_state_callback|mc_session_set_peer_state_callback(kotlinx.cinterop.CPointer<out|kotlinx.cinterop.CPointed>?;kotlinx.cinterop.CPointer<kotlinx.cinterop.CFunction<kotlin.Function2<kotlinx.cinterop.CPointer<kotlinx.cinterop.ByteVarOf<kotlin.Byte>>?,kotlin.Int,kotlin.Unit>>>?){}[0]

@@ -1,0 +1,272 @@
+public abstract interface class us/tractat/kuilt/otel/tap/LogTapAdmission {
+}
+
+public final class us/tractat/kuilt/otel/tap/LogTapAdmission$Open : us/tractat/kuilt/otel/tap/LogTapAdmission {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/tap/LogTapAdmission$Open;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/tap/LogTapAdmission$Present : us/tractat/kuilt/otel/tap/LogTapAdmission {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun getCode ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/tap/LogTapAdmission$Verify : us/tractat/kuilt/otel/tap/LogTapAdmission {
+	public fun <init> (Lus/tractat/kuilt/otel/tap/admit/LogTapJoinToken;Lkotlin/time/Clock;Lkotlin/random/Random;)V
+	public final fun getClock ()Lkotlin/time/Clock;
+	public final fun getRandom ()Lkotlin/random/Random;
+	public final fun getToken ()Lus/tractat/kuilt/otel/tap/admit/LogTapJoinToken;
+}
+
+public final class us/tractat/kuilt/otel/tap/LogTapClient : us/tractat/kuilt/core/ScopedCloseable {
+	public fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/otel/tap/LogTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/otel/tap/LogTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun pull (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun pullStamped (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun tail ()Lkotlinx/coroutines/flow/Flow;
+	public final fun tailStamped ()Lkotlinx/coroutines/flow/Flow;
+}
+
+public final class us/tractat/kuilt/otel/tap/LogTapConfig {
+	public fun <init> ()V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Pattern;JJJLus/tractat/kuilt/quilter/QuilterConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Pattern;JJJLus/tractat/kuilt/quilter/QuilterConfig;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/core/Pattern;
+	public final fun component2-UwyO8pc ()J
+	public final fun component3-UwyO8pc ()J
+	public final fun component4-UwyO8pc ()J
+	public final fun component5 ()Lus/tractat/kuilt/quilter/QuilterConfig;
+	public final fun copy-D9DMEZw (Lus/tractat/kuilt/core/Pattern;JJJLus/tractat/kuilt/quilter/QuilterConfig;)Lus/tractat/kuilt/otel/tap/LogTapConfig;
+	public static synthetic fun copy-D9DMEZw$default (Lus/tractat/kuilt/otel/tap/LogTapConfig;Lus/tractat/kuilt/core/Pattern;JJJLus/tractat/kuilt/quilter/QuilterConfig;ILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/LogTapConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPattern ()Lus/tractat/kuilt/core/Pattern;
+	public final fun getPullSettleStep-UwyO8pc ()J
+	public final fun getPullTimeout-UwyO8pc ()J
+	public final fun getQuilterConfig ()Lus/tractat/kuilt/quilter/QuilterConfig;
+	public final fun getSyncInterval-UwyO8pc ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/tap/LogTapHost : us/tractat/kuilt/core/ScopedCloseable {
+	public final fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public final fun sync ()V
+}
+
+public final class us/tractat/kuilt/otel/tap/LogTapHostKt {
+	public static final fun installLogTap (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/otel/tap/LogTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun installLogTap$default (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/otel/tap/LogTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun installLogTapJoining (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Tag;Lus/tractat/kuilt/otel/tap/LogTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun installLogTapJoining$default (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Tag;Lus/tractat/kuilt/otel/tap/LogTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/otel/tap/MetricSnapshot {
+	public fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)V
+	public fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/Map;
+	public final fun component2 ()Ljava/util/Map;
+	public final fun component3 ()Ljava/util/Map;
+	public final fun component4 ()Ljava/util/Map;
+	public final fun component5 ()Ljava/util/Map;
+	public final fun copy (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)Lus/tractat/kuilt/otel/tap/MetricSnapshot;
+	public final fun copy (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)Lus/tractat/kuilt/otel/tap/MetricSnapshot;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/tap/MetricSnapshot;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/MetricSnapshot;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/tap/MetricSnapshot;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/MetricSnapshot;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCardinalities ()Ljava/util/Map;
+	public final fun getDoubleSums ()Ljava/util/Map;
+	public final fun getGauges ()Ljava/util/Map;
+	public final fun getHistograms ()Ljava/util/Map;
+	public final fun getSums ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/tap/MetricTapClient : us/tractat/kuilt/core/ScopedCloseable {
+	public fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/otel/tap/MetricTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/otel/tap/MetricTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun pull (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun tail ()Lkotlinx/coroutines/flow/Flow;
+}
+
+public final class us/tractat/kuilt/otel/tap/MetricTapConfig {
+	public fun <init> ()V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Pattern;JJJLus/tractat/kuilt/quilter/QuilterConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Pattern;JJJLus/tractat/kuilt/quilter/QuilterConfig;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/core/Pattern;
+	public final fun component2-UwyO8pc ()J
+	public final fun component3-UwyO8pc ()J
+	public final fun component4-UwyO8pc ()J
+	public final fun component5 ()Lus/tractat/kuilt/quilter/QuilterConfig;
+	public final fun copy-D9DMEZw (Lus/tractat/kuilt/core/Pattern;JJJLus/tractat/kuilt/quilter/QuilterConfig;)Lus/tractat/kuilt/otel/tap/MetricTapConfig;
+	public static synthetic fun copy-D9DMEZw$default (Lus/tractat/kuilt/otel/tap/MetricTapConfig;Lus/tractat/kuilt/core/Pattern;JJJLus/tractat/kuilt/quilter/QuilterConfig;ILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/MetricTapConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPattern ()Lus/tractat/kuilt/core/Pattern;
+	public final fun getPullSettleStep-UwyO8pc ()J
+	public final fun getPullTimeout-UwyO8pc ()J
+	public final fun getQuilterConfig ()Lus/tractat/kuilt/quilter/QuilterConfig;
+	public final fun getSyncInterval-UwyO8pc ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/tap/MetricTapHost : us/tractat/kuilt/core/ScopedCloseable {
+	public final fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public final fun sync ()V
+}
+
+public final class us/tractat/kuilt/otel/tap/MetricTapHostKt {
+	public static final fun installMetricTap (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/otel/WarpMetricExporter;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/otel/tap/MetricTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun installMetricTap$default (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/otel/WarpMetricExporter;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/otel/tap/MetricTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun installMetricTapJoining (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/otel/WarpMetricExporter;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Tag;Lus/tractat/kuilt/otel/tap/MetricTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun installMetricTapJoining$default (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/otel/WarpMetricExporter;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Tag;Lus/tractat/kuilt/otel/tap/MetricTapConfig;Lus/tractat/kuilt/otel/tap/LogTapAdmission;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/otel/tap/StampedLogRecord {
+	public static final field Companion Lus/tractat/kuilt/otel/tap/StampedLogRecord$Companion;
+	public fun <init> (Lus/tractat/kuilt/crdt/RgaId;Lus/tractat/kuilt/otel/LogRecord;)V
+	public final fun component1 ()Lus/tractat/kuilt/crdt/RgaId;
+	public final fun component2 ()Lus/tractat/kuilt/otel/LogRecord;
+	public final fun copy (Lus/tractat/kuilt/crdt/RgaId;Lus/tractat/kuilt/otel/LogRecord;)Lus/tractat/kuilt/otel/tap/StampedLogRecord;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/tap/StampedLogRecord;Lus/tractat/kuilt/crdt/RgaId;Lus/tractat/kuilt/otel/LogRecord;ILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/StampedLogRecord;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDot ()Lus/tractat/kuilt/crdt/Dot;
+	public final fun getRecord ()Lus/tractat/kuilt/otel/LogRecord;
+	public final fun getRgaId ()Lus/tractat/kuilt/crdt/RgaId;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/otel/tap/StampedLogRecord$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/tap/StampedLogRecord$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/otel/tap/StampedLogRecord;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/otel/tap/StampedLogRecord;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/tap/StampedLogRecord$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/tap/admit/CryptoRandomKt {
+	public static final fun cryptoRandom ()Lkotlin/random/Random;
+}
+
+public final class us/tractat/kuilt/otel/tap/admit/LogTapJoinToken {
+	public static final field Companion Lus/tractat/kuilt/otel/tap/admit/LogTapJoinToken$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/time/Instant;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getIssuedAt ()Lkotlin/time/Instant;
+	public final fun getTtl-UwyO8pc ()J
+	public final fun isValid (Lkotlin/time/Instant;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/tap/admit/LogTapJoinToken$Companion {
+	public final fun getDEFAULT_TTL-UwyO8pc ()J
+	public final fun issue-SxA4cEA (Lkotlin/random/Random;Lkotlin/time/Clock;J)Lus/tractat/kuilt/otel/tap/admit/LogTapJoinToken;
+	public static synthetic fun issue-SxA4cEA$default (Lus/tractat/kuilt/otel/tap/admit/LogTapJoinToken$Companion;Lkotlin/random/Random;Lkotlin/time/Clock;JILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/admit/LogTapJoinToken;
+}
+
+public abstract interface class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Companion;
+	public static final field PREFIX_BYTE B
+}
+
+public final class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Challenge : us/tractat/kuilt/otel/tap/admit/TapAdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Challenge$Companion;
+	public static final field NONCE_BYTES I
+	public fun <init> (Lkotlinx/io/bytestring/ByteString;)V
+	public final fun component1 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun copy (Lkotlinx/io/bytestring/ByteString;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Challenge;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Challenge;Lkotlinx/io/bytestring/ByteString;ILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Challenge;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getNonce ()Lkotlinx/io/bytestring/ByteString;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Challenge$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Challenge$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Challenge;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Challenge;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Challenge$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Companion {
+	public static final field PREFIX_BYTE B
+	public final fun decode ([B)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage;
+	public final fun encode (Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage;)[B
+	public final fun isAdmitFrame ([B)Z
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof : us/tractat/kuilt/otel/tap/admit/TapAdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof$Companion;
+	public fun <init> (Lkotlinx/io/bytestring/ByteString;)V
+	public final fun component1 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun copy (Lkotlinx/io/bytestring/ByteString;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;Lkotlinx/io/bytestring/ByteString;ILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTag ()Lkotlinx/io/bytestring/ByteString;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Reject : us/tractat/kuilt/otel/tap/admit/TapAdmitMessage {
+	public static final field Companion Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Reject$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Reject;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Reject;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Reject;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Reject$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Reject$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Reject;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Reject;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Reject$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+

@@ -1,0 +1,231 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-game>
+final enum class us.tractat.kuilt.game/ReturnPolicy : kotlin/Enum<us.tractat.kuilt.game/ReturnPolicy> { // us.tractat.kuilt.game/ReturnPolicy|null[0]
+    enum entry FullMembership // us.tractat.kuilt.game/ReturnPolicy.FullMembership|null[0]
+    enum entry Quorum // us.tractat.kuilt.game/ReturnPolicy.Quorum|null[0]
+
+    final val entries // us.tractat.kuilt.game/ReturnPolicy.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.game/ReturnPolicy> // us.tractat.kuilt.game/ReturnPolicy.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.game/ReturnPolicy // us.tractat.kuilt.game/ReturnPolicy.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.game/ReturnPolicy> // us.tractat.kuilt.game/ReturnPolicy.values|values#static(){}[0]
+}
+
+abstract interface <#A: kotlin/Any?, #B: kotlin/Any?> us.tractat.kuilt.game/SpeculativeGame { // us.tractat.kuilt.game/SpeculativeGame|null[0]
+    abstract fun apply(#A, #B): #A // us.tractat.kuilt.game/SpeculativeGame.apply|apply(1:0;1:1){}[0]
+    abstract fun restore(#A): #A // us.tractat.kuilt.game/SpeculativeGame.restore|restore(1:0){}[0]
+    abstract fun snapshot(#A): #A // us.tractat.kuilt.game/SpeculativeGame.snapshot|snapshot(1:0){}[0]
+    open fun fromSnapshot(kotlin/ByteArray): #A // us.tractat.kuilt.game/SpeculativeGame.fromSnapshot|fromSnapshot(kotlin.ByteArray){}[0]
+}
+
+abstract interface us.tractat.kuilt.game/ConsensusPlacement { // us.tractat.kuilt.game/ConsensusPlacement|null[0]
+    abstract val seating // us.tractat.kuilt.game/ConsensusPlacement.seating|{}seating[0]
+        abstract fun <get-seating>(): us.tractat.kuilt.game/AuthoritySeating // us.tractat.kuilt.game/ConsensusPlacement.seating.<get-seating>|<get-seating>(){}[0]
+
+    abstract fun node(kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.game/ConsensusBinding): us.tractat.kuilt.raft/RaftNode // us.tractat.kuilt.game/ConsensusPlacement.node|node(kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.game.ConsensusBinding){}[0]
+    open fun launchAdmission(kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.raft/RaftNode, us.tractat.kuilt.game/ConsensusBinding, us.tractat.kuilt.core/Seam) // us.tractat.kuilt.game/ConsensusPlacement.launchAdmission|launchAdmission(kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.raft.RaftNode;us.tractat.kuilt.game.ConsensusBinding;us.tractat.kuilt.core.Seam){}[0]
+
+    final object Companion { // us.tractat.kuilt.game/ConsensusPlacement.Companion|null[0]
+        final val SessionOwned // us.tractat.kuilt.game/ConsensusPlacement.Companion.SessionOwned|{}SessionOwned[0]
+            final fun <get-SessionOwned>(): us.tractat.kuilt.game/ConsensusPlacement // us.tractat.kuilt.game/ConsensusPlacement.Companion.SessionOwned.<get-SessionOwned>|<get-SessionOwned>(){}[0]
+
+        final fun federatedCore(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>, kotlin/Function1<us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId?>): us.tractat.kuilt.game/ConsensusPlacement // us.tractat.kuilt.game/ConsensusPlacement.Companion.federatedCore|federatedCore(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;kotlin.Function1<us.tractat.kuilt.raft.NodeId,us.tractat.kuilt.raft.NodeId?>){}[0]
+        final fun federatedPlayer(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>): us.tractat.kuilt.game/ConsensusPlacement // us.tractat.kuilt.game/ConsensusPlacement.Companion.federatedPlayer|federatedPlayer(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+        final fun preBuilt(us.tractat.kuilt.raft/RaftNode): us.tractat.kuilt.game/ConsensusPlacement // us.tractat.kuilt.game/ConsensusPlacement.Companion.preBuilt|preBuilt(us.tractat.kuilt.raft.RaftNode){}[0]
+        final fun serverCore(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>): us.tractat.kuilt.game/ConsensusPlacement // us.tractat.kuilt.game/ConsensusPlacement.Companion.serverCore|serverCore(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+    }
+}
+
+sealed interface <#A: out kotlin/Any?> us.tractat.kuilt.game/TurnEvent { // us.tractat.kuilt.game/TurnEvent|null[0]
+    final class <#A1: out kotlin/Any?> Committed : us.tractat.kuilt.game/TurnEvent<#A1> { // us.tractat.kuilt.game/TurnEvent.Committed|null[0]
+        constructor <init>(us.tractat.kuilt.game/IndexedAction<#A1>) // us.tractat.kuilt.game/TurnEvent.Committed.<init>|<init>(us.tractat.kuilt.game.IndexedAction<1:0>){}[0]
+
+        final val indexed // us.tractat.kuilt.game/TurnEvent.Committed.indexed|{}indexed[0]
+            final fun <get-indexed>(): us.tractat.kuilt.game/IndexedAction<#A1> // us.tractat.kuilt.game/TurnEvent.Committed.indexed.<get-indexed>|<get-indexed>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.game/IndexedAction<#A1> // us.tractat.kuilt.game/TurnEvent.Committed.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.game/IndexedAction<#A1> = ...): us.tractat.kuilt.game/TurnEvent.Committed<#A1> // us.tractat.kuilt.game/TurnEvent.Committed.copy|copy(us.tractat.kuilt.game.IndexedAction<1:0>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.game/TurnEvent.Committed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.game/TurnEvent.Committed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.game/TurnEvent.Committed.toString|toString(){}[0]
+    }
+
+    final class Reset : us.tractat.kuilt.game/TurnEvent<kotlin/Nothing> { // us.tractat.kuilt.game/TurnEvent.Reset|null[0]
+        constructor <init>(us.tractat.kuilt.raft/Snapshot) // us.tractat.kuilt.game/TurnEvent.Reset.<init>|<init>(us.tractat.kuilt.raft.Snapshot){}[0]
+
+        final val snapshot // us.tractat.kuilt.game/TurnEvent.Reset.snapshot|{}snapshot[0]
+            final fun <get-snapshot>(): us.tractat.kuilt.raft/Snapshot // us.tractat.kuilt.game/TurnEvent.Reset.snapshot.<get-snapshot>|<get-snapshot>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.raft/Snapshot // us.tractat.kuilt.game/TurnEvent.Reset.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.raft/Snapshot = ...): us.tractat.kuilt.game/TurnEvent.Reset // us.tractat.kuilt.game/TurnEvent.Reset.copy|copy(us.tractat.kuilt.raft.Snapshot){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.game/TurnEvent.Reset.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.game/TurnEvent.Reset.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.game/TurnEvent.Reset.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.game/AuthoritySeating { // us.tractat.kuilt.game/AuthoritySeating|null[0]
+    final class CoreVoters : us.tractat.kuilt.game/AuthoritySeating { // us.tractat.kuilt.game/AuthoritySeating.CoreVoters|null[0]
+        constructor <init>(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>) // us.tractat.kuilt.game/AuthoritySeating.CoreVoters.<init>|<init>(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+
+        final val core // us.tractat.kuilt.game/AuthoritySeating.CoreVoters.core|{}core[0]
+            final fun <get-core>(): kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.game/AuthoritySeating.CoreVoters.core.<get-core>|<get-core>(){}[0]
+
+        final fun component1(): kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.game/AuthoritySeating.CoreVoters.component1|component1(){}[0]
+        final fun copy(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId> = ...): us.tractat.kuilt.game/AuthoritySeating.CoreVoters // us.tractat.kuilt.game/AuthoritySeating.CoreVoters.copy|copy(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.game/AuthoritySeating.CoreVoters.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.game/AuthoritySeating.CoreVoters.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.game/AuthoritySeating.CoreVoters.toString|toString(){}[0]
+    }
+
+    final object SessionPeers : us.tractat.kuilt.game/AuthoritySeating { // us.tractat.kuilt.game/AuthoritySeating.SessionPeers|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.game/AuthoritySeating.SessionPeers.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.game/AuthoritySeating.SessionPeers.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.game/AuthoritySeating.SessionPeers.toString|toString(){}[0]
+    }
+}
+
+final class <#A: kotlin/Any?, #B: kotlin/Any?> us.tractat.kuilt.game/SpeculativeSequencer { // us.tractat.kuilt.game/SpeculativeSequencer|null[0]
+    constructor <init>(us.tractat.kuilt.game/TurnSequencer<#B>, us.tractat.kuilt.game/SpeculativeGame<#A, #B>, #A, kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.game/SpeculativeSequencer.<init>|<init>(us.tractat.kuilt.game.TurnSequencer<1:1>;us.tractat.kuilt.game.SpeculativeGame<1:0,1:1>;1:0;kotlinx.coroutines.CoroutineScope){}[0]
+
+    final val confirmedCount // us.tractat.kuilt.game/SpeculativeSequencer.confirmedCount|{}confirmedCount[0]
+        final fun <get-confirmedCount>(): kotlinx.coroutines.flow/StateFlow<kotlin/Int> // us.tractat.kuilt.game/SpeculativeSequencer.confirmedCount.<get-confirmedCount>|<get-confirmedCount>(){}[0]
+    final val pendingCount // us.tractat.kuilt.game/SpeculativeSequencer.pendingCount|{}pendingCount[0]
+        final fun <get-pendingCount>(): kotlin/Int // us.tractat.kuilt.game/SpeculativeSequencer.pendingCount.<get-pendingCount>|<get-pendingCount>(){}[0]
+    final val speculativeState // us.tractat.kuilt.game/SpeculativeSequencer.speculativeState|{}speculativeState[0]
+        final fun <get-speculativeState>(): kotlinx.coroutines.flow/StateFlow<#A> // us.tractat.kuilt.game/SpeculativeSequencer.speculativeState.<get-speculativeState>|<get-speculativeState>(){}[0]
+
+    final suspend fun awaitConfirmedCount(kotlin/Int) // us.tractat.kuilt.game/SpeculativeSequencer.awaitConfirmedCount|awaitConfirmedCount(kotlin.Int){}[0]
+    final suspend fun propose(#B): us.tractat.kuilt.game/IndexedAction<#B> // us.tractat.kuilt.game/SpeculativeSequencer.propose|propose(1:1){}[0]
+    final suspend fun propose(#B, kotlin/Long): us.tractat.kuilt.game/IndexedAction<#B> // us.tractat.kuilt.game/SpeculativeSequencer.propose|propose(1:1;kotlin.Long){}[0]
+}
+
+final class <#A: kotlin/Any?> us.tractat.kuilt.game/TurnSequencer { // us.tractat.kuilt.game/TurnSequencer|null[0]
+    constructor <init>(us.tractat.kuilt.raft/RaftNode, kotlinx.serialization/KSerializer<#A>, kotlinx.serialization/BinaryFormat = ...) // us.tractat.kuilt.game/TurnSequencer.<init>|<init>(us.tractat.kuilt.raft.RaftNode;kotlinx.serialization.KSerializer<1:0>;kotlinx.serialization.BinaryFormat){}[0]
+
+    final val events // us.tractat.kuilt.game/TurnSequencer.events|{}events[0]
+        final fun <get-events>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.game/TurnEvent<#A>> // us.tractat.kuilt.game/TurnSequencer.events.<get-events>|<get-events>(){}[0]
+
+    final suspend fun propose(#A): us.tractat.kuilt.game/IndexedAction<#A> // us.tractat.kuilt.game/TurnSequencer.propose|propose(1:0){}[0]
+    final suspend fun propose(#A, kotlin/Long): us.tractat.kuilt.game/IndexedAction<#A> // us.tractat.kuilt.game/TurnSequencer.propose|propose(1:0;kotlin.Long){}[0]
+}
+
+final class <#A: out kotlin/Any?> us.tractat.kuilt.game/IndexedAction { // us.tractat.kuilt.game/IndexedAction|null[0]
+    constructor <init>(kotlin/Long, #A, us.tractat.kuilt.raft/DedupKey) // us.tractat.kuilt.game/IndexedAction.<init>|<init>(kotlin.Long;1:0;us.tractat.kuilt.raft.DedupKey){}[0]
+
+    final val action // us.tractat.kuilt.game/IndexedAction.action|{}action[0]
+        final fun <get-action>(): #A // us.tractat.kuilt.game/IndexedAction.action.<get-action>|<get-action>(){}[0]
+    final val dedupKey // us.tractat.kuilt.game/IndexedAction.dedupKey|{}dedupKey[0]
+        final fun <get-dedupKey>(): us.tractat.kuilt.raft/DedupKey // us.tractat.kuilt.game/IndexedAction.dedupKey.<get-dedupKey>|<get-dedupKey>(){}[0]
+    final val index // us.tractat.kuilt.game/IndexedAction.index|{}index[0]
+        final fun <get-index>(): kotlin/Long // us.tractat.kuilt.game/IndexedAction.index.<get-index>|<get-index>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.game/IndexedAction.component1|component1(){}[0]
+    final fun component2(): #A // us.tractat.kuilt.game/IndexedAction.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.raft/DedupKey // us.tractat.kuilt.game/IndexedAction.component3|component3(){}[0]
+    final fun copy(kotlin/Long = ..., #A = ..., us.tractat.kuilt.raft/DedupKey = ...): us.tractat.kuilt.game/IndexedAction<#A> // us.tractat.kuilt.game/IndexedAction.copy|copy(kotlin.Long;1:0;us.tractat.kuilt.raft.DedupKey){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.game/IndexedAction.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.game/IndexedAction.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.game/IndexedAction.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.game/ConsensusBinding { // us.tractat.kuilt.game/ConsensusBinding|null[0]
+    constructor <init>(us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/RaftTransport, us.tractat.kuilt.raft/ClusterConfig, us.tractat.kuilt.raft/RaftStorage, us.tractat.kuilt.raft/RaftConfig, us.tractat.kuilt.raft/ClientIdentity, kotlin/Function1<kotlin/Byte, us.tractat.kuilt.core/Seam>) // us.tractat.kuilt.game/ConsensusBinding.<init>|<init>(us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.RaftTransport;us.tractat.kuilt.raft.ClusterConfig;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;us.tractat.kuilt.raft.ClientIdentity;kotlin.Function1<kotlin.Byte,us.tractat.kuilt.core.Seam>){}[0]
+
+    final val identity // us.tractat.kuilt.game/ConsensusBinding.identity|{}identity[0]
+        final fun <get-identity>(): us.tractat.kuilt.raft/ClientIdentity // us.tractat.kuilt.game/ConsensusBinding.identity.<get-identity>|<get-identity>(){}[0]
+    final val raftConfig // us.tractat.kuilt.game/ConsensusBinding.raftConfig|{}raftConfig[0]
+        final fun <get-raftConfig>(): us.tractat.kuilt.raft/RaftConfig // us.tractat.kuilt.game/ConsensusBinding.raftConfig.<get-raftConfig>|<get-raftConfig>(){}[0]
+    final val self // us.tractat.kuilt.game/ConsensusBinding.self|{}self[0]
+        final fun <get-self>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.game/ConsensusBinding.self.<get-self>|<get-self>(){}[0]
+    final val sessionMembership // us.tractat.kuilt.game/ConsensusBinding.sessionMembership|{}sessionMembership[0]
+        final fun <get-sessionMembership>(): us.tractat.kuilt.raft/ClusterConfig // us.tractat.kuilt.game/ConsensusBinding.sessionMembership.<get-sessionMembership>|<get-sessionMembership>(){}[0]
+    final val storage // us.tractat.kuilt.game/ConsensusBinding.storage|{}storage[0]
+        final fun <get-storage>(): us.tractat.kuilt.raft/RaftStorage // us.tractat.kuilt.game/ConsensusBinding.storage.<get-storage>|<get-storage>(){}[0]
+    final val transport // us.tractat.kuilt.game/ConsensusBinding.transport|{}transport[0]
+        final fun <get-transport>(): us.tractat.kuilt.raft/RaftTransport // us.tractat.kuilt.game/ConsensusBinding.transport.<get-transport>|<get-transport>(){}[0]
+
+    final fun channel(kotlin/Byte): us.tractat.kuilt.core/Seam // us.tractat.kuilt.game/ConsensusBinding.channel|channel(kotlin.Byte){}[0]
+}
+
+final class us.tractat.kuilt.game/DuplicateHostException : kotlin/IllegalStateException { // us.tractat.kuilt.game/DuplicateHostException|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.game/DuplicateHostException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.game/GamePresence { // us.tractat.kuilt.game/GamePresence|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope, kotlin/Boolean = ...) // us.tractat.kuilt.game/GamePresence.<init>|<init>(us.tractat.kuilt.core.Seam;kotlinx.coroutines.CoroutineScope;kotlin.Boolean){}[0]
+
+    final val admissionClosed // us.tractat.kuilt.game/GamePresence.admissionClosed|{}admissionClosed[0]
+        final fun <get-admissionClosed>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>?> // us.tractat.kuilt.game/GamePresence.admissionClosed.<get-admissionClosed>|<get-admissionClosed>(){}[0]
+    final val announced // us.tractat.kuilt.game/GamePresence.announced|{}announced[0]
+        final fun <get-announced>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId>> // us.tractat.kuilt.game/GamePresence.announced.<get-announced>|<get-announced>(){}[0]
+    final val replica // us.tractat.kuilt.game/GamePresence.replica|{}replica[0]
+        final fun <get-replica>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.game/GamePresence.replica.<get-replica>|<get-replica>(){}[0]
+    final val spectatorsClosed // us.tractat.kuilt.game/GamePresence.spectatorsClosed|{}spectatorsClosed[0]
+        final fun <get-spectatorsClosed>(): kotlinx.coroutines.flow/StateFlow<kotlin/Boolean> // us.tractat.kuilt.game/GamePresence.spectatorsClosed.<get-spectatorsClosed>|<get-spectatorsClosed>(){}[0]
+
+    final fun declareAdmissionClosed(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>) // us.tractat.kuilt.game/GamePresence.declareAdmissionClosed|declareAdmissionClosed(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+    final fun declareAdmissionOpen() // us.tractat.kuilt.game/GamePresence.declareAdmissionOpen|declareAdmissionOpen(){}[0]
+    final fun declareHost() // us.tractat.kuilt.game/GamePresence.declareHost|declareHost(){}[0]
+    final fun declarePresent() // us.tractat.kuilt.game/GamePresence.declarePresent|declarePresent(){}[0]
+    final fun declareSpectate() // us.tractat.kuilt.game/GamePresence.declareSpectate|declareSpectate(){}[0]
+    final fun declareSpectatorsClosed() // us.tractat.kuilt.game/GamePresence.declareSpectatorsClosed|declareSpectatorsClosed(){}[0]
+    final fun declareVacate() // us.tractat.kuilt.game/GamePresence.declareVacate|declareVacate(){}[0]
+    final fun declaredHosts(): kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId> // us.tractat.kuilt.game/GamePresence.declaredHosts|declaredHosts(){}[0]
+    final fun spectators(): kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId> // us.tractat.kuilt.game/GamePresence.spectators|spectators(){}[0]
+    final fun vacaters(): kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId> // us.tractat.kuilt.game/GamePresence.vacaters|vacaters(){}[0]
+}
+
+final class us.tractat.kuilt.game/JoinTimeoutException : kotlin/IllegalStateException { // us.tractat.kuilt.game/JoinTimeoutException|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.game/JoinTimeoutException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.game/RoomGameSession : us.tractat.kuilt.game/GameSession { // us.tractat.kuilt.game/RoomGameSession|null[0]
+    final val presence // us.tractat.kuilt.game/RoomGameSession.presence|{}presence[0]
+        final fun <get-presence>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.session/MembershipEvent> // us.tractat.kuilt.game/RoomGameSession.presence.<get-presence>|<get-presence>(){}[0]
+    final val roster // us.tractat.kuilt.game/RoomGameSession.roster|{}roster[0]
+        final fun <get-roster>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.session/Member>> // us.tractat.kuilt.game/RoomGameSession.roster.<get-roster>|<get-roster>(){}[0]
+
+    final suspend fun close(us.tractat.kuilt.core/CloseReason) // us.tractat.kuilt.game/RoomGameSession.close|close(us.tractat.kuilt.core.CloseReason){}[0]
+}
+
+final class us.tractat.kuilt.game/RosterFullException : kotlin/IllegalStateException { // us.tractat.kuilt.game/RosterFullException|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.game/RosterFullException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.game/SpectateTimeoutException : kotlin/IllegalStateException { // us.tractat.kuilt.game/SpectateTimeoutException|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.game/SpectateTimeoutException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.game/SpectatorsClosedException : kotlin/IllegalStateException { // us.tractat.kuilt.game/SpectatorsClosedException|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.game/SpectatorsClosedException.<init>|<init>(kotlin.String){}[0]
+}
+
+open class us.tractat.kuilt.game/GameSession { // us.tractat.kuilt.game/GameSession|null[0]
+    final val attestedPrincipals // us.tractat.kuilt.game/GameSession.attestedPrincipals|{}attestedPrincipals[0]
+        final fun <get-attestedPrincipals>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Principal>> // us.tractat.kuilt.game/GameSession.attestedPrincipals.<get-attestedPrincipals>|<get-attestedPrincipals>(){}[0]
+    final val node // us.tractat.kuilt.game/GameSession.node|{}node[0]
+        final fun <get-node>(): us.tractat.kuilt.raft/RaftNode // us.tractat.kuilt.game/GameSession.node.<get-node>|<get-node>(){}[0]
+
+    final fun appChannel(kotlin/String): us.tractat.kuilt.core/Seam // us.tractat.kuilt.game/GameSession.appChannel|appChannel(kotlin.String){}[0]
+    final fun leave() // us.tractat.kuilt.game/GameSession.leave|leave(){}[0]
+    final fun principalFor(us.tractat.kuilt.core/PeerId): us.tractat.kuilt.core/Principal? // us.tractat.kuilt.game/GameSession.principalFor|principalFor(us.tractat.kuilt.core.PeerId){}[0]
+    open suspend fun close(us.tractat.kuilt.core/CloseReason = ...) // us.tractat.kuilt.game/GameSession.close|close(us.tractat.kuilt.core.CloseReason){}[0]
+}
+
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.game/gameNode(us.tractat.kuilt.core/Seam, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>, us.tractat.kuilt.raft/RaftStorage = ..., us.tractat.kuilt.raft/RaftConfig = ..., us.tractat.kuilt.raft/ClientIdentity = ..., us.tractat.kuilt.game/ConsensusPlacement = ..., kotlin/Function2<kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/Seam>? = ...): us.tractat.kuilt.game/GameSession // us.tractat.kuilt.game/gameNode|gameNode@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Seam;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;us.tractat.kuilt.raft.ClientIdentity;us.tractat.kuilt.game.ConsensusPlacement;kotlin.Function2<kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.core.Seam,us.tractat.kuilt.core.Seam>?){}[0]
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.game/gameOverRoom(us.tractat.kuilt.session/Room, us.tractat.kuilt.raft/RaftStorage = ..., us.tractat.kuilt.raft/RaftConfig = ..., us.tractat.kuilt.raft/ClientIdentity = ..., kotlin/Function2<kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/Seam>? = ...): us.tractat.kuilt.game/RoomGameSession // us.tractat.kuilt.game/gameOverRoom|gameOverRoom@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.session.Room;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;us.tractat.kuilt.raft.ClientIdentity;kotlin.Function2<kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.core.Seam,us.tractat.kuilt.core.Seam>?){}[0]
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.game/gameHost(us.tractat.kuilt.core/Seam, kotlin/Int, us.tractat.kuilt.game/ReturnPolicy = ..., kotlin/Boolean = ..., kotlin/Int = ..., us.tractat.kuilt.raft/RaftStorage = ..., us.tractat.kuilt.raft/RaftConfig = ..., us.tractat.kuilt.liveness/HeartbeatConfig? = ..., kotlin/Function0<kotlin.time/Instant>, kotlin.time/Duration = ..., us.tractat.kuilt.raft/ClientIdentity = ..., us.tractat.kuilt.game/ConsensusPlacement = ..., kotlin/Function2<kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/Seam>? = ...): us.tractat.kuilt.game/GameSession // us.tractat.kuilt.game/gameHost|gameHost@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Seam;kotlin.Int;us.tractat.kuilt.game.ReturnPolicy;kotlin.Boolean;kotlin.Int;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;us.tractat.kuilt.liveness.HeartbeatConfig?;kotlin.Function0<kotlin.time.Instant>;kotlin.time.Duration;us.tractat.kuilt.raft.ClientIdentity;us.tractat.kuilt.game.ConsensusPlacement;kotlin.Function2<kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.core.Seam,us.tractat.kuilt.core.Seam>?){}[0]
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.game/gameHosted(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core.fabric/ConnectionSource, kotlin/Int, us.tractat.kuilt.game/ReturnPolicy = ..., us.tractat.kuilt.raft/RaftStorage = ..., us.tractat.kuilt.raft/RaftConfig = ..., us.tractat.kuilt.liveness/HeartbeatConfig? = ..., kotlin.random/Random = ..., kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.raft/ClientIdentity = ..., us.tractat.kuilt.core.fabric/LinkAdmission = ..., us.tractat.kuilt.game/ConsensusPlacement = ...): us.tractat.kuilt.game/GameSession // us.tractat.kuilt.game/gameHosted|gameHosted@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.fabric.ConnectionSource;kotlin.Int;us.tractat.kuilt.game.ReturnPolicy;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;us.tractat.kuilt.liveness.HeartbeatConfig?;kotlin.random.Random;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.raft.ClientIdentity;us.tractat.kuilt.core.fabric.LinkAdmission;us.tractat.kuilt.game.ConsensusPlacement){}[0]
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.game/gameHostedRoom(us.tractat.kuilt.core/Loom, kotlin/String, kotlin/Int, us.tractat.kuilt.game/ReturnPolicy = ..., us.tractat.kuilt.raft/RaftStorage = ..., us.tractat.kuilt.raft/RaftConfig = ..., us.tractat.kuilt.liveness/HeartbeatConfig? = ..., kotlin.random/Random = ..., kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.raft/ClientIdentity = ..., us.tractat.kuilt.game/ConsensusPlacement = ...): us.tractat.kuilt.game/GameSession // us.tractat.kuilt.game/gameHostedRoom|gameHostedRoom@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Loom;kotlin.String;kotlin.Int;us.tractat.kuilt.game.ReturnPolicy;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;us.tractat.kuilt.liveness.HeartbeatConfig?;kotlin.random.Random;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.raft.ClientIdentity;us.tractat.kuilt.game.ConsensusPlacement){}[0]
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.game/gameJoin(us.tractat.kuilt.core/Seam, us.tractat.kuilt.raft/RaftStorage = ..., us.tractat.kuilt.raft/RaftConfig = ..., kotlin.time/Duration = ..., us.tractat.kuilt.raft/ClientIdentity = ..., us.tractat.kuilt.game/ConsensusPlacement = ..., kotlin/Function2<kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/Seam>? = ...): us.tractat.kuilt.game/GameSession // us.tractat.kuilt.game/gameJoin|gameJoin@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Seam;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;kotlin.time.Duration;us.tractat.kuilt.raft.ClientIdentity;us.tractat.kuilt.game.ConsensusPlacement;kotlin.Function2<kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.core.Seam,us.tractat.kuilt.core.Seam>?){}[0]
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.game/gameJoinRoom(us.tractat.kuilt.core/Loom, kotlin/String, us.tractat.kuilt.raft/RaftStorage = ..., us.tractat.kuilt.raft/RaftConfig = ..., kotlin.time/Duration = ..., kotlin.random/Random = ..., kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.raft/ClientIdentity = ..., us.tractat.kuilt.game/ConsensusPlacement = ...): us.tractat.kuilt.game/GameSession // us.tractat.kuilt.game/gameJoinRoom|gameJoinRoom@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Loom;kotlin.String;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;kotlin.time.Duration;kotlin.random.Random;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.raft.ClientIdentity;us.tractat.kuilt.game.ConsensusPlacement){}[0]
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.game/gameNodeRoom(us.tractat.kuilt.core/Loom, kotlin/String, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>, us.tractat.kuilt.raft/RaftStorage = ..., us.tractat.kuilt.raft/RaftConfig = ..., kotlin.random/Random = ..., kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.raft/ClientIdentity = ..., us.tractat.kuilt.game/ConsensusPlacement = ...): us.tractat.kuilt.game/GameSession // us.tractat.kuilt.game/gameNodeRoom|gameNodeRoom@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Loom;kotlin.String;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;kotlin.random.Random;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.raft.ClientIdentity;us.tractat.kuilt.game.ConsensusPlacement){}[0]
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.game/gameNodeRoomFederated(us.tractat.kuilt.core/Loom, kotlin/String, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>, us.tractat.kuilt.core/Seam, kotlin/Function1<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/PeerId?>, us.tractat.kuilt.raft/RaftStorage = ..., us.tractat.kuilt.raft/RaftConfig = ..., kotlin.random/Random = ..., kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.raft/ClientIdentity = ...): us.tractat.kuilt.game/GameSession // us.tractat.kuilt.game/gameNodeRoomFederated|gameNodeRoomFederated@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Loom;kotlin.String;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;us.tractat.kuilt.core.Seam;kotlin.Function1<us.tractat.kuilt.core.PeerId,us.tractat.kuilt.core.PeerId?>;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;kotlin.random.Random;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.raft.ClientIdentity){}[0]
+final suspend fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.game/gameSpectate(us.tractat.kuilt.core/Seam, us.tractat.kuilt.raft/RaftStorage = ..., us.tractat.kuilt.raft/RaftConfig = ..., kotlin.time/Duration = ..., us.tractat.kuilt.raft/ClientIdentity = ..., us.tractat.kuilt.game/ConsensusPlacement = ..., kotlin/Function2<kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/Seam>? = ...): us.tractat.kuilt.game/GameSession // us.tractat.kuilt.game/gameSpectate|gameSpectate@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Seam;us.tractat.kuilt.raft.RaftStorage;us.tractat.kuilt.raft.RaftConfig;kotlin.time.Duration;us.tractat.kuilt.raft.ClientIdentity;us.tractat.kuilt.game.ConsensusPlacement;kotlin.Function2<kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.core.Seam,us.tractat.kuilt.core.Seam>?){}[0]

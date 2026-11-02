@@ -1,0 +1,1033 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-warp>
+open annotation class us.tractat.kuilt.warp/WarpOp : kotlin/Annotation { // us.tractat.kuilt.warp/WarpOp|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.warp/WarpOp.<init>|<init>(kotlin.String){}[0]
+
+    final val id // us.tractat.kuilt.warp/WarpOp.id|{}id[0]
+        final fun <get-id>(): kotlin/String // us.tractat.kuilt.warp/WarpOp.id.<get-id>|<get-id>(){}[0]
+}
+
+final enum class us.tractat.kuilt.warp/OptLevel : kotlin/Enum<us.tractat.kuilt.warp/OptLevel> { // us.tractat.kuilt.warp/OptLevel|null[0]
+    enum entry O0 // us.tractat.kuilt.warp/OptLevel.O0|null[0]
+    enum entry O2 // us.tractat.kuilt.warp/OptLevel.O2|null[0]
+    enum entry O3 // us.tractat.kuilt.warp/OptLevel.O3|null[0]
+    enum entry Oz // us.tractat.kuilt.warp/OptLevel.Oz|null[0]
+
+    final val entries // us.tractat.kuilt.warp/OptLevel.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.warp/OptLevel> // us.tractat.kuilt.warp/OptLevel.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.warp/OptLevel // us.tractat.kuilt.warp/OptLevel.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.warp/OptLevel> // us.tractat.kuilt.warp/OptLevel.values|values#static(){}[0]
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.warp/OptLevel.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/OptLevel> // us.tractat.kuilt.warp/OptLevel.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.warp/OptLevel.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+final enum class us.tractat.kuilt.warp/Target : kotlin/Enum<us.tractat.kuilt.warp/Target> { // us.tractat.kuilt.warp/Target|null[0]
+    enum entry Browser // us.tractat.kuilt.warp/Target.Browser|null[0]
+    enum entry IosArm64 // us.tractat.kuilt.warp/Target.IosArm64|null[0]
+    enum entry Jvm // us.tractat.kuilt.warp/Target.Jvm|null[0]
+    enum entry MacosArm64 // us.tractat.kuilt.warp/Target.MacosArm64|null[0]
+
+    final val entries // us.tractat.kuilt.warp/Target.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.warp/Target> // us.tractat.kuilt.warp/Target.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.warp/Target // us.tractat.kuilt.warp/Target.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.warp/Target> // us.tractat.kuilt.warp/Target.values|values#static(){}[0]
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.warp/Target.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/Target> // us.tractat.kuilt.warp/Target.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.warp/Target.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+abstract fun interface us.tractat.kuilt.warp/AdmissionControl { // us.tractat.kuilt.warp/AdmissionControl|null[0]
+    abstract fun admit(us.tractat.kuilt.warp/TaskDescriptor): us.tractat.kuilt.warp/AdmissionTicket? // us.tractat.kuilt.warp/AdmissionControl.admit|admit(us.tractat.kuilt.warp.TaskDescriptor){}[0]
+
+    final object Companion { // us.tractat.kuilt.warp/AdmissionControl.Companion|null[0]
+        final val OPEN // us.tractat.kuilt.warp/AdmissionControl.Companion.OPEN|{}OPEN[0]
+            final fun <get-OPEN>(): us.tractat.kuilt.warp/AdmissionControl // us.tractat.kuilt.warp/AdmissionControl.Companion.OPEN.<get-OPEN>|<get-OPEN>(){}[0]
+    }
+}
+
+abstract fun interface us.tractat.kuilt.warp/AdmissionTicket { // us.tractat.kuilt.warp/AdmissionTicket|null[0]
+    abstract fun settle() // us.tractat.kuilt.warp/AdmissionTicket.settle|settle(){}[0]
+
+    final object Companion { // us.tractat.kuilt.warp/AdmissionTicket.Companion|null[0]
+        final val NOOP // us.tractat.kuilt.warp/AdmissionTicket.Companion.NOOP|{}NOOP[0]
+            final fun <get-NOOP>(): us.tractat.kuilt.warp/AdmissionTicket // us.tractat.kuilt.warp/AdmissionTicket.Companion.NOOP.<get-NOOP>|<get-NOOP>(){}[0]
+    }
+}
+
+abstract fun interface us.tractat.kuilt.warp/Op { // us.tractat.kuilt.warp/Op|null[0]
+    abstract suspend fun invoke(kotlin/ByteArray): kotlin/ByteArray // us.tractat.kuilt.warp/Op.invoke|invoke(kotlin.ByteArray){}[0]
+}
+
+abstract fun interface us.tractat.kuilt.warp/OpRegistrar { // us.tractat.kuilt.warp/OpRegistrar|null[0]
+    abstract fun registerInto(us.tractat.kuilt.warp/OpRegistry) // us.tractat.kuilt.warp/OpRegistrar.registerInto|registerInto(us.tractat.kuilt.warp.OpRegistry){}[0]
+}
+
+abstract interface us.tractat.kuilt.warp/WasmOptimizer { // us.tractat.kuilt.warp/WasmOptimizer|null[0]
+    abstract suspend fun optimize(kotlin/ByteArray, us.tractat.kuilt.warp/OptLevel): kotlin/ByteArray // us.tractat.kuilt.warp/WasmOptimizer.optimize|optimize(kotlin.ByteArray;us.tractat.kuilt.warp.OptLevel){}[0]
+}
+
+abstract interface us.tractat.kuilt.warp/WasmRuntime { // us.tractat.kuilt.warp/WasmRuntime|null[0]
+    abstract fun load(kotlin/ByteArray): us.tractat.kuilt.warp/Op // us.tractat.kuilt.warp/WasmRuntime.load|load(kotlin.ByteArray){}[0]
+}
+
+sealed interface us.tractat.kuilt.warp/Affinity { // us.tractat.kuilt.warp/Affinity|null[0]
+    abstract fun matches(us.tractat.kuilt.warp/CapSet): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.matches|matches(us.tractat.kuilt.warp.CapSet){}[0]
+
+    final class And : us.tractat.kuilt.warp/Affinity { // us.tractat.kuilt.warp/Affinity.And|null[0]
+        constructor <init>(kotlin.collections/List<us.tractat.kuilt.warp/Affinity>) // us.tractat.kuilt.warp/Affinity.And.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.warp.Affinity>){}[0]
+
+        final val terms // us.tractat.kuilt.warp/Affinity.And.terms|{}terms[0]
+            final fun <get-terms>(): kotlin.collections/List<us.tractat.kuilt.warp/Affinity> // us.tractat.kuilt.warp/Affinity.And.terms.<get-terms>|<get-terms>(){}[0]
+
+        final fun component1(): kotlin.collections/List<us.tractat.kuilt.warp/Affinity> // us.tractat.kuilt.warp/Affinity.And.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<us.tractat.kuilt.warp/Affinity> = ...): us.tractat.kuilt.warp/Affinity.And // us.tractat.kuilt.warp/Affinity.And.copy|copy(kotlin.collections.List<us.tractat.kuilt.warp.Affinity>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.And.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/Affinity.And.hashCode|hashCode(){}[0]
+        final fun matches(us.tractat.kuilt.warp/CapSet): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.And.matches|matches(us.tractat.kuilt.warp.CapSet){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/Affinity.And.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/Affinity.And> { // us.tractat.kuilt.warp/Affinity.And.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.warp/Affinity.And.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/Affinity.And.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/Affinity.And.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/Affinity.And // us.tractat.kuilt.warp/Affinity.And.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/Affinity.And) // us.tractat.kuilt.warp/Affinity.And.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.Affinity.And){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.warp/Affinity.And.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.warp/Affinity.And.Companion.$childSerializers|{}$childSerializers[0]
+
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/Affinity.And> // us.tractat.kuilt.warp/Affinity.And.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Attr : us.tractat.kuilt.warp/Affinity { // us.tractat.kuilt.warp/Affinity.Attr|null[0]
+        constructor <init>(kotlin/String, kotlin/String) // us.tractat.kuilt.warp/Affinity.Attr.<init>|<init>(kotlin.String;kotlin.String){}[0]
+
+        final val key // us.tractat.kuilt.warp/Affinity.Attr.key|{}key[0]
+            final fun <get-key>(): kotlin/String // us.tractat.kuilt.warp/Affinity.Attr.key.<get-key>|<get-key>(){}[0]
+        final val value // us.tractat.kuilt.warp/Affinity.Attr.value|{}value[0]
+            final fun <get-value>(): kotlin/String // us.tractat.kuilt.warp/Affinity.Attr.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.warp/Affinity.Attr.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.warp/Affinity.Attr.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.warp/Affinity.Attr // us.tractat.kuilt.warp/Affinity.Attr.copy|copy(kotlin.String;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.Attr.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/Affinity.Attr.hashCode|hashCode(){}[0]
+        final fun matches(us.tractat.kuilt.warp/CapSet): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.Attr.matches|matches(us.tractat.kuilt.warp.CapSet){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/Affinity.Attr.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/Affinity.Attr> { // us.tractat.kuilt.warp/Affinity.Attr.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.warp/Affinity.Attr.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/Affinity.Attr.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/Affinity.Attr.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/Affinity.Attr // us.tractat.kuilt.warp/Affinity.Attr.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/Affinity.Attr) // us.tractat.kuilt.warp/Affinity.Attr.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.Affinity.Attr){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.warp/Affinity.Attr.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/Affinity.Attr> // us.tractat.kuilt.warp/Affinity.Attr.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Has : us.tractat.kuilt.warp/Affinity { // us.tractat.kuilt.warp/Affinity.Has|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.warp/Affinity.Has.<init>|<init>(kotlin.String){}[0]
+
+        final val token // us.tractat.kuilt.warp/Affinity.Has.token|{}token[0]
+            final fun <get-token>(): kotlin/String // us.tractat.kuilt.warp/Affinity.Has.token.<get-token>|<get-token>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.warp/Affinity.Has.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.warp/Affinity.Has // us.tractat.kuilt.warp/Affinity.Has.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.Has.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/Affinity.Has.hashCode|hashCode(){}[0]
+        final fun matches(us.tractat.kuilt.warp/CapSet): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.Has.matches|matches(us.tractat.kuilt.warp.CapSet){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/Affinity.Has.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/Affinity.Has> { // us.tractat.kuilt.warp/Affinity.Has.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.warp/Affinity.Has.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/Affinity.Has.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/Affinity.Has.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/Affinity.Has // us.tractat.kuilt.warp/Affinity.Has.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/Affinity.Has) // us.tractat.kuilt.warp/Affinity.Has.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.Affinity.Has){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.warp/Affinity.Has.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/Affinity.Has> // us.tractat.kuilt.warp/Affinity.Has.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Not : us.tractat.kuilt.warp/Affinity { // us.tractat.kuilt.warp/Affinity.Not|null[0]
+        constructor <init>(us.tractat.kuilt.warp/Affinity) // us.tractat.kuilt.warp/Affinity.Not.<init>|<init>(us.tractat.kuilt.warp.Affinity){}[0]
+
+        final val term // us.tractat.kuilt.warp/Affinity.Not.term|{}term[0]
+            final fun <get-term>(): us.tractat.kuilt.warp/Affinity // us.tractat.kuilt.warp/Affinity.Not.term.<get-term>|<get-term>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.warp/Affinity // us.tractat.kuilt.warp/Affinity.Not.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.warp/Affinity = ...): us.tractat.kuilt.warp/Affinity.Not // us.tractat.kuilt.warp/Affinity.Not.copy|copy(us.tractat.kuilt.warp.Affinity){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.Not.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/Affinity.Not.hashCode|hashCode(){}[0]
+        final fun matches(us.tractat.kuilt.warp/CapSet): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.Not.matches|matches(us.tractat.kuilt.warp.CapSet){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/Affinity.Not.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/Affinity.Not> { // us.tractat.kuilt.warp/Affinity.Not.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.warp/Affinity.Not.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/Affinity.Not.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/Affinity.Not.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/Affinity.Not // us.tractat.kuilt.warp/Affinity.Not.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/Affinity.Not) // us.tractat.kuilt.warp/Affinity.Not.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.Affinity.Not){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.warp/Affinity.Not.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.warp/Affinity.Not.Companion.$childSerializers|{}$childSerializers[0]
+
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/Affinity.Not> // us.tractat.kuilt.warp/Affinity.Not.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Or : us.tractat.kuilt.warp/Affinity { // us.tractat.kuilt.warp/Affinity.Or|null[0]
+        constructor <init>(kotlin.collections/List<us.tractat.kuilt.warp/Affinity>) // us.tractat.kuilt.warp/Affinity.Or.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.warp.Affinity>){}[0]
+
+        final val terms // us.tractat.kuilt.warp/Affinity.Or.terms|{}terms[0]
+            final fun <get-terms>(): kotlin.collections/List<us.tractat.kuilt.warp/Affinity> // us.tractat.kuilt.warp/Affinity.Or.terms.<get-terms>|<get-terms>(){}[0]
+
+        final fun component1(): kotlin.collections/List<us.tractat.kuilt.warp/Affinity> // us.tractat.kuilt.warp/Affinity.Or.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<us.tractat.kuilt.warp/Affinity> = ...): us.tractat.kuilt.warp/Affinity.Or // us.tractat.kuilt.warp/Affinity.Or.copy|copy(kotlin.collections.List<us.tractat.kuilt.warp.Affinity>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.Or.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/Affinity.Or.hashCode|hashCode(){}[0]
+        final fun matches(us.tractat.kuilt.warp/CapSet): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.Or.matches|matches(us.tractat.kuilt.warp.CapSet){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/Affinity.Or.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/Affinity.Or> { // us.tractat.kuilt.warp/Affinity.Or.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.warp/Affinity.Or.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/Affinity.Or.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/Affinity.Or.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/Affinity.Or // us.tractat.kuilt.warp/Affinity.Or.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/Affinity.Or) // us.tractat.kuilt.warp/Affinity.Or.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.Affinity.Or){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.warp/Affinity.Or.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.warp/Affinity.Or.Companion.$childSerializers|{}$childSerializers[0]
+
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/Affinity.Or> // us.tractat.kuilt.warp/Affinity.Or.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object Anywhere : kotlinx.serialization.internal/SerializerFactory, us.tractat.kuilt.warp/Affinity { // us.tractat.kuilt.warp/Affinity.Anywhere|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.Anywhere.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/Affinity.Anywhere.hashCode|hashCode(){}[0]
+        final fun matches(us.tractat.kuilt.warp/CapSet): kotlin/Boolean // us.tractat.kuilt.warp/Affinity.Anywhere.matches|matches(us.tractat.kuilt.warp.CapSet){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/Affinity.Anywhere> // us.tractat.kuilt.warp/Affinity.Anywhere.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.warp/Affinity.Anywhere.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/Affinity.Anywhere.toString|toString(){}[0]
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.warp/Affinity.Companion|null[0]
+        final fun attr(kotlin/String, kotlin/String): us.tractat.kuilt.warp/Affinity // us.tractat.kuilt.warp/Affinity.Companion.attr|attr(kotlin.String;kotlin.String){}[0]
+        final fun has(kotlin/String): us.tractat.kuilt.warp/Affinity // us.tractat.kuilt.warp/Affinity.Companion.has|has(kotlin.String){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/Affinity> // us.tractat.kuilt.warp/Affinity.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.warp/Affinity.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.warp/ClaimStrategy { // us.tractat.kuilt.warp/ClaimStrategy|null[0]
+    final class RingWithIntent : us.tractat.kuilt.warp/ClaimStrategy { // us.tractat.kuilt.warp/ClaimStrategy.RingWithIntent|null[0]
+        constructor <init>(kotlin.time/Duration = ...) // us.tractat.kuilt.warp/ClaimStrategy.RingWithIntent.<init>|<init>(kotlin.time.Duration){}[0]
+
+        final val settleWindow // us.tractat.kuilt.warp/ClaimStrategy.RingWithIntent.settleWindow|{}settleWindow[0]
+            final fun <get-settleWindow>(): kotlin.time/Duration // us.tractat.kuilt.warp/ClaimStrategy.RingWithIntent.settleWindow.<get-settleWindow>|<get-settleWindow>(){}[0]
+
+        final fun component1(): kotlin.time/Duration // us.tractat.kuilt.warp/ClaimStrategy.RingWithIntent.component1|component1(){}[0]
+        final fun copy(kotlin.time/Duration = ...): us.tractat.kuilt.warp/ClaimStrategy.RingWithIntent // us.tractat.kuilt.warp/ClaimStrategy.RingWithIntent.copy|copy(kotlin.time.Duration){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/ClaimStrategy.RingWithIntent.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/ClaimStrategy.RingWithIntent.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/ClaimStrategy.RingWithIntent.toString|toString(){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/ClaimStrategy.Companion|null[0]
+        final val DEFAULT_SETTLE_WINDOW // us.tractat.kuilt.warp/ClaimStrategy.Companion.DEFAULT_SETTLE_WINDOW|{}DEFAULT_SETTLE_WINDOW[0]
+            final fun <get-DEFAULT_SETTLE_WINDOW>(): kotlin.time/Duration // us.tractat.kuilt.warp/ClaimStrategy.Companion.DEFAULT_SETTLE_WINDOW.<get-DEFAULT_SETTLE_WINDOW>|<get-DEFAULT_SETTLE_WINDOW>(){}[0]
+    }
+
+    final object Ring : us.tractat.kuilt.warp/ClaimStrategy { // us.tractat.kuilt.warp/ClaimStrategy.Ring|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/ClaimStrategy.Ring.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/ClaimStrategy.Ring.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/ClaimStrategy.Ring.toString|toString(){}[0]
+    }
+}
+
+final class <#A: kotlin/Any?, #B: kotlin/Any?> us.tractat.kuilt.warp/Results { // us.tractat.kuilt.warp/Results|null[0]
+    final val taskIds // us.tractat.kuilt.warp/Results.taskIds|{}taskIds[0]
+        final fun <get-taskIds>(): kotlin.collections/Set<#A> // us.tractat.kuilt.warp/Results.taskIds.<get-taskIds>|<get-taskIds>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/Results.equals|equals(kotlin.Any?){}[0]
+    final fun get(#A): #B? // us.tractat.kuilt.warp/Results.get|get(1:0){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/Results.hashCode|hashCode(){}[0]
+    final fun merge(us.tractat.kuilt.warp/Results<#A, #B>): us.tractat.kuilt.warp/Results<#A, #B> // us.tractat.kuilt.warp/Results.merge|merge(us.tractat.kuilt.warp.Results<1:0,1:1>){}[0]
+    final fun record(us.tractat.kuilt.crdt/ReplicaId, #A, kotlin/Long, #B): us.tractat.kuilt.warp/Results<#A, #B> // us.tractat.kuilt.warp/Results.record|record(us.tractat.kuilt.crdt.ReplicaId;1:0;kotlin.Long;1:1){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/Results.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.warp/Results.Companion|null[0]
+        final fun <#A2: kotlin/Any?, #B2: kotlin/Any?> empty(): us.tractat.kuilt.warp/Results<#A2, #B2> // us.tractat.kuilt.warp/Results.Companion.empty|empty(){0§<kotlin.Any?>;1§<kotlin.Any?>}[0]
+    }
+}
+
+final class <#A: kotlin/Any?> us.tractat.kuilt.warp/Coordinated { // us.tractat.kuilt.warp/Coordinated|null[0]
+    constructor <init>(#A) // us.tractat.kuilt.warp/Coordinated.<init>|<init>(1:0){}[0]
+
+    final val value // us.tractat.kuilt.warp/Coordinated.value|{}value[0]
+        final fun <get-value>(): #A // us.tractat.kuilt.warp/Coordinated.value.<get-value>|<get-value>(){}[0]
+
+    final fun <#A1: kotlin/Any?> commit(kotlin/Function1<#A, #A1>): #A1 // us.tractat.kuilt.warp/Coordinated.commit|commit(kotlin.Function1<1:0,0:0>){0§<kotlin.Any?>}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/Coordinated.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/Coordinated.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/Coordinated.toString|toString(){}[0]
+}
+
+final class <#A: kotlin/Any?> us.tractat.kuilt.warp/WorkQueue { // us.tractat.kuilt.warp/WorkQueue|null[0]
+    final val pending // us.tractat.kuilt.warp/WorkQueue.pending|{}pending[0]
+        final fun <get-pending>(): kotlin.collections/Set<#A> // us.tractat.kuilt.warp/WorkQueue.pending.<get-pending>|<get-pending>(){}[0]
+
+    final fun add(us.tractat.kuilt.crdt/ReplicaId, #A): us.tractat.kuilt.warp/WorkQueue<#A> // us.tractat.kuilt.warp/WorkQueue.add|add(us.tractat.kuilt.crdt.ReplicaId;1:0){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/WorkQueue.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/WorkQueue.hashCode|hashCode(){}[0]
+    final fun merge(us.tractat.kuilt.warp/WorkQueue<#A>): us.tractat.kuilt.warp/WorkQueue<#A> // us.tractat.kuilt.warp/WorkQueue.merge|merge(us.tractat.kuilt.warp.WorkQueue<1:0>){}[0]
+    final fun remove(#A): us.tractat.kuilt.warp/WorkQueue<#A> // us.tractat.kuilt.warp/WorkQueue.remove|remove(1:0){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/WorkQueue.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.warp/WorkQueue.Companion|null[0]
+        final fun <#A2: kotlin/Any?> empty(): us.tractat.kuilt.warp/WorkQueue<#A2> // us.tractat.kuilt.warp/WorkQueue.Companion.empty|empty(){0§<kotlin.Any?>}[0]
+    }
+}
+
+final class <#A: out kotlin/Any?> us.tractat.kuilt.warp/Draft { // us.tractat.kuilt.warp/Draft|null[0]
+    constructor <init>(kotlin.collections/List<us.tractat.kuilt.warp/DraftNode>) // us.tractat.kuilt.warp/Draft.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.warp.DraftNode>){}[0]
+
+    final val embroideries // us.tractat.kuilt.warp/Draft.embroideries|{}embroideries[0]
+        final fun <get-embroideries>(): kotlin.collections/List<us.tractat.kuilt.warp/DraftStage.Embroider> // us.tractat.kuilt.warp/Draft.embroideries.<get-embroideries>|<get-embroideries>(){}[0]
+    final val embroidery // us.tractat.kuilt.warp/Draft.embroidery|{}embroidery[0]
+        final fun <get-embroidery>(): us.tractat.kuilt.warp/DraftStage.Embroider? // us.tractat.kuilt.warp/Draft.embroidery.<get-embroidery>|<get-embroidery>(){}[0]
+    final val isMonotone // us.tractat.kuilt.warp/Draft.isMonotone|{}isMonotone[0]
+        final fun <get-isMonotone>(): kotlin/Boolean // us.tractat.kuilt.warp/Draft.isMonotone.<get-isMonotone>|<get-isMonotone>(){}[0]
+    final val nodes // us.tractat.kuilt.warp/Draft.nodes|{}nodes[0]
+        final fun <get-nodes>(): kotlin.collections/List<us.tractat.kuilt.warp/DraftNode> // us.tractat.kuilt.warp/Draft.nodes.<get-nodes>|<get-nodes>(){}[0]
+    final val stages // us.tractat.kuilt.warp/Draft.stages|{}stages[0]
+        final fun <get-stages>(): kotlin.collections/List<us.tractat.kuilt.warp/DraftStage> // us.tractat.kuilt.warp/Draft.stages.<get-stages>|<get-stages>(){}[0]
+
+    final fun combine(us.tractat.kuilt.warp/Draft<*>): us.tractat.kuilt.warp/Draft<kotlin/Unit> // us.tractat.kuilt.warp/Draft.combine|combine(us.tractat.kuilt.warp.Draft<*>){}[0]
+    final fun embroider(us.tractat.kuilt.warp/OpId): us.tractat.kuilt.warp/Draft<#A> // us.tractat.kuilt.warp/Draft.embroider|embroider(us.tractat.kuilt.warp.OpId){}[0]
+    final fun filter(us.tractat.kuilt.warp/OpId): us.tractat.kuilt.warp/Draft<#A> // us.tractat.kuilt.warp/Draft.filter|filter(us.tractat.kuilt.warp.OpId){}[0]
+    final fun map(us.tractat.kuilt.warp/OpId): us.tractat.kuilt.warp/Draft<kotlin/ByteArray> // us.tractat.kuilt.warp/Draft.map|map(us.tractat.kuilt.warp.OpId){}[0]
+}
+
+final class <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.warp/ConvergentExecution { // us.tractat.kuilt.warp/ConvergentExecution|null[0]
+    constructor <init>(us.tractat.kuilt.warp/Draft<*>, kotlinx.coroutines/CoroutineScope, #A) // us.tractat.kuilt.warp/ConvergentExecution.<init>|<init>(us.tractat.kuilt.warp.Draft<*>;kotlinx.coroutines.CoroutineScope;1:0){}[0]
+
+    final val draft // us.tractat.kuilt.warp/ConvergentExecution.draft|{}draft[0]
+        final fun <get-draft>(): us.tractat.kuilt.warp/Draft<*> // us.tractat.kuilt.warp/ConvergentExecution.draft.<get-draft>|<get-draft>(){}[0]
+    final val result // us.tractat.kuilt.warp/ConvergentExecution.result|{}result[0]
+        final fun <get-result>(): us.tractat.kuilt.warp/IncrementalResult<#A> // us.tractat.kuilt.warp/ConvergentExecution.result.<get-result>|<get-result>(){}[0]
+
+    final fun submit(#A) // us.tractat.kuilt.warp/ConvergentExecution.submit|submit(1:0){}[0]
+}
+
+final class <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.warp/CoordinationFree { // us.tractat.kuilt.warp/CoordinationFree|null[0]
+    constructor <init>(#A) // us.tractat.kuilt.warp/CoordinationFree.<init>|<init>(1:0){}[0]
+
+    final val state // us.tractat.kuilt.warp/CoordinationFree.state|{}state[0]
+        final fun <get-state>(): #A // us.tractat.kuilt.warp/CoordinationFree.state.<get-state>|<get-state>(){}[0]
+
+    final fun embroider(us.tractat.kuilt.warp/CoordinationFree<#A>): us.tractat.kuilt.warp/CoordinationFree<#A> // us.tractat.kuilt.warp/CoordinationFree.embroider|embroider(us.tractat.kuilt.warp.CoordinationFree<1:0>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/CoordinationFree.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/CoordinationFree.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/CoordinationFree.toString|toString(){}[0]
+}
+
+final class <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.warp/IncrementalResult { // us.tractat.kuilt.warp/IncrementalResult|null[0]
+    constructor <init>(#A) // us.tractat.kuilt.warp/IncrementalResult.<init>|<init>(1:0){}[0]
+
+    final val state // us.tractat.kuilt.warp/IncrementalResult.state|{}state[0]
+        final fun <get-state>(): kotlinx.coroutines.flow/StateFlow<#A> // us.tractat.kuilt.warp/IncrementalResult.state.<get-state>|<get-state>(){}[0]
+
+    final fun contribute(#A) // us.tractat.kuilt.warp/IncrementalResult.contribute|contribute(1:0){}[0]
+    final suspend fun awaitThreshold(kotlin/Function1<#A, kotlin/Boolean>): #A // us.tractat.kuilt.warp/IncrementalResult.awaitThreshold|awaitThreshold(kotlin.Function1<1:0,kotlin.Boolean>){}[0]
+}
+
+final class us.tractat.kuilt.warp/BobbinExchange { // us.tractat.kuilt.warp/BobbinExchange|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, us.tractat.kuilt.warp/Creel, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.quilter/QuilterConfig = ...) // us.tractat.kuilt.warp/BobbinExchange.<init>|<init>(us.tractat.kuilt.core.Seam;us.tractat.kuilt.warp.Creel;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.quilter.QuilterConfig){}[0]
+
+    final val creel // us.tractat.kuilt.warp/BobbinExchange.creel|{}creel[0]
+        final fun <get-creel>(): us.tractat.kuilt.warp/Creel // us.tractat.kuilt.warp/BobbinExchange.creel.<get-creel>|<get-creel>(){}[0]
+    final val manifest // us.tractat.kuilt.warp/BobbinExchange.manifest|{}manifest[0]
+        final fun <get-manifest>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.warp/BobbinMeta>> // us.tractat.kuilt.warp/BobbinExchange.manifest.<get-manifest>|<get-manifest>(){}[0]
+
+    final fun put(kotlin/ByteArray): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/BobbinExchange.put|put(kotlin.ByteArray){}[0]
+    final fun putVariant(kotlin/ByteArray, us.tractat.kuilt.warp/VariantKey): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/BobbinExchange.putVariant|putVariant(kotlin.ByteArray;us.tractat.kuilt.warp.VariantKey){}[0]
+    final suspend fun fetch(us.tractat.kuilt.warp/BobbinHash): kotlin/ByteArray // us.tractat.kuilt.warp/BobbinExchange.fetch|fetch(us.tractat.kuilt.warp.BobbinHash){}[0]
+}
+
+final class us.tractat.kuilt.warp/BobbinMeta { // us.tractat.kuilt.warp/BobbinMeta|null[0]
+    constructor <init>(us.tractat.kuilt.warp/BobbinHash, us.tractat.kuilt.warp/VariantKey?) // us.tractat.kuilt.warp/BobbinMeta.<init>|<init>(us.tractat.kuilt.warp.BobbinHash;us.tractat.kuilt.warp.VariantKey?){}[0]
+
+    final val hash // us.tractat.kuilt.warp/BobbinMeta.hash|{}hash[0]
+        final fun <get-hash>(): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/BobbinMeta.hash.<get-hash>|<get-hash>(){}[0]
+    final val variantOf // us.tractat.kuilt.warp/BobbinMeta.variantOf|{}variantOf[0]
+        final fun <get-variantOf>(): us.tractat.kuilt.warp/VariantKey? // us.tractat.kuilt.warp/BobbinMeta.variantOf.<get-variantOf>|<get-variantOf>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/BobbinMeta.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.warp/VariantKey? // us.tractat.kuilt.warp/BobbinMeta.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.warp/BobbinHash = ..., us.tractat.kuilt.warp/VariantKey? = ...): us.tractat.kuilt.warp/BobbinMeta // us.tractat.kuilt.warp/BobbinMeta.copy|copy(us.tractat.kuilt.warp.BobbinHash;us.tractat.kuilt.warp.VariantKey?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/BobbinMeta.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/BobbinMeta.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/BobbinMeta.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/BobbinMeta> { // us.tractat.kuilt.warp/BobbinMeta.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/BobbinMeta.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/BobbinMeta.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/BobbinMeta.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/BobbinMeta // us.tractat.kuilt.warp/BobbinMeta.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/BobbinMeta) // us.tractat.kuilt.warp/BobbinMeta.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.BobbinMeta){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/BobbinMeta.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/BobbinMeta> // us.tractat.kuilt.warp/BobbinMeta.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.warp/CapSet { // us.tractat.kuilt.warp/CapSet|null[0]
+    constructor <init>(kotlin.collections/Set<kotlin/String> = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...) // us.tractat.kuilt.warp/CapSet.<init>|<init>(kotlin.collections.Set<kotlin.String>;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
+
+    final val attributes // us.tractat.kuilt.warp/CapSet.attributes|{}attributes[0]
+        final fun <get-attributes>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.warp/CapSet.attributes.<get-attributes>|<get-attributes>(){}[0]
+    final val tokens // us.tractat.kuilt.warp/CapSet.tokens|{}tokens[0]
+        final fun <get-tokens>(): kotlin.collections/Set<kotlin/String> // us.tractat.kuilt.warp/CapSet.tokens.<get-tokens>|<get-tokens>(){}[0]
+
+    final fun attr(kotlin/String): kotlin/String? // us.tractat.kuilt.warp/CapSet.attr|attr(kotlin.String){}[0]
+    final fun component1(): kotlin.collections/Set<kotlin/String> // us.tractat.kuilt.warp/CapSet.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.warp/CapSet.component2|component2(){}[0]
+    final fun copy(kotlin.collections/Set<kotlin/String> = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...): us.tractat.kuilt.warp/CapSet // us.tractat.kuilt.warp/CapSet.copy|copy(kotlin.collections.Set<kotlin.String>;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/CapSet.equals|equals(kotlin.Any?){}[0]
+    final fun has(kotlin/String): kotlin/Boolean // us.tractat.kuilt.warp/CapSet.has|has(kotlin.String){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/CapSet.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/CapSet.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/CapSet> { // us.tractat.kuilt.warp/CapSet.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/CapSet.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/CapSet.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/CapSet.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/CapSet // us.tractat.kuilt.warp/CapSet.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/CapSet) // us.tractat.kuilt.warp/CapSet.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.CapSet){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/CapSet.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.warp/CapSet.Companion.$childSerializers|{}$childSerializers[0]
+        final val EMPTY // us.tractat.kuilt.warp/CapSet.Companion.EMPTY|{}EMPTY[0]
+            final fun <get-EMPTY>(): us.tractat.kuilt.warp/CapSet // us.tractat.kuilt.warp/CapSet.Companion.EMPTY.<get-EMPTY>|<get-EMPTY>(){}[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/CapSet> // us.tractat.kuilt.warp/CapSet.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.warp/CompileRequest { // us.tractat.kuilt.warp/CompileRequest|null[0]
+    constructor <init>(us.tractat.kuilt.warp/BobbinHash, us.tractat.kuilt.warp/Target, us.tractat.kuilt.warp/OptLevel) // us.tractat.kuilt.warp/CompileRequest.<init>|<init>(us.tractat.kuilt.warp.BobbinHash;us.tractat.kuilt.warp.Target;us.tractat.kuilt.warp.OptLevel){}[0]
+
+    final val optLevel // us.tractat.kuilt.warp/CompileRequest.optLevel|{}optLevel[0]
+        final fun <get-optLevel>(): us.tractat.kuilt.warp/OptLevel // us.tractat.kuilt.warp/CompileRequest.optLevel.<get-optLevel>|<get-optLevel>(){}[0]
+    final val sourceHash // us.tractat.kuilt.warp/CompileRequest.sourceHash|{}sourceHash[0]
+        final fun <get-sourceHash>(): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/CompileRequest.sourceHash.<get-sourceHash>|<get-sourceHash>(){}[0]
+    final val target // us.tractat.kuilt.warp/CompileRequest.target|{}target[0]
+        final fun <get-target>(): us.tractat.kuilt.warp/Target // us.tractat.kuilt.warp/CompileRequest.target.<get-target>|<get-target>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/CompileRequest.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.warp/Target // us.tractat.kuilt.warp/CompileRequest.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.warp/OptLevel // us.tractat.kuilt.warp/CompileRequest.component3|component3(){}[0]
+    final fun copy(us.tractat.kuilt.warp/BobbinHash = ..., us.tractat.kuilt.warp/Target = ..., us.tractat.kuilt.warp/OptLevel = ...): us.tractat.kuilt.warp/CompileRequest // us.tractat.kuilt.warp/CompileRequest.copy|copy(us.tractat.kuilt.warp.BobbinHash;us.tractat.kuilt.warp.Target;us.tractat.kuilt.warp.OptLevel){}[0]
+    final fun encode(): kotlin/ByteArray // us.tractat.kuilt.warp/CompileRequest.encode|encode(){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/CompileRequest.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/CompileRequest.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/CompileRequest.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/CompileRequest> { // us.tractat.kuilt.warp/CompileRequest.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/CompileRequest.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/CompileRequest.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/CompileRequest.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/CompileRequest // us.tractat.kuilt.warp/CompileRequest.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/CompileRequest) // us.tractat.kuilt.warp/CompileRequest.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.CompileRequest){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/CompileRequest.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.warp/CompileRequest.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun decode(kotlin/ByteArray): us.tractat.kuilt.warp/CompileRequest // us.tractat.kuilt.warp/CompileRequest.Companion.decode|decode(kotlin.ByteArray){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/CompileRequest> // us.tractat.kuilt.warp/CompileRequest.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.warp/Creel { // us.tractat.kuilt.warp/Creel|null[0]
+    constructor <init>() // us.tractat.kuilt.warp/Creel.<init>|<init>(){}[0]
+
+    final val loaded // us.tractat.kuilt.warp/Creel.loaded|{}loaded[0]
+        final fun <get-loaded>(): kotlin.collections/Set<us.tractat.kuilt.warp/BobbinHash> // us.tractat.kuilt.warp/Creel.loaded.<get-loaded>|<get-loaded>(){}[0]
+
+    final fun contains(us.tractat.kuilt.warp/BobbinHash): kotlin/Boolean // us.tractat.kuilt.warp/Creel.contains|contains(us.tractat.kuilt.warp.BobbinHash){}[0]
+    final fun get(us.tractat.kuilt.warp/BobbinHash): kotlin/ByteArray? // us.tractat.kuilt.warp/Creel.get|get(us.tractat.kuilt.warp.BobbinHash){}[0]
+    final fun put(kotlin/ByteArray): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/Creel.put|put(kotlin.ByteArray){}[0]
+    final fun putVerified(us.tractat.kuilt.warp/BobbinHash, kotlin/ByteArray) // us.tractat.kuilt.warp/Creel.putVerified|putVerified(us.tractat.kuilt.warp.BobbinHash;kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.warp/DraftNode { // us.tractat.kuilt.warp/DraftNode|null[0]
+    constructor <init>(us.tractat.kuilt.warp/NodeId, us.tractat.kuilt.warp/DraftStage, kotlin.collections/Set<us.tractat.kuilt.warp/NodeId>) // us.tractat.kuilt.warp/DraftNode.<init>|<init>(us.tractat.kuilt.warp.NodeId;us.tractat.kuilt.warp.DraftStage;kotlin.collections.Set<us.tractat.kuilt.warp.NodeId>){}[0]
+
+    final val id // us.tractat.kuilt.warp/DraftNode.id|{}id[0]
+        final fun <get-id>(): us.tractat.kuilt.warp/NodeId // us.tractat.kuilt.warp/DraftNode.id.<get-id>|<get-id>(){}[0]
+    final val predecessors // us.tractat.kuilt.warp/DraftNode.predecessors|{}predecessors[0]
+        final fun <get-predecessors>(): kotlin.collections/Set<us.tractat.kuilt.warp/NodeId> // us.tractat.kuilt.warp/DraftNode.predecessors.<get-predecessors>|<get-predecessors>(){}[0]
+    final val stage // us.tractat.kuilt.warp/DraftNode.stage|{}stage[0]
+        final fun <get-stage>(): us.tractat.kuilt.warp/DraftStage // us.tractat.kuilt.warp/DraftNode.stage.<get-stage>|<get-stage>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.warp/NodeId // us.tractat.kuilt.warp/DraftNode.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.warp/DraftStage // us.tractat.kuilt.warp/DraftNode.component2|component2(){}[0]
+    final fun component3(): kotlin.collections/Set<us.tractat.kuilt.warp/NodeId> // us.tractat.kuilt.warp/DraftNode.component3|component3(){}[0]
+    final fun copy(us.tractat.kuilt.warp/NodeId = ..., us.tractat.kuilt.warp/DraftStage = ..., kotlin.collections/Set<us.tractat.kuilt.warp/NodeId> = ...): us.tractat.kuilt.warp/DraftNode // us.tractat.kuilt.warp/DraftNode.copy|copy(us.tractat.kuilt.warp.NodeId;us.tractat.kuilt.warp.DraftStage;kotlin.collections.Set<us.tractat.kuilt.warp.NodeId>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/DraftNode.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/DraftNode.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/DraftNode.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.warp/GuestRegion { // us.tractat.kuilt.warp/GuestRegion|null[0]
+    constructor <init>(kotlin/Long, kotlin/Long) // us.tractat.kuilt.warp/GuestRegion.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
+
+    final val len // us.tractat.kuilt.warp/GuestRegion.len|{}len[0]
+        final fun <get-len>(): kotlin/Long // us.tractat.kuilt.warp/GuestRegion.len.<get-len>|<get-len>(){}[0]
+    final val ptr // us.tractat.kuilt.warp/GuestRegion.ptr|{}ptr[0]
+        final fun <get-ptr>(): kotlin/Long // us.tractat.kuilt.warp/GuestRegion.ptr.<get-ptr>|<get-ptr>(){}[0]
+}
+
+final class us.tractat.kuilt.warp/OpRegistry { // us.tractat.kuilt.warp/OpRegistry|null[0]
+    constructor <init>() // us.tractat.kuilt.warp/OpRegistry.<init>|<init>(){}[0]
+
+    final val registered // us.tractat.kuilt.warp/OpRegistry.registered|{}registered[0]
+        final fun <get-registered>(): kotlin.collections/Set<us.tractat.kuilt.warp/OpId> // us.tractat.kuilt.warp/OpRegistry.registered.<get-registered>|<get-registered>(){}[0]
+
+    final fun register(us.tractat.kuilt.warp/OpId, us.tractat.kuilt.warp/Op) // us.tractat.kuilt.warp/OpRegistry.register|register(us.tractat.kuilt.warp.OpId;us.tractat.kuilt.warp.Op){}[0]
+    final fun resolve(us.tractat.kuilt.warp/OpId): us.tractat.kuilt.warp/Op? // us.tractat.kuilt.warp/OpRegistry.resolve|resolve(us.tractat.kuilt.warp.OpId){}[0]
+}
+
+final class us.tractat.kuilt.warp/OpResult { // us.tractat.kuilt.warp/OpResult|null[0]
+    constructor <init>(kotlin/ByteArray) // us.tractat.kuilt.warp/OpResult.<init>|<init>(kotlin.ByteArray){}[0]
+
+    final val bytes // us.tractat.kuilt.warp/OpResult.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // us.tractat.kuilt.warp/OpResult.bytes.<get-bytes>|<get-bytes>(){}[0]
+    final val error // us.tractat.kuilt.warp/OpResult.error|{}error[0]
+        final fun <get-error>(): kotlin/String? // us.tractat.kuilt.warp/OpResult.error.<get-error>|<get-error>(){}[0]
+    final val isError // us.tractat.kuilt.warp/OpResult.isError|{}isError[0]
+        final fun <get-isError>(): kotlin/Boolean // us.tractat.kuilt.warp/OpResult.isError.<get-isError>|<get-isError>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/OpResult.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/OpResult.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/OpResult.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/OpResult> { // us.tractat.kuilt.warp/OpResult.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/OpResult.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/OpResult.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/OpResult.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/OpResult // us.tractat.kuilt.warp/OpResult.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/OpResult) // us.tractat.kuilt.warp/OpResult.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.OpResult){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/OpResult.Companion|null[0]
+        final fun failure(kotlin/String): us.tractat.kuilt.warp/OpResult // us.tractat.kuilt.warp/OpResult.Companion.failure|failure(kotlin.String){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/OpResult> // us.tractat.kuilt.warp/OpResult.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.warp/RosterSnapshot { // us.tractat.kuilt.warp/RosterSnapshot|null[0]
+    constructor <init>(kotlin.collections/Set<us.tractat.kuilt.core/PeerId>) // us.tractat.kuilt.warp/RosterSnapshot.<init>|<init>(kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+
+    final val peers // us.tractat.kuilt.warp/RosterSnapshot.peers|{}peers[0]
+        final fun <get-peers>(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.warp/RosterSnapshot.peers.<get-peers>|<get-peers>(){}[0]
+
+    final fun component1(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.warp/RosterSnapshot.component1|component1(){}[0]
+    final fun copy(kotlin.collections/Set<us.tractat.kuilt.core/PeerId> = ...): us.tractat.kuilt.warp/RosterSnapshot // us.tractat.kuilt.warp/RosterSnapshot.copy|copy(kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/RosterSnapshot.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/RosterSnapshot.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/RosterSnapshot.toString|toString(){}[0]
+    final fun toTaskRing(kotlin/Int = ..., kotlin/Long = ...): us.tractat.kuilt.warp/TaskRing // us.tractat.kuilt.warp/RosterSnapshot.toTaskRing|toTaskRing(kotlin.Int;kotlin.Long){}[0]
+}
+
+final class us.tractat.kuilt.warp/TaskDescriptor { // us.tractat.kuilt.warp/TaskDescriptor|null[0]
+    constructor <init>(us.tractat.kuilt.warp/OpId, kotlin/ByteArray = ..., kotlin/String? = ..., us.tractat.kuilt.core/PeerId? = ..., us.tractat.kuilt.warp/Lane = ..., us.tractat.kuilt.warp/Affinity = ...) // us.tractat.kuilt.warp/TaskDescriptor.<init>|<init>(us.tractat.kuilt.warp.OpId;kotlin.ByteArray;kotlin.String?;us.tractat.kuilt.core.PeerId?;us.tractat.kuilt.warp.Lane;us.tractat.kuilt.warp.Affinity){}[0]
+
+    final val affinity // us.tractat.kuilt.warp/TaskDescriptor.affinity|{}affinity[0]
+        final fun <get-affinity>(): us.tractat.kuilt.warp/Affinity // us.tractat.kuilt.warp/TaskDescriptor.affinity.<get-affinity>|<get-affinity>(){}[0]
+    final val args // us.tractat.kuilt.warp/TaskDescriptor.args|{}args[0]
+        final fun <get-args>(): kotlin/ByteArray // us.tractat.kuilt.warp/TaskDescriptor.args.<get-args>|<get-args>(){}[0]
+    final val lane // us.tractat.kuilt.warp/TaskDescriptor.lane|{}lane[0]
+        final fun <get-lane>(): us.tractat.kuilt.warp/Lane // us.tractat.kuilt.warp/TaskDescriptor.lane.<get-lane>|<get-lane>(){}[0]
+    final val op // us.tractat.kuilt.warp/TaskDescriptor.op|{}op[0]
+        final fun <get-op>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/TaskDescriptor.op.<get-op>|<get-op>(){}[0]
+    final val pinnedOwner // us.tractat.kuilt.warp/TaskDescriptor.pinnedOwner|{}pinnedOwner[0]
+        final fun <get-pinnedOwner>(): us.tractat.kuilt.core/PeerId? // us.tractat.kuilt.warp/TaskDescriptor.pinnedOwner.<get-pinnedOwner>|<get-pinnedOwner>(){}[0]
+    final val traceparent // us.tractat.kuilt.warp/TaskDescriptor.traceparent|{}traceparent[0]
+        final fun <get-traceparent>(): kotlin/String? // us.tractat.kuilt.warp/TaskDescriptor.traceparent.<get-traceparent>|<get-traceparent>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/TaskDescriptor.component1|component1(){}[0]
+    final fun component2(): kotlin/ByteArray // us.tractat.kuilt.warp/TaskDescriptor.component2|component2(){}[0]
+    final fun component3(): kotlin/String? // us.tractat.kuilt.warp/TaskDescriptor.component3|component3(){}[0]
+    final fun component4(): us.tractat.kuilt.core/PeerId? // us.tractat.kuilt.warp/TaskDescriptor.component4|component4(){}[0]
+    final fun component5(): us.tractat.kuilt.warp/Lane // us.tractat.kuilt.warp/TaskDescriptor.component5|component5(){}[0]
+    final fun component6(): us.tractat.kuilt.warp/Affinity // us.tractat.kuilt.warp/TaskDescriptor.component6|component6(){}[0]
+    final fun copy(us.tractat.kuilt.warp/OpId = ..., kotlin/ByteArray = ..., kotlin/String? = ..., us.tractat.kuilt.core/PeerId? = ..., us.tractat.kuilt.warp/Lane = ..., us.tractat.kuilt.warp/Affinity = ...): us.tractat.kuilt.warp/TaskDescriptor // us.tractat.kuilt.warp/TaskDescriptor.copy|copy(us.tractat.kuilt.warp.OpId;kotlin.ByteArray;kotlin.String?;us.tractat.kuilt.core.PeerId?;us.tractat.kuilt.warp.Lane;us.tractat.kuilt.warp.Affinity){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/TaskDescriptor.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/TaskDescriptor.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/TaskDescriptor.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/TaskDescriptor> { // us.tractat.kuilt.warp/TaskDescriptor.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/TaskDescriptor.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/TaskDescriptor.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/TaskDescriptor.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/TaskDescriptor // us.tractat.kuilt.warp/TaskDescriptor.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/TaskDescriptor) // us.tractat.kuilt.warp/TaskDescriptor.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.TaskDescriptor){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/TaskDescriptor.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.warp/TaskDescriptor.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/TaskDescriptor> // us.tractat.kuilt.warp/TaskDescriptor.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.warp/TaskRing { // us.tractat.kuilt.warp/TaskRing|null[0]
+    constructor <init>(kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin/Int = ..., kotlin/Long = ...) // us.tractat.kuilt.warp/TaskRing.<init>|<init>(kotlin.collections.Set<us.tractat.kuilt.core.PeerId>;kotlin.Int;kotlin.Long){}[0]
+
+    final val vnodeCount // us.tractat.kuilt.warp/TaskRing.vnodeCount|{}vnodeCount[0]
+        final fun <get-vnodeCount>(): kotlin/Int // us.tractat.kuilt.warp/TaskRing.vnodeCount.<get-vnodeCount>|<get-vnodeCount>(){}[0]
+
+    final fun owner(us.tractat.kuilt.warp/TaskId): us.tractat.kuilt.core/PeerId? // us.tractat.kuilt.warp/TaskRing.owner|owner(us.tractat.kuilt.warp.TaskId){}[0]
+    final fun owner(us.tractat.kuilt.warp/TaskId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): us.tractat.kuilt.core/PeerId? // us.tractat.kuilt.warp/TaskRing.owner|owner(us.tractat.kuilt.warp.TaskId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+    final fun successor(us.tractat.kuilt.warp/TaskId, kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): us.tractat.kuilt.core/PeerId? // us.tractat.kuilt.warp/TaskRing.successor|successor(us.tractat.kuilt.warp.TaskId;kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]
+}
+
+final class us.tractat.kuilt.warp/VariantKey { // us.tractat.kuilt.warp/VariantKey|null[0]
+    constructor <init>(us.tractat.kuilt.warp/BobbinHash, us.tractat.kuilt.warp/Target, us.tractat.kuilt.warp/OptLevel) // us.tractat.kuilt.warp/VariantKey.<init>|<init>(us.tractat.kuilt.warp.BobbinHash;us.tractat.kuilt.warp.Target;us.tractat.kuilt.warp.OptLevel){}[0]
+
+    final val optLevel // us.tractat.kuilt.warp/VariantKey.optLevel|{}optLevel[0]
+        final fun <get-optLevel>(): us.tractat.kuilt.warp/OptLevel // us.tractat.kuilt.warp/VariantKey.optLevel.<get-optLevel>|<get-optLevel>(){}[0]
+    final val sourceHash // us.tractat.kuilt.warp/VariantKey.sourceHash|{}sourceHash[0]
+        final fun <get-sourceHash>(): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/VariantKey.sourceHash.<get-sourceHash>|<get-sourceHash>(){}[0]
+    final val target // us.tractat.kuilt.warp/VariantKey.target|{}target[0]
+        final fun <get-target>(): us.tractat.kuilt.warp/Target // us.tractat.kuilt.warp/VariantKey.target.<get-target>|<get-target>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/VariantKey.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.warp/Target // us.tractat.kuilt.warp/VariantKey.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.warp/OptLevel // us.tractat.kuilt.warp/VariantKey.component3|component3(){}[0]
+    final fun copy(us.tractat.kuilt.warp/BobbinHash = ..., us.tractat.kuilt.warp/Target = ..., us.tractat.kuilt.warp/OptLevel = ...): us.tractat.kuilt.warp/VariantKey // us.tractat.kuilt.warp/VariantKey.copy|copy(us.tractat.kuilt.warp.BobbinHash;us.tractat.kuilt.warp.Target;us.tractat.kuilt.warp.OptLevel){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/VariantKey.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/VariantKey.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/VariantKey.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/VariantKey> { // us.tractat.kuilt.warp/VariantKey.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/VariantKey.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/VariantKey.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/VariantKey.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/VariantKey // us.tractat.kuilt.warp/VariantKey.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/VariantKey) // us.tractat.kuilt.warp/VariantKey.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.VariantKey){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/VariantKey.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.warp/VariantKey.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/VariantKey> // us.tractat.kuilt.warp/VariantKey.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.warp/WarpLazyFetch { // us.tractat.kuilt.warp/WarpLazyFetch|null[0]
+    constructor <init>(us.tractat.kuilt.warp/Creel, us.tractat.kuilt.warp/WasmRuntime, kotlin/Function1<us.tractat.kuilt.warp/OpId, us.tractat.kuilt.warp/BobbinHash?>, kotlin.time/Duration = ...) // us.tractat.kuilt.warp/WarpLazyFetch.<init>|<init>(us.tractat.kuilt.warp.Creel;us.tractat.kuilt.warp.WasmRuntime;kotlin.Function1<us.tractat.kuilt.warp.OpId,us.tractat.kuilt.warp.BobbinHash?>;kotlin.time.Duration){}[0]
+
+    final val creel // us.tractat.kuilt.warp/WarpLazyFetch.creel|{}creel[0]
+        final fun <get-creel>(): us.tractat.kuilt.warp/Creel // us.tractat.kuilt.warp/WarpLazyFetch.creel.<get-creel>|<get-creel>(){}[0]
+    final val fetchTimeout // us.tractat.kuilt.warp/WarpLazyFetch.fetchTimeout|{}fetchTimeout[0]
+        final fun <get-fetchTimeout>(): kotlin.time/Duration // us.tractat.kuilt.warp/WarpLazyFetch.fetchTimeout.<get-fetchTimeout>|<get-fetchTimeout>(){}[0]
+    final val opToBobbin // us.tractat.kuilt.warp/WarpLazyFetch.opToBobbin|{}opToBobbin[0]
+        final fun <get-opToBobbin>(): kotlin/Function1<us.tractat.kuilt.warp/OpId, us.tractat.kuilt.warp/BobbinHash?> // us.tractat.kuilt.warp/WarpLazyFetch.opToBobbin.<get-opToBobbin>|<get-opToBobbin>(){}[0]
+    final val runtime // us.tractat.kuilt.warp/WarpLazyFetch.runtime|{}runtime[0]
+        final fun <get-runtime>(): us.tractat.kuilt.warp/WasmRuntime // us.tractat.kuilt.warp/WarpLazyFetch.runtime.<get-runtime>|<get-runtime>(){}[0]
+}
+
+final class us.tractat.kuilt.warp/WarpNode { // us.tractat.kuilt.warp/WarpNode|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Seam, kotlinx.coroutines.flow/Flow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>>, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.quilter/QuilterConfig = ..., kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.liveness/HeartbeatConfig = ..., us.tractat.kuilt.warp/ClaimStrategy = ..., us.tractat.kuilt.warp/OpRegistry, kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.warp/TaskId, kotlin/String> = ..., us.tractat.kuilt.raft/RaftNode? = ..., us.tractat.kuilt.warp/WarpLazyFetch? = ..., us.tractat.kuilt.warp/Target? = ..., us.tractat.kuilt.warp/AdmissionControl = ..., kotlin.time/Duration = ..., kotlin/Long) // us.tractat.kuilt.warp/WarpNode.<init>|<init>(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.Seam;kotlinx.coroutines.flow.Flow<kotlin.collections.Set<us.tractat.kuilt.core.PeerId>>;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.quilter.QuilterConfig;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.liveness.HeartbeatConfig;us.tractat.kuilt.warp.ClaimStrategy;us.tractat.kuilt.warp.OpRegistry;kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.warp.TaskId,kotlin.String>;us.tractat.kuilt.raft.RaftNode?;us.tractat.kuilt.warp.WarpLazyFetch?;us.tractat.kuilt.warp.Target?;us.tractat.kuilt.warp.AdmissionControl;kotlin.time.Duration;kotlin.Long){}[0]
+
+    final val duplicates // us.tractat.kuilt.warp/WarpNode.duplicates|{}duplicates[0]
+        final fun <get-duplicates>(): us.tractat.kuilt.crdt/GCounter // us.tractat.kuilt.warp/WarpNode.duplicates.<get-duplicates>|<get-duplicates>(){}[0]
+    final val executions // us.tractat.kuilt.warp/WarpNode.executions|{}executions[0]
+        final fun <get-executions>(): us.tractat.kuilt.crdt/GCounter // us.tractat.kuilt.warp/WarpNode.executions.<get-executions>|<get-executions>(){}[0]
+    final val executionsCompiled // us.tractat.kuilt.warp/WarpNode.executionsCompiled|{}executionsCompiled[0]
+        final fun <get-executionsCompiled>(): us.tractat.kuilt.crdt/GCounter // us.tractat.kuilt.warp/WarpNode.executionsCompiled.<get-executionsCompiled>|<get-executionsCompiled>(){}[0]
+    final val executionsInterpreted // us.tractat.kuilt.warp/WarpNode.executionsInterpreted|{}executionsInterpreted[0]
+        final fun <get-executionsInterpreted>(): us.tractat.kuilt.crdt/GCounter // us.tractat.kuilt.warp/WarpNode.executionsInterpreted.<get-executionsInterpreted>|<get-executionsInterpreted>(){}[0]
+    final val failovers // us.tractat.kuilt.warp/WarpNode.failovers|{}failovers[0]
+        final fun <get-failovers>(): us.tractat.kuilt.crdt/GCounter // us.tractat.kuilt.warp/WarpNode.failovers.<get-failovers>|<get-failovers>(){}[0]
+    final val results // us.tractat.kuilt.warp/WarpNode.results|{}results[0]
+        final fun <get-results>(): us.tractat.kuilt.warp/Results<us.tractat.kuilt.warp/TaskId, us.tractat.kuilt.warp/OpResult> // us.tractat.kuilt.warp/WarpNode.results.<get-results>|<get-results>(){}[0]
+    final val selfId // us.tractat.kuilt.warp/WarpNode.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.warp/WarpNode.selfId.<get-selfId>|<get-selfId>(){}[0]
+
+    final fun advertiseCapabilities(us.tractat.kuilt.warp/CapSet) // us.tractat.kuilt.warp/WarpNode.advertiseCapabilities|advertiseCapabilities(us.tractat.kuilt.warp.CapSet){}[0]
+    final fun capabilityView(): kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.warp/CapSet> // us.tractat.kuilt.warp/WarpNode.capabilityView|capabilityView(){}[0]
+    final fun close() // us.tractat.kuilt.warp/WarpNode.close|close(){}[0]
+    final fun eligiblePeers(us.tractat.kuilt.warp/Affinity): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.warp/WarpNode.eligiblePeers|eligiblePeers(us.tractat.kuilt.warp.Affinity){}[0]
+    final fun enqueue(us.tractat.kuilt.warp/TaskId, us.tractat.kuilt.warp/CoordinationKind) // us.tractat.kuilt.warp/WarpNode.enqueue|enqueue(us.tractat.kuilt.warp.TaskId;us.tractat.kuilt.warp.CoordinationKind){}[0]
+    final fun enqueue(us.tractat.kuilt.warp/TaskId, us.tractat.kuilt.warp/TaskDescriptor) // us.tractat.kuilt.warp/WarpNode.enqueue|enqueue(us.tractat.kuilt.warp.TaskId;us.tractat.kuilt.warp.TaskDescriptor){}[0]
+    final fun enqueueLocal(us.tractat.kuilt.warp/TaskId, us.tractat.kuilt.warp/TaskDescriptor) // us.tractat.kuilt.warp/WarpNode.enqueueLocal|enqueueLocal(us.tractat.kuilt.warp.TaskId;us.tractat.kuilt.warp.TaskDescriptor){}[0]
+    final fun registerCompiler(kotlin.coroutines/SuspendFunction3<kotlin/ByteArray, us.tractat.kuilt.warp/Target, us.tractat.kuilt.warp/OptLevel, kotlin/ByteArray>) // us.tractat.kuilt.warp/WarpNode.registerCompiler|registerCompiler(kotlin.coroutines.SuspendFunction3<kotlin.ByteArray,us.tractat.kuilt.warp.Target,us.tractat.kuilt.warp.OptLevel,kotlin.ByteArray>){}[0]
+    final suspend fun publishVariant(kotlin/ByteArray, us.tractat.kuilt.warp/VariantKey): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/WarpNode.publishVariant|publishVariant(kotlin.ByteArray;us.tractat.kuilt.warp.VariantKey){}[0]
+}
+
+final class us.tractat.kuilt.warp/WarpStats : us.tractat.kuilt.crdt/Quilted<us.tractat.kuilt.warp/WarpStats> { // us.tractat.kuilt.warp/WarpStats|null[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/WarpStats.equals|equals(kotlin.Any?){}[0]
+    final fun estimatedCardinality(us.tractat.kuilt.warp/OpId): kotlin/Long // us.tractat.kuilt.warp/WarpStats.estimatedCardinality|estimatedCardinality(us.tractat.kuilt.warp.OpId){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/WarpStats.hashCode|hashCode(){}[0]
+    final fun observe(us.tractat.kuilt.warp/OpId, kotlin/String): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.warp/WarpStats> // us.tractat.kuilt.warp/WarpStats.observe|observe(us.tractat.kuilt.warp.OpId;kotlin.String){}[0]
+    final fun piece(us.tractat.kuilt.warp/WarpStats): us.tractat.kuilt.warp/WarpStats // us.tractat.kuilt.warp/WarpStats.piece|piece(us.tractat.kuilt.warp.WarpStats){}[0]
+    final fun sketches(): kotlin.collections/Map<us.tractat.kuilt.warp/OpId, us.tractat.kuilt.crdt/HyperLogLog> // us.tractat.kuilt.warp/WarpStats.sketches|sketches(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/WarpStats.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/WarpStats> { // us.tractat.kuilt.warp/WarpStats.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/WarpStats.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/WarpStats.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/WarpStats.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/WarpStats // us.tractat.kuilt.warp/WarpStats.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/WarpStats) // us.tractat.kuilt.warp/WarpStats.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.WarpStats){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/WarpStats.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.warp/WarpStats.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun empty(): us.tractat.kuilt.warp/WarpStats // us.tractat.kuilt.warp/WarpStats.Companion.empty|empty(){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/WarpStats> // us.tractat.kuilt.warp/WarpStats.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.warp/WasmExecutionException : us.tractat.kuilt.warp/WasmException { // us.tractat.kuilt.warp/WasmExecutionException|null[0]
+    constructor <init>(kotlin/String, kotlin/Throwable? = ...) // us.tractat.kuilt.warp/WasmExecutionException.<init>|<init>(kotlin.String;kotlin.Throwable?){}[0]
+}
+
+final class us.tractat.kuilt.warp/WasmLoadException : us.tractat.kuilt.warp/WasmException { // us.tractat.kuilt.warp/WasmLoadException|null[0]
+    constructor <init>(kotlin/String, kotlin/Throwable? = ...) // us.tractat.kuilt.warp/WasmLoadException.<init>|<init>(kotlin.String;kotlin.Throwable?){}[0]
+}
+
+final class us.tractat.kuilt.warp/WasmSandboxConfig { // us.tractat.kuilt.warp/WasmSandboxConfig|null[0]
+    constructor <init>(kotlin/Int = ..., kotlin.time/Duration = ...) // us.tractat.kuilt.warp/WasmSandboxConfig.<init>|<init>(kotlin.Int;kotlin.time.Duration){}[0]
+
+    final val executionTimeout // us.tractat.kuilt.warp/WasmSandboxConfig.executionTimeout|{}executionTimeout[0]
+        final fun <get-executionTimeout>(): kotlin.time/Duration // us.tractat.kuilt.warp/WasmSandboxConfig.executionTimeout.<get-executionTimeout>|<get-executionTimeout>(){}[0]
+    final val maxMemoryPages // us.tractat.kuilt.warp/WasmSandboxConfig.maxMemoryPages|{}maxMemoryPages[0]
+        final fun <get-maxMemoryPages>(): kotlin/Int // us.tractat.kuilt.warp/WasmSandboxConfig.maxMemoryPages.<get-maxMemoryPages>|<get-maxMemoryPages>(){}[0]
+
+    final fun component1(): kotlin/Int // us.tractat.kuilt.warp/WasmSandboxConfig.component1|component1(){}[0]
+    final fun component2(): kotlin.time/Duration // us.tractat.kuilt.warp/WasmSandboxConfig.component2|component2(){}[0]
+    final fun copy(kotlin/Int = ..., kotlin.time/Duration = ...): us.tractat.kuilt.warp/WasmSandboxConfig // us.tractat.kuilt.warp/WasmSandboxConfig.copy|copy(kotlin.Int;kotlin.time.Duration){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/WasmSandboxConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/WasmSandboxConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/WasmSandboxConfig.toString|toString(){}[0]
+}
+
+final value class us.tractat.kuilt.warp/BobbinHash { // us.tractat.kuilt.warp/BobbinHash|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.warp/BobbinHash.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.warp/BobbinHash.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.warp/BobbinHash.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/BobbinHash.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/BobbinHash.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/BobbinHash.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/BobbinHash> { // us.tractat.kuilt.warp/BobbinHash.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/BobbinHash.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/BobbinHash.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/BobbinHash.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/BobbinHash // us.tractat.kuilt.warp/BobbinHash.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/BobbinHash) // us.tractat.kuilt.warp/BobbinHash.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.BobbinHash){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/BobbinHash.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/BobbinHash> // us.tractat.kuilt.warp/BobbinHash.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.warp/Lane { // us.tractat.kuilt.warp/Lane|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.warp/Lane.<init>|<init>(kotlin.String){}[0]
+
+    final val tag // us.tractat.kuilt.warp/Lane.tag|{}tag[0]
+        final fun <get-tag>(): kotlin/String // us.tractat.kuilt.warp/Lane.tag.<get-tag>|<get-tag>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/Lane.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/Lane.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/Lane.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/Lane> { // us.tractat.kuilt.warp/Lane.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/Lane.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/Lane.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/Lane.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/Lane // us.tractat.kuilt.warp/Lane.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/Lane) // us.tractat.kuilt.warp/Lane.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.Lane){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/Lane.Companion|null[0]
+        final val ROOT // us.tractat.kuilt.warp/Lane.Companion.ROOT|{}ROOT[0]
+            final fun <get-ROOT>(): us.tractat.kuilt.warp/Lane // us.tractat.kuilt.warp/Lane.Companion.ROOT.<get-ROOT>|<get-ROOT>(){}[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/Lane> // us.tractat.kuilt.warp/Lane.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.warp/NodeId { // us.tractat.kuilt.warp/NodeId|null[0]
+    constructor <init>(kotlin/Int) // us.tractat.kuilt.warp/NodeId.<init>|<init>(kotlin.Int){}[0]
+
+    final val value // us.tractat.kuilt.warp/NodeId.value|{}value[0]
+        final fun <get-value>(): kotlin/Int // us.tractat.kuilt.warp/NodeId.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/NodeId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/NodeId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/NodeId.toString|toString(){}[0]
+}
+
+final value class us.tractat.kuilt.warp/OpId { // us.tractat.kuilt.warp/OpId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.warp/OpId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.warp/OpId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.warp/OpId.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/OpId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/OpId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/OpId.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/OpId> { // us.tractat.kuilt.warp/OpId.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/OpId.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/OpId.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/OpId.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/OpId.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/OpId) // us.tractat.kuilt.warp/OpId.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.OpId){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/OpId.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/OpId> // us.tractat.kuilt.warp/OpId.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.warp/TaskId { // us.tractat.kuilt.warp/TaskId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.warp/TaskId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.warp/TaskId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.warp/TaskId.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/TaskId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/TaskId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/TaskId.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.warp/TaskId> { // us.tractat.kuilt.warp/TaskId.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.warp/TaskId.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.warp/TaskId.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.warp/TaskId.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.warp/TaskId // us.tractat.kuilt.warp/TaskId.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.warp/TaskId) // us.tractat.kuilt.warp/TaskId.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.warp.TaskId){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.warp/TaskId.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.warp/TaskId> // us.tractat.kuilt.warp/TaskId.Companion.serializer|serializer(){}[0]
+    }
+}
+
+sealed class us.tractat.kuilt.warp/CoordinationKind { // us.tractat.kuilt.warp/CoordinationKind|null[0]
+    final object Coordinated : us.tractat.kuilt.warp/CoordinationKind { // us.tractat.kuilt.warp/CoordinationKind.Coordinated|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/CoordinationKind.Coordinated.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/CoordinationKind.Coordinated.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/CoordinationKind.Coordinated.toString|toString(){}[0]
+    }
+
+    final object Free : us.tractat.kuilt.warp/CoordinationKind { // us.tractat.kuilt.warp/CoordinationKind.Free|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/CoordinationKind.Free.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/CoordinationKind.Free.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/CoordinationKind.Free.toString|toString(){}[0]
+    }
+}
+
+sealed class us.tractat.kuilt.warp/DraftStage { // us.tractat.kuilt.warp/DraftStage|null[0]
+    abstract val coordinationKind // us.tractat.kuilt.warp/DraftStage.coordinationKind|{}coordinationKind[0]
+        abstract fun <get-coordinationKind>(): us.tractat.kuilt.warp/CoordinationKind // us.tractat.kuilt.warp/DraftStage.coordinationKind.<get-coordinationKind>|<get-coordinationKind>(){}[0]
+    abstract val opId // us.tractat.kuilt.warp/DraftStage.opId|{}opId[0]
+        abstract fun <get-opId>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.opId.<get-opId>|<get-opId>(){}[0]
+
+    final class BatchedEmbroider : us.tractat.kuilt.warp/DraftStage { // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider|null[0]
+        constructor <init>(kotlin.collections/List<us.tractat.kuilt.warp/OpId>) // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.warp.OpId>){}[0]
+
+        final val coordinationKind // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.coordinationKind|{}coordinationKind[0]
+            final fun <get-coordinationKind>(): us.tractat.kuilt.warp/CoordinationKind // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.coordinationKind.<get-coordinationKind>|<get-coordinationKind>(){}[0]
+        final val opId // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.opId|{}opId[0]
+            final fun <get-opId>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.opId.<get-opId>|<get-opId>(){}[0]
+        final val opIds // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.opIds|{}opIds[0]
+            final fun <get-opIds>(): kotlin.collections/List<us.tractat.kuilt.warp/OpId> // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.opIds.<get-opIds>|<get-opIds>(){}[0]
+
+        final fun component1(): kotlin.collections/List<us.tractat.kuilt.warp/OpId> // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<us.tractat.kuilt.warp/OpId> = ...): us.tractat.kuilt.warp/DraftStage.BatchedEmbroider // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.copy|copy(kotlin.collections.List<us.tractat.kuilt.warp.OpId>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/DraftStage.BatchedEmbroider.toString|toString(){}[0]
+    }
+
+    final class Embroider : us.tractat.kuilt.warp/DraftStage { // us.tractat.kuilt.warp/DraftStage.Embroider|null[0]
+        constructor <init>(us.tractat.kuilt.warp/OpId) // us.tractat.kuilt.warp/DraftStage.Embroider.<init>|<init>(us.tractat.kuilt.warp.OpId){}[0]
+
+        final val coordinationKind // us.tractat.kuilt.warp/DraftStage.Embroider.coordinationKind|{}coordinationKind[0]
+            final fun <get-coordinationKind>(): us.tractat.kuilt.warp/CoordinationKind // us.tractat.kuilt.warp/DraftStage.Embroider.coordinationKind.<get-coordinationKind>|<get-coordinationKind>(){}[0]
+        final val opId // us.tractat.kuilt.warp/DraftStage.Embroider.opId|{}opId[0]
+            final fun <get-opId>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.Embroider.opId.<get-opId>|<get-opId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.Embroider.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.warp/OpId = ...): us.tractat.kuilt.warp/DraftStage.Embroider // us.tractat.kuilt.warp/DraftStage.Embroider.copy|copy(us.tractat.kuilt.warp.OpId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/DraftStage.Embroider.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/DraftStage.Embroider.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/DraftStage.Embroider.toString|toString(){}[0]
+    }
+
+    final class Filter : us.tractat.kuilt.warp/DraftStage { // us.tractat.kuilt.warp/DraftStage.Filter|null[0]
+        constructor <init>(us.tractat.kuilt.warp/OpId) // us.tractat.kuilt.warp/DraftStage.Filter.<init>|<init>(us.tractat.kuilt.warp.OpId){}[0]
+
+        final val coordinationKind // us.tractat.kuilt.warp/DraftStage.Filter.coordinationKind|{}coordinationKind[0]
+            final fun <get-coordinationKind>(): us.tractat.kuilt.warp/CoordinationKind // us.tractat.kuilt.warp/DraftStage.Filter.coordinationKind.<get-coordinationKind>|<get-coordinationKind>(){}[0]
+        final val opId // us.tractat.kuilt.warp/DraftStage.Filter.opId|{}opId[0]
+            final fun <get-opId>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.Filter.opId.<get-opId>|<get-opId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.Filter.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.warp/OpId = ...): us.tractat.kuilt.warp/DraftStage.Filter // us.tractat.kuilt.warp/DraftStage.Filter.copy|copy(us.tractat.kuilt.warp.OpId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/DraftStage.Filter.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/DraftStage.Filter.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/DraftStage.Filter.toString|toString(){}[0]
+    }
+
+    final class FusedFilter : us.tractat.kuilt.warp/DraftStage { // us.tractat.kuilt.warp/DraftStage.FusedFilter|null[0]
+        constructor <init>(kotlin.collections/List<us.tractat.kuilt.warp/OpId>) // us.tractat.kuilt.warp/DraftStage.FusedFilter.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.warp.OpId>){}[0]
+
+        final val coordinationKind // us.tractat.kuilt.warp/DraftStage.FusedFilter.coordinationKind|{}coordinationKind[0]
+            final fun <get-coordinationKind>(): us.tractat.kuilt.warp/CoordinationKind // us.tractat.kuilt.warp/DraftStage.FusedFilter.coordinationKind.<get-coordinationKind>|<get-coordinationKind>(){}[0]
+        final val opId // us.tractat.kuilt.warp/DraftStage.FusedFilter.opId|{}opId[0]
+            final fun <get-opId>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.FusedFilter.opId.<get-opId>|<get-opId>(){}[0]
+        final val opIds // us.tractat.kuilt.warp/DraftStage.FusedFilter.opIds|{}opIds[0]
+            final fun <get-opIds>(): kotlin.collections/List<us.tractat.kuilt.warp/OpId> // us.tractat.kuilt.warp/DraftStage.FusedFilter.opIds.<get-opIds>|<get-opIds>(){}[0]
+
+        final fun component1(): kotlin.collections/List<us.tractat.kuilt.warp/OpId> // us.tractat.kuilt.warp/DraftStage.FusedFilter.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<us.tractat.kuilt.warp/OpId> = ...): us.tractat.kuilt.warp/DraftStage.FusedFilter // us.tractat.kuilt.warp/DraftStage.FusedFilter.copy|copy(kotlin.collections.List<us.tractat.kuilt.warp.OpId>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/DraftStage.FusedFilter.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/DraftStage.FusedFilter.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/DraftStage.FusedFilter.toString|toString(){}[0]
+    }
+
+    final class FusedMap : us.tractat.kuilt.warp/DraftStage { // us.tractat.kuilt.warp/DraftStage.FusedMap|null[0]
+        constructor <init>(kotlin.collections/List<us.tractat.kuilt.warp/OpId>) // us.tractat.kuilt.warp/DraftStage.FusedMap.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.warp.OpId>){}[0]
+
+        final val coordinationKind // us.tractat.kuilt.warp/DraftStage.FusedMap.coordinationKind|{}coordinationKind[0]
+            final fun <get-coordinationKind>(): us.tractat.kuilt.warp/CoordinationKind // us.tractat.kuilt.warp/DraftStage.FusedMap.coordinationKind.<get-coordinationKind>|<get-coordinationKind>(){}[0]
+        final val opId // us.tractat.kuilt.warp/DraftStage.FusedMap.opId|{}opId[0]
+            final fun <get-opId>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.FusedMap.opId.<get-opId>|<get-opId>(){}[0]
+        final val opIds // us.tractat.kuilt.warp/DraftStage.FusedMap.opIds|{}opIds[0]
+            final fun <get-opIds>(): kotlin.collections/List<us.tractat.kuilt.warp/OpId> // us.tractat.kuilt.warp/DraftStage.FusedMap.opIds.<get-opIds>|<get-opIds>(){}[0]
+
+        final fun component1(): kotlin.collections/List<us.tractat.kuilt.warp/OpId> // us.tractat.kuilt.warp/DraftStage.FusedMap.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<us.tractat.kuilt.warp/OpId> = ...): us.tractat.kuilt.warp/DraftStage.FusedMap // us.tractat.kuilt.warp/DraftStage.FusedMap.copy|copy(kotlin.collections.List<us.tractat.kuilt.warp.OpId>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/DraftStage.FusedMap.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/DraftStage.FusedMap.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/DraftStage.FusedMap.toString|toString(){}[0]
+    }
+
+    final class Map : us.tractat.kuilt.warp/DraftStage { // us.tractat.kuilt.warp/DraftStage.Map|null[0]
+        constructor <init>(us.tractat.kuilt.warp/OpId) // us.tractat.kuilt.warp/DraftStage.Map.<init>|<init>(us.tractat.kuilt.warp.OpId){}[0]
+
+        final val coordinationKind // us.tractat.kuilt.warp/DraftStage.Map.coordinationKind|{}coordinationKind[0]
+            final fun <get-coordinationKind>(): us.tractat.kuilt.warp/CoordinationKind // us.tractat.kuilt.warp/DraftStage.Map.coordinationKind.<get-coordinationKind>|<get-coordinationKind>(){}[0]
+        final val opId // us.tractat.kuilt.warp/DraftStage.Map.opId|{}opId[0]
+            final fun <get-opId>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.Map.opId.<get-opId>|<get-opId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.Map.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.warp/OpId = ...): us.tractat.kuilt.warp/DraftStage.Map // us.tractat.kuilt.warp/DraftStage.Map.copy|copy(us.tractat.kuilt.warp.OpId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/DraftStage.Map.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/DraftStage.Map.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/DraftStage.Map.toString|toString(){}[0]
+    }
+
+    final class Source : us.tractat.kuilt.warp/DraftStage { // us.tractat.kuilt.warp/DraftStage.Source|null[0]
+        constructor <init>(us.tractat.kuilt.warp/OpId) // us.tractat.kuilt.warp/DraftStage.Source.<init>|<init>(us.tractat.kuilt.warp.OpId){}[0]
+
+        final val coordinationKind // us.tractat.kuilt.warp/DraftStage.Source.coordinationKind|{}coordinationKind[0]
+            final fun <get-coordinationKind>(): us.tractat.kuilt.warp/CoordinationKind // us.tractat.kuilt.warp/DraftStage.Source.coordinationKind.<get-coordinationKind>|<get-coordinationKind>(){}[0]
+        final val opId // us.tractat.kuilt.warp/DraftStage.Source.opId|{}opId[0]
+            final fun <get-opId>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.Source.opId.<get-opId>|<get-opId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/DraftStage.Source.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.warp/OpId = ...): us.tractat.kuilt.warp/DraftStage.Source // us.tractat.kuilt.warp/DraftStage.Source.copy|copy(us.tractat.kuilt.warp.OpId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/DraftStage.Source.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/DraftStage.Source.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.warp/DraftStage.Source.toString|toString(){}[0]
+    }
+}
+
+sealed class us.tractat.kuilt.warp/WasmException : kotlin/Exception // us.tractat.kuilt.warp/WasmException|null[0]
+
+final object us.tractat.kuilt.warp/CompileOp { // us.tractat.kuilt.warp/CompileOp|null[0]
+    final val ID // us.tractat.kuilt.warp/CompileOp.ID|{}ID[0]
+        final fun <get-ID>(): us.tractat.kuilt.warp/OpId // us.tractat.kuilt.warp/CompileOp.ID.<get-ID>|<get-ID>(){}[0]
+
+    final fun descriptor(us.tractat.kuilt.warp/CompileRequest, us.tractat.kuilt.core/PeerId, kotlin/String? = ...): us.tractat.kuilt.warp/TaskDescriptor // us.tractat.kuilt.warp/CompileOp.descriptor|descriptor(us.tractat.kuilt.warp.CompileRequest;us.tractat.kuilt.core.PeerId;kotlin.String?){}[0]
+}
+
+final object us.tractat.kuilt.warp/PassthroughWasmOptimizer : us.tractat.kuilt.warp/WasmOptimizer { // us.tractat.kuilt.warp/PassthroughWasmOptimizer|null[0]
+    final suspend fun optimize(kotlin/ByteArray, us.tractat.kuilt.warp/OptLevel): kotlin/ByteArray // us.tractat.kuilt.warp/PassthroughWasmOptimizer.optimize|optimize(kotlin.ByteArray;us.tractat.kuilt.warp.OptLevel){}[0]
+}
+
+final object us.tractat.kuilt.warp/Warp { // us.tractat.kuilt.warp/Warp|null[0]
+    final fun shuttle(us.tractat.kuilt.warp/OpId): us.tractat.kuilt.warp/Draft<kotlin/ByteArray> // us.tractat.kuilt.warp/Warp.shuttle|shuttle(us.tractat.kuilt.warp.OpId){}[0]
+}
+
+final fun (us.tractat.kuilt.core/Seam).us.tractat.kuilt.warp/rosterSnapshot(): kotlinx.coroutines.flow/Flow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.warp/rosterSnapshot|rosterSnapshot@us.tractat.kuilt.core.Seam(){}[0]
+final fun (us.tractat.kuilt.raft/RaftNode).us.tractat.kuilt.warp/rosterSnapshot(): kotlinx.coroutines.flow/Flow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.warp/rosterSnapshot|rosterSnapshot@us.tractat.kuilt.raft.RaftNode(){}[0]
+final fun (us.tractat.kuilt.warp/Affinity).us.tractat.kuilt.warp/and(us.tractat.kuilt.warp/Affinity): us.tractat.kuilt.warp/Affinity // us.tractat.kuilt.warp/and|and@us.tractat.kuilt.warp.Affinity(us.tractat.kuilt.warp.Affinity){}[0]
+final fun (us.tractat.kuilt.warp/Affinity).us.tractat.kuilt.warp/or(us.tractat.kuilt.warp/Affinity): us.tractat.kuilt.warp/Affinity // us.tractat.kuilt.warp/or|or@us.tractat.kuilt.warp.Affinity(us.tractat.kuilt.warp.Affinity){}[0]
+final fun (us.tractat.kuilt.warp/TaskDescriptor).us.tractat.kuilt.warp/where(us.tractat.kuilt.warp/Affinity): us.tractat.kuilt.warp/TaskDescriptor // us.tractat.kuilt.warp/where|where@us.tractat.kuilt.warp.TaskDescriptor(us.tractat.kuilt.warp.Affinity){}[0]
+final fun <#A: us.tractat.kuilt.crdt/Quilted<#A>, #B: us.tractat.kuilt.crdt/Quilted<#B>> (us.tractat.kuilt.warp/CoordinationFree<#A>).us.tractat.kuilt.warp/monotoneMap(kotlin/Function1<#A, #B>): us.tractat.kuilt.warp/CoordinationFree<#B> // us.tractat.kuilt.warp/monotoneMap|monotoneMap@us.tractat.kuilt.warp.CoordinationFree<0:0>(kotlin.Function1<0:0,0:1>){0§<us.tractat.kuilt.crdt.Quilted<0:0>>;1§<us.tractat.kuilt.crdt.Quilted<0:1>>}[0]
+final fun <#A: us.tractat.kuilt.crdt/Quilted<#A>, #B: us.tractat.kuilt.crdt/Quilted<#B>> (us.tractat.kuilt.warp/CoordinationFree<#A>).us.tractat.kuilt.warp/zip(us.tractat.kuilt.warp/CoordinationFree<#B>): us.tractat.kuilt.warp/CoordinationFree<us.tractat.kuilt.crdt/LatticeProduct<#A, #B>> // us.tractat.kuilt.warp/zip|zip@us.tractat.kuilt.warp.CoordinationFree<0:0>(us.tractat.kuilt.warp.CoordinationFree<0:1>){0§<us.tractat.kuilt.crdt.Quilted<0:0>>;1§<us.tractat.kuilt.crdt.Quilted<0:1>>}[0]
+final fun <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.warp/joinAll(kotlin.collections/List<us.tractat.kuilt.warp/CoordinationFree<#A>>): us.tractat.kuilt.warp/CoordinationFree<#A> // us.tractat.kuilt.warp/joinAll|joinAll(kotlin.collections.List<us.tractat.kuilt.warp.CoordinationFree<0:0>>){0§<us.tractat.kuilt.crdt.Quilted<0:0>>}[0]
+final fun <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.warp/joinAllOrNull(kotlin.collections/List<us.tractat.kuilt.warp/CoordinationFree<#A>>): us.tractat.kuilt.warp/CoordinationFree<#A>? // us.tractat.kuilt.warp/joinAllOrNull|joinAllOrNull(kotlin.collections.List<us.tractat.kuilt.warp.CoordinationFree<0:0>>){0§<us.tractat.kuilt.crdt.Quilted<0:0>>}[0]
+final fun <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.warp/liftCoordinationFree(#A): us.tractat.kuilt.warp/CoordinationFree<#A> // us.tractat.kuilt.warp/liftCoordinationFree|liftCoordinationFree(0:0){0§<us.tractat.kuilt.crdt.Quilted<0:0>>}[0]
+final fun us.tractat.kuilt.warp/not(us.tractat.kuilt.warp/Affinity): us.tractat.kuilt.warp/Affinity // us.tractat.kuilt.warp/not|not(us.tractat.kuilt.warp.Affinity){}[0]
+final fun us.tractat.kuilt.warp/opRegistryOf(kotlin/Array<out us.tractat.kuilt.warp/OpRegistrar>...): us.tractat.kuilt.warp/OpRegistry // us.tractat.kuilt.warp/opRegistryOf|opRegistryOf(kotlin.Array<out|us.tractat.kuilt.warp.OpRegistrar>...){}[0]
+final fun us.tractat.kuilt.warp/requireInBounds(kotlin/Long, kotlin/Long, kotlin/Long) // us.tractat.kuilt.warp/requireInBounds|requireInBounds(kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+final fun us.tractat.kuilt.warp/shuttle(us.tractat.kuilt.warp/Op): us.tractat.kuilt.warp/Op // us.tractat.kuilt.warp/shuttle|shuttle(us.tractat.kuilt.warp.Op){}[0]
+final fun us.tractat.kuilt.warp/unpackWarpResult(kotlin/Long): us.tractat.kuilt.warp/GuestRegion // us.tractat.kuilt.warp/unpackWarpResult|unpackWarpResult(kotlin.Long){}[0]
+final inline fun us.tractat.kuilt.warp/decodeWarpResult(kotlin/Long, kotlin/Long, kotlin/Function2<kotlin/Long, kotlin/Long, kotlin/ByteArray>): kotlin/ByteArray // us.tractat.kuilt.warp/decodeWarpResult|decodeWarpResult(kotlin.Long;kotlin.Long;kotlin.Function2<kotlin.Long,kotlin.Long,kotlin.ByteArray>){}[0]

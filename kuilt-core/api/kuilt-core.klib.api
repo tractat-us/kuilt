@@ -1,0 +1,861 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-core>
+final enum class us.tractat.kuilt.core/Overflow : kotlin/Enum<us.tractat.kuilt.core/Overflow> { // us.tractat.kuilt.core/Overflow|null[0]
+    enum entry DROP_LATEST // us.tractat.kuilt.core/Overflow.DROP_LATEST|null[0]
+    enum entry DROP_OLDEST // us.tractat.kuilt.core/Overflow.DROP_OLDEST|null[0]
+    enum entry FAIL // us.tractat.kuilt.core/Overflow.FAIL|null[0]
+    enum entry SUSPEND // us.tractat.kuilt.core/Overflow.SUSPEND|null[0]
+
+    final val entries // us.tractat.kuilt.core/Overflow.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.core/Overflow> // us.tractat.kuilt.core/Overflow.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.core/Overflow // us.tractat.kuilt.core/Overflow.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.core/Overflow> // us.tractat.kuilt.core/Overflow.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.core/PumpFailure : kotlin/Enum<us.tractat.kuilt.core/PumpFailure> { // us.tractat.kuilt.core/PumpFailure|null[0]
+    enum entry ITEM // us.tractat.kuilt.core/PumpFailure.ITEM|null[0]
+    enum entry UPSTREAM // us.tractat.kuilt.core/PumpFailure.UPSTREAM|null[0]
+
+    final val entries // us.tractat.kuilt.core/PumpFailure.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.core/PumpFailure> // us.tractat.kuilt.core/PumpFailure.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.core/PumpFailure // us.tractat.kuilt.core/PumpFailure.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.core/PumpFailure> // us.tractat.kuilt.core/PumpFailure.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.core/PumpVerdict : kotlin/Enum<us.tractat.kuilt.core/PumpVerdict> { // us.tractat.kuilt.core/PumpVerdict|null[0]
+    enum entry CONTINUE // us.tractat.kuilt.core/PumpVerdict.CONTINUE|null[0]
+    enum entry STOP // us.tractat.kuilt.core/PumpVerdict.STOP|null[0]
+
+    final val entries // us.tractat.kuilt.core/PumpVerdict.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.core/PumpVerdict> // us.tractat.kuilt.core/PumpVerdict.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.core/PumpVerdict // us.tractat.kuilt.core/PumpVerdict.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.core/PumpVerdict> // us.tractat.kuilt.core/PumpVerdict.values|values#static(){}[0]
+}
+
+abstract fun interface us.tractat.kuilt.core.fabric/LinkAdmission { // us.tractat.kuilt.core.fabric/LinkAdmission|null[0]
+    abstract suspend fun admit(us.tractat.kuilt.core/Principal?, us.tractat.kuilt.core/PeerId): kotlin/Boolean // us.tractat.kuilt.core.fabric/LinkAdmission.admit|admit(us.tractat.kuilt.core.Principal?;us.tractat.kuilt.core.PeerId){}[0]
+
+    final object Companion { // us.tractat.kuilt.core.fabric/LinkAdmission.Companion|null[0]
+        final val AcceptAll // us.tractat.kuilt.core.fabric/LinkAdmission.Companion.AcceptAll|{}AcceptAll[0]
+            final fun <get-AcceptAll>(): us.tractat.kuilt.core.fabric/LinkAdmission // us.tractat.kuilt.core.fabric/LinkAdmission.Companion.AcceptAll.<get-AcceptAll>|<get-AcceptAll>(){}[0]
+        final val RequireAttested // us.tractat.kuilt.core.fabric/LinkAdmission.Companion.RequireAttested|{}RequireAttested[0]
+            final fun <get-RequireAttested>(): us.tractat.kuilt.core.fabric/LinkAdmission // us.tractat.kuilt.core.fabric/LinkAdmission.Companion.RequireAttested.<get-RequireAttested>|<get-RequireAttested>(){}[0]
+    }
+}
+
+abstract fun interface us.tractat.kuilt.core/RoomAuthorizer { // us.tractat.kuilt.core/RoomAuthorizer|null[0]
+    abstract suspend fun authorize(us.tractat.kuilt.core/PeerId, kotlin/String): kotlin/Boolean // us.tractat.kuilt.core/RoomAuthorizer.authorize|authorize(us.tractat.kuilt.core.PeerId;kotlin.String){}[0]
+
+    final object Companion { // us.tractat.kuilt.core/RoomAuthorizer.Companion|null[0]
+        final val AllowAll // us.tractat.kuilt.core/RoomAuthorizer.Companion.AllowAll|{}AllowAll[0]
+            final fun <get-AllowAll>(): us.tractat.kuilt.core/RoomAuthorizer // us.tractat.kuilt.core/RoomAuthorizer.Companion.AllowAll.<get-AllowAll>|<get-AllowAll>(){}[0]
+    }
+}
+
+abstract interface us.tractat.kuilt.core.discovery/DiscoveryKind { // us.tractat.kuilt.core.discovery/DiscoveryKind|null[0]
+    abstract val id // us.tractat.kuilt.core.discovery/DiscoveryKind.id|{}id[0]
+        abstract fun <get-id>(): kotlin/String // us.tractat.kuilt.core.discovery/DiscoveryKind.id.<get-id>|<get-id>(){}[0]
+
+    final object Mdns : us.tractat.kuilt.core.discovery/DiscoveryKind { // us.tractat.kuilt.core.discovery/DiscoveryKind.Mdns|null[0]
+        final val id // us.tractat.kuilt.core.discovery/DiscoveryKind.Mdns.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.core.discovery/DiscoveryKind.Mdns.id.<get-id>|<get-id>(){}[0]
+    }
+
+    final object Multipeer : us.tractat.kuilt.core.discovery/DiscoveryKind { // us.tractat.kuilt.core.discovery/DiscoveryKind.Multipeer|null[0]
+        final val id // us.tractat.kuilt.core.discovery/DiscoveryKind.Multipeer.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.core.discovery/DiscoveryKind.Multipeer.id.<get-id>|<get-id>(){}[0]
+    }
+}
+
+abstract interface us.tractat.kuilt.core.discovery/PeerDiscoverySource { // us.tractat.kuilt.core.discovery/PeerDiscoverySource|null[0]
+    abstract val kind // us.tractat.kuilt.core.discovery/PeerDiscoverySource.kind|{}kind[0]
+        abstract fun <get-kind>(): us.tractat.kuilt.core.discovery/DiscoveryKind // us.tractat.kuilt.core.discovery/PeerDiscoverySource.kind.<get-kind>|<get-kind>(){}[0]
+
+    abstract fun departures(): kotlinx.coroutines.flow/Flow<kotlin/String> // us.tractat.kuilt.core.discovery/PeerDiscoverySource.departures|departures(){}[0]
+    abstract fun discoveries(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.core/Tag> // us.tractat.kuilt.core.discovery/PeerDiscoverySource.discoveries|discoveries(){}[0]
+}
+
+abstract interface us.tractat.kuilt.core.fabric/Connection { // us.tractat.kuilt.core.fabric/Connection|null[0]
+    abstract val incoming // us.tractat.kuilt.core.fabric/Connection.incoming|{}incoming[0]
+        abstract fun <get-incoming>(): kotlinx.coroutines.flow/Flow<kotlin/ByteArray> // us.tractat.kuilt.core.fabric/Connection.incoming.<get-incoming>|<get-incoming>(){}[0]
+    open val maxFrameBytes // us.tractat.kuilt.core.fabric/Connection.maxFrameBytes|{}maxFrameBytes[0]
+        open fun <get-maxFrameBytes>(): kotlin/Int? // us.tractat.kuilt.core.fabric/Connection.maxFrameBytes.<get-maxFrameBytes>|<get-maxFrameBytes>(){}[0]
+
+    abstract suspend fun close() // us.tractat.kuilt.core.fabric/Connection.close|close(){}[0]
+    abstract suspend fun send(kotlin/ByteArray) // us.tractat.kuilt.core.fabric/Connection.send|send(kotlin.ByteArray){}[0]
+}
+
+abstract interface us.tractat.kuilt.core.fabric/ConnectionSource { // us.tractat.kuilt.core.fabric/ConnectionSource|null[0]
+    abstract suspend fun accept(): us.tractat.kuilt.core.fabric/Connection // us.tractat.kuilt.core.fabric/ConnectionSource.accept|accept(){}[0]
+}
+
+abstract interface us.tractat.kuilt.core.fabric/Mesh : us.tractat.kuilt.core/PrincipalRoster, us.tractat.kuilt.core/Seam { // us.tractat.kuilt.core.fabric/Mesh|null[0]
+    abstract suspend fun addLink(us.tractat.kuilt.core.fabric/Connection) // us.tractat.kuilt.core.fabric/Mesh.addLink|addLink(us.tractat.kuilt.core.fabric.Connection){}[0]
+}
+
+abstract interface us.tractat.kuilt.core/Loom { // us.tractat.kuilt.core/Loom|null[0]
+    abstract suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core/Loom.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+    open fun availability(): us.tractat.kuilt.core/FabricAvailability // us.tractat.kuilt.core/Loom.availability|availability(){}[0]
+    open fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.core/Loom.capability|capability(){}[0]
+    open suspend fun host(us.tractat.kuilt.core/Pattern): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core/Loom.host|host(us.tractat.kuilt.core.Pattern){}[0]
+    open suspend fun join(us.tractat.kuilt.core/Tag): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core/Loom.join|join(us.tractat.kuilt.core.Tag){}[0]
+}
+
+abstract interface us.tractat.kuilt.core/PrincipalAttested { // us.tractat.kuilt.core/PrincipalAttested|null[0]
+    abstract val principal // us.tractat.kuilt.core/PrincipalAttested.principal|{}principal[0]
+        abstract fun <get-principal>(): us.tractat.kuilt.core/Principal? // us.tractat.kuilt.core/PrincipalAttested.principal.<get-principal>|<get-principal>(){}[0]
+}
+
+abstract interface us.tractat.kuilt.core/PrincipalRoster { // us.tractat.kuilt.core/PrincipalRoster|null[0]
+    abstract val attestedPrincipals // us.tractat.kuilt.core/PrincipalRoster.attestedPrincipals|{}attestedPrincipals[0]
+        abstract fun <get-attestedPrincipals>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Principal>> // us.tractat.kuilt.core/PrincipalRoster.attestedPrincipals.<get-attestedPrincipals>|<get-attestedPrincipals>(){}[0]
+}
+
+abstract interface us.tractat.kuilt.core/Seam { // us.tractat.kuilt.core/Seam|null[0]
+    abstract val incoming // us.tractat.kuilt.core/Seam.incoming|{}incoming[0]
+        abstract fun <get-incoming>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.core/Swatch> // us.tractat.kuilt.core/Seam.incoming.<get-incoming>|<get-incoming>(){}[0]
+    abstract val peers // us.tractat.kuilt.core/Seam.peers|{}peers[0]
+        abstract fun <get-peers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.core/Seam.peers.<get-peers>|<get-peers>(){}[0]
+    abstract val selfId // us.tractat.kuilt.core/Seam.selfId|{}selfId[0]
+        abstract fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core/Seam.selfId.<get-selfId>|<get-selfId>(){}[0]
+    abstract val state // us.tractat.kuilt.core/Seam.state|{}state[0]
+        abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/SeamState> // us.tractat.kuilt.core/Seam.state.<get-state>|<get-state>(){}[0]
+    open val capability // us.tractat.kuilt.core/Seam.capability|{}capability[0]
+        open fun <get-capability>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/TransportCapability> // us.tractat.kuilt.core/Seam.capability.<get-capability>|<get-capability>(){}[0]
+    open val maxPayloadBytes // us.tractat.kuilt.core/Seam.maxPayloadBytes|{}maxPayloadBytes[0]
+        open fun <get-maxPayloadBytes>(): kotlin/Int? // us.tractat.kuilt.core/Seam.maxPayloadBytes.<get-maxPayloadBytes>|<get-maxPayloadBytes>(){}[0]
+    open val plies // us.tractat.kuilt.core/Seam.plies|{}plies[0]
+        open fun <get-plies>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Map<us.tractat.kuilt.core/PlyId, us.tractat.kuilt.core/SeamState>> // us.tractat.kuilt.core/Seam.plies.<get-plies>|<get-plies>(){}[0]
+
+    abstract suspend fun broadcast(kotlin/ByteArray) // us.tractat.kuilt.core/Seam.broadcast|broadcast(kotlin.ByteArray){}[0]
+    abstract suspend fun close(us.tractat.kuilt.core/CloseReason = ...) // us.tractat.kuilt.core/Seam.close|close(us.tractat.kuilt.core.CloseReason){}[0]
+    abstract suspend fun sendTo(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.core/Seam.sendTo|sendTo(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+}
+
+abstract interface us.tractat.kuilt.core/Tag { // us.tractat.kuilt.core/Tag|null[0]
+    abstract val peerKey // us.tractat.kuilt.core/Tag.peerKey|{}peerKey[0]
+        abstract fun <get-peerKey>(): kotlin/String // us.tractat.kuilt.core/Tag.peerKey.<get-peerKey>|<get-peerKey>(){}[0]
+    abstract val sessionName // us.tractat.kuilt.core/Tag.sessionName|{}sessionName[0]
+        abstract fun <get-sessionName>(): kotlin/String // us.tractat.kuilt.core/Tag.sessionName.<get-sessionName>|<get-sessionName>(){}[0]
+    open val roomKey // us.tractat.kuilt.core/Tag.roomKey|{}roomKey[0]
+        open fun <get-roomKey>(): kotlin/String? // us.tractat.kuilt.core/Tag.roomKey.<get-roomKey>|<get-roomKey>(){}[0]
+}
+
+sealed interface us.tractat.kuilt.core.fabric/MeshDisplacement { // us.tractat.kuilt.core.fabric/MeshDisplacement|null[0]
+    abstract val peer // us.tractat.kuilt.core.fabric/MeshDisplacement.peer|{}peer[0]
+        abstract fun <get-peer>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core.fabric/MeshDisplacement.peer.<get-peer>|<get-peer>(){}[0]
+
+    final enum class Arm : kotlin/Enum<us.tractat.kuilt.core.fabric/MeshDisplacement.Arm> { // us.tractat.kuilt.core.fabric/MeshDisplacement.Arm|null[0]
+        enum entry Keep // us.tractat.kuilt.core.fabric/MeshDisplacement.Arm.Keep|null[0]
+        enum entry Replace // us.tractat.kuilt.core.fabric/MeshDisplacement.Arm.Replace|null[0]
+
+        final val entries // us.tractat.kuilt.core.fabric/MeshDisplacement.Arm.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.core.fabric/MeshDisplacement.Arm> // us.tractat.kuilt.core.fabric/MeshDisplacement.Arm.entries.<get-entries>|<get-entries>#static(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.core.fabric/MeshDisplacement.Arm // us.tractat.kuilt.core.fabric/MeshDisplacement.Arm.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.core.fabric/MeshDisplacement.Arm> // us.tractat.kuilt.core.fabric/MeshDisplacement.Arm.values|values#static(){}[0]
+    }
+
+    final enum class Outcome : kotlin/Enum<us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome> { // us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome|null[0]
+        enum entry Bound // us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome.Bound|null[0]
+        enum entry Goodbye // us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome.Goodbye|null[0]
+        enum entry LinkLoss // us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome.LinkLoss|null[0]
+
+        final val entries // us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome> // us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome.entries.<get-entries>|<get-entries>#static(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome // us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome> // us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome.values|values#static(){}[0]
+    }
+
+    final class Drained : us.tractat.kuilt.core.fabric/MeshDisplacement { // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core.fabric/MeshDisplacement.Arm, us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome, kotlin/Int) // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.<init>|<init>(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.fabric.MeshDisplacement.Arm;us.tractat.kuilt.core.fabric.MeshDisplacement.Outcome;kotlin.Int){}[0]
+
+        final val arm // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.arm|{}arm[0]
+            final fun <get-arm>(): us.tractat.kuilt.core.fabric/MeshDisplacement.Arm // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.arm.<get-arm>|<get-arm>(){}[0]
+        final val framesDrained // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.framesDrained|{}framesDrained[0]
+            final fun <get-framesDrained>(): kotlin/Int // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.framesDrained.<get-framesDrained>|<get-framesDrained>(){}[0]
+        final val outcome // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.outcome|{}outcome[0]
+            final fun <get-outcome>(): us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.outcome.<get-outcome>|<get-outcome>(){}[0]
+        final val peer // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.peer|{}peer[0]
+            final fun <get-peer>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.peer.<get-peer>|<get-peer>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.core.fabric/MeshDisplacement.Arm // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.component3|component3(){}[0]
+        final fun component4(): kotlin/Int // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.component4|component4(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.core.fabric/MeshDisplacement.Arm = ..., us.tractat.kuilt.core.fabric/MeshDisplacement.Outcome = ..., kotlin/Int = ...): us.tractat.kuilt.core.fabric/MeshDisplacement.Drained // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.copy|copy(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.fabric.MeshDisplacement.Arm;us.tractat.kuilt.core.fabric.MeshDisplacement.Outcome;kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core.fabric/MeshDisplacement.Drained.toString|toString(){}[0]
+    }
+
+    final class OrderingHoldOverflowed : us.tractat.kuilt.core.fabric/MeshDisplacement { // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin/Int, kotlin/Int) // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.Int;kotlin.Int){}[0]
+
+        final val buffered // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.buffered|{}buffered[0]
+            final fun <get-buffered>(): kotlin/Int // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.buffered.<get-buffered>|<get-buffered>(){}[0]
+        final val capacity // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.capacity|{}capacity[0]
+            final fun <get-capacity>(): kotlin/Int // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.capacity.<get-capacity>|<get-capacity>(){}[0]
+        final val peer // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.peer|{}peer[0]
+            final fun <get-peer>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.peer.<get-peer>|<get-peer>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.component1|component1(){}[0]
+        final fun component2(): kotlin/Int // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.component2|component2(){}[0]
+        final fun component3(): kotlin/Int // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin/Int = ..., kotlin/Int = ...): us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.Int;kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core.fabric/MeshDisplacement.OrderingHoldOverflowed.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.core/CloseReason { // us.tractat.kuilt.core/CloseReason|null[0]
+    final class Error : us.tractat.kuilt.core/CloseReason { // us.tractat.kuilt.core/CloseReason.Error|null[0]
+        constructor <init>(kotlin/Throwable) // us.tractat.kuilt.core/CloseReason.Error.<init>|<init>(kotlin.Throwable){}[0]
+
+        final val throwable // us.tractat.kuilt.core/CloseReason.Error.throwable|{}throwable[0]
+            final fun <get-throwable>(): kotlin/Throwable // us.tractat.kuilt.core/CloseReason.Error.throwable.<get-throwable>|<get-throwable>(){}[0]
+
+        final fun component1(): kotlin/Throwable // us.tractat.kuilt.core/CloseReason.Error.component1|component1(){}[0]
+        final fun copy(kotlin/Throwable = ...): us.tractat.kuilt.core/CloseReason.Error // us.tractat.kuilt.core/CloseReason.Error.copy|copy(kotlin.Throwable){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/CloseReason.Error.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/CloseReason.Error.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/CloseReason.Error.toString|toString(){}[0]
+    }
+
+    final object Normal : us.tractat.kuilt.core/CloseReason { // us.tractat.kuilt.core/CloseReason.Normal|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/CloseReason.Normal.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/CloseReason.Normal.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/CloseReason.Normal.toString|toString(){}[0]
+    }
+
+    final object RemoteRequested : us.tractat.kuilt.core/CloseReason { // us.tractat.kuilt.core/CloseReason.RemoteRequested|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/CloseReason.RemoteRequested.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/CloseReason.RemoteRequested.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/CloseReason.RemoteRequested.toString|toString(){}[0]
+    }
+
+    final object Unreachable : us.tractat.kuilt.core/CloseReason { // us.tractat.kuilt.core/CloseReason.Unreachable|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/CloseReason.Unreachable.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/CloseReason.Unreachable.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/CloseReason.Unreachable.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.core/FabricAvailability { // us.tractat.kuilt.core/FabricAvailability|null[0]
+    final class Unavailable : us.tractat.kuilt.core/FabricAvailability { // us.tractat.kuilt.core/FabricAvailability.Unavailable|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.core/FabricAvailability.Unavailable.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.core/FabricAvailability.Unavailable.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.core/FabricAvailability.Unavailable.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.core/FabricAvailability.Unavailable.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.core/FabricAvailability.Unavailable // us.tractat.kuilt.core/FabricAvailability.Unavailable.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/FabricAvailability.Unavailable.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/FabricAvailability.Unavailable.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/FabricAvailability.Unavailable.toString|toString(){}[0]
+    }
+
+    final class Unknown : us.tractat.kuilt.core/FabricAvailability { // us.tractat.kuilt.core/FabricAvailability.Unknown|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.core/FabricAvailability.Unknown.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.core/FabricAvailability.Unknown.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.core/FabricAvailability.Unknown.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.core/FabricAvailability.Unknown.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.core/FabricAvailability.Unknown // us.tractat.kuilt.core/FabricAvailability.Unknown.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/FabricAvailability.Unknown.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/FabricAvailability.Unknown.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/FabricAvailability.Unknown.toString|toString(){}[0]
+    }
+
+    final object Available : us.tractat.kuilt.core/FabricAvailability { // us.tractat.kuilt.core/FabricAvailability.Available|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/FabricAvailability.Available.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/FabricAvailability.Available.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/FabricAvailability.Available.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.core/Rendezvous { // us.tractat.kuilt.core/Rendezvous|null[0]
+    final class Existing : us.tractat.kuilt.core/Rendezvous { // us.tractat.kuilt.core/Rendezvous.Existing|null[0]
+        constructor <init>(us.tractat.kuilt.core/Tag) // us.tractat.kuilt.core/Rendezvous.Existing.<init>|<init>(us.tractat.kuilt.core.Tag){}[0]
+
+        final val tag // us.tractat.kuilt.core/Rendezvous.Existing.tag|{}tag[0]
+            final fun <get-tag>(): us.tractat.kuilt.core/Tag // us.tractat.kuilt.core/Rendezvous.Existing.tag.<get-tag>|<get-tag>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/Tag // us.tractat.kuilt.core/Rendezvous.Existing.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.core/Tag = ...): us.tractat.kuilt.core/Rendezvous.Existing // us.tractat.kuilt.core/Rendezvous.Existing.copy|copy(us.tractat.kuilt.core.Tag){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/Rendezvous.Existing.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/Rendezvous.Existing.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/Rendezvous.Existing.toString|toString(){}[0]
+    }
+
+    final class New : us.tractat.kuilt.core/Rendezvous { // us.tractat.kuilt.core/Rendezvous.New|null[0]
+        constructor <init>(us.tractat.kuilt.core/Pattern) // us.tractat.kuilt.core/Rendezvous.New.<init>|<init>(us.tractat.kuilt.core.Pattern){}[0]
+
+        final val pattern // us.tractat.kuilt.core/Rendezvous.New.pattern|{}pattern[0]
+            final fun <get-pattern>(): us.tractat.kuilt.core/Pattern // us.tractat.kuilt.core/Rendezvous.New.pattern.<get-pattern>|<get-pattern>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/Pattern // us.tractat.kuilt.core/Rendezvous.New.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.core/Pattern = ...): us.tractat.kuilt.core/Rendezvous.New // us.tractat.kuilt.core/Rendezvous.New.copy|copy(us.tractat.kuilt.core.Pattern){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/Rendezvous.New.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/Rendezvous.New.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/Rendezvous.New.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.core/SeamState { // us.tractat.kuilt.core/SeamState|null[0]
+    final class Torn : us.tractat.kuilt.core/SeamState { // us.tractat.kuilt.core/SeamState.Torn|null[0]
+        constructor <init>(us.tractat.kuilt.core/CloseReason) // us.tractat.kuilt.core/SeamState.Torn.<init>|<init>(us.tractat.kuilt.core.CloseReason){}[0]
+
+        final val reason // us.tractat.kuilt.core/SeamState.Torn.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.core/CloseReason // us.tractat.kuilt.core/SeamState.Torn.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/CloseReason // us.tractat.kuilt.core/SeamState.Torn.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.core/CloseReason = ...): us.tractat.kuilt.core/SeamState.Torn // us.tractat.kuilt.core/SeamState.Torn.copy|copy(us.tractat.kuilt.core.CloseReason){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/SeamState.Torn.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/SeamState.Torn.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/SeamState.Torn.toString|toString(){}[0]
+    }
+
+    final object Weaving : us.tractat.kuilt.core/SeamState { // us.tractat.kuilt.core/SeamState.Weaving|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/SeamState.Weaving.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/SeamState.Weaving.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/SeamState.Weaving.toString|toString(){}[0]
+    }
+
+    final object Woven : us.tractat.kuilt.core/SeamState { // us.tractat.kuilt.core/SeamState.Woven|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/SeamState.Woven.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/SeamState.Woven.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/SeamState.Woven.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.core/TransportRole { // us.tractat.kuilt.core/TransportRole|null[0]
+    final object Bluetooth : us.tractat.kuilt.core/TransportRole { // us.tractat.kuilt.core/TransportRole.Bluetooth|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/TransportRole.Bluetooth.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/TransportRole.Bluetooth.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/TransportRole.Bluetooth.toString|toString(){}[0]
+    }
+
+    final object Data : us.tractat.kuilt.core/TransportRole { // us.tractat.kuilt.core/TransportRole.Data|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/TransportRole.Data.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/TransportRole.Data.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/TransportRole.Data.toString|toString(){}[0]
+    }
+
+    final object Discovery : us.tractat.kuilt.core/TransportRole { // us.tractat.kuilt.core/TransportRole.Discovery|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/TransportRole.Discovery.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/TransportRole.Discovery.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/TransportRole.Discovery.toString|toString(){}[0]
+    }
+
+    final object ServerRelay : us.tractat.kuilt.core/TransportRole { // us.tractat.kuilt.core/TransportRole.ServerRelay|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/TransportRole.ServerRelay.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/TransportRole.ServerRelay.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/TransportRole.ServerRelay.toString|toString(){}[0]
+    }
+
+    final object WebRtc : us.tractat.kuilt.core/TransportRole { // us.tractat.kuilt.core/TransportRole.WebRtc|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/TransportRole.WebRtc.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/TransportRole.WebRtc.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/TransportRole.WebRtc.toString|toString(){}[0]
+    }
+
+    final object WifiDirect : us.tractat.kuilt.core/TransportRole { // us.tractat.kuilt.core/TransportRole.WifiDirect|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/TransportRole.WifiDirect.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/TransportRole.WifiDirect.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/TransportRole.WifiDirect.toString|toString(){}[0]
+    }
+
+    final object WifiLan : us.tractat.kuilt.core/TransportRole { // us.tractat.kuilt.core/TransportRole.WifiLan|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/TransportRole.WifiLan.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/TransportRole.WifiLan.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.core/TransportRole.WifiLan.toString|toString(){}[0]
+    }
+}
+
+abstract class us.tractat.kuilt.core/ScopedCloseable : kotlin/AutoCloseable { // us.tractat.kuilt.core/ScopedCloseable|null[0]
+    constructor <init>(kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.core/ScopedCloseable.<init>|<init>(kotlinx.coroutines.CoroutineScope){}[0]
+
+    final val closed // us.tractat.kuilt.core/ScopedCloseable.closed|{}closed[0]
+        final fun <get-closed>(): kotlin/Boolean // us.tractat.kuilt.core/ScopedCloseable.closed.<get-closed>|<get-closed>(){}[0]
+    final val ownJob // us.tractat.kuilt.core/ScopedCloseable.ownJob|{}ownJob[0]
+        final fun <get-ownJob>(): kotlinx.coroutines/Job // us.tractat.kuilt.core/ScopedCloseable.ownJob.<get-ownJob>|<get-ownJob>(){}[0]
+    final val scope // us.tractat.kuilt.core/ScopedCloseable.scope|{}scope[0]
+        final fun <get-scope>(): kotlinx.coroutines/CoroutineScope // us.tractat.kuilt.core/ScopedCloseable.scope.<get-scope>|<get-scope>(){}[0]
+
+    final fun close() // us.tractat.kuilt.core/ScopedCloseable.close|close(){}[0]
+    open fun onClose() // us.tractat.kuilt.core/ScopedCloseable.onClose|onClose(){}[0]
+}
+
+final class <#A: kotlin/Any> us.tractat.kuilt.core/PeerIdentityRegistry { // us.tractat.kuilt.core/PeerIdentityRegistry|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.core/PeerIdentityRegistry.<init>|<init>(us.tractat.kuilt.core.PeerId){}[0]
+
+    final val peers // us.tractat.kuilt.core/PeerIdentityRegistry.peers|{}peers[0]
+        final fun <get-peers>(): kotlin.collections/Set<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.core/PeerIdentityRegistry.peers.<get-peers>|<get-peers>(){}[0]
+
+    final fun bind(us.tractat.kuilt.core/PeerId, #A): us.tractat.kuilt.core/PeerIdentityRegistry.BindResult // us.tractat.kuilt.core/PeerIdentityRegistry.bind|bind(us.tractat.kuilt.core.PeerId;1:0){}[0]
+    final fun clear() // us.tractat.kuilt.core/PeerIdentityRegistry.clear|clear(){}[0]
+    final fun holderOf(us.tractat.kuilt.core/PeerId): #A? // us.tractat.kuilt.core/PeerIdentityRegistry.holderOf|holderOf(us.tractat.kuilt.core.PeerId){}[0]
+    final fun idHeldBy(#A): us.tractat.kuilt.core/PeerId? // us.tractat.kuilt.core/PeerIdentityRegistry.idHeldBy|idHeldBy(1:0){}[0]
+    final fun unbind(us.tractat.kuilt.core/PeerId, #A): kotlin/Boolean // us.tractat.kuilt.core/PeerIdentityRegistry.unbind|unbind(us.tractat.kuilt.core.PeerId;1:0){}[0]
+
+    final enum class BindResult : kotlin/Enum<us.tractat.kuilt.core/PeerIdentityRegistry.BindResult> { // us.tractat.kuilt.core/PeerIdentityRegistry.BindResult|null[0]
+        enum entry ALREADY_BOUND // us.tractat.kuilt.core/PeerIdentityRegistry.BindResult.ALREADY_BOUND|null[0]
+        enum entry BOUND // us.tractat.kuilt.core/PeerIdentityRegistry.BindResult.BOUND|null[0]
+        enum entry COLLISION // us.tractat.kuilt.core/PeerIdentityRegistry.BindResult.COLLISION|null[0]
+        enum entry REFUSED_BLANK // us.tractat.kuilt.core/PeerIdentityRegistry.BindResult.REFUSED_BLANK|null[0]
+        enum entry REFUSED_SELF // us.tractat.kuilt.core/PeerIdentityRegistry.BindResult.REFUSED_SELF|null[0]
+
+        final val entries // us.tractat.kuilt.core/PeerIdentityRegistry.BindResult.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.core/PeerIdentityRegistry.BindResult> // us.tractat.kuilt.core/PeerIdentityRegistry.BindResult.entries.<get-entries>|<get-entries>#static(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.core/PeerIdentityRegistry.BindResult // us.tractat.kuilt.core/PeerIdentityRegistry.BindResult.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.core/PeerIdentityRegistry.BindResult> // us.tractat.kuilt.core/PeerIdentityRegistry.BindResult.values|values#static(){}[0]
+    }
+}
+
+final class <#A: kotlin/Any?> us.tractat.kuilt.core/Spool { // us.tractat.kuilt.core/Spool|null[0]
+    constructor <init>(us.tractat.kuilt.core/DeliveryPolicy) // us.tractat.kuilt.core/Spool.<init>|<init>(us.tractat.kuilt.core.DeliveryPolicy){}[0]
+
+    final val incoming // us.tractat.kuilt.core/Spool.incoming|{}incoming[0]
+        final fun <get-incoming>(): kotlinx.coroutines.flow/Flow<#A> // us.tractat.kuilt.core/Spool.incoming.<get-incoming>|<get-incoming>(){}[0]
+
+    final fun close() // us.tractat.kuilt.core/Spool.close|close(){}[0]
+    final suspend fun deliver(#A) // us.tractat.kuilt.core/Spool.deliver|deliver(1:0){}[0]
+}
+
+final class us.tractat.kuilt.core.composite/CompositeLoom : us.tractat.kuilt.core/Loom { // us.tractat.kuilt.core.composite/CompositeLoom|null[0]
+    constructor <init>(kotlin.collections/List<kotlin/Pair<us.tractat.kuilt.core/PlyId, us.tractat.kuilt.core/Loom>>, kotlin.coroutines/CoroutineContext = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., kotlin/Function1<us.tractat.kuilt.core.composite/PlyReconcileException, kotlin/Unit> = ...) // us.tractat.kuilt.core.composite/CompositeLoom.<init>|<init>(kotlin.collections.List<kotlin.Pair<us.tractat.kuilt.core.PlyId,us.tractat.kuilt.core.Loom>>;kotlin.coroutines.CoroutineContext;us.tractat.kuilt.core.DeliveryPolicy;kotlin.Function1<us.tractat.kuilt.core.composite.PlyReconcileException,kotlin.Unit>){}[0]
+    constructor <init>(kotlinx.coroutines.flow/StateFlow<kotlin.collections/List<kotlin/Pair<us.tractat.kuilt.core/PlyId, us.tractat.kuilt.core/Loom>>>, kotlin.coroutines/CoroutineContext = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., kotlin/Function1<us.tractat.kuilt.core.composite/PlyReconcileException, kotlin/Unit> = ...) // us.tractat.kuilt.core.composite/CompositeLoom.<init>|<init>(kotlinx.coroutines.flow.StateFlow<kotlin.collections.List<kotlin.Pair<us.tractat.kuilt.core.PlyId,us.tractat.kuilt.core.Loom>>>;kotlin.coroutines.CoroutineContext;us.tractat.kuilt.core.DeliveryPolicy;kotlin.Function1<us.tractat.kuilt.core.composite.PlyReconcileException,kotlin.Unit>){}[0]
+
+    final fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.core.composite/CompositeLoom.capability|capability(){}[0]
+    final suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core.composite/CompositeLoom.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+}
+
+final class us.tractat.kuilt.core.composite/PlyReconcileException : kotlin/Exception { // us.tractat.kuilt.core.composite/PlyReconcileException|null[0]
+    constructor <init>(us.tractat.kuilt.core/PlyId, us.tractat.kuilt.core.composite/PlyReconcileException.Phase, kotlin/Throwable) // us.tractat.kuilt.core.composite/PlyReconcileException.<init>|<init>(us.tractat.kuilt.core.PlyId;us.tractat.kuilt.core.composite.PlyReconcileException.Phase;kotlin.Throwable){}[0]
+
+    final val cause // us.tractat.kuilt.core.composite/PlyReconcileException.cause|{}cause[0]
+        final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.core.composite/PlyReconcileException.cause.<get-cause>|<get-cause>(){}[0]
+    final val phase // us.tractat.kuilt.core.composite/PlyReconcileException.phase|{}phase[0]
+        final fun <get-phase>(): us.tractat.kuilt.core.composite/PlyReconcileException.Phase // us.tractat.kuilt.core.composite/PlyReconcileException.phase.<get-phase>|<get-phase>(){}[0]
+    final val plyId // us.tractat.kuilt.core.composite/PlyReconcileException.plyId|{}plyId[0]
+        final fun <get-plyId>(): us.tractat.kuilt.core/PlyId // us.tractat.kuilt.core.composite/PlyReconcileException.plyId.<get-plyId>|<get-plyId>(){}[0]
+
+    final enum class Phase : kotlin/Enum<us.tractat.kuilt.core.composite/PlyReconcileException.Phase> { // us.tractat.kuilt.core.composite/PlyReconcileException.Phase|null[0]
+        enum entry ATTACH // us.tractat.kuilt.core.composite/PlyReconcileException.Phase.ATTACH|null[0]
+        enum entry DETACH // us.tractat.kuilt.core.composite/PlyReconcileException.Phase.DETACH|null[0]
+        enum entry INBOUND // us.tractat.kuilt.core.composite/PlyReconcileException.Phase.INBOUND|null[0]
+        enum entry PUMP // us.tractat.kuilt.core.composite/PlyReconcileException.Phase.PUMP|null[0]
+        enum entry PUMP_ENDED // us.tractat.kuilt.core.composite/PlyReconcileException.Phase.PUMP_ENDED|null[0]
+        enum entry SALVAGE // us.tractat.kuilt.core.composite/PlyReconcileException.Phase.SALVAGE|null[0]
+
+        final val entries // us.tractat.kuilt.core.composite/PlyReconcileException.Phase.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.core.composite/PlyReconcileException.Phase> // us.tractat.kuilt.core.composite/PlyReconcileException.Phase.entries.<get-entries>|<get-entries>#static(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.core.composite/PlyReconcileException.Phase // us.tractat.kuilt.core.composite/PlyReconcileException.Phase.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.core.composite/PlyReconcileException.Phase> // us.tractat.kuilt.core.composite/PlyReconcileException.Phase.values|values#static(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.core.fabric/HandshakeTimeoutException : kotlin/Exception { // us.tractat.kuilt.core.fabric/HandshakeTimeoutException|null[0]
+    constructor <init>(kotlin.time/Duration) // us.tractat.kuilt.core.fabric/HandshakeTimeoutException.<init>|<init>(kotlin.time.Duration){}[0]
+}
+
+final class us.tractat.kuilt.core.fabric/HelloAbsentException : us.tractat.kuilt.core.fabric/HelloFormatException { // us.tractat.kuilt.core.fabric/HelloAbsentException|null[0]
+    constructor <init>() // us.tractat.kuilt.core.fabric/HelloAbsentException.<init>|<init>(){}[0]
+}
+
+final class us.tractat.kuilt.core.fabric/HelloBadMagicException : us.tractat.kuilt.core.fabric/HelloFormatException { // us.tractat.kuilt.core.fabric/HelloBadMagicException|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.core.fabric/HelloBadMagicException.<init>|<init>(kotlin.String){}[0]
+
+    final val receivedHex // us.tractat.kuilt.core.fabric/HelloBadMagicException.receivedHex|{}receivedHex[0]
+        final fun <get-receivedHex>(): kotlin/String // us.tractat.kuilt.core.fabric/HelloBadMagicException.receivedHex.<get-receivedHex>|<get-receivedHex>(){}[0]
+}
+
+final class us.tractat.kuilt.core.fabric/HelloEmptyIdException : us.tractat.kuilt.core.fabric/HelloFormatException { // us.tractat.kuilt.core.fabric/HelloEmptyIdException|null[0]
+    constructor <init>() // us.tractat.kuilt.core.fabric/HelloEmptyIdException.<init>|<init>(){}[0]
+}
+
+final class us.tractat.kuilt.core.fabric/HelloIdLengthMismatchException : us.tractat.kuilt.core.fabric/HelloFormatException { // us.tractat.kuilt.core.fabric/HelloIdLengthMismatchException|null[0]
+    constructor <init>(kotlin/Int, kotlin/Int) // us.tractat.kuilt.core.fabric/HelloIdLengthMismatchException.<init>|<init>(kotlin.Int;kotlin.Int){}[0]
+
+    final val declaredIdLength // us.tractat.kuilt.core.fabric/HelloIdLengthMismatchException.declaredIdLength|{}declaredIdLength[0]
+        final fun <get-declaredIdLength>(): kotlin/Int // us.tractat.kuilt.core.fabric/HelloIdLengthMismatchException.declaredIdLength.<get-declaredIdLength>|<get-declaredIdLength>(){}[0]
+    final val remainingBytes // us.tractat.kuilt.core.fabric/HelloIdLengthMismatchException.remainingBytes|{}remainingBytes[0]
+        final fun <get-remainingBytes>(): kotlin/Int // us.tractat.kuilt.core.fabric/HelloIdLengthMismatchException.remainingBytes.<get-remainingBytes>|<get-remainingBytes>(){}[0]
+}
+
+final class us.tractat.kuilt.core.fabric/HelloInvalidUtf8Exception : us.tractat.kuilt.core.fabric/HelloFormatException { // us.tractat.kuilt.core.fabric/HelloInvalidUtf8Exception|null[0]
+    constructor <init>(kotlin/Throwable) // us.tractat.kuilt.core.fabric/HelloInvalidUtf8Exception.<init>|<init>(kotlin.Throwable){}[0]
+}
+
+final class us.tractat.kuilt.core.fabric/HelloSelfConnectionException : kotlin/IllegalArgumentException { // us.tractat.kuilt.core.fabric/HelloSelfConnectionException|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.core.fabric/HelloSelfConnectionException.<init>|<init>(us.tractat.kuilt.core.PeerId){}[0]
+
+    final val selfId // us.tractat.kuilt.core.fabric/HelloSelfConnectionException.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core.fabric/HelloSelfConnectionException.selfId.<get-selfId>|<get-selfId>(){}[0]
+}
+
+final class us.tractat.kuilt.core.fabric/HelloTruncatedException : us.tractat.kuilt.core.fabric/HelloFormatException { // us.tractat.kuilt.core.fabric/HelloTruncatedException|null[0]
+    constructor <init>(kotlin/Int) // us.tractat.kuilt.core.fabric/HelloTruncatedException.<init>|<init>(kotlin.Int){}[0]
+
+    final val size // us.tractat.kuilt.core.fabric/HelloTruncatedException.size|{}size[0]
+        final fun <get-size>(): kotlin/Int // us.tractat.kuilt.core.fabric/HelloTruncatedException.size.<get-size>|<get-size>(){}[0]
+}
+
+final class us.tractat.kuilt.core.fabric/HelloUnencodableIdException : kotlin/IllegalArgumentException { // us.tractat.kuilt.core.fabric/HelloUnencodableIdException|null[0]
+    constructor <init>(kotlin/Throwable) // us.tractat.kuilt.core.fabric/HelloUnencodableIdException.<init>|<init>(kotlin.Throwable){}[0]
+}
+
+final class us.tractat.kuilt.core.fabric/HelloUnsupportedVersionException : us.tractat.kuilt.core.fabric/HelloFormatException { // us.tractat.kuilt.core.fabric/HelloUnsupportedVersionException|null[0]
+    constructor <init>(kotlin/Int, kotlin/Int) // us.tractat.kuilt.core.fabric/HelloUnsupportedVersionException.<init>|<init>(kotlin.Int;kotlin.Int){}[0]
+
+    final val receivedVersion // us.tractat.kuilt.core.fabric/HelloUnsupportedVersionException.receivedVersion|{}receivedVersion[0]
+        final fun <get-receivedVersion>(): kotlin/Int // us.tractat.kuilt.core.fabric/HelloUnsupportedVersionException.receivedVersion.<get-receivedVersion>|<get-receivedVersion>(){}[0]
+    final val supportedVersion // us.tractat.kuilt.core.fabric/HelloUnsupportedVersionException.supportedVersion|{}supportedVersion[0]
+        final fun <get-supportedVersion>(): kotlin/Int // us.tractat.kuilt.core.fabric/HelloUnsupportedVersionException.supportedVersion.<get-supportedVersion>|<get-supportedVersion>(){}[0]
+}
+
+final class us.tractat.kuilt.core.fabric/LinkRejectedException : kotlin/Exception { // us.tractat.kuilt.core.fabric/LinkRejectedException|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId, kotlin/Boolean) // us.tractat.kuilt.core.fabric/LinkRejectedException.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.Boolean){}[0]
+
+    final val attested // us.tractat.kuilt.core.fabric/LinkRejectedException.attested|{}attested[0]
+        final fun <get-attested>(): kotlin/Boolean // us.tractat.kuilt.core.fabric/LinkRejectedException.attested.<get-attested>|<get-attested>(){}[0]
+    final val remoteId // us.tractat.kuilt.core.fabric/LinkRejectedException.remoteId|{}remoteId[0]
+        final fun <get-remoteId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core.fabric/LinkRejectedException.remoteId.<get-remoteId>|<get-remoteId>(){}[0]
+}
+
+final class us.tractat.kuilt.core.util/ExponentialBackoff { // us.tractat.kuilt.core.util/ExponentialBackoff|null[0]
+    constructor <init>(kotlin.time/Duration, kotlin.time/Duration, kotlin/Double = ..., kotlin.random/Random) // us.tractat.kuilt.core.util/ExponentialBackoff.<init>|<init>(kotlin.time.Duration;kotlin.time.Duration;kotlin.Double;kotlin.random.Random){}[0]
+
+    final fun delay(kotlin/Int): kotlin.time/Duration // us.tractat.kuilt.core.util/ExponentialBackoff.delay|delay(kotlin.Int){}[0]
+}
+
+final class us.tractat.kuilt.core/ActiveSeamSlot { // us.tractat.kuilt.core/ActiveSeamSlot|null[0]
+    constructor <init>(kotlin/String = ...) // us.tractat.kuilt.core/ActiveSeamSlot.<init>|<init>(kotlin.String){}[0]
+
+    final fun <#A1: us.tractat.kuilt.core/Seam> occupy(kotlin/Function0<#A1>): #A1 // us.tractat.kuilt.core/ActiveSeamSlot.occupy|occupy(kotlin.Function0<0:0>){0§<us.tractat.kuilt.core.Seam>}[0]
+    final fun grabAndRelease(): us.tractat.kuilt.core/Seam? // us.tractat.kuilt.core/ActiveSeamSlot.grabAndRelease|grabAndRelease(){}[0]
+    final fun release(us.tractat.kuilt.core/Seam) // us.tractat.kuilt.core/ActiveSeamSlot.release|release(us.tractat.kuilt.core.Seam){}[0]
+}
+
+final class us.tractat.kuilt.core/DeliveryPolicy { // us.tractat.kuilt.core/DeliveryPolicy|null[0]
+    constructor <init>(kotlin/Int = ..., us.tractat.kuilt.core/Overflow = ...) // us.tractat.kuilt.core/DeliveryPolicy.<init>|<init>(kotlin.Int;us.tractat.kuilt.core.Overflow){}[0]
+
+    final val capacity // us.tractat.kuilt.core/DeliveryPolicy.capacity|{}capacity[0]
+        final fun <get-capacity>(): kotlin/Int // us.tractat.kuilt.core/DeliveryPolicy.capacity.<get-capacity>|<get-capacity>(){}[0]
+    final val overflow // us.tractat.kuilt.core/DeliveryPolicy.overflow|{}overflow[0]
+        final fun <get-overflow>(): us.tractat.kuilt.core/Overflow // us.tractat.kuilt.core/DeliveryPolicy.overflow.<get-overflow>|<get-overflow>(){}[0]
+
+    final fun component1(): kotlin/Int // us.tractat.kuilt.core/DeliveryPolicy.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.core/Overflow // us.tractat.kuilt.core/DeliveryPolicy.component2|component2(){}[0]
+    final fun copy(kotlin/Int = ..., us.tractat.kuilt.core/Overflow = ...): us.tractat.kuilt.core/DeliveryPolicy // us.tractat.kuilt.core/DeliveryPolicy.copy|copy(kotlin.Int;us.tractat.kuilt.core.Overflow){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/DeliveryPolicy.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/DeliveryPolicy.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.core/DeliveryPolicy.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.core/DeliveryPolicy.Companion|null[0]
+        final const val DEFAULT_CAPACITY // us.tractat.kuilt.core/DeliveryPolicy.Companion.DEFAULT_CAPACITY|{}DEFAULT_CAPACITY[0]
+            final fun <get-DEFAULT_CAPACITY>(): kotlin/Int // us.tractat.kuilt.core/DeliveryPolicy.Companion.DEFAULT_CAPACITY.<get-DEFAULT_CAPACITY>|<get-DEFAULT_CAPACITY>(){}[0]
+
+        final val Lossy // us.tractat.kuilt.core/DeliveryPolicy.Companion.Lossy|{}Lossy[0]
+            final fun <get-Lossy>(): us.tractat.kuilt.core/DeliveryPolicy // us.tractat.kuilt.core/DeliveryPolicy.Companion.Lossy.<get-Lossy>|<get-Lossy>(){}[0]
+        final val Reliable // us.tractat.kuilt.core/DeliveryPolicy.Companion.Reliable|{}Reliable[0]
+            final fun <get-Reliable>(): us.tractat.kuilt.core/DeliveryPolicy // us.tractat.kuilt.core/DeliveryPolicy.Companion.Reliable.<get-Reliable>|<get-Reliable>(){}[0]
+        final val Strict // us.tractat.kuilt.core/DeliveryPolicy.Companion.Strict|{}Strict[0]
+            final fun <get-Strict>(): us.tractat.kuilt.core/DeliveryPolicy // us.tractat.kuilt.core/DeliveryPolicy.Companion.Strict.<get-Strict>|<get-Strict>(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.core/FrameOverflow : kotlin/RuntimeException { // us.tractat.kuilt.core/FrameOverflow|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.core/FrameOverflow.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.core/InMemoryLoom : us.tractat.kuilt.core/Loom { // us.tractat.kuilt.core/InMemoryLoom|null[0]
+    constructor <init>(us.tractat.kuilt.core/DeliveryPolicy = ...) // us.tractat.kuilt.core/InMemoryLoom.<init>|<init>(us.tractat.kuilt.core.DeliveryPolicy){}[0]
+
+    final val peers // us.tractat.kuilt.core/InMemoryLoom.peers|{}peers[0]
+        final fun <get-peers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.core/InMemoryLoom.peers.<get-peers>|<get-peers>(){}[0]
+
+    final fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.core/InMemoryLoom.capability|capability(){}[0]
+    final suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core/InMemoryLoom.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+}
+
+final class us.tractat.kuilt.core/InMemoryTag : us.tractat.kuilt.core/Tag { // us.tractat.kuilt.core/InMemoryTag|null[0]
+    constructor <init>(kotlin/String, kotlin/String = ..., kotlin/String? = ...) // us.tractat.kuilt.core/InMemoryTag.<init>|<init>(kotlin.String;kotlin.String;kotlin.String?){}[0]
+
+    final val peerKey // us.tractat.kuilt.core/InMemoryTag.peerKey|{}peerKey[0]
+        final fun <get-peerKey>(): kotlin/String // us.tractat.kuilt.core/InMemoryTag.peerKey.<get-peerKey>|<get-peerKey>(){}[0]
+    final val roomKey // us.tractat.kuilt.core/InMemoryTag.roomKey|{}roomKey[0]
+        final fun <get-roomKey>(): kotlin/String? // us.tractat.kuilt.core/InMemoryTag.roomKey.<get-roomKey>|<get-roomKey>(){}[0]
+    final val sessionName // us.tractat.kuilt.core/InMemoryTag.sessionName|{}sessionName[0]
+        final fun <get-sessionName>(): kotlin/String // us.tractat.kuilt.core/InMemoryTag.sessionName.<get-sessionName>|<get-sessionName>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.core/InMemoryTag.component1|component1(){}[0]
+    final fun component2(): kotlin/String // us.tractat.kuilt.core/InMemoryTag.component2|component2(){}[0]
+    final fun component3(): kotlin/String? // us.tractat.kuilt.core/InMemoryTag.component3|component3(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/String? = ...): us.tractat.kuilt.core/InMemoryTag // us.tractat.kuilt.core/InMemoryTag.copy|copy(kotlin.String;kotlin.String;kotlin.String?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/InMemoryTag.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/InMemoryTag.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.core/InMemoryTag.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.core/MuxClientLoom : us.tractat.kuilt.core/Loom { // us.tractat.kuilt.core/MuxClientLoom|null[0]
+    constructor <init>(us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/Rendezvous, kotlinx.coroutines/CoroutineScope, kotlin/Function1<us.tractat.kuilt.core/Rendezvous, kotlin/String>) // us.tractat.kuilt.core/MuxClientLoom.<init>|<init>(us.tractat.kuilt.core.Loom;us.tractat.kuilt.core.Rendezvous;kotlinx.coroutines.CoroutineScope;kotlin.Function1<us.tractat.kuilt.core.Rendezvous,kotlin.String>){}[0]
+
+    final fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.core/MuxClientLoom.capability|capability(){}[0]
+    final suspend fun closeBase(us.tractat.kuilt.core/CloseReason = ...) // us.tractat.kuilt.core/MuxClientLoom.closeBase|closeBase(us.tractat.kuilt.core.CloseReason){}[0]
+    final suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core/MuxClientLoom.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+}
+
+final class us.tractat.kuilt.core/MuxSeam { // us.tractat.kuilt.core/MuxSeam|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.core/MuxSeam.<init>|<init>(us.tractat.kuilt.core.Seam;kotlinx.coroutines.CoroutineScope){}[0]
+
+    final fun channel(kotlin/Byte): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core/MuxSeam.channel|channel(kotlin.Byte){}[0]
+    final suspend fun closeBase(us.tractat.kuilt.core/CloseReason = ...) // us.tractat.kuilt.core/MuxSeam.closeBase|closeBase(us.tractat.kuilt.core.CloseReason){}[0]
+}
+
+final class us.tractat.kuilt.core/MuxServerLoom : us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/ScopedCloseable { // us.tractat.kuilt.core/MuxServerLoom|null[0]
+    constructor <init>(us.tractat.kuilt.core.fabric/ConnectionSource, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/RoomAuthorizer, kotlin.coroutines/CoroutineContext = ..., kotlin.random/Random = ..., kotlin.time/Duration = ...) // us.tractat.kuilt.core/MuxServerLoom.<init>|<init>(us.tractat.kuilt.core.fabric.ConnectionSource;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.RoomAuthorizer;kotlin.coroutines.CoroutineContext;kotlin.random.Random;kotlin.time.Duration){}[0]
+
+    final val connectedPeers // us.tractat.kuilt.core/MuxServerLoom.connectedPeers|{}connectedPeers[0]
+        final fun <get-connectedPeers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.core/MuxServerLoom.connectedPeers.<get-connectedPeers>|<get-connectedPeers>(){}[0]
+    final val selfId // us.tractat.kuilt.core/MuxServerLoom.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core/MuxServerLoom.selfId.<get-selfId>|<get-selfId>(){}[0]
+
+    final fun capability(): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.core/MuxServerLoom.capability|capability(){}[0]
+    final suspend fun weave(us.tractat.kuilt.core/Rendezvous): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core/MuxServerLoom.weave|weave(us.tractat.kuilt.core.Rendezvous){}[0]
+}
+
+final class us.tractat.kuilt.core/NamedMux { // us.tractat.kuilt.core/NamedMux|null[0]
+    constructor <init>(us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.core/NamedMux.<init>|<init>(us.tractat.kuilt.core.Seam;kotlinx.coroutines.CoroutineScope){}[0]
+
+    final val baseState // us.tractat.kuilt.core/NamedMux.baseState|{}baseState[0]
+        final fun <get-baseState>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/SeamState> // us.tractat.kuilt.core/NamedMux.baseState.<get-baseState>|<get-baseState>(){}[0]
+
+    final fun channel(kotlin/String): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core/NamedMux.channel|channel(kotlin.String){}[0]
+    final suspend fun closeBase(us.tractat.kuilt.core/CloseReason = ...) // us.tractat.kuilt.core/NamedMux.closeBase|closeBase(us.tractat.kuilt.core.CloseReason){}[0]
+}
+
+final class us.tractat.kuilt.core/Pattern { // us.tractat.kuilt.core/Pattern|null[0]
+    constructor <init>(kotlin/String, kotlin/Int = ..., kotlin/String? = ...) // us.tractat.kuilt.core/Pattern.<init>|<init>(kotlin.String;kotlin.Int;kotlin.String?){}[0]
+
+    final val maxPeers // us.tractat.kuilt.core/Pattern.maxPeers|{}maxPeers[0]
+        final fun <get-maxPeers>(): kotlin/Int // us.tractat.kuilt.core/Pattern.maxPeers.<get-maxPeers>|<get-maxPeers>(){}[0]
+    final val roomKey // us.tractat.kuilt.core/Pattern.roomKey|{}roomKey[0]
+        final fun <get-roomKey>(): kotlin/String? // us.tractat.kuilt.core/Pattern.roomKey.<get-roomKey>|<get-roomKey>(){}[0]
+    final val sessionName // us.tractat.kuilt.core/Pattern.sessionName|{}sessionName[0]
+        final fun <get-sessionName>(): kotlin/String // us.tractat.kuilt.core/Pattern.sessionName.<get-sessionName>|<get-sessionName>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.core/Pattern.component1|component1(){}[0]
+    final fun component2(): kotlin/Int // us.tractat.kuilt.core/Pattern.component2|component2(){}[0]
+    final fun component3(): kotlin/String? // us.tractat.kuilt.core/Pattern.component3|component3(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/Int = ..., kotlin/String? = ...): us.tractat.kuilt.core/Pattern // us.tractat.kuilt.core/Pattern.copy|copy(kotlin.String;kotlin.Int;kotlin.String?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/Pattern.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/Pattern.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.core/Pattern.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.core/PayloadTooLarge : kotlin/IllegalArgumentException { // us.tractat.kuilt.core/PayloadTooLarge|null[0]
+    constructor <init>(kotlin/Int, kotlin/Int, kotlin/Int) // us.tractat.kuilt.core/PayloadTooLarge.<init>|<init>(kotlin.Int;kotlin.Int;kotlin.Int){}[0]
+
+    final val budgetBytes // us.tractat.kuilt.core/PayloadTooLarge.budgetBytes|{}budgetBytes[0]
+        final fun <get-budgetBytes>(): kotlin/Int // us.tractat.kuilt.core/PayloadTooLarge.budgetBytes.<get-budgetBytes>|<get-budgetBytes>(){}[0]
+    final val payloadBytes // us.tractat.kuilt.core/PayloadTooLarge.payloadBytes|{}payloadBytes[0]
+        final fun <get-payloadBytes>(): kotlin/Int // us.tractat.kuilt.core/PayloadTooLarge.payloadBytes.<get-payloadBytes>|<get-payloadBytes>(){}[0]
+    final val reservedBytes // us.tractat.kuilt.core/PayloadTooLarge.reservedBytes|{}reservedBytes[0]
+        final fun <get-reservedBytes>(): kotlin/Int // us.tractat.kuilt.core/PayloadTooLarge.reservedBytes.<get-reservedBytes>|<get-reservedBytes>(){}[0]
+}
+
+final class us.tractat.kuilt.core/PeerIdentityRejectedException : kotlin/Exception { // us.tractat.kuilt.core/PeerIdentityRejectedException|null[0]
+    constructor <init>(kotlin/String, kotlin/String) // us.tractat.kuilt.core/PeerIdentityRejectedException.<init>|<init>(kotlin.String;kotlin.String){}[0]
+
+    final val endpoint // us.tractat.kuilt.core/PeerIdentityRejectedException.endpoint|{}endpoint[0]
+        final fun <get-endpoint>(): kotlin/String // us.tractat.kuilt.core/PeerIdentityRejectedException.endpoint.<get-endpoint>|<get-endpoint>(){}[0]
+    final val reason // us.tractat.kuilt.core/PeerIdentityRejectedException.reason|{}reason[0]
+        final fun <get-reason>(): kotlin/String // us.tractat.kuilt.core/PeerIdentityRejectedException.reason.<get-reason>|<get-reason>(){}[0]
+}
+
+final class us.tractat.kuilt.core/PeerNotConnected : kotlin/IllegalStateException { // us.tractat.kuilt.core/PeerNotConnected|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.core/PeerNotConnected.<init>|<init>(us.tractat.kuilt.core.PeerId){}[0]
+
+    final val peer // us.tractat.kuilt.core/PeerNotConnected.peer|{}peer[0]
+        final fun <get-peer>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core/PeerNotConnected.peer.<get-peer>|<get-peer>(){}[0]
+}
+
+final class us.tractat.kuilt.core/RoomHubSeam : us.tractat.kuilt.core/PrincipalRoster, us.tractat.kuilt.core/Seam { // us.tractat.kuilt.core/RoomHubSeam|null[0]
+    constructor <init>(kotlin/String, us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/RoomAuthorizer) // us.tractat.kuilt.core/RoomHubSeam.<init>|<init>(kotlin.String;us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.RoomAuthorizer){}[0]
+
+    final val attestedPrincipals // us.tractat.kuilt.core/RoomHubSeam.attestedPrincipals|{}attestedPrincipals[0]
+        final fun <get-attestedPrincipals>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Principal>> // us.tractat.kuilt.core/RoomHubSeam.attestedPrincipals.<get-attestedPrincipals>|<get-attestedPrincipals>(){}[0]
+    final val incoming // us.tractat.kuilt.core/RoomHubSeam.incoming|{}incoming[0]
+        final fun <get-incoming>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.core/Swatch> // us.tractat.kuilt.core/RoomHubSeam.incoming.<get-incoming>|<get-incoming>(){}[0]
+    final val maxPayloadBytes // us.tractat.kuilt.core/RoomHubSeam.maxPayloadBytes|{}maxPayloadBytes[0]
+        final fun <get-maxPayloadBytes>(): kotlin/Int? // us.tractat.kuilt.core/RoomHubSeam.maxPayloadBytes.<get-maxPayloadBytes>|<get-maxPayloadBytes>(){}[0]
+    final val peers // us.tractat.kuilt.core/RoomHubSeam.peers|{}peers[0]
+        final fun <get-peers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.core/RoomHubSeam.peers.<get-peers>|<get-peers>(){}[0]
+    final val selfId // us.tractat.kuilt.core/RoomHubSeam.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core/RoomHubSeam.selfId.<get-selfId>|<get-selfId>(){}[0]
+    final val state // us.tractat.kuilt.core/RoomHubSeam.state|{}state[0]
+        final fun <get-state>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/SeamState> // us.tractat.kuilt.core/RoomHubSeam.state.<get-state>|<get-state>(){}[0]
+
+    final suspend fun broadcast(kotlin/ByteArray) // us.tractat.kuilt.core/RoomHubSeam.broadcast|broadcast(kotlin.ByteArray){}[0]
+    final suspend fun close(us.tractat.kuilt.core/CloseReason) // us.tractat.kuilt.core/RoomHubSeam.close|close(us.tractat.kuilt.core.CloseReason){}[0]
+    final suspend fun sendTo(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.core/RoomHubSeam.sendTo|sendTo(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.core/SeamCollapsedException : kotlin/Exception { // us.tractat.kuilt.core/SeamCollapsedException|null[0]
+    constructor <init>(us.tractat.kuilt.core/CloseReason) // us.tractat.kuilt.core/SeamCollapsedException.<init>|<init>(us.tractat.kuilt.core.CloseReason){}[0]
+
+    final val reason // us.tractat.kuilt.core/SeamCollapsedException.reason|{}reason[0]
+        final fun <get-reason>(): us.tractat.kuilt.core/CloseReason // us.tractat.kuilt.core/SeamCollapsedException.reason.<get-reason>|<get-reason>(){}[0]
+}
+
+final class us.tractat.kuilt.core/SeamStateGate { // us.tractat.kuilt.core/SeamStateGate|null[0]
+    constructor <init>(us.tractat.kuilt.core/SeamState) // us.tractat.kuilt.core/SeamStateGate.<init>|<init>(us.tractat.kuilt.core.SeamState){}[0]
+
+    final val state // us.tractat.kuilt.core/SeamStateGate.state|{}state[0]
+        final fun <get-state>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/SeamState> // us.tractat.kuilt.core/SeamStateGate.state.<get-state>|<get-state>(){}[0]
+
+    final fun tear(us.tractat.kuilt.core/CloseReason): kotlin/Boolean // us.tractat.kuilt.core/SeamStateGate.tear|tear(us.tractat.kuilt.core.CloseReason){}[0]
+    final fun update(us.tractat.kuilt.core/SeamState) // us.tractat.kuilt.core/SeamStateGate.update|update(us.tractat.kuilt.core.SeamState){}[0]
+}
+
+final class us.tractat.kuilt.core/Swatch { // us.tractat.kuilt.core/Swatch|null[0]
+    constructor <init>(kotlin/ByteArray, us.tractat.kuilt.core/PeerId? = ..., kotlin/Long = ...) // us.tractat.kuilt.core/Swatch.<init>|<init>(kotlin.ByteArray;us.tractat.kuilt.core.PeerId?;kotlin.Long){}[0]
+
+    final val payloadSize // us.tractat.kuilt.core/Swatch.payloadSize|{}payloadSize[0]
+        final fun <get-payloadSize>(): kotlin/Int // us.tractat.kuilt.core/Swatch.payloadSize.<get-payloadSize>|<get-payloadSize>(){}[0]
+    final val sender // us.tractat.kuilt.core/Swatch.sender|{}sender[0]
+        final fun <get-sender>(): us.tractat.kuilt.core/PeerId? // us.tractat.kuilt.core/Swatch.sender.<get-sender>|<get-sender>(){}[0]
+    final val sequence // us.tractat.kuilt.core/Swatch.sequence|{}sequence[0]
+        final fun <get-sequence>(): kotlin/Long // us.tractat.kuilt.core/Swatch.sequence.<get-sequence>|<get-sequence>(){}[0]
+
+    final fun <#A1: kotlin/Any?> decode(kotlinx.serialization/BinaryFormat, kotlinx.serialization/DeserializationStrategy<#A1>): #A1 // us.tractat.kuilt.core/Swatch.decode|decode(kotlinx.serialization.BinaryFormat;kotlinx.serialization.DeserializationStrategy<0:0>){0§<kotlin.Any?>}[0]
+    final fun byteAt(kotlin/Int): kotlin/Byte // us.tractat.kuilt.core/Swatch.byteAt|byteAt(kotlin.Int){}[0]
+    final fun copy(kotlin/Long): us.tractat.kuilt.core/Swatch // us.tractat.kuilt.core/Swatch.copy|copy(kotlin.Long){}[0]
+    final fun copy(us.tractat.kuilt.core/PeerId?): us.tractat.kuilt.core/Swatch // us.tractat.kuilt.core/Swatch.copy|copy(us.tractat.kuilt.core.PeerId?){}[0]
+    final fun decodeToString(): kotlin/String // us.tractat.kuilt.core/Swatch.decodeToString|decodeToString(){}[0]
+    final fun dropFirst(kotlin/Int): us.tractat.kuilt.core/Swatch // us.tractat.kuilt.core/Swatch.dropFirst|dropFirst(kotlin.Int){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/Swatch.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/Swatch.hashCode|hashCode(){}[0]
+    final fun toByteArray(): kotlin/ByteArray // us.tractat.kuilt.core/Swatch.toByteArray|toByteArray(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.core/Swatch.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.core/TransportCapability { // us.tractat.kuilt.core/TransportCapability|null[0]
+    constructor <init>(kotlin.collections/Set<us.tractat.kuilt.core/TransportRole>, us.tractat.kuilt.core/FabricAvailability) // us.tractat.kuilt.core/TransportCapability.<init>|<init>(kotlin.collections.Set<us.tractat.kuilt.core.TransportRole>;us.tractat.kuilt.core.FabricAvailability){}[0]
+
+    final val availability // us.tractat.kuilt.core/TransportCapability.availability|{}availability[0]
+        final fun <get-availability>(): us.tractat.kuilt.core/FabricAvailability // us.tractat.kuilt.core/TransportCapability.availability.<get-availability>|<get-availability>(){}[0]
+    final val roles // us.tractat.kuilt.core/TransportCapability.roles|{}roles[0]
+        final fun <get-roles>(): kotlin.collections/Set<us.tractat.kuilt.core/TransportRole> // us.tractat.kuilt.core/TransportCapability.roles.<get-roles>|<get-roles>(){}[0]
+
+    final fun component1(): kotlin.collections/Set<us.tractat.kuilt.core/TransportRole> // us.tractat.kuilt.core/TransportCapability.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.core/FabricAvailability // us.tractat.kuilt.core/TransportCapability.component2|component2(){}[0]
+    final fun copy(kotlin.collections/Set<us.tractat.kuilt.core/TransportRole> = ..., us.tractat.kuilt.core/FabricAvailability = ...): us.tractat.kuilt.core/TransportCapability // us.tractat.kuilt.core/TransportCapability.copy|copy(kotlin.collections.Set<us.tractat.kuilt.core.TransportRole>;us.tractat.kuilt.core.FabricAvailability){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/TransportCapability.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/TransportCapability.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.core/TransportCapability.toString|toString(){}[0]
+}
+
+final value class us.tractat.kuilt.core/PeerId { // us.tractat.kuilt.core/PeerId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.core/PeerId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.core/PeerId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.core/PeerId.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/PeerId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/PeerId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.core/PeerId.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.core/PeerId> { // us.tractat.kuilt.core/PeerId.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.core/PeerId.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.core/PeerId.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.core/PeerId.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core/PeerId.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.core/PeerId.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.core.PeerId){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.core/PeerId.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.core/PeerId.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.core/PlyId { // us.tractat.kuilt.core/PlyId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.core/PlyId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.core/PlyId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.core/PlyId.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/PlyId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/PlyId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.core/PlyId.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.core/PlyId.Companion|null[0]
+        final val Sole // us.tractat.kuilt.core/PlyId.Companion.Sole|{}Sole[0]
+            final fun <get-Sole>(): us.tractat.kuilt.core/PlyId // us.tractat.kuilt.core/PlyId.Companion.Sole.<get-Sole>|<get-Sole>(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.core/Principal { // us.tractat.kuilt.core/Principal|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.core/Principal.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.core/Principal.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.core/Principal.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.core/Principal.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.core/Principal.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.core/Principal.toString|toString(){}[0]
+}
+
+sealed class us.tractat.kuilt.core.fabric/HelloFormatException : kotlin/IllegalArgumentException // us.tractat.kuilt.core.fabric/HelloFormatException|null[0]
+
+final object us.tractat.kuilt.core.fabric/Hello { // us.tractat.kuilt.core.fabric/Hello|null[0]
+    final fun decode(kotlin/ByteArray): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core.fabric/Hello.decode|decode(kotlin.ByteArray){}[0]
+    final fun encode(us.tractat.kuilt.core/PeerId): kotlin/ByteArray // us.tractat.kuilt.core.fabric/Hello.encode|encode(us.tractat.kuilt.core.PeerId){}[0]
+}
+
+final object us.tractat.kuilt.core/LoomDefaults { // us.tractat.kuilt.core/LoomDefaults|null[0]
+    final val WEAVE_TIMEOUT // us.tractat.kuilt.core/LoomDefaults.WEAVE_TIMEOUT|{}WEAVE_TIMEOUT[0]
+        final fun <get-WEAVE_TIMEOUT>(): kotlin.time/Duration // us.tractat.kuilt.core/LoomDefaults.WEAVE_TIMEOUT.<get-WEAVE_TIMEOUT>|<get-WEAVE_TIMEOUT>(){}[0]
+}
+
+final const val us.tractat.kuilt.core.fabric/DEFAULT_MESH_ORDERING_HOLD_CAPACITY // us.tractat.kuilt.core.fabric/DEFAULT_MESH_ORDERING_HOLD_CAPACITY|{}DEFAULT_MESH_ORDERING_HOLD_CAPACITY[0]
+    final fun <get-DEFAULT_MESH_ORDERING_HOLD_CAPACITY>(): kotlin/Int // us.tractat.kuilt.core.fabric/DEFAULT_MESH_ORDERING_HOLD_CAPACITY.<get-DEFAULT_MESH_ORDERING_HOLD_CAPACITY>|<get-DEFAULT_MESH_ORDERING_HOLD_CAPACITY>(){}[0]
+
+final val us.tractat.kuilt.core.fabric/DEFAULT_MESH_DRAIN_BOUND // us.tractat.kuilt.core.fabric/DEFAULT_MESH_DRAIN_BOUND|{}DEFAULT_MESH_DRAIN_BOUND[0]
+    final fun <get-DEFAULT_MESH_DRAIN_BOUND>(): kotlin.time/Duration // us.tractat.kuilt.core.fabric/DEFAULT_MESH_DRAIN_BOUND.<get-DEFAULT_MESH_DRAIN_BOUND>|<get-DEFAULT_MESH_DRAIN_BOUND>(){}[0]
+
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.core.fabric/acceptPump(us.tractat.kuilt.core.fabric/ConnectionSource, kotlin.time/Duration, kotlin/Function1<kotlin/Throwable, kotlin/Unit> = ..., kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.core.fabric/Connection, kotlin/Unit>): kotlinx.coroutines/Job // us.tractat.kuilt.core.fabric/acceptPump|acceptPump@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.fabric.ConnectionSource;kotlin.time.Duration;kotlin.Function1<kotlin.Throwable,kotlin.Unit>;kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.core.fabric.Connection,kotlin.Unit>){}[0]
+final fun (us.tractat.kuilt.core.fabric/Connection).us.tractat.kuilt.core/withPrincipal(us.tractat.kuilt.core/Principal?): us.tractat.kuilt.core.fabric/Connection // us.tractat.kuilt.core/withPrincipal|withPrincipal@us.tractat.kuilt.core.fabric.Connection(us.tractat.kuilt.core.Principal?){}[0]
+final fun <#A: kotlin/Any> (kotlinx.coroutines.flow/StateFlow<#A>).us.tractat.kuilt.core/latchingTo(kotlinx.coroutines.flow/StateFlow<kotlin/Boolean>, #A): kotlinx.coroutines.flow/StateFlow<#A> // us.tractat.kuilt.core/latchingTo|latchingTo@kotlinx.coroutines.flow.StateFlow<0:0>(kotlinx.coroutines.flow.StateFlow<kotlin.Boolean>;0:0){0§<kotlin.Any>}[0]
+final fun <#A: kotlin/Any?> (kotlinx.coroutines.flow/Flow<#A>).us.tractat.kuilt.core/pumpIn(kotlinx.coroutines/CoroutineScope, kotlin/Function2<us.tractat.kuilt.core/PumpFailure, kotlin/Throwable, kotlin/Unit>, kotlin/String, kotlin.coroutines/SuspendFunction1<#A, kotlin/Unit>): kotlinx.coroutines/Job // us.tractat.kuilt.core/pumpIn|pumpIn@kotlinx.coroutines.flow.Flow<0:0>(kotlinx.coroutines.CoroutineScope;kotlin.Function2<us.tractat.kuilt.core.PumpFailure,kotlin.Throwable,kotlin.Unit>;kotlin.String;kotlin.coroutines.SuspendFunction1<0:0,kotlin.Unit>){0§<kotlin.Any?>}[0]
+final fun <#A: kotlin/Any?> (kotlinx.coroutines.flow/Flow<#A>).us.tractat.kuilt.core/pumpIn(kotlinx.coroutines/CoroutineScope, kotlin/Function2<us.tractat.kuilt.core/PumpFailure, kotlin/Throwable, kotlin/Unit>, kotlin/String, kotlinx.coroutines/CoroutineStart = ..., kotlin.coroutines/SuspendFunction1<#A, kotlin/Unit>): kotlinx.coroutines/Job // us.tractat.kuilt.core/pumpIn|pumpIn@kotlinx.coroutines.flow.Flow<0:0>(kotlinx.coroutines.CoroutineScope;kotlin.Function2<us.tractat.kuilt.core.PumpFailure,kotlin.Throwable,kotlin.Unit>;kotlin.String;kotlinx.coroutines.CoroutineStart;kotlin.coroutines.SuspendFunction1<0:0,kotlin.Unit>){0§<kotlin.Any?>}[0]
+final fun <#A: kotlin/Any?> (kotlinx.coroutines.flow/Flow<#A>).us.tractat.kuilt.core/pumpIn(kotlinx.coroutines/CoroutineScope, kotlin/Function2<us.tractat.kuilt.core/PumpFailure, kotlin/Throwable, us.tractat.kuilt.core/PumpVerdict>, kotlin/String, kotlinx.coroutines/CoroutineStart = ..., kotlin.coroutines/SuspendFunction1<#A, kotlin/Unit>): kotlinx.coroutines/Job // us.tractat.kuilt.core/pumpIn|pumpIn@kotlinx.coroutines.flow.Flow<0:0>(kotlinx.coroutines.CoroutineScope;kotlin.Function2<us.tractat.kuilt.core.PumpFailure,kotlin.Throwable,us.tractat.kuilt.core.PumpVerdict>;kotlin.String;kotlinx.coroutines.CoroutineStart;kotlin.coroutines.SuspendFunction1<0:0,kotlin.Unit>){0§<kotlin.Any?>}[0]
+final fun <#A: kotlin/Any?> us.tractat.kuilt.core/validFirstHop(#A, #A, kotlin.collections/Set<#A>): kotlin/Boolean // us.tractat.kuilt.core/validFirstHop|validFirstHop(0:0;0:0;kotlin.collections.Set<0:0>){0§<kotlin.Any?>}[0]
+final fun us.tractat.kuilt.core.discovery/discoveryRoster(kotlin.collections/List<us.tractat.kuilt.core.discovery/PeerDiscoverySource>, kotlinx.coroutines/CoroutineScope, kotlin/Function2<us.tractat.kuilt.core.discovery/PeerDiscoverySource, kotlin/Throwable, kotlin/Unit> = ...): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/Tag>> // us.tractat.kuilt.core.discovery/discoveryRoster|discoveryRoster(kotlin.collections.List<us.tractat.kuilt.core.discovery.PeerDiscoverySource>;kotlinx.coroutines.CoroutineScope;kotlin.Function2<us.tractat.kuilt.core.discovery.PeerDiscoverySource,kotlin.Throwable,kotlin.Unit>){}[0]
+final fun us.tractat.kuilt.core.fabric/identified(us.tractat.kuilt.core.fabric/Connection, us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/PeerId, kotlin.coroutines/CoroutineContext, us.tractat.kuilt.core/DeliveryPolicy = ...): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core.fabric/identified|identified(us.tractat.kuilt.core.fabric.Connection;us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.PeerId;kotlin.coroutines.CoroutineContext;us.tractat.kuilt.core.DeliveryPolicy){}[0]
+final fun us.tractat.kuilt.core/checkNotUnderTestDispatcher(kotlinx.coroutines/CoroutineScope, kotlin/String, kotlin/String, kotlin/Boolean, kotlin/Boolean) // us.tractat.kuilt.core/checkNotUnderTestDispatcher|checkNotUnderTestDispatcher(kotlinx.coroutines.CoroutineScope;kotlin.String;kotlin.String;kotlin.Boolean;kotlin.Boolean){}[0]
+final fun us.tractat.kuilt.core/freshPeerId(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.core/freshPeerId|freshPeerId(){}[0]
+final fun us.tractat.kuilt.core/tieredSeam(us.tractat.kuilt.core/Seam, us.tractat.kuilt.core/Seam, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.core/DeliveryPolicy = ...): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core/tieredSeam|tieredSeam(us.tractat.kuilt.core.Seam;us.tractat.kuilt.core.Seam;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.core.DeliveryPolicy){}[0]
+final inline fun <#A: kotlin/Any?> us.tractat.kuilt.core/runCatchingCancellable(kotlin/Function0<#A>): kotlin/Result<#A> // us.tractat.kuilt.core/runCatchingCancellable|runCatchingCancellable(kotlin.Function0<0:0>){0§<kotlin.Any?>}[0]
+final suspend fun <#A: kotlin/Any?> (us.tractat.kuilt.core/Seam).us.tractat.kuilt.core/raceCollapse(kotlin/Function1<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>, kotlin/Boolean> = ..., kotlin.coroutines/SuspendFunction0<#A>): #A // us.tractat.kuilt.core/raceCollapse|raceCollapse@us.tractat.kuilt.core.Seam(kotlin.Function1<kotlin.collections.Set<us.tractat.kuilt.core.PeerId>,kotlin.Boolean>;kotlin.coroutines.SuspendFunction0<0:0>){0§<kotlin.Any?>}[0]
+final suspend fun us.tractat.kuilt.core.fabric/handshaking(us.tractat.kuilt.core.fabric/Connection, us.tractat.kuilt.core/PeerId, kotlin.coroutines/CoroutineContext, us.tractat.kuilt.core/DeliveryPolicy = ...): us.tractat.kuilt.core/Seam // us.tractat.kuilt.core.fabric/handshaking|handshaking(us.tractat.kuilt.core.fabric.Connection;us.tractat.kuilt.core.PeerId;kotlin.coroutines.CoroutineContext;us.tractat.kuilt.core.DeliveryPolicy){}[0]
+final suspend fun us.tractat.kuilt.core.fabric/hubMesh(us.tractat.kuilt.core/PeerId, kotlin.collections/List<us.tractat.kuilt.core.fabric/Connection>, kotlin.coroutines/CoroutineContext, kotlin.random/Random = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., us.tractat.kuilt.core.fabric/LinkAdmission = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Function1<us.tractat.kuilt.core.fabric/MeshDisplacement, kotlin/Unit> = ...): us.tractat.kuilt.core.fabric/Mesh // us.tractat.kuilt.core.fabric/hubMesh|hubMesh(us.tractat.kuilt.core.PeerId;kotlin.collections.List<us.tractat.kuilt.core.fabric.Connection>;kotlin.coroutines.CoroutineContext;kotlin.random.Random;us.tractat.kuilt.core.DeliveryPolicy;us.tractat.kuilt.core.fabric.LinkAdmission;kotlin.time.Duration;kotlin.Int;kotlin.Function1<us.tractat.kuilt.core.fabric.MeshDisplacement,kotlin.Unit>){}[0]
+final suspend fun us.tractat.kuilt.core.fabric/meshSeam(us.tractat.kuilt.core/PeerId, kotlin.collections/List<us.tractat.kuilt.core.fabric/Connection>, kotlin.coroutines/CoroutineContext, kotlin.random/Random = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., us.tractat.kuilt.core.fabric/LinkAdmission = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Function1<us.tractat.kuilt.core.fabric/MeshDisplacement, kotlin/Unit> = ...): us.tractat.kuilt.core.fabric/Mesh // us.tractat.kuilt.core.fabric/meshSeam|meshSeam(us.tractat.kuilt.core.PeerId;kotlin.collections.List<us.tractat.kuilt.core.fabric.Connection>;kotlin.coroutines.CoroutineContext;kotlin.random.Random;us.tractat.kuilt.core.DeliveryPolicy;us.tractat.kuilt.core.fabric.LinkAdmission;kotlin.time.Duration;kotlin.Int;kotlin.Function1<us.tractat.kuilt.core.fabric.MeshDisplacement,kotlin.Unit>){}[0]
+final suspend fun us.tractat.kuilt.core.fabric/peerMesh(us.tractat.kuilt.core/PeerId, kotlin.collections/List<us.tractat.kuilt.core.fabric/Connection>, kotlin.coroutines/CoroutineContext, kotlin.random/Random = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., us.tractat.kuilt.core.fabric/LinkAdmission = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Function1<us.tractat.kuilt.core.fabric/MeshDisplacement, kotlin/Unit> = ...): us.tractat.kuilt.core.fabric/Mesh // us.tractat.kuilt.core.fabric/peerMesh|peerMesh(us.tractat.kuilt.core.PeerId;kotlin.collections.List<us.tractat.kuilt.core.fabric.Connection>;kotlin.coroutines.CoroutineContext;kotlin.random.Random;us.tractat.kuilt.core.DeliveryPolicy;us.tractat.kuilt.core.fabric.LinkAdmission;kotlin.time.Duration;kotlin.Int;kotlin.Function1<us.tractat.kuilt.core.fabric.MeshDisplacement,kotlin.Unit>){}[0]

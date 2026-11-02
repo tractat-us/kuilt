@@ -1,0 +1,1016 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-heddle>
+final enum class us.tractat.kuilt.heddle/Lifecycle : kotlin/Enum<us.tractat.kuilt.heddle/Lifecycle> { // us.tractat.kuilt.heddle/Lifecycle|null[0]
+    enum entry ACTIVE // us.tractat.kuilt.heddle/Lifecycle.ACTIVE|null[0]
+    enum entry CLOSING // us.tractat.kuilt.heddle/Lifecycle.CLOSING|null[0]
+    enum entry PREPARED // us.tractat.kuilt.heddle/Lifecycle.PREPARED|null[0]
+    enum entry RETIRED // us.tractat.kuilt.heddle/Lifecycle.RETIRED|null[0]
+
+    final val entries // us.tractat.kuilt.heddle/Lifecycle.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.heddle/Lifecycle> // us.tractat.kuilt.heddle/Lifecycle.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.heddle/Lifecycle // us.tractat.kuilt.heddle/Lifecycle.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.heddle/Lifecycle> // us.tractat.kuilt.heddle/Lifecycle.values|values#static(){}[0]
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.heddle/Lifecycle.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Lifecycle> // us.tractat.kuilt.heddle/Lifecycle.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.heddle/Lifecycle.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+abstract interface us.tractat.kuilt.heddle/FairShareExecution { // us.tractat.kuilt.heddle/FairShareExecution|null[0]
+    abstract fun cancel(us.tractat.kuilt.heddle/ReservationId) // us.tractat.kuilt.heddle/FairShareExecution.cancel|cancel(us.tractat.kuilt.heddle.ReservationId){}[0]
+    abstract fun complete(us.tractat.kuilt.heddle/ReservationId, kotlin/Long) // us.tractat.kuilt.heddle/FairShareExecution.complete|complete(us.tractat.kuilt.heddle.ReservationId;kotlin.Long){}[0]
+    abstract fun earmarked(us.tractat.kuilt.heddle/GroupId): kotlin/Long // us.tractat.kuilt.heddle/FairShareExecution.earmarked|earmarked(us.tractat.kuilt.heddle.GroupId){}[0]
+    abstract fun reserve(us.tractat.kuilt.heddle/GroupId, kotlin/Long): us.tractat.kuilt.heddle/ReserveOutcome // us.tractat.kuilt.heddle/FairShareExecution.reserve|reserve(us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
+}
+
+abstract interface us.tractat.kuilt.heddle/RevocationSeam { // us.tractat.kuilt.heddle/RevocationSeam|null[0]
+    abstract suspend fun revoke(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/RevocationOutcome // us.tractat.kuilt.heddle/RevocationSeam.revoke|revoke(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.heddle.GroupId){}[0]
+}
+
+sealed interface us.tractat.kuilt.heddle/ControlConflict { // us.tractat.kuilt.heddle/ControlConflict|null[0]
+    final class DualInbound : us.tractat.kuilt.heddle/ControlConflict { // us.tractat.kuilt.heddle/ControlConflict.DualInbound|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/AttachmentId) // us.tractat.kuilt.heddle/ControlConflict.DualInbound.<init>|<init>(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.AttachmentId){}[0]
+
+        final val child // us.tractat.kuilt.heddle/ControlConflict.DualInbound.child|{}child[0]
+            final fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/ControlConflict.DualInbound.child.<get-child>|<get-child>(){}[0]
+        final val incumbent // us.tractat.kuilt.heddle/ControlConflict.DualInbound.incumbent|{}incumbent[0]
+            final fun <get-incumbent>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/ControlConflict.DualInbound.incumbent.<get-incumbent>|<get-incumbent>(){}[0]
+        final val rejected // us.tractat.kuilt.heddle/ControlConflict.DualInbound.rejected|{}rejected[0]
+            final fun <get-rejected>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/ControlConflict.DualInbound.rejected.<get-rejected>|<get-rejected>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/ControlConflict.DualInbound.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/ControlConflict.DualInbound.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/ControlConflict.DualInbound.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/AttachmentId = ..., us.tractat.kuilt.heddle/AttachmentId = ...): us.tractat.kuilt.heddle/ControlConflict.DualInbound // us.tractat.kuilt.heddle/ControlConflict.DualInbound.copy|copy(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.AttachmentId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ControlConflict.DualInbound.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ControlConflict.DualInbound.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ControlConflict.DualInbound.toString|toString(){}[0]
+    }
+
+    final class Refused : us.tractat.kuilt.heddle/ControlConflict { // us.tractat.kuilt.heddle/ControlConflict.Refused|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.heddle/ControlConflict.Refused.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.heddle/ControlConflict.Refused.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.heddle/ControlConflict.Refused.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.heddle/ControlConflict.Refused.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.heddle/ControlConflict.Refused // us.tractat.kuilt.heddle/ControlConflict.Refused.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ControlConflict.Refused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ControlConflict.Refused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ControlConflict.Refused.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.heddle/ControlOutcome { // us.tractat.kuilt.heddle/ControlOutcome|null[0]
+    abstract val index // us.tractat.kuilt.heddle/ControlOutcome.index|{}index[0]
+        abstract fun <get-index>(): kotlin/Long // us.tractat.kuilt.heddle/ControlOutcome.index.<get-index>|<get-index>(){}[0]
+
+    final class Applied : us.tractat.kuilt.heddle/ControlOutcome { // us.tractat.kuilt.heddle/ControlOutcome.Applied|null[0]
+        constructor <init>(kotlin/Long) // us.tractat.kuilt.heddle/ControlOutcome.Applied.<init>|<init>(kotlin.Long){}[0]
+
+        final val index // us.tractat.kuilt.heddle/ControlOutcome.Applied.index|{}index[0]
+            final fun <get-index>(): kotlin/Long // us.tractat.kuilt.heddle/ControlOutcome.Applied.index.<get-index>|<get-index>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.heddle/ControlOutcome.Applied.component1|component1(){}[0]
+        final fun copy(kotlin/Long = ...): us.tractat.kuilt.heddle/ControlOutcome.Applied // us.tractat.kuilt.heddle/ControlOutcome.Applied.copy|copy(kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ControlOutcome.Applied.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ControlOutcome.Applied.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ControlOutcome.Applied.toString|toString(){}[0]
+    }
+
+    final class Conflict : us.tractat.kuilt.heddle/ControlOutcome { // us.tractat.kuilt.heddle/ControlOutcome.Conflict|null[0]
+        constructor <init>(kotlin/Long, us.tractat.kuilt.heddle/ControlConflict) // us.tractat.kuilt.heddle/ControlOutcome.Conflict.<init>|<init>(kotlin.Long;us.tractat.kuilt.heddle.ControlConflict){}[0]
+
+        final val conflict // us.tractat.kuilt.heddle/ControlOutcome.Conflict.conflict|{}conflict[0]
+            final fun <get-conflict>(): us.tractat.kuilt.heddle/ControlConflict // us.tractat.kuilt.heddle/ControlOutcome.Conflict.conflict.<get-conflict>|<get-conflict>(){}[0]
+        final val index // us.tractat.kuilt.heddle/ControlOutcome.Conflict.index|{}index[0]
+            final fun <get-index>(): kotlin/Long // us.tractat.kuilt.heddle/ControlOutcome.Conflict.index.<get-index>|<get-index>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.heddle/ControlOutcome.Conflict.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/ControlConflict // us.tractat.kuilt.heddle/ControlOutcome.Conflict.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., us.tractat.kuilt.heddle/ControlConflict = ...): us.tractat.kuilt.heddle/ControlOutcome.Conflict // us.tractat.kuilt.heddle/ControlOutcome.Conflict.copy|copy(kotlin.Long;us.tractat.kuilt.heddle.ControlConflict){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ControlOutcome.Conflict.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ControlOutcome.Conflict.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ControlOutcome.Conflict.toString|toString(){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/ControlOutcome.Companion|null[0]
+        final const val NOT_COMMITTED // us.tractat.kuilt.heddle/ControlOutcome.Companion.NOT_COMMITTED|{}NOT_COMMITTED[0]
+            final fun <get-NOT_COMMITTED>(): kotlin/Long // us.tractat.kuilt.heddle/ControlOutcome.Companion.NOT_COMMITTED.<get-NOT_COMMITTED>|<get-NOT_COMMITTED>(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.heddle/LedgerConflict : kotlin/Comparable<us.tractat.kuilt.heddle/LedgerConflict> { // us.tractat.kuilt.heddle/LedgerConflict|null[0]
+    abstract val order // us.tractat.kuilt.heddle/LedgerConflict.order|{}order[0]
+        abstract fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.order.<get-order>|<get-order>(){}[0]
+
+    open fun compareTo(us.tractat.kuilt.heddle/LedgerConflict): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.compareTo|compareTo(us.tractat.kuilt.heddle.LedgerConflict){}[0]
+
+    final class ClosureViolation : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/AttachmentId) // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId){}[0]
+
+        final val edge // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation.edge|{}edge[0]
+            final fun <get-edge>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation.edge.<get-edge>|<get-edge>(){}[0]
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation.order.<get-order>|<get-order>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/AttachmentId = ...): us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation.copy|copy(us.tractat.kuilt.heddle.AttachmentId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.ClosureViolation.toString|toString(){}[0]
+    }
+
+    final class ConservationViolation : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation|null[0]
+        constructor <init>(kotlin/Long, kotlin/Long) // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
+
+        final val leafSpentTotal // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.leafSpentTotal|{}leafSpentTotal[0]
+            final fun <get-leafSpentTotal>(): kotlin/Long // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.leafSpentTotal.<get-leafSpentTotal>|<get-leafSpentTotal>(){}[0]
+        final val mintedTotal // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.mintedTotal|{}mintedTotal[0]
+            final fun <get-mintedTotal>(): kotlin/Long // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.mintedTotal.<get-mintedTotal>|<get-mintedTotal>(){}[0]
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.order.<get-order>|<get-order>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.copy|copy(kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.ConservationViolation.toString|toString(){}[0]
+    }
+
+    final class DualActiveInbound : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val group // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound.group|{}group[0]
+            final fun <get-group>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound.group.<get-group>|<get-group>(){}[0]
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound.order.<get-order>|<get-order>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.DualActiveInbound.toString|toString(){}[0]
+    }
+
+    final class FrozenCarriedHandoff : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/PathKey, us.tractat.kuilt.crdt/ReplicaId, kotlin/Long) // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.<init>|<init>(us.tractat.kuilt.heddle.PathKey;us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
+
+        final val carried // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.carried|{}carried[0]
+            final fun <get-carried>(): kotlin/Long // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.carried.<get-carried>|<get-carried>(){}[0]
+        final val donor // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.donor|{}donor[0]
+            final fun <get-donor>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.donor.<get-donor>|<get-donor>(){}[0]
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.order.<get-order>|<get-order>(){}[0]
+        final val path // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.path|{}path[0]
+            final fun <get-path>(): us.tractat.kuilt.heddle/PathKey // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/PathKey // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/PathKey = ..., us.tractat.kuilt.crdt/ReplicaId = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.copy|copy(us.tractat.kuilt.heddle.PathKey;us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.FrozenCarriedHandoff.toString|toString(){}[0]
+    }
+
+    final class LineageCycle : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val group // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle.group|{}group[0]
+            final fun <get-group>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle.group.<get-group>|<get-group>(){}[0]
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle.order.<get-order>|<get-order>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/LedgerConflict.LineageCycle // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.LineageCycle.toString|toString(){}[0]
+    }
+
+    final class MultipleRoots : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots|null[0]
+        constructor <init>(kotlin.collections/List<us.tractat.kuilt.heddle/GroupId>) // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.heddle.GroupId>){}[0]
+
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots.order.<get-order>|<get-order>(){}[0]
+        final val roots // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots.roots|{}roots[0]
+            final fun <get-roots>(): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots.roots.<get-roots>|<get-roots>(){}[0]
+
+        final fun component1(): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> = ...): us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots.copy|copy(kotlin.collections.List<us.tractat.kuilt.heddle.GroupId>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.MultipleRoots.toString|toString(){}[0]
+    }
+
+    final class NegativeEffectiveSpend : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/AttachmentId) // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId){}[0]
+
+        final val edge // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.edge|{}edge[0]
+            final fun <get-edge>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.edge.<get-edge>|<get-edge>(){}[0]
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.order.<get-order>|<get-order>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/AttachmentId = ...): us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.copy|copy(us.tractat.kuilt.heddle.AttachmentId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.toString|toString(){}[0]
+    }
+
+    final class OrphanedTransferPath : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/PathKey) // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.<init>|<init>(us.tractat.kuilt.heddle.PathKey){}[0]
+
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.order.<get-order>|<get-order>(){}[0]
+        final val path // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.path|{}path[0]
+            final fun <get-path>(): us.tractat.kuilt.heddle/PathKey // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.path.<get-path>|<get-path>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/PathKey // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/PathKey = ...): us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.copy|copy(us.tractat.kuilt.heddle.PathKey){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.toString|toString(){}[0]
+    }
+
+    final class PerEdgeSafety : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/AttachmentId) // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId){}[0]
+
+        final val edge // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety.edge|{}edge[0]
+            final fun <get-edge>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety.edge.<get-edge>|<get-edge>(){}[0]
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety.order.<get-order>|<get-order>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/AttachmentId = ...): us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety.copy|copy(us.tractat.kuilt.heddle.AttachmentId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.PerEdgeSafety.toString|toString(){}[0]
+    }
+
+    final class PersistentNegativeHoldings : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.crdt/ReplicaId) // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.<init>|<init>(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.crdt.ReplicaId){}[0]
+
+        final val group // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.group|{}group[0]
+            final fun <get-group>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.group.<get-group>|<get-group>(){}[0]
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.order.<get-order>|<get-order>(){}[0]
+        final val replica // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.replica|{}replica[0]
+            final fun <get-replica>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.replica.<get-replica>|<get-replica>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.crdt/ReplicaId = ...): us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.copy|copy(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.crdt.ReplicaId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.PersistentNegativeHoldings.toString|toString(){}[0]
+    }
+
+    final class RecordDivergence : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/AttachmentId) // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId){}[0]
+
+        final val id // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence.id|{}id[0]
+            final fun <get-id>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence.id.<get-id>|<get-id>(){}[0]
+        final val order // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence.order|{}order[0]
+            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence.order.<get-order>|<get-order>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/AttachmentId = ...): us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence.copy|copy(us.tractat.kuilt.heddle.AttachmentId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.RecordDivergence.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.heddle/ReserveOutcome { // us.tractat.kuilt.heddle/ReserveOutcome|null[0]
+    final class Reserved : us.tractat.kuilt.heddle/ReserveOutcome { // us.tractat.kuilt.heddle/ReserveOutcome.Reserved|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/ReservationId) // us.tractat.kuilt.heddle/ReserveOutcome.Reserved.<init>|<init>(us.tractat.kuilt.heddle.ReservationId){}[0]
+
+        final val id // us.tractat.kuilt.heddle/ReserveOutcome.Reserved.id|{}id[0]
+            final fun <get-id>(): us.tractat.kuilt.heddle/ReservationId // us.tractat.kuilt.heddle/ReserveOutcome.Reserved.id.<get-id>|<get-id>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/ReservationId // us.tractat.kuilt.heddle/ReserveOutcome.Reserved.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/ReservationId = ...): us.tractat.kuilt.heddle/ReserveOutcome.Reserved // us.tractat.kuilt.heddle/ReserveOutcome.Reserved.copy|copy(us.tractat.kuilt.heddle.ReservationId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ReserveOutcome.Reserved.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ReserveOutcome.Reserved.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ReserveOutcome.Reserved.toString|toString(){}[0]
+    }
+
+    final object NoHoldings : us.tractat.kuilt.heddle/ReserveOutcome { // us.tractat.kuilt.heddle/ReserveOutcome.NoHoldings|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ReserveOutcome.NoHoldings.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ReserveOutcome.NoHoldings.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ReserveOutcome.NoHoldings.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.heddle/RevocationOutcome { // us.tractat.kuilt.heddle/RevocationOutcome|null[0]
+    final object NotShipped : us.tractat.kuilt.heddle/RevocationOutcome { // us.tractat.kuilt.heddle/RevocationOutcome.NotShipped|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/RevocationOutcome.NotShipped.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/RevocationOutcome.NotShipped.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/RevocationOutcome.NotShipped.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.heddle/ScheduleOutcome { // us.tractat.kuilt.heddle/ScheduleOutcome|null[0]
+    final class Delegated : us.tractat.kuilt.heddle/ScheduleOutcome { // us.tractat.kuilt.heddle/ScheduleOutcome.Delegated|null[0]
+        constructor <init>(kotlin/Int) // us.tractat.kuilt.heddle/ScheduleOutcome.Delegated.<init>|<init>(kotlin.Int){}[0]
+
+        final val grants // us.tractat.kuilt.heddle/ScheduleOutcome.Delegated.grants|{}grants[0]
+            final fun <get-grants>(): kotlin/Int // us.tractat.kuilt.heddle/ScheduleOutcome.Delegated.grants.<get-grants>|<get-grants>(){}[0]
+
+        final fun component1(): kotlin/Int // us.tractat.kuilt.heddle/ScheduleOutcome.Delegated.component1|component1(){}[0]
+        final fun copy(kotlin/Int = ...): us.tractat.kuilt.heddle/ScheduleOutcome.Delegated // us.tractat.kuilt.heddle/ScheduleOutcome.Delegated.copy|copy(kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ScheduleOutcome.Delegated.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ScheduleOutcome.Delegated.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ScheduleOutcome.Delegated.toString|toString(){}[0]
+    }
+
+    final object NothingToDelegate : us.tractat.kuilt.heddle/ScheduleOutcome { // us.tractat.kuilt.heddle/ScheduleOutcome.NothingToDelegate|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ScheduleOutcome.NothingToDelegate.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ScheduleOutcome.NothingToDelegate.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ScheduleOutcome.NothingToDelegate.toString|toString(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/AttachmentRecord { // us.tractat.kuilt.heddle/AttachmentRecord|null[0]
+    constructor <init>(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/Weight) // us.tractat.kuilt.heddle/AttachmentRecord.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.Weight){}[0]
+
+    final val child // us.tractat.kuilt.heddle/AttachmentRecord.child|{}child[0]
+        final fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AttachmentRecord.child.<get-child>|<get-child>(){}[0]
+    final val id // us.tractat.kuilt.heddle/AttachmentRecord.id|{}id[0]
+        final fun <get-id>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/AttachmentRecord.id.<get-id>|<get-id>(){}[0]
+    final val parent // us.tractat.kuilt.heddle/AttachmentRecord.parent|{}parent[0]
+        final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AttachmentRecord.parent.<get-parent>|<get-parent>(){}[0]
+    final val weight // us.tractat.kuilt.heddle/AttachmentRecord.weight|{}weight[0]
+        final fun <get-weight>(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/AttachmentRecord.weight.<get-weight>|<get-weight>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/AttachmentRecord.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AttachmentRecord.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AttachmentRecord.component3|component3(){}[0]
+    final fun component4(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/AttachmentRecord.component4|component4(){}[0]
+    final fun copy(us.tractat.kuilt.heddle/AttachmentId = ..., us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/Weight = ...): us.tractat.kuilt.heddle/AttachmentRecord // us.tractat.kuilt.heddle/AttachmentRecord.copy|copy(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.Weight){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AttachmentRecord.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AttachmentRecord.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AttachmentRecord.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/AttachmentRecord> { // us.tractat.kuilt.heddle/AttachmentRecord.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/AttachmentRecord.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/AttachmentRecord.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/AttachmentRecord.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/AttachmentRecord // us.tractat.kuilt.heddle/AttachmentRecord.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/AttachmentRecord) // us.tractat.kuilt.heddle/AttachmentRecord.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.AttachmentRecord){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/AttachmentRecord.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/AttachmentRecord> // us.tractat.kuilt.heddle/AttachmentRecord.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/BoundMetrics { // us.tractat.kuilt.heddle/BoundMetrics|null[0]
+    constructor <init>(us.tractat.kuilt.heddle/GroupId, kotlin/Long, kotlin/Long, kotlin/Long) // us.tractat.kuilt.heddle/BoundMetrics.<init>|<init>(us.tractat.kuilt.heddle.GroupId;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+
+    final val configuredWorstCase // us.tractat.kuilt.heddle/BoundMetrics.configuredWorstCase|{}configuredWorstCase[0]
+        final fun <get-configuredWorstCase>(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.configuredWorstCase.<get-configuredWorstCase>|<get-configuredWorstCase>(){}[0]
+    final val currentBound // us.tractat.kuilt.heddle/BoundMetrics.currentBound|{}currentBound[0]
+        final fun <get-currentBound>(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.currentBound.<get-currentBound>|<get-currentBound>(){}[0]
+    final val isConsistent // us.tractat.kuilt.heddle/BoundMetrics.isConsistent|{}isConsistent[0]
+        final fun <get-isConsistent>(): kotlin/Boolean // us.tractat.kuilt.heddle/BoundMetrics.isConsistent.<get-isConsistent>|<get-isConsistent>(){}[0]
+    final val observedDeviation // us.tractat.kuilt.heddle/BoundMetrics.observedDeviation|{}observedDeviation[0]
+        final fun <get-observedDeviation>(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.observedDeviation.<get-observedDeviation>|<get-observedDeviation>(){}[0]
+    final val parent // us.tractat.kuilt.heddle/BoundMetrics.parent|{}parent[0]
+        final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/BoundMetrics.parent.<get-parent>|<get-parent>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/BoundMetrics.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.component2|component2(){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.component3|component3(){}[0]
+    final fun component4(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.component4|component4(){}[0]
+    final fun copy(us.tractat.kuilt.heddle/GroupId = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/BoundMetrics // us.tractat.kuilt.heddle/BoundMetrics.copy|copy(us.tractat.kuilt.heddle.GroupId;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/BoundMetrics.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/BoundMetrics.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/BoundMetrics.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.heddle/BoundMetrics.Companion|null[0]
+        final fun at(us.tractat.kuilt.heddle/EntitlementLedger, us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId>, kotlin.collections/Set<us.tractat.kuilt.heddle/AttachmentId>, us.tractat.kuilt.heddle/HeddleConfig): us.tractat.kuilt.heddle/BoundMetrics // us.tractat.kuilt.heddle/BoundMetrics.Companion.at|at(us.tractat.kuilt.heddle.EntitlementLedger;us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.crdt.ReplicaId>;kotlin.collections.Set<us.tractat.kuilt.heddle.AttachmentId>;us.tractat.kuilt.heddle.HeddleConfig){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/Demand { // us.tractat.kuilt.heddle/Demand|null[0]
+    constructor <init>(kotlin/Long, kotlin/Long) // us.tractat.kuilt.heddle/Demand.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
+
+    final val maximumUsefulGrant // us.tractat.kuilt.heddle/Demand.maximumUsefulGrant|{}maximumUsefulGrant[0]
+        final fun <get-maximumUsefulGrant>(): kotlin/Long // us.tractat.kuilt.heddle/Demand.maximumUsefulGrant.<get-maximumUsefulGrant>|<get-maximumUsefulGrant>(){}[0]
+    final val targetOutstanding // us.tractat.kuilt.heddle/Demand.targetOutstanding|{}targetOutstanding[0]
+        final fun <get-targetOutstanding>(): kotlin/Long // us.tractat.kuilt.heddle/Demand.targetOutstanding.<get-targetOutstanding>|<get-targetOutstanding>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.heddle/Demand.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/Demand.component2|component2(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/Demand // us.tractat.kuilt.heddle/Demand.copy|copy(kotlin.Long;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Demand.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Demand.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Demand.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/Demand> { // us.tractat.kuilt.heddle/Demand.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/Demand.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/Demand.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/Demand.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Demand // us.tractat.kuilt.heddle/Demand.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Demand) // us.tractat.kuilt.heddle/Demand.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Demand){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/Demand.Companion|null[0]
+        final val NONE // us.tractat.kuilt.heddle/Demand.Companion.NONE|{}NONE[0]
+            final fun <get-NONE>(): us.tractat.kuilt.heddle/Demand // us.tractat.kuilt.heddle/Demand.Companion.NONE.<get-NONE>|<get-NONE>(){}[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Demand> // us.tractat.kuilt.heddle/Demand.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/DemandBoard { // us.tractat.kuilt.heddle/DemandBoard|null[0]
+    constructor <init>(kotlin.collections/Map<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand> = ...) // us.tractat.kuilt.heddle/DemandBoard.<init>|<init>(kotlin.collections.Map<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>){}[0]
+
+    final val perEdge // us.tractat.kuilt.heddle/DemandBoard.perEdge|{}perEdge[0]
+        final fun <get-perEdge>(): kotlin.collections/Map<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand> // us.tractat.kuilt.heddle/DemandBoard.perEdge.<get-perEdge>|<get-perEdge>(){}[0]
+
+    final fun component1(): kotlin.collections/Map<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand> // us.tractat.kuilt.heddle/DemandBoard.component1|component1(){}[0]
+    final fun copy(kotlin.collections/Map<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand> = ...): us.tractat.kuilt.heddle/DemandBoard // us.tractat.kuilt.heddle/DemandBoard.copy|copy(kotlin.collections.Map<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/DemandBoard.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/DemandBoard.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/DemandBoard.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/DemandBoard> { // us.tractat.kuilt.heddle/DemandBoard.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/DemandBoard.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/DemandBoard.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/DemandBoard.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/DemandBoard // us.tractat.kuilt.heddle/DemandBoard.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/DemandBoard) // us.tractat.kuilt.heddle/DemandBoard.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.DemandBoard){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/DemandBoard.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.heddle/DemandBoard.Companion.$childSerializers|{}$childSerializers[0]
+        final val EMPTY // us.tractat.kuilt.heddle/DemandBoard.Companion.EMPTY|{}EMPTY[0]
+            final fun <get-EMPTY>(): us.tractat.kuilt.heddle/DemandBoard // us.tractat.kuilt.heddle/DemandBoard.Companion.EMPTY.<get-EMPTY>|<get-EMPTY>(){}[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/DemandBoard> // us.tractat.kuilt.heddle/DemandBoard.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/EdgeSummary { // us.tractat.kuilt.heddle/EdgeSummary|null[0]
+    constructor <init>(us.tractat.kuilt.heddle/AttachmentId, kotlin/Long, kotlin/Long, kotlin/Long) // us.tractat.kuilt.heddle/EdgeSummary.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+
+    final val attachment // us.tractat.kuilt.heddle/EdgeSummary.attachment|{}attachment[0]
+        final fun <get-attachment>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/EdgeSummary.attachment.<get-attachment>|<get-attachment>(){}[0]
+    final val committedService // us.tractat.kuilt.heddle/EdgeSummary.committedService|{}committedService[0]
+        final fun <get-committedService>(): kotlin/Long // us.tractat.kuilt.heddle/EdgeSummary.committedService.<get-committedService>|<get-committedService>(){}[0]
+    final val issued // us.tractat.kuilt.heddle/EdgeSummary.issued|{}issued[0]
+        final fun <get-issued>(): kotlin/Long // us.tractat.kuilt.heddle/EdgeSummary.issued.<get-issued>|<get-issued>(){}[0]
+    final val outstanding // us.tractat.kuilt.heddle/EdgeSummary.outstanding|{}outstanding[0]
+        final fun <get-outstanding>(): kotlin/Long // us.tractat.kuilt.heddle/EdgeSummary.outstanding.<get-outstanding>|<get-outstanding>(){}[0]
+    final val returned // us.tractat.kuilt.heddle/EdgeSummary.returned|{}returned[0]
+        final fun <get-returned>(): kotlin/Long // us.tractat.kuilt.heddle/EdgeSummary.returned.<get-returned>|<get-returned>(){}[0]
+    final val spent // us.tractat.kuilt.heddle/EdgeSummary.spent|{}spent[0]
+        final fun <get-spent>(): kotlin/Long // us.tractat.kuilt.heddle/EdgeSummary.spent.<get-spent>|<get-spent>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/EdgeSummary.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/EdgeSummary.component2|component2(){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/EdgeSummary.component3|component3(){}[0]
+    final fun component4(): kotlin/Long // us.tractat.kuilt.heddle/EdgeSummary.component4|component4(){}[0]
+    final fun copy(us.tractat.kuilt.heddle/AttachmentId = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/EdgeSummary // us.tractat.kuilt.heddle/EdgeSummary.copy|copy(us.tractat.kuilt.heddle.AttachmentId;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/EdgeSummary.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/EdgeSummary.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/EdgeSummary.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/EdgeSummary> { // us.tractat.kuilt.heddle/EdgeSummary.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/EdgeSummary.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/EdgeSummary.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/EdgeSummary.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/EdgeSummary // us.tractat.kuilt.heddle/EdgeSummary.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/EdgeSummary) // us.tractat.kuilt.heddle/EdgeSummary.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.EdgeSummary){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/EdgeSummary.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/EdgeSummary> // us.tractat.kuilt.heddle/EdgeSummary.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/EntitlementLedger : us.tractat.kuilt.crdt/Quilted<us.tractat.kuilt.heddle/EntitlementLedger> { // us.tractat.kuilt.heddle/EntitlementLedger|null[0]
+    final fun activate(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.activate|activate(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun activeChildren(us.tractat.kuilt.heddle/GroupId): kotlin.collections/List<us.tractat.kuilt.heddle/EdgeSummary> // us.tractat.kuilt.heddle/EntitlementLedger.activeChildren|activeChildren(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun baseIssuance(us.tractat.kuilt.heddle/AttachmentId): kotlin/Long // us.tractat.kuilt.heddle/EntitlementLedger.baseIssuance|baseIssuance(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun close(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.close|close(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun delegate(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.heddle/AttachmentId, kotlin/Long): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.delegate|delegate(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.heddle.AttachmentId;kotlin.Long){}[0]
+    final fun edge(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/EdgeSummary? // us.tractat.kuilt.heddle/EntitlementLedger.edge|edge(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/EntitlementLedger.equals|equals(kotlin.Any?){}[0]
+    final fun gauge(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Gauge? // us.tractat.kuilt.heddle/EntitlementLedger.gauge|gauge(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun grossVirtualService(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/EntitlementLedger.grossVirtualService|grossVirtualService(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/EntitlementLedger.hashCode|hashCode(){}[0]
+    final fun holdings(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.crdt/ReplicaId): kotlin/Long // us.tractat.kuilt.heddle/EntitlementLedger.holdings|holdings(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.crdt.ReplicaId){}[0]
+    final fun isLeaf(us.tractat.kuilt.heddle/GroupId): kotlin/Boolean // us.tractat.kuilt.heddle/EntitlementLedger.isLeaf|isLeaf(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun lifecycle(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Lifecycle? // us.tractat.kuilt.heddle/EntitlementLedger.lifecycle|lifecycle(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun lineageOf(us.tractat.kuilt.heddle/GroupId): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId>? // us.tractat.kuilt.heddle/EntitlementLedger.lineageOf|lineageOf(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun mint(us.tractat.kuilt.heddle/MintId, us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.crdt/ReplicaId, kotlin/Long): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger> // us.tractat.kuilt.heddle/EntitlementLedger.mint|mint(us.tractat.kuilt.heddle.MintId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
+    final fun piece(us.tractat.kuilt.heddle/EntitlementLedger): us.tractat.kuilt.heddle/EntitlementLedger // us.tractat.kuilt.heddle/EntitlementLedger.piece|piece(us.tractat.kuilt.heddle.EntitlementLedger){}[0]
+    final fun prepare(us.tractat.kuilt.heddle/AttachmentRecord): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.prepare|prepare(us.tractat.kuilt.heddle.AttachmentRecord){}[0]
+    final fun record(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/AttachmentRecord? // us.tractat.kuilt.heddle/EntitlementLedger.record|record(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun release(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.heddle/AttachmentId, kotlin/Long): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.release|release(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.heddle.AttachmentId;kotlin.Long){}[0]
+    final fun retire(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.retire|retire(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun seat(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Rational): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.seat|seat(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.Rational){}[0]
+    final fun spend(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.heddle/GroupId, kotlin/Long): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.spend|spend(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
+    final fun spendCaptured(us.tractat.kuilt.crdt/ReplicaId, kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId>, kotlin/Long): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.spendCaptured|spendCaptured(us.tractat.kuilt.crdt.ReplicaId;kotlin.collections.List<us.tractat.kuilt.heddle.AttachmentId>;kotlin.Long){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/EntitlementLedger.toString|toString(){}[0]
+    final fun transfer(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.crdt/ReplicaId, kotlin/Long): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.transfer|transfer(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
+    final fun validate(): kotlin.collections/List<us.tractat.kuilt.heddle/LedgerConflict> // us.tractat.kuilt.heddle/EntitlementLedger.validate|validate(){}[0]
+    final fun virtualService(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/EntitlementLedger.virtualService|virtualService(us.tractat.kuilt.heddle.AttachmentId){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/EntitlementLedger> { // us.tractat.kuilt.heddle/EntitlementLedger.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/EntitlementLedger.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/EntitlementLedger.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/EntitlementLedger.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/EntitlementLedger // us.tractat.kuilt.heddle/EntitlementLedger.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/EntitlementLedger) // us.tractat.kuilt.heddle/EntitlementLedger.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.EntitlementLedger){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/EntitlementLedger.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.heddle/EntitlementLedger.Companion.$childSerializers|{}$childSerializers[0]
+        final val ZERO // us.tractat.kuilt.heddle/EntitlementLedger.Companion.ZERO|{}ZERO[0]
+            final fun <get-ZERO>(): us.tractat.kuilt.heddle/EntitlementLedger // us.tractat.kuilt.heddle/EntitlementLedger.Companion.ZERO.<get-ZERO>|<get-ZERO>(){}[0]
+
+        final fun bootstrap(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Map<us.tractat.kuilt.crdt/ReplicaId, kotlin/Long>, kotlin/String): us.tractat.kuilt.heddle/EntitlementLedger // us.tractat.kuilt.heddle/EntitlementLedger.Companion.bootstrap|bootstrap(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Map<us.tractat.kuilt.crdt.ReplicaId,kotlin.Long>;kotlin.String){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/EntitlementLedger> // us.tractat.kuilt.heddle/EntitlementLedger.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/GateClosed : us.tractat.kuilt.heddle/ReserveOutcome, us.tractat.kuilt.heddle/ScheduleOutcome { // us.tractat.kuilt.heddle/GateClosed|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.heddle/GateClosed.Reason) // us.tractat.kuilt.heddle/GateClosed.<init>|<init>(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.heddle.GateClosed.Reason){}[0]
+
+    final val reason // us.tractat.kuilt.heddle/GateClosed.reason|{}reason[0]
+        final fun <get-reason>(): us.tractat.kuilt.heddle/GateClosed.Reason // us.tractat.kuilt.heddle/GateClosed.reason.<get-reason>|<get-reason>(){}[0]
+    final val replica // us.tractat.kuilt.heddle/GateClosed.replica|{}replica[0]
+        final fun <get-replica>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/GateClosed.replica.<get-replica>|<get-replica>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/GateClosed.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.heddle/GateClosed.Reason // us.tractat.kuilt.heddle/GateClosed.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.crdt/ReplicaId = ..., us.tractat.kuilt.heddle/GateClosed.Reason = ...): us.tractat.kuilt.heddle/GateClosed // us.tractat.kuilt.heddle/GateClosed.copy|copy(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.heddle.GateClosed.Reason){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/GateClosed.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/GateClosed.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/GateClosed.toString|toString(){}[0]
+
+    sealed interface Reason { // us.tractat.kuilt.heddle/GateClosed.Reason|null[0]
+        final object AwaitingEnrollment : us.tractat.kuilt.heddle/GateClosed.Reason { // us.tractat.kuilt.heddle/GateClosed.Reason.AwaitingEnrollment|null[0]
+            final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/GateClosed.Reason.AwaitingEnrollment.equals|equals(kotlin.Any?){}[0]
+            final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/GateClosed.Reason.AwaitingEnrollment.hashCode|hashCode(){}[0]
+            final fun toString(): kotlin/String // us.tractat.kuilt.heddle/GateClosed.Reason.AwaitingEnrollment.toString|toString(){}[0]
+        }
+
+        final object Departed : us.tractat.kuilt.heddle/GateClosed.Reason { // us.tractat.kuilt.heddle/GateClosed.Reason.Departed|null[0]
+            final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/GateClosed.Reason.Departed.equals|equals(kotlin.Any?){}[0]
+            final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/GateClosed.Reason.Departed.hashCode|hashCode(){}[0]
+            final fun toString(): kotlin/String // us.tractat.kuilt.heddle/GateClosed.Reason.Departed.toString|toString(){}[0]
+        }
+    }
+}
+
+final class us.tractat.kuilt.heddle/Gauge { // us.tractat.kuilt.heddle/Gauge|null[0]
+    constructor <init>(us.tractat.kuilt.heddle/Rational, kotlin/Long) // us.tractat.kuilt.heddle/Gauge.<init>|<init>(us.tractat.kuilt.heddle.Rational;kotlin.Long){}[0]
+
+    final val floor // us.tractat.kuilt.heddle/Gauge.floor|{}floor[0]
+        final fun <get-floor>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Gauge.floor.<get-floor>|<get-floor>(){}[0]
+    final val folded // us.tractat.kuilt.heddle/Gauge.folded|{}folded[0]
+        final fun <get-folded>(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.folded.<get-folded>|<get-folded>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Gauge.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.heddle/Rational = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/Gauge // us.tractat.kuilt.heddle/Gauge.copy|copy(us.tractat.kuilt.heddle.Rational;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Gauge.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Gauge.hashCode|hashCode(){}[0]
+    final fun join(us.tractat.kuilt.heddle/Gauge): us.tractat.kuilt.heddle/Gauge // us.tractat.kuilt.heddle/Gauge.join|join(us.tractat.kuilt.heddle.Gauge){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Gauge.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/Gauge> { // us.tractat.kuilt.heddle/Gauge.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/Gauge.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/Gauge.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/Gauge.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Gauge // us.tractat.kuilt.heddle/Gauge.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Gauge) // us.tractat.kuilt.heddle/Gauge.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Gauge){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/Gauge.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Gauge> // us.tractat.kuilt.heddle/Gauge.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/GovernedHeddleNode : us.tractat.kuilt.heddle/FairShareExecution { // us.tractat.kuilt.heddle/GovernedHeddleNode|null[0]
+    final val isWritable // us.tractat.kuilt.heddle/GovernedHeddleNode.isWritable|{}isWritable[0]
+        final fun <get-isWritable>(): kotlin/Boolean // us.tractat.kuilt.heddle/GovernedHeddleNode.isWritable.<get-isWritable>|<get-isWritable>(){}[0]
+    final val ledger // us.tractat.kuilt.heddle/GovernedHeddleNode.ledger|{}ledger[0]
+        final fun <get-ledger>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.heddle/EntitlementLedger> // us.tractat.kuilt.heddle/GovernedHeddleNode.ledger.<get-ledger>|<get-ledger>(){}[0]
+    final val partitionEvents // us.tractat.kuilt.heddle/GovernedHeddleNode.partitionEvents|{}partitionEvents[0]
+        final fun <get-partitionEvents>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.liveness/PartitionEvent> // us.tractat.kuilt.heddle/GovernedHeddleNode.partitionEvents.<get-partitionEvents>|<get-partitionEvents>(){}[0]
+    final val revocation // us.tractat.kuilt.heddle/GovernedHeddleNode.revocation|{}revocation[0]
+        final fun <get-revocation>(): us.tractat.kuilt.heddle/RevocationSeam // us.tractat.kuilt.heddle/GovernedHeddleNode.revocation.<get-revocation>|<get-revocation>(){}[0]
+    final val self // us.tractat.kuilt.heddle/GovernedHeddleNode.self|{}self[0]
+        final fun <get-self>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/GovernedHeddleNode.self.<get-self>|<get-self>(){}[0]
+    final val unreachable // us.tractat.kuilt.heddle/GovernedHeddleNode.unreachable|{}unreachable[0]
+        final fun <get-unreachable>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId>> // us.tractat.kuilt.heddle/GovernedHeddleNode.unreachable.<get-unreachable>|<get-unreachable>(){}[0]
+
+    final fun advertise(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand) // us.tractat.kuilt.heddle/GovernedHeddleNode.advertise|advertise(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.Demand){}[0]
+    final fun boundMetrics(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/BoundMetrics // us.tractat.kuilt.heddle/GovernedHeddleNode.boundMetrics|boundMetrics(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun cancel(us.tractat.kuilt.heddle/ReservationId) // us.tractat.kuilt.heddle/GovernedHeddleNode.cancel|cancel(us.tractat.kuilt.heddle.ReservationId){}[0]
+    final fun complete(us.tractat.kuilt.heddle/ReservationId, kotlin/Long) // us.tractat.kuilt.heddle/GovernedHeddleNode.complete|complete(us.tractat.kuilt.heddle.ReservationId;kotlin.Long){}[0]
+    final fun earmarked(us.tractat.kuilt.heddle/GroupId): kotlin/Long // us.tractat.kuilt.heddle/GovernedHeddleNode.earmarked|earmarked(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun enrolledReplicas(): kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId> // us.tractat.kuilt.heddle/GovernedHeddleNode.enrolledReplicas|enrolledReplicas(){}[0]
+    final fun parentVirtualTime(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/GovernedHeddleNode.parentVirtualTime|parentVirtualTime(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun pendingAcks(us.tractat.kuilt.heddle/AttachmentId): kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId>? // us.tractat.kuilt.heddle/GovernedHeddleNode.pendingAcks|pendingAcks(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun reserve(us.tractat.kuilt.heddle/GroupId, kotlin/Long): us.tractat.kuilt.heddle/ReserveOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.reserve|reserve(us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
+    final fun schedule(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/ScheduleOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.schedule|schedule(us.tractat.kuilt.heddle.GroupId){}[0]
+    final suspend fun activate(us.tractat.kuilt.heddle/AttachmentId, kotlin.time/Duration? = ...): us.tractat.kuilt.heddle/ControlOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.activate|activate(us.tractat.kuilt.heddle.AttachmentId;kotlin.time.Duration?){}[0]
+    final suspend fun close(us.tractat.kuilt.heddle/AttachmentId, kotlin.time/Duration? = ...): us.tractat.kuilt.heddle/ControlOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.close|close(us.tractat.kuilt.heddle.AttachmentId;kotlin.time.Duration?){}[0]
+    final suspend fun depart(kotlin.time/Duration? = ...): us.tractat.kuilt.heddle/ControlOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.depart|depart(kotlin.time.Duration?){}[0]
+    final suspend fun enroll(us.tractat.kuilt.crdt/ReplicaId, kotlin.time/Duration? = ...): us.tractat.kuilt.heddle/ControlOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.enroll|enroll(us.tractat.kuilt.crdt.ReplicaId;kotlin.time.Duration?){}[0]
+    final suspend fun mint(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long, kotlin.time/Duration? = ...): us.tractat.kuilt.heddle/ControlOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.mint|mint(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long;kotlin.time.Duration?){}[0]
+    final suspend fun prepare(us.tractat.kuilt.heddle/AttachmentRecord, kotlin.time/Duration? = ...): us.tractat.kuilt.heddle/ControlOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.prepare|prepare(us.tractat.kuilt.heddle.AttachmentRecord;kotlin.time.Duration?){}[0]
+    final suspend fun quiesce(us.tractat.kuilt.heddle/AttachmentId, kotlin.time/Duration? = ...): us.tractat.kuilt.heddle/ControlOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.quiesce|quiesce(us.tractat.kuilt.heddle.AttachmentId;kotlin.time.Duration?){}[0]
+    final suspend fun reconcile(us.tractat.kuilt.heddle/GroupId, kotlin.time/Duration? = ...): us.tractat.kuilt.heddle/ControlOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.reconcile|reconcile(us.tractat.kuilt.heddle.GroupId;kotlin.time.Duration?){}[0]
+    final suspend fun retire(us.tractat.kuilt.heddle/AttachmentId, kotlin.time/Duration? = ...): us.tractat.kuilt.heddle/ControlOutcome // us.tractat.kuilt.heddle/GovernedHeddleNode.retire|retire(us.tractat.kuilt.heddle.AttachmentId;kotlin.time.Duration?){}[0]
+}
+
+final class us.tractat.kuilt.heddle/Grant { // us.tractat.kuilt.heddle/Grant|null[0]
+    constructor <init>(us.tractat.kuilt.heddle/AttachmentId, kotlin/Long) // us.tractat.kuilt.heddle/Grant.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId;kotlin.Long){}[0]
+
+    final val amount // us.tractat.kuilt.heddle/Grant.amount|{}amount[0]
+        final fun <get-amount>(): kotlin/Long // us.tractat.kuilt.heddle/Grant.amount.<get-amount>|<get-amount>(){}[0]
+    final val attachment // us.tractat.kuilt.heddle/Grant.attachment|{}attachment[0]
+        final fun <get-attachment>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/Grant.attachment.<get-attachment>|<get-attachment>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/Grant.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/Grant.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.heddle/AttachmentId = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/Grant // us.tractat.kuilt.heddle/Grant.copy|copy(us.tractat.kuilt.heddle.AttachmentId;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Grant.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Grant.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Grant.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.heddle/HeddleConfig { // us.tractat.kuilt.heddle/HeddleConfig|null[0]
+    constructor <init>(us.tractat.kuilt.heddle/PolicyConfig, kotlin/Long, kotlin.time/Duration = ..., us.tractat.kuilt.quilter/QuilterConfig = ..., us.tractat.kuilt.liveness/HeartbeatConfig = ..., kotlin.random/Random = ...) // us.tractat.kuilt.heddle/HeddleConfig.<init>|<init>(us.tractat.kuilt.heddle.PolicyConfig;kotlin.Long;kotlin.time.Duration;us.tractat.kuilt.quilter.QuilterConfig;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.random.Random){}[0]
+
+    final val demandTtl // us.tractat.kuilt.heddle/HeddleConfig.demandTtl|{}demandTtl[0]
+        final fun <get-demandTtl>(): kotlin.time/Duration // us.tractat.kuilt.heddle/HeddleConfig.demandTtl.<get-demandTtl>|<get-demandTtl>(){}[0]
+    final val heartbeat // us.tractat.kuilt.heddle/HeddleConfig.heartbeat|{}heartbeat[0]
+        final fun <get-heartbeat>(): us.tractat.kuilt.liveness/HeartbeatConfig // us.tractat.kuilt.heddle/HeddleConfig.heartbeat.<get-heartbeat>|<get-heartbeat>(){}[0]
+    final val maxHoldingsPerPeer // us.tractat.kuilt.heddle/HeddleConfig.maxHoldingsPerPeer|{}maxHoldingsPerPeer[0]
+        final fun <get-maxHoldingsPerPeer>(): kotlin/Long // us.tractat.kuilt.heddle/HeddleConfig.maxHoldingsPerPeer.<get-maxHoldingsPerPeer>|<get-maxHoldingsPerPeer>(){}[0]
+    final val policy // us.tractat.kuilt.heddle/HeddleConfig.policy|{}policy[0]
+        final fun <get-policy>(): us.tractat.kuilt.heddle/PolicyConfig // us.tractat.kuilt.heddle/HeddleConfig.policy.<get-policy>|<get-policy>(){}[0]
+    final val quilter // us.tractat.kuilt.heddle/HeddleConfig.quilter|{}quilter[0]
+        final fun <get-quilter>(): us.tractat.kuilt.quilter/QuilterConfig // us.tractat.kuilt.heddle/HeddleConfig.quilter.<get-quilter>|<get-quilter>(){}[0]
+    final val random // us.tractat.kuilt.heddle/HeddleConfig.random|{}random[0]
+        final fun <get-random>(): kotlin.random/Random // us.tractat.kuilt.heddle/HeddleConfig.random.<get-random>|<get-random>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.heddle/PolicyConfig // us.tractat.kuilt.heddle/HeddleConfig.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/HeddleConfig.component2|component2(){}[0]
+    final fun component3(): kotlin.time/Duration // us.tractat.kuilt.heddle/HeddleConfig.component3|component3(){}[0]
+    final fun component4(): us.tractat.kuilt.quilter/QuilterConfig // us.tractat.kuilt.heddle/HeddleConfig.component4|component4(){}[0]
+    final fun component5(): us.tractat.kuilt.liveness/HeartbeatConfig // us.tractat.kuilt.heddle/HeddleConfig.component5|component5(){}[0]
+    final fun component6(): kotlin.random/Random // us.tractat.kuilt.heddle/HeddleConfig.component6|component6(){}[0]
+    final fun copy(us.tractat.kuilt.heddle/PolicyConfig = ..., kotlin/Long = ..., kotlin.time/Duration = ..., us.tractat.kuilt.quilter/QuilterConfig = ..., us.tractat.kuilt.liveness/HeartbeatConfig = ..., kotlin.random/Random = ...): us.tractat.kuilt.heddle/HeddleConfig // us.tractat.kuilt.heddle/HeddleConfig.copy|copy(us.tractat.kuilt.heddle.PolicyConfig;kotlin.Long;kotlin.time.Duration;us.tractat.kuilt.quilter.QuilterConfig;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.random.Random){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/HeddleConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/HeddleConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/HeddleConfig.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.heddle/HeddleNode : us.tractat.kuilt.heddle/FairShareExecution { // us.tractat.kuilt.heddle/HeddleNode|null[0]
+    final val ledger // us.tractat.kuilt.heddle/HeddleNode.ledger|{}ledger[0]
+        final fun <get-ledger>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.heddle/EntitlementLedger> // us.tractat.kuilt.heddle/HeddleNode.ledger.<get-ledger>|<get-ledger>(){}[0]
+    final val partitionEvents // us.tractat.kuilt.heddle/HeddleNode.partitionEvents|{}partitionEvents[0]
+        final fun <get-partitionEvents>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.liveness/PartitionEvent> // us.tractat.kuilt.heddle/HeddleNode.partitionEvents.<get-partitionEvents>|<get-partitionEvents>(){}[0]
+    final val self // us.tractat.kuilt.heddle/HeddleNode.self|{}self[0]
+        final fun <get-self>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/HeddleNode.self.<get-self>|<get-self>(){}[0]
+    final val unreachable // us.tractat.kuilt.heddle/HeddleNode.unreachable|{}unreachable[0]
+        final fun <get-unreachable>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId>> // us.tractat.kuilt.heddle/HeddleNode.unreachable.<get-unreachable>|<get-unreachable>(){}[0]
+
+    final fun activate(us.tractat.kuilt.heddle/AttachmentId): kotlin/Boolean // us.tractat.kuilt.heddle/HeddleNode.activate|activate(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun advertise(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand) // us.tractat.kuilt.heddle/HeddleNode.advertise|advertise(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.Demand){}[0]
+    final fun boundMetrics(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/BoundMetrics // us.tractat.kuilt.heddle/HeddleNode.boundMetrics|boundMetrics(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun cancel(us.tractat.kuilt.heddle/ReservationId) // us.tractat.kuilt.heddle/HeddleNode.cancel|cancel(us.tractat.kuilt.heddle.ReservationId){}[0]
+    final fun close(us.tractat.kuilt.heddle/AttachmentId): kotlin/Boolean // us.tractat.kuilt.heddle/HeddleNode.close|close(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun complete(us.tractat.kuilt.heddle/ReservationId, kotlin/Long) // us.tractat.kuilt.heddle/HeddleNode.complete|complete(us.tractat.kuilt.heddle.ReservationId;kotlin.Long){}[0]
+    final fun earmarked(us.tractat.kuilt.heddle/GroupId): kotlin/Long // us.tractat.kuilt.heddle/HeddleNode.earmarked|earmarked(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun parentVirtualTime(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/HeddleNode.parentVirtualTime|parentVirtualTime(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun prepare(us.tractat.kuilt.heddle/AttachmentRecord): kotlin/Boolean // us.tractat.kuilt.heddle/HeddleNode.prepare|prepare(us.tractat.kuilt.heddle.AttachmentRecord){}[0]
+    final fun reserve(us.tractat.kuilt.heddle/GroupId, kotlin/Long): us.tractat.kuilt.heddle/ReserveOutcome // us.tractat.kuilt.heddle/HeddleNode.reserve|reserve(us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
+    final fun retire(us.tractat.kuilt.heddle/AttachmentId): kotlin/Boolean // us.tractat.kuilt.heddle/HeddleNode.retire|retire(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun schedule(us.tractat.kuilt.heddle/GroupId): kotlin/Int // us.tractat.kuilt.heddle/HeddleNode.schedule|schedule(us.tractat.kuilt.heddle.GroupId){}[0]
+
+    final object Companion // us.tractat.kuilt.heddle/HeddleNode.Companion|null[0]
+}
+
+final class us.tractat.kuilt.heddle/MintRecord : kotlin/Comparable<us.tractat.kuilt.heddle/MintRecord> { // us.tractat.kuilt.heddle/MintRecord|null[0]
+    constructor <init>(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.crdt/ReplicaId, kotlin/Long) // us.tractat.kuilt.heddle/MintRecord.<init>|<init>(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
+
+    final val amount // us.tractat.kuilt.heddle/MintRecord.amount|{}amount[0]
+        final fun <get-amount>(): kotlin/Long // us.tractat.kuilt.heddle/MintRecord.amount.<get-amount>|<get-amount>(){}[0]
+    final val holder // us.tractat.kuilt.heddle/MintRecord.holder|{}holder[0]
+        final fun <get-holder>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/MintRecord.holder.<get-holder>|<get-holder>(){}[0]
+    final val root // us.tractat.kuilt.heddle/MintRecord.root|{}root[0]
+        final fun <get-root>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/MintRecord.root.<get-root>|<get-root>(){}[0]
+
+    final fun compareTo(us.tractat.kuilt.heddle/MintRecord): kotlin/Int // us.tractat.kuilt.heddle/MintRecord.compareTo|compareTo(us.tractat.kuilt.heddle.MintRecord){}[0]
+    final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/MintRecord.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/MintRecord.component2|component2(){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/MintRecord.component3|component3(){}[0]
+    final fun copy(us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.crdt/ReplicaId = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/MintRecord // us.tractat.kuilt.heddle/MintRecord.copy|copy(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/MintRecord.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/MintRecord.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/MintRecord.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/MintRecord> { // us.tractat.kuilt.heddle/MintRecord.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/MintRecord.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/MintRecord.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/MintRecord.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/MintRecord // us.tractat.kuilt.heddle/MintRecord.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/MintRecord) // us.tractat.kuilt.heddle/MintRecord.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.MintRecord){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/MintRecord.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/MintRecord> // us.tractat.kuilt.heddle/MintRecord.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/PolicyConfig { // us.tractat.kuilt.heddle/PolicyConfig|null[0]
+    constructor <init>(kotlin/Long, kotlin/Long = ..., kotlin/Long = ...) // us.tractat.kuilt.heddle/PolicyConfig.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+
+    final val perChildOutstandingCap // us.tractat.kuilt.heddle/PolicyConfig.perChildOutstandingCap|{}perChildOutstandingCap[0]
+        final fun <get-perChildOutstandingCap>(): kotlin/Long // us.tractat.kuilt.heddle/PolicyConfig.perChildOutstandingCap.<get-perChildOutstandingCap>|<get-perChildOutstandingCap>(){}[0]
+    final val quantum // us.tractat.kuilt.heddle/PolicyConfig.quantum|{}quantum[0]
+        final fun <get-quantum>(): kotlin/Long // us.tractat.kuilt.heddle/PolicyConfig.quantum.<get-quantum>|<get-quantum>(){}[0]
+    final val sleeperCredit // us.tractat.kuilt.heddle/PolicyConfig.sleeperCredit|{}sleeperCredit[0]
+        final fun <get-sleeperCredit>(): kotlin/Long // us.tractat.kuilt.heddle/PolicyConfig.sleeperCredit.<get-sleeperCredit>|<get-sleeperCredit>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.heddle/PolicyConfig.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/PolicyConfig.component2|component2(){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/PolicyConfig.component3|component3(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/PolicyConfig // us.tractat.kuilt.heddle/PolicyConfig.copy|copy(kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/PolicyConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/PolicyConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/PolicyConfig.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.heddle/PolicyEdge { // us.tractat.kuilt.heddle/PolicyEdge|null[0]
+    constructor <init>(us.tractat.kuilt.heddle/AttachmentRecord, us.tractat.kuilt.heddle/EdgeSummary, us.tractat.kuilt.heddle/Demand, us.tractat.kuilt.heddle/Gauge?, kotlin/Long, us.tractat.kuilt.heddle/Rational = ...) // us.tractat.kuilt.heddle/PolicyEdge.<init>|<init>(us.tractat.kuilt.heddle.AttachmentRecord;us.tractat.kuilt.heddle.EdgeSummary;us.tractat.kuilt.heddle.Demand;us.tractat.kuilt.heddle.Gauge?;kotlin.Long;us.tractat.kuilt.heddle.Rational){}[0]
+
+    final val baseIssued // us.tractat.kuilt.heddle/PolicyEdge.baseIssued|{}baseIssued[0]
+        final fun <get-baseIssued>(): kotlin/Long // us.tractat.kuilt.heddle/PolicyEdge.baseIssued.<get-baseIssued>|<get-baseIssued>(){}[0]
+    final val demand // us.tractat.kuilt.heddle/PolicyEdge.demand|{}demand[0]
+        final fun <get-demand>(): us.tractat.kuilt.heddle/Demand // us.tractat.kuilt.heddle/PolicyEdge.demand.<get-demand>|<get-demand>(){}[0]
+    final val gauge // us.tractat.kuilt.heddle/PolicyEdge.gauge|{}gauge[0]
+        final fun <get-gauge>(): us.tractat.kuilt.heddle/Gauge? // us.tractat.kuilt.heddle/PolicyEdge.gauge.<get-gauge>|<get-gauge>(){}[0]
+    final val record // us.tractat.kuilt.heddle/PolicyEdge.record|{}record[0]
+        final fun <get-record>(): us.tractat.kuilt.heddle/AttachmentRecord // us.tractat.kuilt.heddle/PolicyEdge.record.<get-record>|<get-record>(){}[0]
+    final val summary // us.tractat.kuilt.heddle/PolicyEdge.summary|{}summary[0]
+        final fun <get-summary>(): us.tractat.kuilt.heddle/EdgeSummary // us.tractat.kuilt.heddle/PolicyEdge.summary.<get-summary>|<get-summary>(){}[0]
+    final val virtualOffset // us.tractat.kuilt.heddle/PolicyEdge.virtualOffset|{}virtualOffset[0]
+        final fun <get-virtualOffset>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/PolicyEdge.virtualOffset.<get-virtualOffset>|<get-virtualOffset>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.heddle/AttachmentRecord // us.tractat.kuilt.heddle/PolicyEdge.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.heddle/EdgeSummary // us.tractat.kuilt.heddle/PolicyEdge.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.heddle/Demand // us.tractat.kuilt.heddle/PolicyEdge.component3|component3(){}[0]
+    final fun component4(): us.tractat.kuilt.heddle/Gauge? // us.tractat.kuilt.heddle/PolicyEdge.component4|component4(){}[0]
+    final fun component5(): kotlin/Long // us.tractat.kuilt.heddle/PolicyEdge.component5|component5(){}[0]
+    final fun component6(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/PolicyEdge.component6|component6(){}[0]
+    final fun copy(us.tractat.kuilt.heddle/AttachmentRecord = ..., us.tractat.kuilt.heddle/EdgeSummary = ..., us.tractat.kuilt.heddle/Demand = ..., us.tractat.kuilt.heddle/Gauge? = ..., kotlin/Long = ..., us.tractat.kuilt.heddle/Rational = ...): us.tractat.kuilt.heddle/PolicyEdge // us.tractat.kuilt.heddle/PolicyEdge.copy|copy(us.tractat.kuilt.heddle.AttachmentRecord;us.tractat.kuilt.heddle.EdgeSummary;us.tractat.kuilt.heddle.Demand;us.tractat.kuilt.heddle.Gauge?;kotlin.Long;us.tractat.kuilt.heddle.Rational){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/PolicyEdge.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/PolicyEdge.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/PolicyEdge.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.heddle/Rational : kotlin/Comparable<us.tractat.kuilt.heddle/Rational> { // us.tractat.kuilt.heddle/Rational|null[0]
+    final val denominator // us.tractat.kuilt.heddle/Rational.denominator|{}denominator[0]
+        final fun <get-denominator>(): kotlin/Long // us.tractat.kuilt.heddle/Rational.denominator.<get-denominator>|<get-denominator>(){}[0]
+    final val numerator // us.tractat.kuilt.heddle/Rational.numerator|{}numerator[0]
+        final fun <get-numerator>(): kotlin/Long // us.tractat.kuilt.heddle/Rational.numerator.<get-numerator>|<get-numerator>(){}[0]
+
+    final fun ceil(): kotlin/Long // us.tractat.kuilt.heddle/Rational.ceil|ceil(){}[0]
+    final fun compareTo(us.tractat.kuilt.heddle/Rational): kotlin/Int // us.tractat.kuilt.heddle/Rational.compareTo|compareTo(us.tractat.kuilt.heddle.Rational){}[0]
+    final fun div(us.tractat.kuilt.heddle/Rational): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.div|div(us.tractat.kuilt.heddle.Rational){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Rational.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Rational.hashCode|hashCode(){}[0]
+    final fun minus(us.tractat.kuilt.heddle/Rational): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.minus|minus(us.tractat.kuilt.heddle.Rational){}[0]
+    final fun plus(us.tractat.kuilt.heddle/Rational): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.plus|plus(us.tractat.kuilt.heddle.Rational){}[0]
+    final fun times(us.tractat.kuilt.heddle/Rational): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.times|times(us.tractat.kuilt.heddle.Rational){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Rational.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.heddle/Rational.Companion|null[0]
+        final val ONE // us.tractat.kuilt.heddle/Rational.Companion.ONE|{}ONE[0]
+            final fun <get-ONE>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.Companion.ONE.<get-ONE>|<get-ONE>(){}[0]
+        final val ZERO // us.tractat.kuilt.heddle/Rational.Companion.ZERO|{}ZERO[0]
+            final fun <get-ZERO>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.Companion.ZERO.<get-ZERO>|<get-ZERO>(){}[0]
+
+        final fun max(us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.Companion.max|max(us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational){}[0]
+        final fun of(kotlin/Long): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.Companion.of|of(kotlin.Long){}[0]
+        final fun of(kotlin/Long, kotlin/Long): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Rational.Companion.of|of(kotlin.Long;kotlin.Long){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/Weight : kotlin/Comparable<us.tractat.kuilt.heddle/Weight> { // us.tractat.kuilt.heddle/Weight|null[0]
+    final val denominator // us.tractat.kuilt.heddle/Weight.denominator|{}denominator[0]
+        final fun <get-denominator>(): kotlin/Long // us.tractat.kuilt.heddle/Weight.denominator.<get-denominator>|<get-denominator>(){}[0]
+    final val numerator // us.tractat.kuilt.heddle/Weight.numerator|{}numerator[0]
+        final fun <get-numerator>(): kotlin/Long // us.tractat.kuilt.heddle/Weight.numerator.<get-numerator>|<get-numerator>(){}[0]
+
+    final fun compareTo(us.tractat.kuilt.heddle/Weight): kotlin/Int // us.tractat.kuilt.heddle/Weight.compareTo|compareTo(us.tractat.kuilt.heddle.Weight){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Weight.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Weight.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Weight.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.heddle/Weight.Companion|null[0]
+        final val ONE // us.tractat.kuilt.heddle/Weight.Companion.ONE|{}ONE[0]
+            final fun <get-ONE>(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Weight.Companion.ONE.<get-ONE>|<get-ONE>(){}[0]
+
+        final fun of(kotlin/Long): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Weight.Companion.of|of(kotlin.Long){}[0]
+        final fun of(kotlin/Long, kotlin/Long): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Weight.Companion.of|of(kotlin.Long;kotlin.Long){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Weight> // us.tractat.kuilt.heddle/Weight.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.heddle/AttachmentId : kotlin/Comparable<us.tractat.kuilt.heddle/AttachmentId> { // us.tractat.kuilt.heddle/AttachmentId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.heddle/AttachmentId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.heddle/AttachmentId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.heddle/AttachmentId.value.<get-value>|<get-value>(){}[0]
+
+    final fun compareTo(us.tractat.kuilt.heddle/AttachmentId): kotlin/Int // us.tractat.kuilt.heddle/AttachmentId.compareTo|compareTo(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AttachmentId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AttachmentId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AttachmentId.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/AttachmentId> { // us.tractat.kuilt.heddle/AttachmentId.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/AttachmentId.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/AttachmentId.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/AttachmentId.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/AttachmentId.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/AttachmentId) // us.tractat.kuilt.heddle/AttachmentId.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.AttachmentId){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/AttachmentId.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/AttachmentId> // us.tractat.kuilt.heddle/AttachmentId.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.heddle/GroupId : kotlin/Comparable<us.tractat.kuilt.heddle/GroupId> { // us.tractat.kuilt.heddle/GroupId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.heddle/GroupId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.heddle/GroupId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.heddle/GroupId.value.<get-value>|<get-value>(){}[0]
+
+    final fun compareTo(us.tractat.kuilt.heddle/GroupId): kotlin/Int // us.tractat.kuilt.heddle/GroupId.compareTo|compareTo(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/GroupId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/GroupId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/GroupId.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/GroupId> { // us.tractat.kuilt.heddle/GroupId.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/GroupId.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/GroupId.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/GroupId.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/GroupId.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/GroupId.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.GroupId){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/GroupId.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/GroupId.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.heddle/MintId : kotlin/Comparable<us.tractat.kuilt.heddle/MintId> { // us.tractat.kuilt.heddle/MintId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.heddle/MintId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.heddle/MintId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.heddle/MintId.value.<get-value>|<get-value>(){}[0]
+
+    final fun compareTo(us.tractat.kuilt.heddle/MintId): kotlin/Int // us.tractat.kuilt.heddle/MintId.compareTo|compareTo(us.tractat.kuilt.heddle.MintId){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/MintId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/MintId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/MintId.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/MintId> { // us.tractat.kuilt.heddle/MintId.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/MintId.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/MintId.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/MintId.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/MintId // us.tractat.kuilt.heddle/MintId.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/MintId) // us.tractat.kuilt.heddle/MintId.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.MintId){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/MintId.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/MintId> // us.tractat.kuilt.heddle/MintId.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.heddle/PathKey : kotlin/Comparable<us.tractat.kuilt.heddle/PathKey> { // us.tractat.kuilt.heddle/PathKey|null[0]
+    final val value // us.tractat.kuilt.heddle/PathKey.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.heddle/PathKey.value.<get-value>|<get-value>(){}[0]
+
+    final fun compareTo(us.tractat.kuilt.heddle/PathKey): kotlin/Int // us.tractat.kuilt.heddle/PathKey.compareTo|compareTo(us.tractat.kuilt.heddle.PathKey){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/PathKey.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/PathKey.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/PathKey.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/PathKey> { // us.tractat.kuilt.heddle/PathKey.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/PathKey.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/PathKey.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/PathKey.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/PathKey // us.tractat.kuilt.heddle/PathKey.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/PathKey) // us.tractat.kuilt.heddle/PathKey.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.PathKey){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/PathKey.Companion|null[0]
+        final val ROOT // us.tractat.kuilt.heddle/PathKey.Companion.ROOT|{}ROOT[0]
+            final fun <get-ROOT>(): us.tractat.kuilt.heddle/PathKey // us.tractat.kuilt.heddle/PathKey.Companion.ROOT.<get-ROOT>|<get-ROOT>(){}[0]
+
+        final fun of(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/PathKey // us.tractat.kuilt.heddle/PathKey.Companion.of|of(us.tractat.kuilt.heddle.AttachmentId){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/PathKey> // us.tractat.kuilt.heddle/PathKey.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.heddle/ReservationId { // us.tractat.kuilt.heddle/ReservationId|null[0]
+    final val value // us.tractat.kuilt.heddle/ReservationId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.heddle/ReservationId.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ReservationId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ReservationId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ReservationId.toString|toString(){}[0]
+}
+
+final value class us.tractat.kuilt.heddle/ServiceUnits : kotlin/Comparable<us.tractat.kuilt.heddle/ServiceUnits> { // us.tractat.kuilt.heddle/ServiceUnits|null[0]
+    constructor <init>(kotlin/Long) // us.tractat.kuilt.heddle/ServiceUnits.<init>|<init>(kotlin.Long){}[0]
+
+    final val value // us.tractat.kuilt.heddle/ServiceUnits.value|{}value[0]
+        final fun <get-value>(): kotlin/Long // us.tractat.kuilt.heddle/ServiceUnits.value.<get-value>|<get-value>(){}[0]
+
+    final fun compareTo(us.tractat.kuilt.heddle/ServiceUnits): kotlin/Int // us.tractat.kuilt.heddle/ServiceUnits.compareTo|compareTo(us.tractat.kuilt.heddle.ServiceUnits){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ServiceUnits.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ServiceUnits.hashCode|hashCode(){}[0]
+    final fun plus(us.tractat.kuilt.heddle/ServiceUnits): us.tractat.kuilt.heddle/ServiceUnits // us.tractat.kuilt.heddle/ServiceUnits.plus|plus(us.tractat.kuilt.heddle.ServiceUnits){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ServiceUnits.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/ServiceUnits> { // us.tractat.kuilt.heddle/ServiceUnits.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/ServiceUnits.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/ServiceUnits.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/ServiceUnits.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/ServiceUnits // us.tractat.kuilt.heddle/ServiceUnits.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/ServiceUnits) // us.tractat.kuilt.heddle/ServiceUnits.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.ServiceUnits){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/ServiceUnits.Companion|null[0]
+        final val ZERO // us.tractat.kuilt.heddle/ServiceUnits.Companion.ZERO|{}ZERO[0]
+            final fun <get-ZERO>(): us.tractat.kuilt.heddle/ServiceUnits // us.tractat.kuilt.heddle/ServiceUnits.Companion.ZERO.<get-ZERO>|<get-ZERO>(){}[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/ServiceUnits> // us.tractat.kuilt.heddle/ServiceUnits.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final object us.tractat.kuilt.heddle/HeddlePolicy { // us.tractat.kuilt.heddle/HeddlePolicy|null[0]
+    final fun front(kotlin.collections/List<us.tractat.kuilt.heddle/PolicyEdge>, kotlin.collections/Set<us.tractat.kuilt.heddle/AttachmentId> = ...): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/HeddlePolicy.front|front(kotlin.collections.List<us.tractat.kuilt.heddle.PolicyEdge>;kotlin.collections.Set<us.tractat.kuilt.heddle.AttachmentId>){}[0]
+    final fun isDemanding(us.tractat.kuilt.heddle/PolicyEdge): kotlin/Boolean // us.tractat.kuilt.heddle/HeddlePolicy.isDemanding|isDemanding(us.tractat.kuilt.heddle.PolicyEdge){}[0]
+    final fun pick(kotlin.collections/List<us.tractat.kuilt.heddle/PolicyEdge>, us.tractat.kuilt.heddle/PolicyConfig, kotlin/Long): us.tractat.kuilt.heddle/Grant? // us.tractat.kuilt.heddle/HeddlePolicy.pick|pick(kotlin.collections.List<us.tractat.kuilt.heddle.PolicyEdge>;us.tractat.kuilt.heddle.PolicyConfig;kotlin.Long){}[0]
+    final fun virtualService(us.tractat.kuilt.heddle/PolicyEdge): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/HeddlePolicy.virtualService|virtualService(us.tractat.kuilt.heddle.PolicyEdge){}[0]
+    final fun wakeOffset(us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Weight, kotlin/Long): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/HeddlePolicy.wakeOffset|wakeOffset(us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Weight;kotlin.Long){}[0]
+}
+
+final object us.tractat.kuilt.heddle/RationalSerializer : kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Rational> { // us.tractat.kuilt.heddle/RationalSerializer|null[0]
+    final val descriptor // us.tractat.kuilt.heddle/RationalSerializer.descriptor|{}descriptor[0]
+        final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/RationalSerializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+    final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/RationalSerializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+    final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Rational) // us.tractat.kuilt.heddle/RationalSerializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Rational){}[0]
+}
+
+final object us.tractat.kuilt.heddle/WeightSerializer : kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Weight> { // us.tractat.kuilt.heddle/WeightSerializer|null[0]
+    final val descriptor // us.tractat.kuilt.heddle/WeightSerializer.descriptor|{}descriptor[0]
+        final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/WeightSerializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+    final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/WeightSerializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+    final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Weight) // us.tractat.kuilt.heddle/WeightSerializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Weight){}[0]
+}
+
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.heddle/heddleGoverned(us.tractat.kuilt.core/Seam, us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.raft/RaftNode, us.tractat.kuilt.heddle/GroupId, kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.heddle/HeddleConfig, kotlin/String, kotlin/Long): us.tractat.kuilt.heddle/GovernedHeddleNode // us.tractat.kuilt.heddle/heddleGoverned|heddleGoverned@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Seam;us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.raft.RaftNode;us.tractat.kuilt.heddle.GroupId;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.heddle.HeddleConfig;kotlin.String;kotlin.Long){}[0]
+final fun (kotlinx.coroutines/CoroutineScope).us.tractat.kuilt.heddle/heddleStatic(us.tractat.kuilt.core/Seam, us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.heddle/GroupId, kotlin.collections/Map<us.tractat.kuilt.crdt/ReplicaId, kotlin/Long>, kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentRecord> = ..., kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.heddle/HeddleConfig, kotlin/Long): us.tractat.kuilt.heddle/HeddleNode // us.tractat.kuilt.heddle/heddleStatic|heddleStatic@kotlinx.coroutines.CoroutineScope(us.tractat.kuilt.core.Seam;us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.heddle.GroupId;kotlin.collections.Map<us.tractat.kuilt.crdt.ReplicaId,kotlin.Long>;kotlin.collections.List<us.tractat.kuilt.heddle.AttachmentRecord>;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.heddle.HeddleConfig;kotlin.Long){}[0]

@@ -1,0 +1,45 @@
+public final class us/tractat/kuilt/warp/FedAvg : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/warp/FedAvg$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getWeights ()Ljava/util/List;
+	public fun hashCode ()I
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/warp/FedAvg;)Lus/tractat/kuilt/warp/FedAvg;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/FedAvg$Companion {
+	public final fun contribution-tmEOuCI (Ljava/lang/String;JLjava/util/List;J)Lus/tractat/kuilt/warp/FedAvg;
+	public static synthetic fun contribution-tmEOuCI$default (Lus/tractat/kuilt/warp/FedAvg$Companion;Ljava/lang/String;JLjava/util/List;JILjava/lang/Object;)Lus/tractat/kuilt/warp/FedAvg;
+	public final fun getZERO ()Lus/tractat/kuilt/warp/FedAvg;
+}
+
+public final class us/tractat/kuilt/warp/FedAvgKernelCodec {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/FedAvgKernelCodec;
+	public static final field RESULT_LEN I
+	public final fun decodeOutput ([B)Lus/tractat/kuilt/warp/TrainingUpdate;
+	public final fun encodeInput (Ljava/util/List;Ljava/util/List;D)[B
+}
+
+public final class us/tractat/kuilt/warp/ReferenceTrainer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/ReferenceTrainer;
+	public final fun step (Ljava/util/List;Ljava/util/List;D)Ljava/util/List;
+}
+
+public final class us/tractat/kuilt/warp/TrainingUpdate {
+	public fun <init> (JLjava/util/List;)V
+	public final fun component1 ()J
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (JLjava/util/List;)Lus/tractat/kuilt/warp/TrainingUpdate;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/TrainingUpdate;JLjava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/warp/TrainingUpdate;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSampleCount ()J
+	public final fun getWeights ()Ljava/util/List;
+	public fun hashCode ()I
+	public final fun toContribution-8mRuq1Y (Ljava/lang/String;J)Lus/tractat/kuilt/warp/FedAvg;
+	public static synthetic fun toContribution-8mRuq1Y$default (Lus/tractat/kuilt/warp/TrainingUpdate;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/warp/FedAvg;
+	public fun toString ()Ljava/lang/String;
+}
+

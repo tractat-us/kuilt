@@ -1,0 +1,24 @@
+public final class us/tractat/kuilt/otel/otlp/OtlpHttpEdge : us/tractat/kuilt/otel/OtlpEdge {
+	public static final field Companion Lus/tractat/kuilt/otel/otlp/OtlpHttpEdge$Companion;
+	public static final field DEFAULT_MAX_SENT_IDS I
+	public fun <init> (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/otlp/OtlpWireFormat;)V
+	public synthetic fun <init> (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/otlp/OtlpWireFormat;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun digest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun logDigest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun metricDigest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun send (Ljava/util/Set;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun sendLogs (Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun sendMetrics (Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/otel/otlp/OtlpHttpEdge$Companion {
+}
+
+public final class us/tractat/kuilt/otel/otlp/OtlpWireFormat : java/lang/Enum {
+	public static final field JSON Lus/tractat/kuilt/otel/otlp/OtlpWireFormat;
+	public static final field PROTOBUF Lus/tractat/kuilt/otel/otlp/OtlpWireFormat;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/otel/otlp/OtlpWireFormat;
+	public static fun values ()[Lus/tractat/kuilt/otel/otlp/OtlpWireFormat;
+}
+

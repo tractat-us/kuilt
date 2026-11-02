@@ -1,0 +1,46 @@
+public final class us/tractat/kuilt/seal/SealPrivateKey {
+	public static final field Companion Lus/tractat/kuilt/seal/SealPrivateKey$Companion;
+	public final fun encodePkcs8 (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getPublicKey ()Lus/tractat/kuilt/seal/SealPublicKey;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/seal/SealPrivateKey$Companion {
+	public final fun decodePkcs8 ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun generate (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/seal/SealPublicKey {
+	public static final field Companion Lus/tractat/kuilt/seal/SealPublicKey$Companion;
+	public static final field ENCODED_SIZE I
+	public final fun encoded ()[B
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/seal/SealPublicKey$Companion {
+	public final fun decode ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/seal/SealedBox {
+	public static final field INSTANCE Lus/tractat/kuilt/seal/SealedBox;
+	public static final field OVERHEAD I
+	public final fun open (Lus/tractat/kuilt/seal/SealPrivateKey;[B[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun seal (Lus/tractat/kuilt/seal/SealPublicKey;[B[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/seal/SealedBoxException : java/lang/Exception {
+	public final fun getReason ()Lus/tractat/kuilt/seal/SealedBoxException$Reason;
+}
+
+public final class us/tractat/kuilt/seal/SealedBoxException$Reason : java/lang/Enum {
+	public static final field MALFORMED Lus/tractat/kuilt/seal/SealedBoxException$Reason;
+	public static final field NOT_AUTHENTIC Lus/tractat/kuilt/seal/SealedBoxException$Reason;
+	public static final field SEAL_FAILED Lus/tractat/kuilt/seal/SealedBoxException$Reason;
+	public static final field UNSUPPORTED_VERSION Lus/tractat/kuilt/seal/SealedBoxException$Reason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/seal/SealedBoxException$Reason;
+	public static fun values ()[Lus/tractat/kuilt/seal/SealedBoxException$Reason;
+}
+

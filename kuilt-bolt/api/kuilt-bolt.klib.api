@@ -1,0 +1,349 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Alias: apple => [iosArm64, iosSimulatorArm64, macosArm64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-bolt>
+final enum class us.tractat.kuilt.bolt/TruncationReason : kotlin/Enum<us.tractat.kuilt.bolt/TruncationReason> { // us.tractat.kuilt.bolt/TruncationReason|null[0]
+    enum entry Frame // us.tractat.kuilt.bolt/TruncationReason.Frame|null[0]
+    enum entry MissingRegion // us.tractat.kuilt.bolt/TruncationReason.MissingRegion|null[0]
+    enum entry SegmentHeader // us.tractat.kuilt.bolt/TruncationReason.SegmentHeader|null[0]
+
+    final val entries // us.tractat.kuilt.bolt/TruncationReason.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.bolt/TruncationReason> // us.tractat.kuilt.bolt/TruncationReason.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.bolt/TruncationReason // us.tractat.kuilt.bolt/TruncationReason.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.bolt/TruncationReason> // us.tractat.kuilt.bolt/TruncationReason.values|values#static(){}[0]
+}
+
+abstract interface <#A: kotlin/Any?> us.tractat.kuilt.bolt/Bolt { // us.tractat.kuilt.bolt/Bolt|null[0]
+    abstract fun availability(): us.tractat.kuilt.bolt/BoltAvailability // us.tractat.kuilt.bolt/Bolt.availability|availability(){}[0]
+    abstract fun durability(): us.tractat.kuilt.bolt/DurabilityState // us.tractat.kuilt.bolt/Bolt.durability|durability(){}[0]
+    abstract fun replay(us.tractat.kuilt.bolt/ReplayScope): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.bolt/ReplayEvent<#A>> // us.tractat.kuilt.bolt/Bolt.replay|replay(us.tractat.kuilt.bolt.ReplayScope){}[0]
+    abstract suspend fun append(kotlin.collections/List<#A>): us.tractat.kuilt.bolt/AppendResult // us.tractat.kuilt.bolt/Bolt.append|append(kotlin.collections.List<1:0>){}[0]
+}
+
+sealed interface <#A: out kotlin/Any?> us.tractat.kuilt.bolt/ReplayEvent // us.tractat.kuilt.bolt/ReplayEvent|null[0]
+
+sealed interface us.tractat.kuilt.bolt/AppendResult { // us.tractat.kuilt.bolt/AppendResult|null[0]
+    final class Failed : us.tractat.kuilt.bolt/AppendResult { // us.tractat.kuilt.bolt/AppendResult.Failed|null[0]
+        constructor <init>(kotlin/String, kotlin.collections/Set<us.tractat.kuilt.crdt/Dot>, kotlin/Long?, kotlin/Long? = ..., kotlin/Throwable? = ...) // us.tractat.kuilt.bolt/AppendResult.Failed.<init>|<init>(kotlin.String;kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>;kotlin.Long?;kotlin.Long?;kotlin.Throwable?){}[0]
+
+        final val cause // us.tractat.kuilt.bolt/AppendResult.Failed.cause|{}cause[0]
+            final fun <get-cause>(): kotlin/Throwable? // us.tractat.kuilt.bolt/AppendResult.Failed.cause.<get-cause>|<get-cause>(){}[0]
+        final val endOffset // us.tractat.kuilt.bolt/AppendResult.Failed.endOffset|{}endOffset[0]
+            final fun <get-endOffset>(): kotlin/Long? // us.tractat.kuilt.bolt/AppendResult.Failed.endOffset.<get-endOffset>|<get-endOffset>(){}[0]
+        final val insertDots // us.tractat.kuilt.bolt/AppendResult.Failed.insertDots|{}insertDots[0]
+            final fun <get-insertDots>(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.bolt/AppendResult.Failed.insertDots.<get-insertDots>|<get-insertDots>(){}[0]
+        final val offset // us.tractat.kuilt.bolt/AppendResult.Failed.offset|{}offset[0]
+            final fun <get-offset>(): kotlin/Long? // us.tractat.kuilt.bolt/AppendResult.Failed.offset.<get-offset>|<get-offset>(){}[0]
+        final val reason // us.tractat.kuilt.bolt/AppendResult.Failed.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.bolt/AppendResult.Failed.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.bolt/AppendResult.Failed.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.bolt/AppendResult.Failed.component2|component2(){}[0]
+        final fun component3(): kotlin/Long? // us.tractat.kuilt.bolt/AppendResult.Failed.component3|component3(){}[0]
+        final fun component4(): kotlin/Long? // us.tractat.kuilt.bolt/AppendResult.Failed.component4|component4(){}[0]
+        final fun component5(): kotlin/Throwable? // us.tractat.kuilt.bolt/AppendResult.Failed.component5|component5(){}[0]
+        final fun copy(kotlin/String = ..., kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> = ..., kotlin/Long? = ..., kotlin/Long? = ..., kotlin/Throwable? = ...): us.tractat.kuilt.bolt/AppendResult.Failed // us.tractat.kuilt.bolt/AppendResult.Failed.copy|copy(kotlin.String;kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>;kotlin.Long?;kotlin.Long?;kotlin.Throwable?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/AppendResult.Failed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/AppendResult.Failed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/AppendResult.Failed.toString|toString(){}[0]
+    }
+
+    final class Written : us.tractat.kuilt.bolt/AppendResult { // us.tractat.kuilt.bolt/AppendResult.Written|null[0]
+        constructor <init>(kotlin/Long, kotlin/Long, kotlin/Int, kotlin.collections/Set<us.tractat.kuilt.crdt/Dot>) // us.tractat.kuilt.bolt/AppendResult.Written.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Int;kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>){}[0]
+
+        final val endOffset // us.tractat.kuilt.bolt/AppendResult.Written.endOffset|{}endOffset[0]
+            final fun <get-endOffset>(): kotlin/Long // us.tractat.kuilt.bolt/AppendResult.Written.endOffset.<get-endOffset>|<get-endOffset>(){}[0]
+        final val insertDots // us.tractat.kuilt.bolt/AppendResult.Written.insertDots|{}insertDots[0]
+            final fun <get-insertDots>(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.bolt/AppendResult.Written.insertDots.<get-insertDots>|<get-insertDots>(){}[0]
+        final val offset // us.tractat.kuilt.bolt/AppendResult.Written.offset|{}offset[0]
+            final fun <get-offset>(): kotlin/Long // us.tractat.kuilt.bolt/AppendResult.Written.offset.<get-offset>|<get-offset>(){}[0]
+        final val opCount // us.tractat.kuilt.bolt/AppendResult.Written.opCount|{}opCount[0]
+            final fun <get-opCount>(): kotlin/Int // us.tractat.kuilt.bolt/AppendResult.Written.opCount.<get-opCount>|<get-opCount>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.bolt/AppendResult.Written.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.bolt/AppendResult.Written.component2|component2(){}[0]
+        final fun component3(): kotlin/Int // us.tractat.kuilt.bolt/AppendResult.Written.component3|component3(){}[0]
+        final fun component4(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.bolt/AppendResult.Written.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ..., kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> = ...): us.tractat.kuilt.bolt/AppendResult.Written // us.tractat.kuilt.bolt/AppendResult.Written.copy|copy(kotlin.Long;kotlin.Long;kotlin.Int;kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/AppendResult.Written.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/AppendResult.Written.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/AppendResult.Written.toString|toString(){}[0]
+    }
+
+    final object Skipped : us.tractat.kuilt.bolt/AppendResult { // us.tractat.kuilt.bolt/AppendResult.Skipped|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/AppendResult.Skipped.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/AppendResult.Skipped.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/AppendResult.Skipped.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.bolt/BoltAvailability { // us.tractat.kuilt.bolt/BoltAvailability|null[0]
+    final class Unavailable : us.tractat.kuilt.bolt/BoltAvailability { // us.tractat.kuilt.bolt/BoltAvailability.Unavailable|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.bolt/BoltAvailability.Unavailable.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.bolt/BoltAvailability.Unavailable.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.bolt/BoltAvailability.Unavailable.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.bolt/BoltAvailability.Unavailable.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.bolt/BoltAvailability.Unavailable // us.tractat.kuilt.bolt/BoltAvailability.Unavailable.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/BoltAvailability.Unavailable.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/BoltAvailability.Unavailable.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/BoltAvailability.Unavailable.toString|toString(){}[0]
+    }
+
+    final class Unknown : us.tractat.kuilt.bolt/BoltAvailability { // us.tractat.kuilt.bolt/BoltAvailability.Unknown|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.bolt/BoltAvailability.Unknown.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.bolt/BoltAvailability.Unknown.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.bolt/BoltAvailability.Unknown.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.bolt/BoltAvailability.Unknown.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.bolt/BoltAvailability.Unknown // us.tractat.kuilt.bolt/BoltAvailability.Unknown.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/BoltAvailability.Unknown.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/BoltAvailability.Unknown.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/BoltAvailability.Unknown.toString|toString(){}[0]
+    }
+
+    final object Available : us.tractat.kuilt.bolt/BoltAvailability { // us.tractat.kuilt.bolt/BoltAvailability.Available|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/BoltAvailability.Available.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/BoltAvailability.Available.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/BoltAvailability.Available.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.bolt/DurabilityState { // us.tractat.kuilt.bolt/DurabilityState|null[0]
+    final class Degraded : us.tractat.kuilt.bolt/DurabilityState { // us.tractat.kuilt.bolt/DurabilityState.Degraded|null[0]
+        constructor <init>(kotlin/Long, kotlin/Long, kotlin/String, kotlin/Throwable? = ...) // us.tractat.kuilt.bolt/DurabilityState.Degraded.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.String;kotlin.Throwable?){}[0]
+
+        final val cause // us.tractat.kuilt.bolt/DurabilityState.Degraded.cause|{}cause[0]
+            final fun <get-cause>(): kotlin/Throwable? // us.tractat.kuilt.bolt/DurabilityState.Degraded.cause.<get-cause>|<get-cause>(){}[0]
+        final val fromOffset // us.tractat.kuilt.bolt/DurabilityState.Degraded.fromOffset|{}fromOffset[0]
+            final fun <get-fromOffset>(): kotlin/Long // us.tractat.kuilt.bolt/DurabilityState.Degraded.fromOffset.<get-fromOffset>|<get-fromOffset>(){}[0]
+        final val reason // us.tractat.kuilt.bolt/DurabilityState.Degraded.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.bolt/DurabilityState.Degraded.reason.<get-reason>|<get-reason>(){}[0]
+        final val toOffset // us.tractat.kuilt.bolt/DurabilityState.Degraded.toOffset|{}toOffset[0]
+            final fun <get-toOffset>(): kotlin/Long // us.tractat.kuilt.bolt/DurabilityState.Degraded.toOffset.<get-toOffset>|<get-toOffset>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.bolt/DurabilityState.Degraded.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.bolt/DurabilityState.Degraded.component2|component2(){}[0]
+        final fun component3(): kotlin/String // us.tractat.kuilt.bolt/DurabilityState.Degraded.component3|component3(){}[0]
+        final fun component4(): kotlin/Throwable? // us.tractat.kuilt.bolt/DurabilityState.Degraded.component4|component4(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/String = ..., kotlin/Throwable? = ...): us.tractat.kuilt.bolt/DurabilityState.Degraded // us.tractat.kuilt.bolt/DurabilityState.Degraded.copy|copy(kotlin.Long;kotlin.Long;kotlin.String;kotlin.Throwable?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/DurabilityState.Degraded.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/DurabilityState.Degraded.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/DurabilityState.Degraded.toString|toString(){}[0]
+    }
+
+    final object AsPromised : us.tractat.kuilt.bolt/DurabilityState { // us.tractat.kuilt.bolt/DurabilityState.AsPromised|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/DurabilityState.AsPromised.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/DurabilityState.AsPromised.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/DurabilityState.AsPromised.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.bolt/ReplayScope { // us.tractat.kuilt.bolt/ReplayScope|null[0]
+    final class Arrived : us.tractat.kuilt.bolt/ReplayScope { // us.tractat.kuilt.bolt/ReplayScope.Arrived|null[0]
+        constructor <init>(kotlin.time/Instant, kotlin.time/Instant) // us.tractat.kuilt.bolt/ReplayScope.Arrived.<init>|<init>(kotlin.time.Instant;kotlin.time.Instant){}[0]
+
+        final val from // us.tractat.kuilt.bolt/ReplayScope.Arrived.from|{}from[0]
+            final fun <get-from>(): kotlin.time/Instant // us.tractat.kuilt.bolt/ReplayScope.Arrived.from.<get-from>|<get-from>(){}[0]
+        final val untilExclusive // us.tractat.kuilt.bolt/ReplayScope.Arrived.untilExclusive|{}untilExclusive[0]
+            final fun <get-untilExclusive>(): kotlin.time/Instant // us.tractat.kuilt.bolt/ReplayScope.Arrived.untilExclusive.<get-untilExclusive>|<get-untilExclusive>(){}[0]
+
+        final fun component1(): kotlin.time/Instant // us.tractat.kuilt.bolt/ReplayScope.Arrived.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Instant // us.tractat.kuilt.bolt/ReplayScope.Arrived.component2|component2(){}[0]
+        final fun copy(kotlin.time/Instant = ..., kotlin.time/Instant = ...): us.tractat.kuilt.bolt/ReplayScope.Arrived // us.tractat.kuilt.bolt/ReplayScope.Arrived.copy|copy(kotlin.time.Instant;kotlin.time.Instant){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/ReplayScope.Arrived.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/ReplayScope.Arrived.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/ReplayScope.Arrived.toString|toString(){}[0]
+    }
+
+    final class FromOffset : us.tractat.kuilt.bolt/ReplayScope { // us.tractat.kuilt.bolt/ReplayScope.FromOffset|null[0]
+        constructor <init>(kotlin/Long) // us.tractat.kuilt.bolt/ReplayScope.FromOffset.<init>|<init>(kotlin.Long){}[0]
+
+        final val offset // us.tractat.kuilt.bolt/ReplayScope.FromOffset.offset|{}offset[0]
+            final fun <get-offset>(): kotlin/Long // us.tractat.kuilt.bolt/ReplayScope.FromOffset.offset.<get-offset>|<get-offset>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.bolt/ReplayScope.FromOffset.component1|component1(){}[0]
+        final fun copy(kotlin/Long = ...): us.tractat.kuilt.bolt/ReplayScope.FromOffset // us.tractat.kuilt.bolt/ReplayScope.FromOffset.copy|copy(kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/ReplayScope.FromOffset.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/ReplayScope.FromOffset.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/ReplayScope.FromOffset.toString|toString(){}[0]
+    }
+
+    final class InsertsAbove : us.tractat.kuilt.bolt/ReplayScope { // us.tractat.kuilt.bolt/ReplayScope.InsertsAbove|null[0]
+        constructor <init>(us.tractat.kuilt.crdt/VersionVector) // us.tractat.kuilt.bolt/ReplayScope.InsertsAbove.<init>|<init>(us.tractat.kuilt.crdt.VersionVector){}[0]
+
+        final val floor // us.tractat.kuilt.bolt/ReplayScope.InsertsAbove.floor|{}floor[0]
+            final fun <get-floor>(): us.tractat.kuilt.crdt/VersionVector // us.tractat.kuilt.bolt/ReplayScope.InsertsAbove.floor.<get-floor>|<get-floor>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.crdt/VersionVector // us.tractat.kuilt.bolt/ReplayScope.InsertsAbove.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.crdt/VersionVector = ...): us.tractat.kuilt.bolt/ReplayScope.InsertsAbove // us.tractat.kuilt.bolt/ReplayScope.InsertsAbove.copy|copy(us.tractat.kuilt.crdt.VersionVector){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/ReplayScope.InsertsAbove.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/ReplayScope.InsertsAbove.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/ReplayScope.InsertsAbove.toString|toString(){}[0]
+    }
+
+    final object All : us.tractat.kuilt.bolt/ReplayScope { // us.tractat.kuilt.bolt/ReplayScope.All|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/ReplayScope.All.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/ReplayScope.All.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.bolt/ReplayScope.All.toString|toString(){}[0]
+    }
+}
+
+final class <#A: kotlin/Any, #B: kotlin/Any?, #C: kotlin/Any> us.tractat.kuilt.bolt/BoltArchiveFormat { // us.tractat.kuilt.bolt/BoltArchiveFormat|null[0]
+    constructor <init>(us.tractat.kuilt.crdt/OpLogCrdt<#A, #B, #C>, kotlinx.serialization/KSerializer<#B>) // us.tractat.kuilt.bolt/BoltArchiveFormat.<init>|<init>(us.tractat.kuilt.crdt.OpLogCrdt<1:0,1:1,1:2>;kotlinx.serialization.KSerializer<1:1>){}[0]
+
+    final val elementType // us.tractat.kuilt.bolt/BoltArchiveFormat.elementType|{}elementType[0]
+        final fun <get-elementType>(): kotlin/String // us.tractat.kuilt.bolt/BoltArchiveFormat.elementType.<get-elementType>|<get-elementType>(){}[0]
+    final val opFormat // us.tractat.kuilt.bolt/BoltArchiveFormat.opFormat|{}opFormat[0]
+        final fun <get-opFormat>(): kotlin/String // us.tractat.kuilt.bolt/BoltArchiveFormat.opFormat.<get-opFormat>|<get-opFormat>(){}[0]
+
+    final object Companion { // us.tractat.kuilt.bolt/BoltArchiveFormat.Companion|null[0]
+        final fun <#A2: kotlin/Any?> fugue(kotlinx.serialization/KSerializer<#A2>): us.tractat.kuilt.bolt/BoltArchiveFormat<us.tractat.kuilt.crdt/FugueId, #A2, us.tractat.kuilt.crdt/FugueOp<#A2>> // us.tractat.kuilt.bolt/BoltArchiveFormat.Companion.fugue|fugue(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+        final fun <#A2: kotlin/Any?> rga(kotlinx.serialization/KSerializer<#A2>): us.tractat.kuilt.bolt/BoltArchiveFormat<us.tractat.kuilt.crdt/RgaId, #A2, us.tractat.kuilt.crdt/RgaOp<#A2>> // us.tractat.kuilt.bolt/BoltArchiveFormat.Companion.rga|rga(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+    }
+}
+
+final class <#A: kotlin/Any, #B: kotlin/Any?, #C: kotlin/Any> us.tractat.kuilt.bolt/BoltDecorator { // us.tractat.kuilt.bolt/BoltDecorator|null[0]
+    constructor <init>(us.tractat.kuilt.bolt/Bolt<#C>, us.tractat.kuilt.bolt/BoltArchiveFormat<#A, #B, #C>, kotlin/Int = ..., kotlin/Int = ...) // us.tractat.kuilt.bolt/BoltDecorator.<init>|<init>(us.tractat.kuilt.bolt.Bolt<1:2>;us.tractat.kuilt.bolt.BoltArchiveFormat<1:0,1:1,1:2>;kotlin.Int;kotlin.Int){}[0]
+
+    final val health // us.tractat.kuilt.bolt/BoltDecorator.health|{}health[0]
+        final fun <get-health>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.bolt/ArchiveHealth> // us.tractat.kuilt.bolt/BoltDecorator.health.<get-health>|<get-health>(){}[0]
+
+    final suspend fun publish(kotlin.collections/List<#C>): us.tractat.kuilt.bolt/AppendResult // us.tractat.kuilt.bolt/BoltDecorator.publish|publish(kotlin.collections.List<1:2>){}[0]
+
+    final object Companion { // us.tractat.kuilt.bolt/BoltDecorator.Companion|null[0]
+        final const val DEFAULT_FRONTIER_WINDOW // us.tractat.kuilt.bolt/BoltDecorator.Companion.DEFAULT_FRONTIER_WINDOW|{}DEFAULT_FRONTIER_WINDOW[0]
+            final fun <get-DEFAULT_FRONTIER_WINDOW>(): kotlin/Int // us.tractat.kuilt.bolt/BoltDecorator.Companion.DEFAULT_FRONTIER_WINDOW.<get-DEFAULT_FRONTIER_WINDOW>|<get-DEFAULT_FRONTIER_WINDOW>(){}[0]
+        final const val DEFAULT_REMOVAL_WINDOW // us.tractat.kuilt.bolt/BoltDecorator.Companion.DEFAULT_REMOVAL_WINDOW|{}DEFAULT_REMOVAL_WINDOW[0]
+            final fun <get-DEFAULT_REMOVAL_WINDOW>(): kotlin/Int // us.tractat.kuilt.bolt/BoltDecorator.Companion.DEFAULT_REMOVAL_WINDOW.<get-DEFAULT_REMOVAL_WINDOW>|<get-DEFAULT_REMOVAL_WINDOW>(){}[0]
+        final const val RETAINED_FAILURES // us.tractat.kuilt.bolt/BoltDecorator.Companion.RETAINED_FAILURES|{}RETAINED_FAILURES[0]
+            final fun <get-RETAINED_FAILURES>(): kotlin/Int // us.tractat.kuilt.bolt/BoltDecorator.Companion.RETAINED_FAILURES.<get-RETAINED_FAILURES>|<get-RETAINED_FAILURES>(){}[0]
+    }
+}
+
+final class <#A: kotlin/Any, #B: kotlin/Any?, #C: kotlin/Any> us.tractat.kuilt.bolt/InMemoryBolt : us.tractat.kuilt.bolt/Bolt<#C> { // us.tractat.kuilt.bolt/InMemoryBolt|null[0]
+    constructor <init>(us.tractat.kuilt.bolt/BoltArchiveFormat<#A, #B, #C>, kotlin.time/Clock, kotlin/Long = ..., kotlin/Long = ...) // us.tractat.kuilt.bolt/InMemoryBolt.<init>|<init>(us.tractat.kuilt.bolt.BoltArchiveFormat<1:0,1:1,1:2>;kotlin.time.Clock;kotlin.Long;kotlin.Long){}[0]
+
+    final fun availability(): us.tractat.kuilt.bolt/BoltAvailability // us.tractat.kuilt.bolt/InMemoryBolt.availability|availability(){}[0]
+    final fun durability(): us.tractat.kuilt.bolt/DurabilityState // us.tractat.kuilt.bolt/InMemoryBolt.durability|durability(){}[0]
+    final fun replay(us.tractat.kuilt.bolt/ReplayScope): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.bolt/ReplayEvent<#C>> // us.tractat.kuilt.bolt/InMemoryBolt.replay|replay(us.tractat.kuilt.bolt.ReplayScope){}[0]
+    final suspend fun append(kotlin.collections/List<#C>): us.tractat.kuilt.bolt/AppendResult // us.tractat.kuilt.bolt/InMemoryBolt.append|append(kotlin.collections.List<1:2>){}[0]
+
+    final object Companion { // us.tractat.kuilt.bolt/InMemoryBolt.Companion|null[0]
+        final const val DEFAULT_SEGMENT_FRAME_BYTES // us.tractat.kuilt.bolt/InMemoryBolt.Companion.DEFAULT_SEGMENT_FRAME_BYTES|{}DEFAULT_SEGMENT_FRAME_BYTES[0]
+            final fun <get-DEFAULT_SEGMENT_FRAME_BYTES>(): kotlin/Long // us.tractat.kuilt.bolt/InMemoryBolt.Companion.DEFAULT_SEGMENT_FRAME_BYTES.<get-DEFAULT_SEGMENT_FRAME_BYTES>|<get-DEFAULT_SEGMENT_FRAME_BYTES>(){}[0]
+    }
+}
+
+final class <#A: kotlin/Any?> us.tractat.kuilt.bolt/Archived : us.tractat.kuilt.bolt/ReplayEvent<#A> { // us.tractat.kuilt.bolt/Archived|null[0]
+    constructor <init>(kotlin/Long, kotlin/Long, kotlin.time/Instant, kotlin.collections/Set<us.tractat.kuilt.crdt/Dot>, kotlin/String?, kotlin.collections/List<#A>) // us.tractat.kuilt.bolt/Archived.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.time.Instant;kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>;kotlin.String?;kotlin.collections.List<1:0>){}[0]
+
+    final val arrivedAt // us.tractat.kuilt.bolt/Archived.arrivedAt|{}arrivedAt[0]
+        final fun <get-arrivedAt>(): kotlin.time/Instant // us.tractat.kuilt.bolt/Archived.arrivedAt.<get-arrivedAt>|<get-arrivedAt>(){}[0]
+    final val endOffset // us.tractat.kuilt.bolt/Archived.endOffset|{}endOffset[0]
+        final fun <get-endOffset>(): kotlin/Long // us.tractat.kuilt.bolt/Archived.endOffset.<get-endOffset>|<get-endOffset>(){}[0]
+    final val insertDots // us.tractat.kuilt.bolt/Archived.insertDots|{}insertDots[0]
+        final fun <get-insertDots>(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.bolt/Archived.insertDots.<get-insertDots>|<get-insertDots>(){}[0]
+    final val key // us.tractat.kuilt.bolt/Archived.key|{}key[0]
+        final fun <get-key>(): kotlin/String? // us.tractat.kuilt.bolt/Archived.key.<get-key>|<get-key>(){}[0]
+    final val offset // us.tractat.kuilt.bolt/Archived.offset|{}offset[0]
+        final fun <get-offset>(): kotlin/Long // us.tractat.kuilt.bolt/Archived.offset.<get-offset>|<get-offset>(){}[0]
+    final val ops // us.tractat.kuilt.bolt/Archived.ops|{}ops[0]
+        final fun <get-ops>(): kotlin.collections/List<#A> // us.tractat.kuilt.bolt/Archived.ops.<get-ops>|<get-ops>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.bolt/Archived.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.bolt/Archived.component2|component2(){}[0]
+    final fun component3(): kotlin.time/Instant // us.tractat.kuilt.bolt/Archived.component3|component3(){}[0]
+    final fun component4(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.bolt/Archived.component4|component4(){}[0]
+    final fun component5(): kotlin/String? // us.tractat.kuilt.bolt/Archived.component5|component5(){}[0]
+    final fun component6(): kotlin.collections/List<#A> // us.tractat.kuilt.bolt/Archived.component6|component6(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin.time/Instant = ..., kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> = ..., kotlin/String? = ..., kotlin.collections/List<#A> = ...): us.tractat.kuilt.bolt/Archived<#A> // us.tractat.kuilt.bolt/Archived.copy|copy(kotlin.Long;kotlin.Long;kotlin.time.Instant;kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>;kotlin.String?;kotlin.collections.List<1:0>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/Archived.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/Archived.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.bolt/Archived.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.bolt/ArchiveHealth { // us.tractat.kuilt.bolt/ArchiveHealth|null[0]
+    constructor <init>(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin.collections/List<us.tractat.kuilt.bolt/AppendResult.Failed> = ..., us.tractat.kuilt.bolt/DurabilityState = ...) // us.tractat.kuilt.bolt/ArchiveHealth.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.collections.List<us.tractat.kuilt.bolt.AppendResult.Failed>;us.tractat.kuilt.bolt.DurabilityState){}[0]
+
+    final val appendsFailed // us.tractat.kuilt.bolt/ArchiveHealth.appendsFailed|{}appendsFailed[0]
+        final fun <get-appendsFailed>(): kotlin/Long // us.tractat.kuilt.bolt/ArchiveHealth.appendsFailed.<get-appendsFailed>|<get-appendsFailed>(){}[0]
+    final val durability // us.tractat.kuilt.bolt/ArchiveHealth.durability|{}durability[0]
+        final fun <get-durability>(): us.tractat.kuilt.bolt/DurabilityState // us.tractat.kuilt.bolt/ArchiveHealth.durability.<get-durability>|<get-durability>(){}[0]
+    final val framesWritten // us.tractat.kuilt.bolt/ArchiveHealth.framesWritten|{}framesWritten[0]
+        final fun <get-framesWritten>(): kotlin/Long // us.tractat.kuilt.bolt/ArchiveHealth.framesWritten.<get-framesWritten>|<get-framesWritten>(){}[0]
+    final val opsArchived // us.tractat.kuilt.bolt/ArchiveHealth.opsArchived|{}opsArchived[0]
+        final fun <get-opsArchived>(): kotlin/Long // us.tractat.kuilt.bolt/ArchiveHealth.opsArchived.<get-opsArchived>|<get-opsArchived>(){}[0]
+    final val opsDeduplicated // us.tractat.kuilt.bolt/ArchiveHealth.opsDeduplicated|{}opsDeduplicated[0]
+        final fun <get-opsDeduplicated>(): kotlin/Long // us.tractat.kuilt.bolt/ArchiveHealth.opsDeduplicated.<get-opsDeduplicated>|<get-opsDeduplicated>(){}[0]
+    final val recentFailures // us.tractat.kuilt.bolt/ArchiveHealth.recentFailures|{}recentFailures[0]
+        final fun <get-recentFailures>(): kotlin.collections/List<us.tractat.kuilt.bolt/AppendResult.Failed> // us.tractat.kuilt.bolt/ArchiveHealth.recentFailures.<get-recentFailures>|<get-recentFailures>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.bolt/ArchiveHealth.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.bolt/ArchiveHealth.component2|component2(){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.bolt/ArchiveHealth.component3|component3(){}[0]
+    final fun component4(): kotlin/Long // us.tractat.kuilt.bolt/ArchiveHealth.component4|component4(){}[0]
+    final fun component5(): kotlin.collections/List<us.tractat.kuilt.bolt/AppendResult.Failed> // us.tractat.kuilt.bolt/ArchiveHealth.component5|component5(){}[0]
+    final fun component6(): us.tractat.kuilt.bolt/DurabilityState // us.tractat.kuilt.bolt/ArchiveHealth.component6|component6(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin.collections/List<us.tractat.kuilt.bolt/AppendResult.Failed> = ..., us.tractat.kuilt.bolt/DurabilityState = ...): us.tractat.kuilt.bolt/ArchiveHealth // us.tractat.kuilt.bolt/ArchiveHealth.copy|copy(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.collections.List<us.tractat.kuilt.bolt.AppendResult.Failed>;us.tractat.kuilt.bolt.DurabilityState){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/ArchiveHealth.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/ArchiveHealth.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.bolt/ArchiveHealth.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.bolt/BoltFormatException : kotlin/Exception { // us.tractat.kuilt.bolt/BoltFormatException|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.bolt/BoltFormatException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.bolt/Truncated : us.tractat.kuilt.bolt/ReplayEvent<kotlin/Nothing> { // us.tractat.kuilt.bolt/Truncated|null[0]
+    constructor <init>(kotlin/Long, us.tractat.kuilt.bolt/TruncationReason) // us.tractat.kuilt.bolt/Truncated.<init>|<init>(kotlin.Long;us.tractat.kuilt.bolt.TruncationReason){}[0]
+
+    final val atOffset // us.tractat.kuilt.bolt/Truncated.atOffset|{}atOffset[0]
+        final fun <get-atOffset>(): kotlin/Long // us.tractat.kuilt.bolt/Truncated.atOffset.<get-atOffset>|<get-atOffset>(){}[0]
+    final val reason // us.tractat.kuilt.bolt/Truncated.reason|{}reason[0]
+        final fun <get-reason>(): us.tractat.kuilt.bolt/TruncationReason // us.tractat.kuilt.bolt/Truncated.reason.<get-reason>|<get-reason>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.bolt/Truncated.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.bolt/TruncationReason // us.tractat.kuilt.bolt/Truncated.component2|component2(){}[0]
+    final fun copy(kotlin/Long = ..., us.tractat.kuilt.bolt/TruncationReason = ...): us.tractat.kuilt.bolt/Truncated // us.tractat.kuilt.bolt/Truncated.copy|copy(kotlin.Long;us.tractat.kuilt.bolt.TruncationReason){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/Truncated.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/Truncated.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.bolt/Truncated.toString|toString(){}[0]
+}
+
+final object us.tractat.kuilt.bolt/CleanTail : us.tractat.kuilt.bolt/ReplayEvent<kotlin/Nothing> { // us.tractat.kuilt.bolt/CleanTail|null[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.bolt/CleanTail.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.bolt/CleanTail.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.bolt/CleanTail.toString|toString(){}[0]
+}
+
+final const val us.tractat.kuilt.bolt/BOLT_FORMAT_VERSION // us.tractat.kuilt.bolt/BOLT_FORMAT_VERSION|{}BOLT_FORMAT_VERSION[0]
+    final fun <get-BOLT_FORMAT_VERSION>(): kotlin/Int // us.tractat.kuilt.bolt/BOLT_FORMAT_VERSION.<get-BOLT_FORMAT_VERSION>|<get-BOLT_FORMAT_VERSION>(){}[0]
+
+final fun <#A: kotlin/Any?> (kotlinx.coroutines.flow/Flow<us.tractat.kuilt.bolt/ReplayEvent<#A>>).us.tractat.kuilt.bolt/frames(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.bolt/Archived<#A>> // us.tractat.kuilt.bolt/frames|frames@kotlinx.coroutines.flow.Flow<us.tractat.kuilt.bolt.ReplayEvent<0:0>>(){0§<kotlin.Any?>}[0]
+
+// Targets: [apple]
+final class <#A: kotlin/Any, #B: kotlin/Any?, #C: kotlin/Any> us.tractat.kuilt.bolt/PosixMappedBolt : us.tractat.kuilt.bolt/Bolt<#C> { // us.tractat.kuilt.bolt/PosixMappedBolt|null[0]
+    constructor <init>(us.tractat.kuilt.bolt/BoltArchiveFormat<#A, #B, #C>, kotlin.time/Clock, kotlin/String, kotlin/Boolean = ..., kotlin/Long = ..., kotlin/Long = ...) // us.tractat.kuilt.bolt/PosixMappedBolt.<init>|<init>(us.tractat.kuilt.bolt.BoltArchiveFormat<1:0,1:1,1:2>;kotlin.time.Clock;kotlin.String;kotlin.Boolean;kotlin.Long;kotlin.Long){}[0]
+
+    final fun availability(): us.tractat.kuilt.bolt/BoltAvailability // us.tractat.kuilt.bolt/PosixMappedBolt.availability|availability(){}[0]
+    final fun close() // us.tractat.kuilt.bolt/PosixMappedBolt.close|close(){}[0]
+    final fun durability(): us.tractat.kuilt.bolt/DurabilityState // us.tractat.kuilt.bolt/PosixMappedBolt.durability|durability(){}[0]
+    final fun lastUnreportedFailure(): kotlin/String? // us.tractat.kuilt.bolt/PosixMappedBolt.lastUnreportedFailure|lastUnreportedFailure(){}[0]
+    final fun repairedTailAt(): kotlin/Long? // us.tractat.kuilt.bolt/PosixMappedBolt.repairedTailAt|repairedTailAt(){}[0]
+    final fun replay(us.tractat.kuilt.bolt/ReplayScope): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.bolt/ReplayEvent<#C>> // us.tractat.kuilt.bolt/PosixMappedBolt.replay|replay(us.tractat.kuilt.bolt.ReplayScope){}[0]
+    final suspend fun append(kotlin.collections/List<#C>): us.tractat.kuilt.bolt/AppendResult // us.tractat.kuilt.bolt/PosixMappedBolt.append|append(kotlin.collections.List<1:2>){}[0]
+
+    final object Companion { // us.tractat.kuilt.bolt/PosixMappedBolt.Companion|null[0]
+        final const val DEFAULT_SEGMENT_FRAME_BYTES // us.tractat.kuilt.bolt/PosixMappedBolt.Companion.DEFAULT_SEGMENT_FRAME_BYTES|{}DEFAULT_SEGMENT_FRAME_BYTES[0]
+            final fun <get-DEFAULT_SEGMENT_FRAME_BYTES>(): kotlin/Long // us.tractat.kuilt.bolt/PosixMappedBolt.Companion.DEFAULT_SEGMENT_FRAME_BYTES.<get-DEFAULT_SEGMENT_FRAME_BYTES>|<get-DEFAULT_SEGMENT_FRAME_BYTES>(){}[0]
+    }
+}

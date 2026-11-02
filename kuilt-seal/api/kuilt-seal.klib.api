@@ -1,0 +1,60 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-seal>
+final class us.tractat.kuilt.seal/SealPrivateKey { // us.tractat.kuilt.seal/SealPrivateKey|null[0]
+    final val publicKey // us.tractat.kuilt.seal/SealPrivateKey.publicKey|{}publicKey[0]
+        final fun <get-publicKey>(): us.tractat.kuilt.seal/SealPublicKey // us.tractat.kuilt.seal/SealPrivateKey.publicKey.<get-publicKey>|<get-publicKey>(){}[0]
+
+    final fun toString(): kotlin/String // us.tractat.kuilt.seal/SealPrivateKey.toString|toString(){}[0]
+    final suspend fun encodePkcs8(): kotlin/ByteArray // us.tractat.kuilt.seal/SealPrivateKey.encodePkcs8|encodePkcs8(){}[0]
+
+    final object Companion { // us.tractat.kuilt.seal/SealPrivateKey.Companion|null[0]
+        final suspend fun decodePkcs8(kotlin/ByteArray): us.tractat.kuilt.seal/SealPrivateKey // us.tractat.kuilt.seal/SealPrivateKey.Companion.decodePkcs8|decodePkcs8(kotlin.ByteArray){}[0]
+        final suspend fun generate(): us.tractat.kuilt.seal/SealPrivateKey // us.tractat.kuilt.seal/SealPrivateKey.Companion.generate|generate(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.seal/SealPublicKey { // us.tractat.kuilt.seal/SealPublicKey|null[0]
+    final fun encoded(): kotlin/ByteArray // us.tractat.kuilt.seal/SealPublicKey.encoded|encoded(){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.seal/SealPublicKey.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.seal/SealPublicKey.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.seal/SealPublicKey.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.seal/SealPublicKey.Companion|null[0]
+        final const val ENCODED_SIZE // us.tractat.kuilt.seal/SealPublicKey.Companion.ENCODED_SIZE|{}ENCODED_SIZE[0]
+            final fun <get-ENCODED_SIZE>(): kotlin/Int // us.tractat.kuilt.seal/SealPublicKey.Companion.ENCODED_SIZE.<get-ENCODED_SIZE>|<get-ENCODED_SIZE>(){}[0]
+
+        final suspend fun decode(kotlin/ByteArray): us.tractat.kuilt.seal/SealPublicKey // us.tractat.kuilt.seal/SealPublicKey.Companion.decode|decode(kotlin.ByteArray){}[0]
+    }
+}
+
+final class us.tractat.kuilt.seal/SealedBoxException : kotlin/Exception { // us.tractat.kuilt.seal/SealedBoxException|null[0]
+    final val reason // us.tractat.kuilt.seal/SealedBoxException.reason|{}reason[0]
+        final fun <get-reason>(): us.tractat.kuilt.seal/SealedBoxException.Reason // us.tractat.kuilt.seal/SealedBoxException.reason.<get-reason>|<get-reason>(){}[0]
+
+    final enum class Reason : kotlin/Enum<us.tractat.kuilt.seal/SealedBoxException.Reason> { // us.tractat.kuilt.seal/SealedBoxException.Reason|null[0]
+        enum entry MALFORMED // us.tractat.kuilt.seal/SealedBoxException.Reason.MALFORMED|null[0]
+        enum entry NOT_AUTHENTIC // us.tractat.kuilt.seal/SealedBoxException.Reason.NOT_AUTHENTIC|null[0]
+        enum entry SEAL_FAILED // us.tractat.kuilt.seal/SealedBoxException.Reason.SEAL_FAILED|null[0]
+        enum entry UNSUPPORTED_VERSION // us.tractat.kuilt.seal/SealedBoxException.Reason.UNSUPPORTED_VERSION|null[0]
+
+        final val entries // us.tractat.kuilt.seal/SealedBoxException.Reason.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.seal/SealedBoxException.Reason> // us.tractat.kuilt.seal/SealedBoxException.Reason.entries.<get-entries>|<get-entries>#static(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.seal/SealedBoxException.Reason // us.tractat.kuilt.seal/SealedBoxException.Reason.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.seal/SealedBoxException.Reason> // us.tractat.kuilt.seal/SealedBoxException.Reason.values|values#static(){}[0]
+    }
+}
+
+final object us.tractat.kuilt.seal/SealedBox { // us.tractat.kuilt.seal/SealedBox|null[0]
+    final const val OVERHEAD // us.tractat.kuilt.seal/SealedBox.OVERHEAD|{}OVERHEAD[0]
+        final fun <get-OVERHEAD>(): kotlin/Int // us.tractat.kuilt.seal/SealedBox.OVERHEAD.<get-OVERHEAD>|<get-OVERHEAD>(){}[0]
+
+    final suspend fun open(us.tractat.kuilt.seal/SealPrivateKey, kotlin/ByteArray, kotlin/ByteArray): kotlin/ByteArray // us.tractat.kuilt.seal/SealedBox.open|open(us.tractat.kuilt.seal.SealPrivateKey;kotlin.ByteArray;kotlin.ByteArray){}[0]
+    final suspend fun seal(us.tractat.kuilt.seal/SealPublicKey, kotlin/ByteArray, kotlin/ByteArray): kotlin/ByteArray // us.tractat.kuilt.seal/SealedBox.seal|seal(us.tractat.kuilt.seal.SealPublicKey;kotlin.ByteArray;kotlin.ByteArray){}[0]
+}

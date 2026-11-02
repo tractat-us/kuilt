@@ -1,0 +1,978 @@
+public abstract interface class us/tractat/kuilt/warp/AdmissionControl {
+	public static final field Companion Lus/tractat/kuilt/warp/AdmissionControl$Companion;
+	public abstract fun admit (Lus/tractat/kuilt/warp/TaskDescriptor;)Lus/tractat/kuilt/warp/AdmissionTicket;
+}
+
+public final class us/tractat/kuilt/warp/AdmissionControl$Companion {
+	public final fun getOPEN ()Lus/tractat/kuilt/warp/AdmissionControl;
+}
+
+public abstract interface class us/tractat/kuilt/warp/AdmissionTicket {
+	public static final field Companion Lus/tractat/kuilt/warp/AdmissionTicket$Companion;
+	public abstract fun settle ()V
+}
+
+public final class us/tractat/kuilt/warp/AdmissionTicket$Companion {
+	public final fun getNOOP ()Lus/tractat/kuilt/warp/AdmissionTicket;
+}
+
+public abstract interface class us/tractat/kuilt/warp/Affinity {
+	public static final field Companion Lus/tractat/kuilt/warp/Affinity$Companion;
+	public abstract fun matches (Lus/tractat/kuilt/warp/CapSet;)Z
+}
+
+public final class us/tractat/kuilt/warp/Affinity$And : us/tractat/kuilt/warp/Affinity {
+	public static final field Companion Lus/tractat/kuilt/warp/Affinity$And$Companion;
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/warp/Affinity$And;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/Affinity$And;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/warp/Affinity$And;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTerms ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun matches (Lus/tractat/kuilt/warp/CapSet;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/Affinity$And$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/Affinity$And$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/Affinity$And;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/Affinity$And;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$And$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$Anywhere : us/tractat/kuilt/warp/Affinity {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/Affinity$Anywhere;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun matches (Lus/tractat/kuilt/warp/CapSet;)Z
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$Attr : us/tractat/kuilt/warp/Affinity {
+	public static final field Companion Lus/tractat/kuilt/warp/Affinity$Attr$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/warp/Affinity$Attr;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/Affinity$Attr;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/warp/Affinity$Attr;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getKey ()Ljava/lang/String;
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun matches (Lus/tractat/kuilt/warp/CapSet;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/Affinity$Attr$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/Affinity$Attr$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/Affinity$Attr;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/Affinity$Attr;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$Attr$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$Companion {
+	public final fun attr (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/warp/Affinity;
+	public final fun has (Ljava/lang/String;)Lus/tractat/kuilt/warp/Affinity;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$Has : us/tractat/kuilt/warp/Affinity {
+	public static final field Companion Lus/tractat/kuilt/warp/Affinity$Has$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/warp/Affinity$Has;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/Affinity$Has;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/warp/Affinity$Has;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getToken ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun matches (Lus/tractat/kuilt/warp/CapSet;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/Affinity$Has$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/Affinity$Has$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/Affinity$Has;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/Affinity$Has;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$Has$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$Not : us/tractat/kuilt/warp/Affinity {
+	public static final field Companion Lus/tractat/kuilt/warp/Affinity$Not$Companion;
+	public fun <init> (Lus/tractat/kuilt/warp/Affinity;)V
+	public final fun component1 ()Lus/tractat/kuilt/warp/Affinity;
+	public final fun copy (Lus/tractat/kuilt/warp/Affinity;)Lus/tractat/kuilt/warp/Affinity$Not;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/Affinity$Not;Lus/tractat/kuilt/warp/Affinity;ILjava/lang/Object;)Lus/tractat/kuilt/warp/Affinity$Not;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTerm ()Lus/tractat/kuilt/warp/Affinity;
+	public fun hashCode ()I
+	public fun matches (Lus/tractat/kuilt/warp/CapSet;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/Affinity$Not$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/Affinity$Not$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/Affinity$Not;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/Affinity$Not;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$Not$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$Or : us/tractat/kuilt/warp/Affinity {
+	public static final field Companion Lus/tractat/kuilt/warp/Affinity$Or$Companion;
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/warp/Affinity$Or;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/Affinity$Or;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/warp/Affinity$Or;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTerms ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun matches (Lus/tractat/kuilt/warp/CapSet;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/Affinity$Or$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/Affinity$Or$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/Affinity$Or;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/Affinity$Or;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Affinity$Or$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/AffinityKt {
+	public static final fun and (Lus/tractat/kuilt/warp/Affinity;Lus/tractat/kuilt/warp/Affinity;)Lus/tractat/kuilt/warp/Affinity;
+	public static final fun not (Lus/tractat/kuilt/warp/Affinity;)Lus/tractat/kuilt/warp/Affinity;
+	public static final fun or (Lus/tractat/kuilt/warp/Affinity;Lus/tractat/kuilt/warp/Affinity;)Lus/tractat/kuilt/warp/Affinity;
+	public static final fun where (Lus/tractat/kuilt/warp/TaskDescriptor;Lus/tractat/kuilt/warp/Affinity;)Lus/tractat/kuilt/warp/TaskDescriptor;
+}
+
+public final class us/tractat/kuilt/warp/BobbinExchange {
+	public fun <init> (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/warp/Creel;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/warp/Creel;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun fetch-w0zNa5c (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getCreel ()Lus/tractat/kuilt/warp/Creel;
+	public final fun getManifest ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun put-hNAH5uA ([B)Ljava/lang/String;
+	public final fun putVariant-vhBJMlg ([BLus/tractat/kuilt/warp/VariantKey;)Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/BobbinHash {
+	public static final field Companion Lus/tractat/kuilt/warp/BobbinHash$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/warp/BobbinHash;
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/BobbinHash$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/BobbinHash$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-hNAH5uA (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-0OnPB3Y (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/BobbinHash$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/BobbinMeta {
+	public static final field Companion Lus/tractat/kuilt/warp/BobbinMeta$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/warp/VariantKey;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-pPELgZU ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/warp/VariantKey;
+	public final fun copy-w0zNa5c (Ljava/lang/String;Lus/tractat/kuilt/warp/VariantKey;)Lus/tractat/kuilt/warp/BobbinMeta;
+	public static synthetic fun copy-w0zNa5c$default (Lus/tractat/kuilt/warp/BobbinMeta;Ljava/lang/String;Lus/tractat/kuilt/warp/VariantKey;ILjava/lang/Object;)Lus/tractat/kuilt/warp/BobbinMeta;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHash-pPELgZU ()Ljava/lang/String;
+	public final fun getVariantOf ()Lus/tractat/kuilt/warp/VariantKey;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/BobbinMeta$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/BobbinMeta$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/BobbinMeta;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/BobbinMeta;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/BobbinMeta$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/CapSet {
+	public static final field Companion Lus/tractat/kuilt/warp/CapSet$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Set;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Set;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun attr (Ljava/lang/String;)Ljava/lang/String;
+	public final fun component1 ()Ljava/util/Set;
+	public final fun component2 ()Ljava/util/Map;
+	public final fun copy (Ljava/util/Set;Ljava/util/Map;)Lus/tractat/kuilt/warp/CapSet;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/CapSet;Ljava/util/Set;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/warp/CapSet;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttributes ()Ljava/util/Map;
+	public final fun getTokens ()Ljava/util/Set;
+	public final fun has (Ljava/lang/String;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/CapSet$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/CapSet$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/CapSet;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/CapSet;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/CapSet$Companion {
+	public final fun getEMPTY ()Lus/tractat/kuilt/warp/CapSet;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/warp/ClaimStrategy {
+	public static final field Companion Lus/tractat/kuilt/warp/ClaimStrategy$Companion;
+}
+
+public final class us/tractat/kuilt/warp/ClaimStrategy$Companion {
+	public final fun getDEFAULT_SETTLE_WINDOW-UwyO8pc ()J
+}
+
+public final class us/tractat/kuilt/warp/ClaimStrategy$Ring : us/tractat/kuilt/warp/ClaimStrategy {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/ClaimStrategy$Ring;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/ClaimStrategy$RingWithIntent : us/tractat/kuilt/warp/ClaimStrategy {
+	public fun <init> ()V
+	public synthetic fun <init> (JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-UwyO8pc ()J
+	public final fun copy-LRDsOJo (J)Lus/tractat/kuilt/warp/ClaimStrategy$RingWithIntent;
+	public static synthetic fun copy-LRDsOJo$default (Lus/tractat/kuilt/warp/ClaimStrategy$RingWithIntent;JILjava/lang/Object;)Lus/tractat/kuilt/warp/ClaimStrategy$RingWithIntent;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSettleWindow-UwyO8pc ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/CompileOp {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/CompileOp;
+	public final fun descriptor-A7J4Ndc (Lus/tractat/kuilt/warp/CompileRequest;Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/warp/TaskDescriptor;
+	public static synthetic fun descriptor-A7J4Ndc$default (Lus/tractat/kuilt/warp/CompileOp;Lus/tractat/kuilt/warp/CompileRequest;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/warp/TaskDescriptor;
+	public final fun getID-mwq_m-M ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/CompileRequest {
+	public static final field Companion Lus/tractat/kuilt/warp/CompileRequest$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/warp/Target;Lus/tractat/kuilt/warp/OptLevel;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-pPELgZU ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/warp/Target;
+	public final fun component3 ()Lus/tractat/kuilt/warp/OptLevel;
+	public final fun copy-6q5cJ6c (Ljava/lang/String;Lus/tractat/kuilt/warp/Target;Lus/tractat/kuilt/warp/OptLevel;)Lus/tractat/kuilt/warp/CompileRequest;
+	public static synthetic fun copy-6q5cJ6c$default (Lus/tractat/kuilt/warp/CompileRequest;Ljava/lang/String;Lus/tractat/kuilt/warp/Target;Lus/tractat/kuilt/warp/OptLevel;ILjava/lang/Object;)Lus/tractat/kuilt/warp/CompileRequest;
+	public final fun encode ()[B
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOptLevel ()Lus/tractat/kuilt/warp/OptLevel;
+	public final fun getSourceHash-pPELgZU ()Ljava/lang/String;
+	public final fun getTarget ()Lus/tractat/kuilt/warp/Target;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/CompileRequest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/CompileRequest$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/CompileRequest;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/CompileRequest;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/CompileRequest$Companion {
+	public final fun decode ([B)Lus/tractat/kuilt/warp/CompileRequest;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/ConvergentExecution {
+	public fun <init> (Lus/tractat/kuilt/warp/Draft;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/crdt/Quilted;)V
+	public final fun getDraft ()Lus/tractat/kuilt/warp/Draft;
+	public final fun getResult ()Lus/tractat/kuilt/warp/IncrementalResult;
+	public final fun submit (Lus/tractat/kuilt/crdt/Quilted;)V
+}
+
+public final class us/tractat/kuilt/warp/Coordinated {
+	public fun <init> (Ljava/lang/Object;)V
+	public final fun commit (Lkotlin/jvm/functions/Function1;)Ljava/lang/Object;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Ljava/lang/Object;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/CoordinationFree {
+	public fun <init> (Lus/tractat/kuilt/crdt/Quilted;)V
+	public final fun embroider (Lus/tractat/kuilt/warp/CoordinationFree;)Lus/tractat/kuilt/warp/CoordinationFree;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getState ()Lus/tractat/kuilt/crdt/Quilted;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/CoordinationFreeKt {
+	public static final fun joinAll (Ljava/util/List;)Lus/tractat/kuilt/warp/CoordinationFree;
+	public static final fun joinAllOrNull (Ljava/util/List;)Lus/tractat/kuilt/warp/CoordinationFree;
+	public static final fun liftCoordinationFree (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/warp/CoordinationFree;
+	public static final fun monotoneMap (Lus/tractat/kuilt/warp/CoordinationFree;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/warp/CoordinationFree;
+	public static final fun zip (Lus/tractat/kuilt/warp/CoordinationFree;Lus/tractat/kuilt/warp/CoordinationFree;)Lus/tractat/kuilt/warp/CoordinationFree;
+}
+
+public abstract class us/tractat/kuilt/warp/CoordinationKind {
+}
+
+public final class us/tractat/kuilt/warp/CoordinationKind$Coordinated : us/tractat/kuilt/warp/CoordinationKind {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/CoordinationKind$Coordinated;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/CoordinationKind$Free : us/tractat/kuilt/warp/CoordinationKind {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/CoordinationKind$Free;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/Creel {
+	public fun <init> ()V
+	public final fun contains-xV0SKmk (Ljava/lang/String;)Z
+	public final fun get-xV0SKmk (Ljava/lang/String;)[B
+	public final fun getLoaded ()Ljava/util/Set;
+	public final fun put-hNAH5uA ([B)Ljava/lang/String;
+	public final fun putVerified-w0zNa5c (Ljava/lang/String;[B)V
+}
+
+public final class us/tractat/kuilt/warp/Draft {
+	public fun <init> (Ljava/util/List;)V
+	public final fun combine (Lus/tractat/kuilt/warp/Draft;)Lus/tractat/kuilt/warp/Draft;
+	public final fun embroider-6XDz_VA (Ljava/lang/String;)Lus/tractat/kuilt/warp/Draft;
+	public final fun filter-6XDz_VA (Ljava/lang/String;)Lus/tractat/kuilt/warp/Draft;
+	public final fun getEmbroideries ()Ljava/util/List;
+	public final fun getEmbroidery ()Lus/tractat/kuilt/warp/DraftStage$Embroider;
+	public final fun getNodes ()Ljava/util/List;
+	public final fun getStages ()Ljava/util/List;
+	public final fun isMonotone ()Z
+	public final fun map-6XDz_VA (Ljava/lang/String;)Lus/tractat/kuilt/warp/Draft;
+}
+
+public final class us/tractat/kuilt/warp/DraftNode {
+	public synthetic fun <init> (ILus/tractat/kuilt/warp/DraftStage;Ljava/util/Set;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-2rubYQE ()I
+	public final fun component2 ()Lus/tractat/kuilt/warp/DraftStage;
+	public final fun component3 ()Ljava/util/Set;
+	public final fun copy-FatFLr8 (ILus/tractat/kuilt/warp/DraftStage;Ljava/util/Set;)Lus/tractat/kuilt/warp/DraftNode;
+	public static synthetic fun copy-FatFLr8$default (Lus/tractat/kuilt/warp/DraftNode;ILus/tractat/kuilt/warp/DraftStage;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/warp/DraftNode;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId-2rubYQE ()I
+	public final fun getPredecessors ()Ljava/util/Set;
+	public final fun getStage ()Lus/tractat/kuilt/warp/DraftStage;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/warp/DraftStage {
+	public abstract fun getCoordinationKind ()Lus/tractat/kuilt/warp/CoordinationKind;
+	public abstract fun getOpId-mwq_m-M ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/DraftStage$BatchedEmbroider : us/tractat/kuilt/warp/DraftStage {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/warp/DraftStage$BatchedEmbroider;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/DraftStage$BatchedEmbroider;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/warp/DraftStage$BatchedEmbroider;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCoordinationKind ()Lus/tractat/kuilt/warp/CoordinationKind;
+	public fun getOpId-mwq_m-M ()Ljava/lang/String;
+	public final fun getOpIds ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/DraftStage$Embroider : us/tractat/kuilt/warp/DraftStage {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-mwq_m-M ()Ljava/lang/String;
+	public final fun copy-6XDz_VA (Ljava/lang/String;)Lus/tractat/kuilt/warp/DraftStage$Embroider;
+	public static synthetic fun copy-6XDz_VA$default (Lus/tractat/kuilt/warp/DraftStage$Embroider;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/warp/DraftStage$Embroider;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCoordinationKind ()Lus/tractat/kuilt/warp/CoordinationKind;
+	public fun getOpId-mwq_m-M ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/DraftStage$Filter : us/tractat/kuilt/warp/DraftStage {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-mwq_m-M ()Ljava/lang/String;
+	public final fun copy-6XDz_VA (Ljava/lang/String;)Lus/tractat/kuilt/warp/DraftStage$Filter;
+	public static synthetic fun copy-6XDz_VA$default (Lus/tractat/kuilt/warp/DraftStage$Filter;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/warp/DraftStage$Filter;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCoordinationKind ()Lus/tractat/kuilt/warp/CoordinationKind;
+	public fun getOpId-mwq_m-M ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/DraftStage$FusedFilter : us/tractat/kuilt/warp/DraftStage {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/warp/DraftStage$FusedFilter;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/DraftStage$FusedFilter;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/warp/DraftStage$FusedFilter;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCoordinationKind ()Lus/tractat/kuilt/warp/CoordinationKind;
+	public fun getOpId-mwq_m-M ()Ljava/lang/String;
+	public final fun getOpIds ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/DraftStage$FusedMap : us/tractat/kuilt/warp/DraftStage {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/warp/DraftStage$FusedMap;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/DraftStage$FusedMap;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/warp/DraftStage$FusedMap;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCoordinationKind ()Lus/tractat/kuilt/warp/CoordinationKind;
+	public fun getOpId-mwq_m-M ()Ljava/lang/String;
+	public final fun getOpIds ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/DraftStage$Map : us/tractat/kuilt/warp/DraftStage {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-mwq_m-M ()Ljava/lang/String;
+	public final fun copy-6XDz_VA (Ljava/lang/String;)Lus/tractat/kuilt/warp/DraftStage$Map;
+	public static synthetic fun copy-6XDz_VA$default (Lus/tractat/kuilt/warp/DraftStage$Map;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/warp/DraftStage$Map;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCoordinationKind ()Lus/tractat/kuilt/warp/CoordinationKind;
+	public fun getOpId-mwq_m-M ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/DraftStage$Source : us/tractat/kuilt/warp/DraftStage {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-mwq_m-M ()Ljava/lang/String;
+	public final fun copy-6XDz_VA (Ljava/lang/String;)Lus/tractat/kuilt/warp/DraftStage$Source;
+	public static synthetic fun copy-6XDz_VA$default (Lus/tractat/kuilt/warp/DraftStage$Source;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/warp/DraftStage$Source;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCoordinationKind ()Lus/tractat/kuilt/warp/CoordinationKind;
+	public fun getOpId-mwq_m-M ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/GuestRegion {
+	public fun <init> (JJ)V
+	public final fun getLen ()J
+	public final fun getPtr ()J
+}
+
+public final class us/tractat/kuilt/warp/IncrementalResult {
+	public fun <init> (Lus/tractat/kuilt/crdt/Quilted;)V
+	public final fun awaitThreshold (Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun contribute (Lus/tractat/kuilt/crdt/Quilted;)V
+	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+}
+
+public final class us/tractat/kuilt/warp/Lane {
+	public static final field Companion Lus/tractat/kuilt/warp/Lane$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/warp/Lane;
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getTag ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/Lane$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/Lane$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-csVQA3Q (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-OYEYfio (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Lane$Companion {
+	public final fun getROOT-wNrlYIQ ()Ljava/lang/String;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/NodeId {
+	public static final synthetic fun box-impl (I)Lus/tractat/kuilt/warp/NodeId;
+	public static fun constructor-impl (I)I
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (ILjava/lang/Object;)Z
+	public static final fun equals-impl0 (II)Z
+	public final fun getValue ()I
+	public fun hashCode ()I
+	public static fun hashCode-impl (I)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (I)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()I
+}
+
+public abstract interface class us/tractat/kuilt/warp/Op {
+	public abstract fun invoke ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/warp/OpId {
+	public static final field Companion Lus/tractat/kuilt/warp/OpId$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/warp/OpId;
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/OpId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/OpId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-FXLy0bc (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-6T4zfoA (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/OpId$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/warp/OpRegistrar {
+	public abstract fun registerInto (Lus/tractat/kuilt/warp/OpRegistry;)V
+}
+
+public final class us/tractat/kuilt/warp/OpRegistrarKt {
+	public static final fun opRegistryOf ([Lus/tractat/kuilt/warp/OpRegistrar;)Lus/tractat/kuilt/warp/OpRegistry;
+}
+
+public final class us/tractat/kuilt/warp/OpRegistry {
+	public fun <init> ()V
+	public final fun getRegistered ()Ljava/util/Set;
+	public final fun register-V9643pE (Ljava/lang/String;Lus/tractat/kuilt/warp/Op;)V
+	public final fun resolve-6XDz_VA (Ljava/lang/String;)Lus/tractat/kuilt/warp/Op;
+}
+
+public final class us/tractat/kuilt/warp/OpResult {
+	public static final field Companion Lus/tractat/kuilt/warp/OpResult$Companion;
+	public fun <init> ([B)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBytes ()[B
+	public final fun getError ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun isError ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/OpResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/OpResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/OpResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/OpResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/OpResult$Companion {
+	public final fun failure (Ljava/lang/String;)Lus/tractat/kuilt/warp/OpResult;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/OptLevel : java/lang/Enum {
+	public static final field Companion Lus/tractat/kuilt/warp/OptLevel$Companion;
+	public static final field O0 Lus/tractat/kuilt/warp/OptLevel;
+	public static final field O2 Lus/tractat/kuilt/warp/OptLevel;
+	public static final field O3 Lus/tractat/kuilt/warp/OptLevel;
+	public static final field Oz Lus/tractat/kuilt/warp/OptLevel;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/warp/OptLevel;
+	public static fun values ()[Lus/tractat/kuilt/warp/OptLevel;
+}
+
+public final class us/tractat/kuilt/warp/OptLevel$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/PassthroughWasmOptimizer : us/tractat/kuilt/warp/WasmOptimizer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/PassthroughWasmOptimizer;
+	public fun optimize ([BLus/tractat/kuilt/warp/OptLevel;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/warp/Results {
+	public static final field Companion Lus/tractat/kuilt/warp/Results$Companion;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun get (Ljava/lang/Object;)Ljava/lang/Object;
+	public final fun getTaskIds ()Ljava/util/Set;
+	public fun hashCode ()I
+	public final fun merge (Lus/tractat/kuilt/warp/Results;)Lus/tractat/kuilt/warp/Results;
+	public final fun record-tmEOuCI (Ljava/lang/String;Ljava/lang/Object;JLjava/lang/Object;)Lus/tractat/kuilt/warp/Results;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/Results$Companion {
+	public final fun empty ()Lus/tractat/kuilt/warp/Results;
+}
+
+public final class us/tractat/kuilt/warp/RosterSnapshot {
+	public fun <init> (Ljava/util/Set;)V
+	public final fun component1 ()Ljava/util/Set;
+	public final fun copy (Ljava/util/Set;)Lus/tractat/kuilt/warp/RosterSnapshot;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/warp/RosterSnapshot;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/warp/RosterSnapshot;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPeers ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public final fun toTaskRing (IJ)Lus/tractat/kuilt/warp/TaskRing;
+	public static synthetic fun toTaskRing$default (Lus/tractat/kuilt/warp/RosterSnapshot;IJILjava/lang/Object;)Lus/tractat/kuilt/warp/TaskRing;
+}
+
+public final class us/tractat/kuilt/warp/ShuttleKt {
+	public static final fun shuttle (Lus/tractat/kuilt/warp/Op;)Lus/tractat/kuilt/warp/Op;
+}
+
+public final class us/tractat/kuilt/warp/Target : java/lang/Enum {
+	public static final field Browser Lus/tractat/kuilt/warp/Target;
+	public static final field Companion Lus/tractat/kuilt/warp/Target$Companion;
+	public static final field IosArm64 Lus/tractat/kuilt/warp/Target;
+	public static final field Jvm Lus/tractat/kuilt/warp/Target;
+	public static final field MacosArm64 Lus/tractat/kuilt/warp/Target;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/warp/Target;
+	public static fun values ()[Lus/tractat/kuilt/warp/Target;
+}
+
+public final class us/tractat/kuilt/warp/Target$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/TaskDescriptor {
+	public static final field Companion Lus/tractat/kuilt/warp/TaskDescriptor$Companion;
+	public synthetic fun <init> (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/warp/Affinity;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/warp/Affinity;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-mwq_m-M ()Ljava/lang/String;
+	public final fun component2 ()[B
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4-dd4KoI4 ()Ljava/lang/String;
+	public final fun component5-wNrlYIQ ()Ljava/lang/String;
+	public final fun component6 ()Lus/tractat/kuilt/warp/Affinity;
+	public final fun copy-VIxWuRg (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/warp/Affinity;)Lus/tractat/kuilt/warp/TaskDescriptor;
+	public static synthetic fun copy-VIxWuRg$default (Lus/tractat/kuilt/warp/TaskDescriptor;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/warp/Affinity;ILjava/lang/Object;)Lus/tractat/kuilt/warp/TaskDescriptor;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAffinity ()Lus/tractat/kuilt/warp/Affinity;
+	public final fun getArgs ()[B
+	public final fun getLane-wNrlYIQ ()Ljava/lang/String;
+	public final fun getOp-mwq_m-M ()Ljava/lang/String;
+	public final fun getPinnedOwner-dd4KoI4 ()Ljava/lang/String;
+	public final fun getTraceparent ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/TaskDescriptor$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/TaskDescriptor$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/TaskDescriptor;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/TaskDescriptor;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/TaskDescriptor$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/TaskId {
+	public static final field Companion Lus/tractat/kuilt/warp/TaskId$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/warp/TaskId;
+	public static fun constructor-impl (Ljava/lang/String;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/TaskId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/TaskId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize-p1mRgyU (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/String;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize-05Hzqtc (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/String;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/TaskId$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/TaskRing {
+	public fun <init> (Ljava/util/Set;IJ)V
+	public synthetic fun <init> (Ljava/util/Set;IJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getVnodeCount ()I
+	public final fun owner-6_QX9qI (Ljava/lang/String;)Ljava/lang/String;
+	public final fun owner-zqThyEY (Ljava/lang/String;Ljava/util/Set;)Ljava/lang/String;
+	public final fun successor-zqThyEY (Ljava/lang/String;Ljava/util/Set;)Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/VariantKey {
+	public static final field Companion Lus/tractat/kuilt/warp/VariantKey$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/warp/Target;Lus/tractat/kuilt/warp/OptLevel;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-pPELgZU ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/warp/Target;
+	public final fun component3 ()Lus/tractat/kuilt/warp/OptLevel;
+	public final fun copy-6q5cJ6c (Ljava/lang/String;Lus/tractat/kuilt/warp/Target;Lus/tractat/kuilt/warp/OptLevel;)Lus/tractat/kuilt/warp/VariantKey;
+	public static synthetic fun copy-6q5cJ6c$default (Lus/tractat/kuilt/warp/VariantKey;Ljava/lang/String;Lus/tractat/kuilt/warp/Target;Lus/tractat/kuilt/warp/OptLevel;ILjava/lang/Object;)Lus/tractat/kuilt/warp/VariantKey;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOptLevel ()Lus/tractat/kuilt/warp/OptLevel;
+	public final fun getSourceHash-pPELgZU ()Ljava/lang/String;
+	public final fun getTarget ()Lus/tractat/kuilt/warp/Target;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/VariantKey$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/VariantKey$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/VariantKey;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/VariantKey;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/VariantKey$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/Warp {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/Warp;
+	public final fun shuttle-6XDz_VA (Ljava/lang/String;)Lus/tractat/kuilt/warp/Draft;
+}
+
+public final class us/tractat/kuilt/warp/WarpAbiResultKt {
+	public static final fun decodeWarpResult (JJLkotlin/jvm/functions/Function2;)[B
+	public static final fun requireInBounds (JJJ)V
+	public static final fun unpackWarpResult (J)Lus/tractat/kuilt/warp/GuestRegion;
+}
+
+public final class us/tractat/kuilt/warp/WarpLazyFetch {
+	public synthetic fun <init> (Lus/tractat/kuilt/warp/Creel;Lus/tractat/kuilt/warp/WasmRuntime;Lkotlin/jvm/functions/Function1;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/warp/Creel;Lus/tractat/kuilt/warp/WasmRuntime;Lkotlin/jvm/functions/Function1;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getCreel ()Lus/tractat/kuilt/warp/Creel;
+	public final fun getFetchTimeout-UwyO8pc ()J
+	public final fun getOpToBobbin ()Lkotlin/jvm/functions/Function1;
+	public final fun getRuntime ()Lus/tractat/kuilt/warp/WasmRuntime;
+}
+
+public final class us/tractat/kuilt/warp/WarpNode {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/flow/Flow;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/warp/ClaimStrategy;Lus/tractat/kuilt/warp/OpRegistry;Lkotlin/jvm/functions/Function2;Lus/tractat/kuilt/raft/RaftNode;Lus/tractat/kuilt/warp/WarpLazyFetch;Lus/tractat/kuilt/warp/Target;Lus/tractat/kuilt/warp/AdmissionControl;JJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/flow/Flow;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/quilter/QuilterConfig;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/warp/ClaimStrategy;Lus/tractat/kuilt/warp/OpRegistry;Lkotlin/jvm/functions/Function2;Lus/tractat/kuilt/raft/RaftNode;Lus/tractat/kuilt/warp/WarpLazyFetch;Lus/tractat/kuilt/warp/Target;Lus/tractat/kuilt/warp/AdmissionControl;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun advertiseCapabilities (Lus/tractat/kuilt/warp/CapSet;)V
+	public final fun capabilityView ()Ljava/util/Map;
+	public final fun close ()V
+	public final fun eligiblePeers (Lus/tractat/kuilt/warp/Affinity;)Ljava/util/Set;
+	public final fun enqueue-X_tJ_T8 (Ljava/lang/String;Lus/tractat/kuilt/warp/CoordinationKind;)V
+	public final fun enqueue-X_tJ_T8 (Ljava/lang/String;Lus/tractat/kuilt/warp/TaskDescriptor;)V
+	public final fun enqueueLocal-X_tJ_T8 (Ljava/lang/String;Lus/tractat/kuilt/warp/TaskDescriptor;)V
+	public final fun getDuplicates ()Lus/tractat/kuilt/crdt/GCounter;
+	public final fun getExecutions ()Lus/tractat/kuilt/crdt/GCounter;
+	public final fun getExecutionsCompiled ()Lus/tractat/kuilt/crdt/GCounter;
+	public final fun getExecutionsInterpreted ()Lus/tractat/kuilt/crdt/GCounter;
+	public final fun getFailovers ()Lus/tractat/kuilt/crdt/GCounter;
+	public final fun getResults ()Lus/tractat/kuilt/warp/Results;
+	public final fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public final fun publishVariant-7LROCZs ([BLus/tractat/kuilt/warp/VariantKey;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun registerCompiler (Lkotlin/jvm/functions/Function4;)V
+}
+
+public final class us/tractat/kuilt/warp/WarpNodeKt {
+	public static final fun rosterSnapshot (Lus/tractat/kuilt/core/Seam;)Lkotlinx/coroutines/flow/Flow;
+	public static final fun rosterSnapshot (Lus/tractat/kuilt/raft/RaftNode;)Lkotlinx/coroutines/flow/Flow;
+}
+
+public abstract interface annotation class us/tractat/kuilt/warp/WarpOp : java/lang/annotation/Annotation {
+	public abstract fun id ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/WarpStats : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/warp/WarpStats$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun estimatedCardinality-6XDz_VA (Ljava/lang/String;)J
+	public fun hashCode ()I
+	public final fun observe-4BozUuc (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/crdt/Quilted;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/warp/WarpStats;)Lus/tractat/kuilt/warp/WarpStats;
+	public final fun sketches ()Ljava/util/Map;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/warp/WarpStats$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/WarpStats$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/warp/WarpStats;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/warp/WarpStats;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/warp/WarpStats$Companion {
+	public final fun empty ()Lus/tractat/kuilt/warp/WarpStats;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract class us/tractat/kuilt/warp/WasmException : java/lang/Exception {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/warp/WasmExecutionException : us/tractat/kuilt/warp/WasmException {
+	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class us/tractat/kuilt/warp/WasmLoadException : us/tractat/kuilt/warp/WasmException {
+	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public abstract interface class us/tractat/kuilt/warp/WasmOptimizer {
+	public abstract fun optimize ([BLus/tractat/kuilt/warp/OptLevel;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/warp/WasmRuntime {
+	public abstract fun load ([B)Lus/tractat/kuilt/warp/Op;
+}
+
+public final class us/tractat/kuilt/warp/WasmSandboxConfig {
+	public fun <init> ()V
+	public synthetic fun <init> (IJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (IJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2-UwyO8pc ()J
+	public final fun copy-HG0u8IE (IJ)Lus/tractat/kuilt/warp/WasmSandboxConfig;
+	public static synthetic fun copy-HG0u8IE$default (Lus/tractat/kuilt/warp/WasmSandboxConfig;IJILjava/lang/Object;)Lus/tractat/kuilt/warp/WasmSandboxConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getExecutionTimeout-UwyO8pc ()J
+	public final fun getMaxMemoryPages ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/WorkQueue {
+	public static final field Companion Lus/tractat/kuilt/warp/WorkQueue$Companion;
+	public final fun add-8mRuq1Y (Ljava/lang/String;Ljava/lang/Object;)Lus/tractat/kuilt/warp/WorkQueue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPending ()Ljava/util/Set;
+	public fun hashCode ()I
+	public final fun merge (Lus/tractat/kuilt/warp/WorkQueue;)Lus/tractat/kuilt/warp/WorkQueue;
+	public final fun remove (Ljava/lang/Object;)Lus/tractat/kuilt/warp/WorkQueue;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/warp/WorkQueue$Companion {
+	public final fun empty ()Lus/tractat/kuilt/warp/WorkQueue;
+}
+

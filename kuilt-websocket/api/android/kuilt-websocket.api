@@ -1,0 +1,151 @@
+public final class us/tractat/kuilt/websocket/AndroidConnectivityObserver : us/tractat/kuilt/websocket/ConnectivityObserver {
+	public final fun close ()V
+	public fun getReachability ()Lkotlinx/coroutines/flow/StateFlow;
+}
+
+public final class us/tractat/kuilt/websocket/AndroidConnectivityObserverKt {
+	public static final fun androidConnectivityObserver (Landroid/content/Context;)Lus/tractat/kuilt/websocket/AndroidConnectivityObserver;
+}
+
+public abstract interface class us/tractat/kuilt/websocket/ConnectivityObserver {
+	public abstract fun getReachability ()Lkotlinx/coroutines/flow/StateFlow;
+}
+
+public final class us/tractat/kuilt/websocket/KtorClientLoom : us/tractat/kuilt/core/Loom {
+	public synthetic fun <init> (Lio/ktor/client/HttpClient;Lkotlinx/coroutines/CoroutineDispatcher;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lus/tractat/kuilt/websocket/ConnectivityObserver;Lus/tractat/kuilt/core/DeliveryPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lio/ktor/client/HttpClient;Lkotlinx/coroutines/CoroutineDispatcher;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lus/tractat/kuilt/websocket/ConnectivityObserver;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public final fun getSelfPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/websocket/KtorConnectionSource : us/tractat/kuilt/core/fabric/ConnectionSource {
+	public synthetic fun <init> (Lio/ktor/server/application/Application;Ljava/lang/String;JLkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lio/ktor/server/application/Application;Ljava/lang/String;JLkotlin/jvm/functions/Function1;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun accept (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/websocket/KtorMeshClientLoom : us/tractat/kuilt/core/Loom {
+	public synthetic fun <init> (Lio/ktor/client/HttpClient;Lkotlinx/coroutines/CoroutineDispatcher;Ljava/lang/String;Lkotlin/random/Random;Lus/tractat/kuilt/core/DeliveryPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lio/ktor/client/HttpClient;Lkotlinx/coroutines/CoroutineDispatcher;Ljava/lang/String;Lkotlin/random/Random;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public final fun getSelfPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/websocket/KtorRoomHost : us/tractat/kuilt/session/RoomHost {
+	public synthetic fun <init> (Lio/ktor/server/application/Application;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/core/Pattern;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lio/ktor/server/application/Application;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/core/Pattern;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun close ()V
+	public fun start (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/websocket/KtorServerLoom : us/tractat/kuilt/core/Loom {
+	public static final field Companion Lus/tractat/kuilt/websocket/KtorServerLoom$Companion;
+	public synthetic fun <init> (Lio/ktor/server/application/Application;Ljava/lang/String;Ljava/lang/String;Lkotlinx/coroutines/CoroutineDispatcher;JLkotlin/jvm/functions/Function1;Lus/tractat/kuilt/websocket/ConnectivityObserver;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lio/ktor/server/application/Application;Ljava/lang/String;Ljava/lang/String;Lkotlinx/coroutines/CoroutineDispatcher;JLkotlin/jvm/functions/Function1;Lus/tractat/kuilt/websocket/ConnectivityObserver;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public final fun getSelfPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun nextLink (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/websocket/KtorServerLoom$Companion {
+	public final fun getDEFAULT_PING_PERIOD-UwyO8pc ()J
+}
+
+public final class us/tractat/kuilt/websocket/NetworkReachability : java/lang/Enum {
+	public static final field Indeterminate Lus/tractat/kuilt/websocket/NetworkReachability;
+	public static final field Reachable Lus/tractat/kuilt/websocket/NetworkReachability;
+	public static final field Unreachable Lus/tractat/kuilt/websocket/NetworkReachability;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/websocket/NetworkReachability;
+	public static fun values ()[Lus/tractat/kuilt/websocket/NetworkReachability;
+}
+
+public final class us/tractat/kuilt/websocket/UnobservedConnectivity : us/tractat/kuilt/websocket/ConnectivityObserver {
+	public static final field INSTANCE Lus/tractat/kuilt/websocket/UnobservedConnectivity;
+	public fun getReachability ()Lkotlinx/coroutines/flow/StateFlow;
+}
+
+public final class us/tractat/kuilt/websocket/WebSocketAdvertisement : us/tractat/kuilt/core/Tag {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2-PaHlmAU ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy-rQ98c58 (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/websocket/WebSocketAdvertisement;
+	public static synthetic fun copy-rQ98c58$default (Lus/tractat/kuilt/websocket/WebSocketAdvertisement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/websocket/WebSocketAdvertisement;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getPeerKey ()Ljava/lang/String;
+	public fun getRoomKey ()Ljava/lang/String;
+	public final fun getServerPeerId-PaHlmAU ()Ljava/lang/String;
+	public fun getSessionName ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/websocket/WebSocketConnection : us/tractat/kuilt/core/fabric/Connection {
+	public fun <init> (Lio/ktor/websocket/DefaultWebSocketSession;)V
+	public fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxFrameBytes ()Ljava/lang/Integer;
+	public fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/websocket/WebSocketDialContext {
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Map;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/Map;
+	public final fun component2 ()Ljava/util/Map;
+	public final fun copy (Ljava/util/Map;Ljava/util/Map;)Lus/tractat/kuilt/websocket/WebSocketDialContext;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/websocket/WebSocketDialContext;Ljava/util/Map;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/websocket/WebSocketDialContext;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHeaders ()Ljava/util/Map;
+	public final fun getQueryParams ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/websocket/WebSocketFabricKt {
+	public static final fun webSocketLoomJoin-nzI33HM (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lkotlin/jvm/functions/Function1;Lus/tractat/kuilt/websocket/ConnectivityObserver;)Lus/tractat/kuilt/websocket/KtorClientLoom;
+	public static synthetic fun webSocketLoomJoin-nzI33HM$default (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lkotlin/jvm/functions/Function1;Lus/tractat/kuilt/websocket/ConnectivityObserver;ILjava/lang/Object;)Lus/tractat/kuilt/websocket/KtorClientLoom;
+	public static final fun webSocketMeshLoomJoin-wcfUuww (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lkotlin/random/Random;)Lus/tractat/kuilt/websocket/KtorMeshClientLoom;
+	public static synthetic fun webSocketMeshLoomJoin-wcfUuww$default (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lkotlin/random/Random;ILjava/lang/Object;)Lus/tractat/kuilt/websocket/KtorMeshClientLoom;
+}
+
+public final class us/tractat/kuilt/websocket/tls/DevTlsIdentity {
+	public final fun getCertificate ()Ljava/security/cert/X509Certificate;
+	public final fun getFingerprintSha256 ()Ljava/lang/String;
+	public final fun getKeyAlias ()Ljava/lang/String;
+	public final fun getKeyStore ()Ljava/security/KeyStore;
+	public final fun keyStorePassword ()[C
+	public final fun privateKeyPassword ()[C
+}
+
+public final class us/tractat/kuilt/websocket/tls/DevTlsIdentityKt {
+	public static final fun generateDevTlsIdentity (Ljava/lang/String;JLjava/util/List;Ljava/util/List;)Lus/tractat/kuilt/websocket/tls/DevTlsIdentity;
+	public static synthetic fun generateDevTlsIdentity$default (Ljava/lang/String;JLjava/util/List;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/websocket/tls/DevTlsIdentity;
+	public static final fun tapTlsConnector (Lio/ktor/server/engine/ApplicationEngine$Configuration;Lus/tractat/kuilt/websocket/tls/DevTlsIdentity;ILjava/lang/String;)V
+	public static synthetic fun tapTlsConnector$default (Lio/ktor/server/engine/ApplicationEngine$Configuration;Lus/tractat/kuilt/websocket/tls/DevTlsIdentity;ILjava/lang/String;ILjava/lang/Object;)V
+}
+
+public final class us/tractat/kuilt/websocket/tls/PinnedTlsKt {
+	public static final fun fingerprintPinningTrustManager (Ljava/lang/String;)Ljavax/net/ssl/X509TrustManager;
+	public static final fun pinnedSslContext (Ljava/lang/String;)Ljavax/net/ssl/SSLContext;
+	public static final fun pinnedTlsHttpClient (Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Lio/ktor/client/HttpClient;
+	public static synthetic fun pinnedTlsHttpClient$default (Ljava/lang/String;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/ktor/client/HttpClient;
+}
+

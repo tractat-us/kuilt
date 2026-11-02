@@ -1,0 +1,1194 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-session>
+final enum class us.tractat.kuilt.session/SessionRole : kotlin/Enum<us.tractat.kuilt.session/SessionRole> { // us.tractat.kuilt.session/SessionRole|null[0]
+    enum entry Host // us.tractat.kuilt.session/SessionRole.Host|null[0]
+    enum entry Joiner // us.tractat.kuilt.session/SessionRole.Joiner|null[0]
+
+    final val entries // us.tractat.kuilt.session/SessionRole.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.session/SessionRole> // us.tractat.kuilt.session/SessionRole.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.session/SessionRole // us.tractat.kuilt.session/SessionRole.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.session/SessionRole> // us.tractat.kuilt.session/SessionRole.values|values#static(){}[0]
+}
+
+open enum class us.tractat.kuilt.session/RoomFramePrefix : kotlin/Enum<us.tractat.kuilt.session/RoomFramePrefix> { // us.tractat.kuilt.session/RoomFramePrefix|null[0]
+    enum entry Admit // us.tractat.kuilt.session/RoomFramePrefix.Admit|null[0]
+    enum entry Channel // us.tractat.kuilt.session/RoomFramePrefix.Channel|null[0]
+    enum entry Heartbeat // us.tractat.kuilt.session/RoomFramePrefix.Heartbeat|null[0]
+    enum entry Lobby // us.tractat.kuilt.session/RoomFramePrefix.Lobby|null[0]
+    enum entry Relay // us.tractat.kuilt.session/RoomFramePrefix.Relay|null[0]
+
+    final val byte // us.tractat.kuilt.session/RoomFramePrefix.byte|{}byte[0]
+        final fun <get-byte>(): kotlin/Byte // us.tractat.kuilt.session/RoomFramePrefix.byte.<get-byte>|<get-byte>(){}[0]
+    final val entries // us.tractat.kuilt.session/RoomFramePrefix.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.session/RoomFramePrefix> // us.tractat.kuilt.session/RoomFramePrefix.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun matches(kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.session/RoomFramePrefix.matches|matches(kotlin.ByteArray){}[0]
+    final fun valueOf(kotlin/String): us.tractat.kuilt.session/RoomFramePrefix // us.tractat.kuilt.session/RoomFramePrefix.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.session/RoomFramePrefix> // us.tractat.kuilt.session/RoomFramePrefix.values|values#static(){}[0]
+    open fun classifies(kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.session/RoomFramePrefix.classifies|classifies(kotlin.ByteArray){}[0]
+}
+
+abstract fun interface us.tractat.kuilt.session.partition/EndpointSelector { // us.tractat.kuilt.session.partition/EndpointSelector|null[0]
+    abstract fun next(kotlin/Int): kotlin/Int // us.tractat.kuilt.session.partition/EndpointSelector.next|next(kotlin.Int){}[0]
+}
+
+abstract interface us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode|null[0]
+    abstract val id // us.tractat.kuilt.session.admit/RejectCode.id|{}id[0]
+        abstract fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.id.<get-id>|<get-id>(){}[0]
+    open val retryable // us.tractat.kuilt.session.admit/RejectCode.retryable|{}retryable[0]
+        open fun <get-retryable>(): kotlin/Boolean // us.tractat.kuilt.session.admit/RejectCode.retryable.<get-retryable>|<get-retryable>(){}[0]
+
+    final class Unknown : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.Unknown|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.session.admit/RejectCode.Unknown.<init>|<init>(kotlin.String){}[0]
+
+        final val id // us.tractat.kuilt.session.admit/RejectCode.Unknown.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.Unknown.id.<get-id>|<get-id>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.Unknown.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.session.admit/RejectCode.Unknown // us.tractat.kuilt.session.admit/RejectCode.Unknown.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/RejectCode.Unknown.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/RejectCode.Unknown.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.Unknown.toString|toString(){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.session.admit/RejectCode.Companion|null[0]
+        final val Unspecified // us.tractat.kuilt.session.admit/RejectCode.Companion.Unspecified|{}Unspecified[0]
+            final fun <get-Unspecified>(): us.tractat.kuilt.session.admit/RejectCode.Unknown // us.tractat.kuilt.session.admit/RejectCode.Companion.Unspecified.<get-Unspecified>|<get-Unspecified>(){}[0]
+
+        final fun fromId(kotlin/String?): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session.admit/RejectCode.Companion.fromId|fromId(kotlin.String?){}[0]
+    }
+
+    final object ProtocolMismatch : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.ProtocolMismatch|null[0]
+        final val id // us.tractat.kuilt.session.admit/RejectCode.ProtocolMismatch.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.ProtocolMismatch.id.<get-id>|<get-id>(){}[0]
+        final val retryable // us.tractat.kuilt.session.admit/RejectCode.ProtocolMismatch.retryable|{}retryable[0]
+            final fun <get-retryable>(): kotlin/Boolean // us.tractat.kuilt.session.admit/RejectCode.ProtocolMismatch.retryable.<get-retryable>|<get-retryable>(){}[0]
+    }
+
+    final object ResumeTokenInvalid : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.ResumeTokenInvalid|null[0]
+        final val id // us.tractat.kuilt.session.admit/RejectCode.ResumeTokenInvalid.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.ResumeTokenInvalid.id.<get-id>|<get-id>(){}[0]
+        final val retryable // us.tractat.kuilt.session.admit/RejectCode.ResumeTokenInvalid.retryable|{}retryable[0]
+            final fun <get-retryable>(): kotlin/Boolean // us.tractat.kuilt.session.admit/RejectCode.ResumeTokenInvalid.retryable.<get-retryable>|<get-retryable>(){}[0]
+    }
+
+    final object ResumeWindowExpired : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.ResumeWindowExpired|null[0]
+        final val id // us.tractat.kuilt.session.admit/RejectCode.ResumeWindowExpired.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.ResumeWindowExpired.id.<get-id>|<get-id>(){}[0]
+        final val retryable // us.tractat.kuilt.session.admit/RejectCode.ResumeWindowExpired.retryable|{}retryable[0]
+            final fun <get-retryable>(): kotlin/Boolean // us.tractat.kuilt.session.admit/RejectCode.ResumeWindowExpired.retryable.<get-retryable>|<get-retryable>(){}[0]
+    }
+
+    final object ResumeWindowNotYetOpen : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.ResumeWindowNotYetOpen|null[0]
+        final val id // us.tractat.kuilt.session.admit/RejectCode.ResumeWindowNotYetOpen.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.ResumeWindowNotYetOpen.id.<get-id>|<get-id>(){}[0]
+    }
+
+    final object RoomMismatch : us.tractat.kuilt.session.admit/RejectCode { // us.tractat.kuilt.session.admit/RejectCode.RoomMismatch|null[0]
+        final val id // us.tractat.kuilt.session.admit/RejectCode.RoomMismatch.id|{}id[0]
+            final fun <get-id>(): kotlin/String // us.tractat.kuilt.session.admit/RejectCode.RoomMismatch.id.<get-id>|<get-id>(){}[0]
+        final val retryable // us.tractat.kuilt.session.admit/RejectCode.RoomMismatch.retryable|{}retryable[0]
+            final fun <get-retryable>(): kotlin/Boolean // us.tractat.kuilt.session.admit/RejectCode.RoomMismatch.retryable.<get-retryable>|<get-retryable>(){}[0]
+    }
+}
+
+abstract interface us.tractat.kuilt.session.election/ElectionLobby { // us.tractat.kuilt.session.election/ElectionLobby|null[0]
+    abstract val host // us.tractat.kuilt.session.election/ElectionLobby.host|{}host[0]
+        abstract fun <get-host>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/PeerId> // us.tractat.kuilt.session.election/ElectionLobby.host.<get-host>|<get-host>(){}[0]
+    abstract val peers // us.tractat.kuilt.session.election/ElectionLobby.peers|{}peers[0]
+        abstract fun <get-peers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.core/PeerId>> // us.tractat.kuilt.session.election/ElectionLobby.peers.<get-peers>|<get-peers>(){}[0]
+    abstract val selfId // us.tractat.kuilt.session.election/ElectionLobby.selfId|{}selfId[0]
+        abstract fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.election/ElectionLobby.selfId.<get-selfId>|<get-selfId>(){}[0]
+    abstract val state // us.tractat.kuilt.session.election/ElectionLobby.state|{}state[0]
+        abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/SeamState> // us.tractat.kuilt.session.election/ElectionLobby.state.<get-state>|<get-state>(){}[0]
+
+    abstract suspend fun awaitRoom(kotlin/String? = ...): us.tractat.kuilt.session.election/ElectionOutcome // us.tractat.kuilt.session.election/ElectionLobby.awaitRoom|awaitRoom(kotlin.String?){}[0]
+    abstract suspend fun leave() // us.tractat.kuilt.session.election/ElectionLobby.leave|leave(){}[0]
+    abstract suspend fun start(kotlin/String? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.election/ElectionLobby.start|start(kotlin.String?){}[0]
+}
+
+abstract interface us.tractat.kuilt.session.partition/JoinerReconnectController { // us.tractat.kuilt.session.partition/JoinerReconnectController|null[0]
+    abstract val events // us.tractat.kuilt.session.partition/JoinerReconnectController.events|{}events[0]
+        abstract fun <get-events>(): kotlinx.coroutines.flow/SharedFlow<us.tractat.kuilt.session.partition/JoinerReconnectEvent> // us.tractat.kuilt.session.partition/JoinerReconnectController.events.<get-events>|<get-events>(){}[0]
+
+    abstract fun expire(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/JoinerReconnectController.expire|expire(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
+    abstract fun onPeerRecovered(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/JoinerReconnectController.onPeerRecovered|onPeerRecovered(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
+    abstract fun onPeerUnresponsive(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/JoinerReconnectController.onPeerUnresponsive|onPeerUnresponsive(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
+    abstract suspend fun tryResume(us.tractat.kuilt.session.partition/ResumeToken, kotlin/Long): us.tractat.kuilt.session.partition/ResumeResult.HostVerdict // us.tractat.kuilt.session.partition/JoinerReconnectController.tryResume|tryResume(us.tractat.kuilt.session.partition.ResumeToken;kotlin.Long){}[0]
+}
+
+abstract interface us.tractat.kuilt.session/Room { // us.tractat.kuilt.session/Room|null[0]
+    abstract val attestedPrincipals // us.tractat.kuilt.session/Room.attestedPrincipals|{}attestedPrincipals[0]
+        abstract fun <get-attestedPrincipals>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Map<us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/Principal>> // us.tractat.kuilt.session/Room.attestedPrincipals.<get-attestedPrincipals>|<get-attestedPrincipals>(){}[0]
+    abstract val events // us.tractat.kuilt.session/Room.events|{}events[0]
+        abstract fun <get-events>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.session/MembershipEvent> // us.tractat.kuilt.session/Room.events.<get-events>|<get-events>(){}[0]
+    abstract val incoming // us.tractat.kuilt.session/Room.incoming|{}incoming[0]
+        abstract fun <get-incoming>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.session/RoomFrame> // us.tractat.kuilt.session/Room.incoming.<get-incoming>|<get-incoming>(){}[0]
+    abstract val localFabric // us.tractat.kuilt.session/Room.localFabric|{}localFabric[0]
+        abstract fun <get-localFabric>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.core/FabricAvailability> // us.tractat.kuilt.session/Room.localFabric.<get-localFabric>|<get-localFabric>(){}[0]
+    abstract val resumeToken // us.tractat.kuilt.session/Room.resumeToken|{}resumeToken[0]
+        abstract fun <get-resumeToken>(): us.tractat.kuilt.session.partition/ResumeToken? // us.tractat.kuilt.session/Room.resumeToken.<get-resumeToken>|<get-resumeToken>(){}[0]
+    abstract val role // us.tractat.kuilt.session/Room.role|{}role[0]
+        abstract fun <get-role>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.session/SessionRole> // us.tractat.kuilt.session/Room.role.<get-role>|<get-role>(){}[0]
+    abstract val roomId // us.tractat.kuilt.session/Room.roomId|{}roomId[0]
+        abstract fun <get-roomId>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.session.partition/RoomId?> // us.tractat.kuilt.session/Room.roomId.<get-roomId>|<get-roomId>(){}[0]
+    abstract val roster // us.tractat.kuilt.session/Room.roster|{}roster[0]
+        abstract fun <get-roster>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/Set<us.tractat.kuilt.session/Member>> // us.tractat.kuilt.session/Room.roster.<get-roster>|<get-roster>(){}[0]
+    abstract val selfId // us.tractat.kuilt.session/Room.selfId|{}selfId[0]
+        abstract fun <get-selfId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/Room.selfId.<get-selfId>|<get-selfId>(){}[0]
+    open val maxPayloadBytes // us.tractat.kuilt.session/Room.maxPayloadBytes|{}maxPayloadBytes[0]
+        open fun <get-maxPayloadBytes>(): kotlin/Int? // us.tractat.kuilt.session/Room.maxPayloadBytes.<get-maxPayloadBytes>|<get-maxPayloadBytes>(){}[0]
+
+    abstract fun channel(kotlin/String): us.tractat.kuilt.core/Seam // us.tractat.kuilt.session/Room.channel|channel(kotlin.String){}[0]
+    abstract fun incomingFrom(us.tractat.kuilt.core/PeerId): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.session/RoomFrame> // us.tractat.kuilt.session/Room.incomingFrom|incomingFrom(us.tractat.kuilt.core.PeerId){}[0]
+    abstract suspend fun broadcast(kotlin/ByteArray) // us.tractat.kuilt.session/Room.broadcast|broadcast(kotlin.ByteArray){}[0]
+    abstract suspend fun leave(us.tractat.kuilt.session/LeaveReason = ...) // us.tractat.kuilt.session/Room.leave|leave(us.tractat.kuilt.session.LeaveReason){}[0]
+    abstract suspend fun resume(us.tractat.kuilt.session.partition/ResumeToken): us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome // us.tractat.kuilt.session/Room.resume|resume(us.tractat.kuilt.session.partition.ResumeToken){}[0]
+    abstract suspend fun sendTo(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.session/Room.sendTo|sendTo(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+}
+
+abstract interface us.tractat.kuilt.session/RoomFactory { // us.tractat.kuilt.session/RoomFactory|null[0]
+    abstract suspend fun host(us.tractat.kuilt.core/Pattern, kotlin/String? = ..., us.tractat.kuilt.session.partition/RoomId? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/RoomFactory.host|host(us.tractat.kuilt.core.Pattern;kotlin.String?;us.tractat.kuilt.session.partition.RoomId?){}[0]
+    abstract suspend fun join(us.tractat.kuilt.core/Tag, kotlin/String? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/RoomFactory.join|join(us.tractat.kuilt.core.Tag;kotlin.String?){}[0]
+}
+
+abstract interface us.tractat.kuilt.session/RoomHost : kotlin/AutoCloseable { // us.tractat.kuilt.session/RoomHost|null[0]
+    abstract suspend fun start(kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.session/Room, kotlin/Unit>) // us.tractat.kuilt.session/RoomHost.start|start(kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.session.Room,kotlin.Unit>){}[0]
+}
+
+sealed interface us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage|null[0]
+    final class Farewell : us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage.Farewell|null[0]
+        constructor <init>(kotlin/String, kotlin/Boolean = ...) // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.<init>|<init>(kotlin.String;kotlin.Boolean){}[0]
+
+        final val expired // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.expired|{}expired[0]
+            final fun <get-expired>(): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.expired.<get-expired>|<get-expired>(){}[0]
+        final val peerId // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.peerId|{}peerId[0]
+            final fun <get-peerId>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.component1|component1(){}[0]
+        final fun component2(): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/Boolean = ...): us.tractat.kuilt.session.admit/AdmitMessage.Farewell // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.copy|copy(kotlin.String;kotlin.Boolean){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Farewell> { // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.admit/AdmitMessage.Farewell // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.admit/AdmitMessage.Farewell) // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.admit.AdmitMessage.Farewell){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Farewell> // us.tractat.kuilt.session.admit/AdmitMessage.Farewell.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Hello : us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage.Hello|null[0]
+        constructor <init>(kotlin/String, kotlin/String, kotlin/String? = ..., kotlin/String? = ..., kotlin/Int? = ...) // us.tractat.kuilt.session.admit/AdmitMessage.Hello.<init>|<init>(kotlin.String;kotlin.String;kotlin.String?;kotlin.String?;kotlin.Int?){}[0]
+
+        final val deviceId // us.tractat.kuilt.session.admit/AdmitMessage.Hello.deviceId|{}deviceId[0]
+            final fun <get-deviceId>(): kotlin/String? // us.tractat.kuilt.session.admit/AdmitMessage.Hello.deviceId.<get-deviceId>|<get-deviceId>(){}[0]
+        final val displayName // us.tractat.kuilt.session.admit/AdmitMessage.Hello.displayName|{}displayName[0]
+            final fun <get-displayName>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Hello.displayName.<get-displayName>|<get-displayName>(){}[0]
+        final val protocolVersion // us.tractat.kuilt.session.admit/AdmitMessage.Hello.protocolVersion|{}protocolVersion[0]
+            final fun <get-protocolVersion>(): kotlin/Int? // us.tractat.kuilt.session.admit/AdmitMessage.Hello.protocolVersion.<get-protocolVersion>|<get-protocolVersion>(){}[0]
+        final val sessionId // us.tractat.kuilt.session.admit/AdmitMessage.Hello.sessionId|{}sessionId[0]
+            final fun <get-sessionId>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Hello.sessionId.<get-sessionId>|<get-sessionId>(){}[0]
+        final val targetRoom // us.tractat.kuilt.session.admit/AdmitMessage.Hello.targetRoom|{}targetRoom[0]
+            final fun <get-targetRoom>(): kotlin/String? // us.tractat.kuilt.session.admit/AdmitMessage.Hello.targetRoom.<get-targetRoom>|<get-targetRoom>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Hello.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Hello.component2|component2(){}[0]
+        final fun component3(): kotlin/String? // us.tractat.kuilt.session.admit/AdmitMessage.Hello.component3|component3(){}[0]
+        final fun component4(): kotlin/String? // us.tractat.kuilt.session.admit/AdmitMessage.Hello.component4|component4(){}[0]
+        final fun component5(): kotlin/Int? // us.tractat.kuilt.session.admit/AdmitMessage.Hello.component5|component5(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/String? = ..., kotlin/String? = ..., kotlin/Int? = ...): us.tractat.kuilt.session.admit/AdmitMessage.Hello // us.tractat.kuilt.session.admit/AdmitMessage.Hello.copy|copy(kotlin.String;kotlin.String;kotlin.String?;kotlin.String?;kotlin.Int?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Hello.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmitMessage.Hello.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Hello.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Hello> { // us.tractat.kuilt.session.admit/AdmitMessage.Hello.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.admit/AdmitMessage.Hello.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.admit/AdmitMessage.Hello.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.admit/AdmitMessage.Hello.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.admit/AdmitMessage.Hello // us.tractat.kuilt.session.admit/AdmitMessage.Hello.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.admit/AdmitMessage.Hello) // us.tractat.kuilt.session.admit/AdmitMessage.Hello.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.admit.AdmitMessage.Hello){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.admit/AdmitMessage.Hello.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Hello> // us.tractat.kuilt.session.admit/AdmitMessage.Hello.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Paused : us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage.Paused|null[0]
+        constructor <init>(kotlin/String, kotlin/Long) // us.tractat.kuilt.session.admit/AdmitMessage.Paused.<init>|<init>(kotlin.String;kotlin.Long){}[0]
+
+        final val expiresAt // us.tractat.kuilt.session.admit/AdmitMessage.Paused.expiresAt|{}expiresAt[0]
+            final fun <get-expiresAt>(): kotlin/Long // us.tractat.kuilt.session.admit/AdmitMessage.Paused.expiresAt.<get-expiresAt>|<get-expiresAt>(){}[0]
+        final val peerId // us.tractat.kuilt.session.admit/AdmitMessage.Paused.peerId|{}peerId[0]
+            final fun <get-peerId>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Paused.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Paused.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.session.admit/AdmitMessage.Paused.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/Long = ...): us.tractat.kuilt.session.admit/AdmitMessage.Paused // us.tractat.kuilt.session.admit/AdmitMessage.Paused.copy|copy(kotlin.String;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Paused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmitMessage.Paused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Paused.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Paused> { // us.tractat.kuilt.session.admit/AdmitMessage.Paused.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.admit/AdmitMessage.Paused.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.admit/AdmitMessage.Paused.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.admit/AdmitMessage.Paused.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.admit/AdmitMessage.Paused // us.tractat.kuilt.session.admit/AdmitMessage.Paused.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.admit/AdmitMessage.Paused) // us.tractat.kuilt.session.admit/AdmitMessage.Paused.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.admit.AdmitMessage.Paused){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.admit/AdmitMessage.Paused.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Paused> // us.tractat.kuilt.session.admit/AdmitMessage.Paused.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Reject : us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage.Reject|null[0]
+        constructor <init>(kotlin/String, kotlin/String? = ...) // us.tractat.kuilt.session.admit/AdmitMessage.Reject.<init>|<init>(kotlin.String;kotlin.String?){}[0]
+        constructor <init>(kotlin/String, us.tractat.kuilt.session.admit/RejectCode) // us.tractat.kuilt.session.admit/AdmitMessage.Reject.<init>|<init>(kotlin.String;us.tractat.kuilt.session.admit.RejectCode){}[0]
+
+        final val code // us.tractat.kuilt.session.admit/AdmitMessage.Reject.code|{}code[0]
+            final fun <get-code>(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session.admit/AdmitMessage.Reject.code.<get-code>|<get-code>(){}[0]
+        final val codeId // us.tractat.kuilt.session.admit/AdmitMessage.Reject.codeId|{}codeId[0]
+            final fun <get-codeId>(): kotlin/String? // us.tractat.kuilt.session.admit/AdmitMessage.Reject.codeId.<get-codeId>|<get-codeId>(){}[0]
+        final val reason // us.tractat.kuilt.session.admit/AdmitMessage.Reject.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Reject.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Reject.component1|component1(){}[0]
+        final fun component2(): kotlin/String? // us.tractat.kuilt.session.admit/AdmitMessage.Reject.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String? = ...): us.tractat.kuilt.session.admit/AdmitMessage.Reject // us.tractat.kuilt.session.admit/AdmitMessage.Reject.copy|copy(kotlin.String;kotlin.String?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Reject.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmitMessage.Reject.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Reject.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Reject> { // us.tractat.kuilt.session.admit/AdmitMessage.Reject.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.admit/AdmitMessage.Reject.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.admit/AdmitMessage.Reject.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.admit/AdmitMessage.Reject.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.admit/AdmitMessage.Reject // us.tractat.kuilt.session.admit/AdmitMessage.Reject.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.admit/AdmitMessage.Reject) // us.tractat.kuilt.session.admit/AdmitMessage.Reject.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.admit.AdmitMessage.Reject){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.admit/AdmitMessage.Reject.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Reject> // us.tractat.kuilt.session.admit/AdmitMessage.Reject.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Resume : us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage.Resume|null[0]
+        constructor <init>(kotlin/String, kotlin/String, kotlin/Long) // us.tractat.kuilt.session.admit/AdmitMessage.Resume.<init>|<init>(kotlin.String;kotlin.String;kotlin.Long){}[0]
+
+        final val issuedAt // us.tractat.kuilt.session.admit/AdmitMessage.Resume.issuedAt|{}issuedAt[0]
+            final fun <get-issuedAt>(): kotlin/Long // us.tractat.kuilt.session.admit/AdmitMessage.Resume.issuedAt.<get-issuedAt>|<get-issuedAt>(){}[0]
+        final val tokenPeerId // us.tractat.kuilt.session.admit/AdmitMessage.Resume.tokenPeerId|{}tokenPeerId[0]
+            final fun <get-tokenPeerId>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Resume.tokenPeerId.<get-tokenPeerId>|<get-tokenPeerId>(){}[0]
+        final val tokenRoomId // us.tractat.kuilt.session.admit/AdmitMessage.Resume.tokenRoomId|{}tokenRoomId[0]
+            final fun <get-tokenRoomId>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Resume.tokenRoomId.<get-tokenRoomId>|<get-tokenRoomId>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Resume.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Resume.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.session.admit/AdmitMessage.Resume.component3|component3(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/Long = ...): us.tractat.kuilt.session.admit/AdmitMessage.Resume // us.tractat.kuilt.session.admit/AdmitMessage.Resume.copy|copy(kotlin.String;kotlin.String;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Resume.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmitMessage.Resume.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Resume.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Resume> { // us.tractat.kuilt.session.admit/AdmitMessage.Resume.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.admit/AdmitMessage.Resume.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.admit/AdmitMessage.Resume.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.admit/AdmitMessage.Resume.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.admit/AdmitMessage.Resume // us.tractat.kuilt.session.admit/AdmitMessage.Resume.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.admit/AdmitMessage.Resume) // us.tractat.kuilt.session.admit/AdmitMessage.Resume.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.admit.AdmitMessage.Resume){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.admit/AdmitMessage.Resume.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Resume> // us.tractat.kuilt.session.admit/AdmitMessage.Resume.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Unpaused : us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.<init>|<init>(kotlin.String){}[0]
+
+        final val peerId // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.peerId|{}peerId[0]
+            final fun <get-peerId>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.session.admit/AdmitMessage.Unpaused // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Unpaused> { // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.admit/AdmitMessage.Unpaused // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.admit/AdmitMessage.Unpaused) // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.admit.AdmitMessage.Unpaused){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Unpaused> // us.tractat.kuilt.session.admit/AdmitMessage.Unpaused.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Welcome : us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage.Welcome|null[0]
+        constructor <init>(kotlin/String, kotlin/String, kotlin/String, kotlin/String? = ..., kotlin/String? = ...) // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.<init>|<init>(kotlin.String;kotlin.String;kotlin.String;kotlin.String?;kotlin.String?){}[0]
+
+        final val assignedPeerId // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.assignedPeerId|{}assignedPeerId[0]
+            final fun <get-assignedPeerId>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.assignedPeerId.<get-assignedPeerId>|<get-assignedPeerId>(){}[0]
+        final val deviceId // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.deviceId|{}deviceId[0]
+            final fun <get-deviceId>(): kotlin/String? // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.deviceId.<get-deviceId>|<get-deviceId>(){}[0]
+        final val displayName // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.displayName|{}displayName[0]
+            final fun <get-displayName>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.displayName.<get-displayName>|<get-displayName>(){}[0]
+        final val roomId // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.roomId|{}roomId[0]
+            final fun <get-roomId>(): kotlin/String? // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.roomId.<get-roomId>|<get-roomId>(){}[0]
+        final val sessionId // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.sessionId|{}sessionId[0]
+            final fun <get-sessionId>(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.sessionId.<get-sessionId>|<get-sessionId>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.component2|component2(){}[0]
+        final fun component3(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.component3|component3(){}[0]
+        final fun component4(): kotlin/String? // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.component4|component4(){}[0]
+        final fun component5(): kotlin/String? // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.component5|component5(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/String = ..., kotlin/String? = ..., kotlin/String? = ...): us.tractat.kuilt.session.admit/AdmitMessage.Welcome // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.copy|copy(kotlin.String;kotlin.String;kotlin.String;kotlin.String?;kotlin.String?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Welcome> { // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.admit/AdmitMessage.Welcome // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.admit/AdmitMessage.Welcome) // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.admit.AdmitMessage.Welcome){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Welcome> // us.tractat.kuilt.session.admit/AdmitMessage.Welcome.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.session.admit/AdmitMessage.Companion|null[0]
+        final val PREFIX_BYTE // us.tractat.kuilt.session.admit/AdmitMessage.Companion.PREFIX_BYTE|{}PREFIX_BYTE[0]
+            final fun <get-PREFIX_BYTE>(): kotlin/Byte // us.tractat.kuilt.session.admit/AdmitMessage.Companion.PREFIX_BYTE.<get-PREFIX_BYTE>|<get-PREFIX_BYTE>(){}[0]
+
+        final fun decode(kotlin/ByteArray): us.tractat.kuilt.session.admit/AdmitMessage? // us.tractat.kuilt.session.admit/AdmitMessage.Companion.decode|decode(kotlin.ByteArray){}[0]
+        final fun encode(us.tractat.kuilt.session.admit/AdmitMessage): kotlin/ByteArray // us.tractat.kuilt.session.admit/AdmitMessage.Companion.encode|encode(us.tractat.kuilt.session.admit.AdmitMessage){}[0]
+        final fun isAdmitFrame(kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Companion.isAdmitFrame|isAdmitFrame(kotlin.ByteArray){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.admit/AdmitMessage> // us.tractat.kuilt.session.admit/AdmitMessage.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.session.admit/AdmitMessage.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+
+    final object Goodbye : kotlinx.serialization.internal/SerializerFactory, us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage.Goodbye|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.Goodbye.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmitMessage.Goodbye.hashCode|hashCode(){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.admit/AdmitMessage.Goodbye> // us.tractat.kuilt.session.admit/AdmitMessage.Goodbye.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.session.admit/AdmitMessage.Goodbye.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.Goodbye.toString|toString(){}[0]
+    }
+
+    final object ResumeAck : kotlinx.serialization.internal/SerializerFactory, us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage.ResumeAck|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmitMessage.ResumeAck.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmitMessage.ResumeAck.hashCode|hashCode(){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.admit/AdmitMessage.ResumeAck> // us.tractat.kuilt.session.admit/AdmitMessage.ResumeAck.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.session.admit/AdmitMessage.ResumeAck.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmitMessage.ResumeAck.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.session.election/ElectionOutcome { // us.tractat.kuilt.session.election/ElectionOutcome|null[0]
+    final class Adopted : us.tractat.kuilt.session.election/ElectionOutcome { // us.tractat.kuilt.session.election/ElectionOutcome.Adopted|null[0]
+        constructor <init>(us.tractat.kuilt.session/Room) // us.tractat.kuilt.session.election/ElectionOutcome.Adopted.<init>|<init>(us.tractat.kuilt.session.Room){}[0]
+
+        final val room // us.tractat.kuilt.session.election/ElectionOutcome.Adopted.room|{}room[0]
+            final fun <get-room>(): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.election/ElectionOutcome.Adopted.room.<get-room>|<get-room>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.election/ElectionOutcome.Adopted.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.session/Room = ...): us.tractat.kuilt.session.election/ElectionOutcome.Adopted // us.tractat.kuilt.session.election/ElectionOutcome.Adopted.copy|copy(us.tractat.kuilt.session.Room){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.election/ElectionOutcome.Adopted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.election/ElectionOutcome.Adopted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.election/ElectionOutcome.Adopted.toString|toString(){}[0]
+    }
+
+    final class Torn : us.tractat.kuilt.session.election/ElectionOutcome { // us.tractat.kuilt.session.election/ElectionOutcome.Torn|null[0]
+        constructor <init>(us.tractat.kuilt.core/CloseReason) // us.tractat.kuilt.session.election/ElectionOutcome.Torn.<init>|<init>(us.tractat.kuilt.core.CloseReason){}[0]
+
+        final val reason // us.tractat.kuilt.session.election/ElectionOutcome.Torn.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.core/CloseReason // us.tractat.kuilt.session.election/ElectionOutcome.Torn.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/CloseReason // us.tractat.kuilt.session.election/ElectionOutcome.Torn.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.core/CloseReason = ...): us.tractat.kuilt.session.election/ElectionOutcome.Torn // us.tractat.kuilt.session.election/ElectionOutcome.Torn.copy|copy(us.tractat.kuilt.core.CloseReason){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.election/ElectionOutcome.Torn.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.election/ElectionOutcome.Torn.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.election/ElectionOutcome.Torn.toString|toString(){}[0]
+    }
+
+    final object BecameHost : us.tractat.kuilt.session.election/ElectionOutcome { // us.tractat.kuilt.session.election/ElectionOutcome.BecameHost|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.election/ElectionOutcome.BecameHost.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.election/ElectionOutcome.BecameHost.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.election/ElectionOutcome.BecameHost.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.session.election/LobbyMessage { // us.tractat.kuilt.session.election/LobbyMessage|null[0]
+    final class Commit : us.tractat.kuilt.session.election/LobbyMessage { // us.tractat.kuilt.session.election/LobbyMessage.Commit|null[0]
+        constructor <init>(kotlin/String, kotlin/Long) // us.tractat.kuilt.session.election/LobbyMessage.Commit.<init>|<init>(kotlin.String;kotlin.Long){}[0]
+
+        final val epoch // us.tractat.kuilt.session.election/LobbyMessage.Commit.epoch|{}epoch[0]
+            final fun <get-epoch>(): kotlin/Long // us.tractat.kuilt.session.election/LobbyMessage.Commit.epoch.<get-epoch>|<get-epoch>(){}[0]
+        final val hostId // us.tractat.kuilt.session.election/LobbyMessage.Commit.hostId|{}hostId[0]
+            final fun <get-hostId>(): kotlin/String // us.tractat.kuilt.session.election/LobbyMessage.Commit.hostId.<get-hostId>|<get-hostId>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.election/LobbyMessage.Commit.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.session.election/LobbyMessage.Commit.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/Long = ...): us.tractat.kuilt.session.election/LobbyMessage.Commit // us.tractat.kuilt.session.election/LobbyMessage.Commit.copy|copy(kotlin.String;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.election/LobbyMessage.Commit.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.election/LobbyMessage.Commit.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.election/LobbyMessage.Commit.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.election/LobbyMessage.Commit> { // us.tractat.kuilt.session.election/LobbyMessage.Commit.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.election/LobbyMessage.Commit.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.election/LobbyMessage.Commit.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.election/LobbyMessage.Commit.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.election/LobbyMessage.Commit // us.tractat.kuilt.session.election/LobbyMessage.Commit.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.election/LobbyMessage.Commit) // us.tractat.kuilt.session.election/LobbyMessage.Commit.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.election.LobbyMessage.Commit){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.election/LobbyMessage.Commit.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.election/LobbyMessage.Commit> // us.tractat.kuilt.session.election/LobbyMessage.Commit.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Freeze : us.tractat.kuilt.session.election/LobbyMessage { // us.tractat.kuilt.session.election/LobbyMessage.Freeze|null[0]
+        constructor <init>(kotlin/String, kotlin.collections/Set<kotlin/String>, kotlin/Long) // us.tractat.kuilt.session.election/LobbyMessage.Freeze.<init>|<init>(kotlin.String;kotlin.collections.Set<kotlin.String>;kotlin.Long){}[0]
+
+        final val epoch // us.tractat.kuilt.session.election/LobbyMessage.Freeze.epoch|{}epoch[0]
+            final fun <get-epoch>(): kotlin/Long // us.tractat.kuilt.session.election/LobbyMessage.Freeze.epoch.<get-epoch>|<get-epoch>(){}[0]
+        final val hostId // us.tractat.kuilt.session.election/LobbyMessage.Freeze.hostId|{}hostId[0]
+            final fun <get-hostId>(): kotlin/String // us.tractat.kuilt.session.election/LobbyMessage.Freeze.hostId.<get-hostId>|<get-hostId>(){}[0]
+        final val roster // us.tractat.kuilt.session.election/LobbyMessage.Freeze.roster|{}roster[0]
+            final fun <get-roster>(): kotlin.collections/Set<kotlin/String> // us.tractat.kuilt.session.election/LobbyMessage.Freeze.roster.<get-roster>|<get-roster>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.election/LobbyMessage.Freeze.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/Set<kotlin/String> // us.tractat.kuilt.session.election/LobbyMessage.Freeze.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.session.election/LobbyMessage.Freeze.component3|component3(){}[0]
+        final fun copy(kotlin/String = ..., kotlin.collections/Set<kotlin/String> = ..., kotlin/Long = ...): us.tractat.kuilt.session.election/LobbyMessage.Freeze // us.tractat.kuilt.session.election/LobbyMessage.Freeze.copy|copy(kotlin.String;kotlin.collections.Set<kotlin.String>;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.election/LobbyMessage.Freeze.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.election/LobbyMessage.Freeze.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.election/LobbyMessage.Freeze.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.election/LobbyMessage.Freeze> { // us.tractat.kuilt.session.election/LobbyMessage.Freeze.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.election/LobbyMessage.Freeze.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.election/LobbyMessage.Freeze.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.election/LobbyMessage.Freeze.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.election/LobbyMessage.Freeze // us.tractat.kuilt.session.election/LobbyMessage.Freeze.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.election/LobbyMessage.Freeze) // us.tractat.kuilt.session.election/LobbyMessage.Freeze.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.election.LobbyMessage.Freeze){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.election/LobbyMessage.Freeze.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.session.election/LobbyMessage.Freeze.Companion.$childSerializers|{}$childSerializers[0]
+
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.election/LobbyMessage.Freeze> // us.tractat.kuilt.session.election/LobbyMessage.Freeze.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class FreezeAck : us.tractat.kuilt.session.election/LobbyMessage { // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck|null[0]
+        constructor <init>(kotlin/String, kotlin/Long) // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.<init>|<init>(kotlin.String;kotlin.Long){}[0]
+
+        final val epoch // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.epoch|{}epoch[0]
+            final fun <get-epoch>(): kotlin/Long // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.epoch.<get-epoch>|<get-epoch>(){}[0]
+        final val hostId // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.hostId|{}hostId[0]
+            final fun <get-hostId>(): kotlin/String // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.hostId.<get-hostId>|<get-hostId>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/Long = ...): us.tractat.kuilt.session.election/LobbyMessage.FreezeAck // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.copy|copy(kotlin.String;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.election/LobbyMessage.FreezeAck> { // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.election/LobbyMessage.FreezeAck // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.election/LobbyMessage.FreezeAck) // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.election.LobbyMessage.FreezeAck){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.election/LobbyMessage.FreezeAck> // us.tractat.kuilt.session.election/LobbyMessage.FreezeAck.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Reopen : us.tractat.kuilt.session.election/LobbyMessage { // us.tractat.kuilt.session.election/LobbyMessage.Reopen|null[0]
+        constructor <init>(kotlin/Long) // us.tractat.kuilt.session.election/LobbyMessage.Reopen.<init>|<init>(kotlin.Long){}[0]
+
+        final val epoch // us.tractat.kuilt.session.election/LobbyMessage.Reopen.epoch|{}epoch[0]
+            final fun <get-epoch>(): kotlin/Long // us.tractat.kuilt.session.election/LobbyMessage.Reopen.epoch.<get-epoch>|<get-epoch>(){}[0]
+
+        final fun component1(): kotlin/Long // us.tractat.kuilt.session.election/LobbyMessage.Reopen.component1|component1(){}[0]
+        final fun copy(kotlin/Long = ...): us.tractat.kuilt.session.election/LobbyMessage.Reopen // us.tractat.kuilt.session.election/LobbyMessage.Reopen.copy|copy(kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.election/LobbyMessage.Reopen.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.election/LobbyMessage.Reopen.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.election/LobbyMessage.Reopen.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.session.election/LobbyMessage.Reopen> { // us.tractat.kuilt.session.election/LobbyMessage.Reopen.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.session.election/LobbyMessage.Reopen.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.session.election/LobbyMessage.Reopen.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.session.election/LobbyMessage.Reopen.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.session.election/LobbyMessage.Reopen // us.tractat.kuilt.session.election/LobbyMessage.Reopen.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.session.election/LobbyMessage.Reopen) // us.tractat.kuilt.session.election/LobbyMessage.Reopen.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.session.election.LobbyMessage.Reopen){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.session.election/LobbyMessage.Reopen.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.election/LobbyMessage.Reopen> // us.tractat.kuilt.session.election/LobbyMessage.Reopen.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.session.election/LobbyMessage.Companion|null[0]
+        final val PREFIX_BYTE // us.tractat.kuilt.session.election/LobbyMessage.Companion.PREFIX_BYTE|{}PREFIX_BYTE[0]
+            final fun <get-PREFIX_BYTE>(): kotlin/Byte // us.tractat.kuilt.session.election/LobbyMessage.Companion.PREFIX_BYTE.<get-PREFIX_BYTE>|<get-PREFIX_BYTE>(){}[0]
+
+        final fun decode(kotlin/ByteArray): us.tractat.kuilt.session.election/LobbyMessage? // us.tractat.kuilt.session.election/LobbyMessage.Companion.decode|decode(kotlin.ByteArray){}[0]
+        final fun encode(us.tractat.kuilt.session.election/LobbyMessage): kotlin/ByteArray // us.tractat.kuilt.session.election/LobbyMessage.Companion.encode|encode(us.tractat.kuilt.session.election.LobbyMessage){}[0]
+        final fun isLobbyFrame(kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.session.election/LobbyMessage.Companion.isLobbyFrame|isLobbyFrame(kotlin.ByteArray){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.session.election/LobbyMessage> // us.tractat.kuilt.session.election/LobbyMessage.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.session.election/LobbyMessage.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.session.partition/JoinerReconnectEvent { // us.tractat.kuilt.session.partition/JoinerReconnectEvent|null[0]
+    final class Resumed : us.tractat.kuilt.session.partition/JoinerReconnectEvent { // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
+
+        final val at // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.at|{}at[0]
+            final fun <get-at>(): kotlin/Long // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.at.<get-at>|<get-at>(){}[0]
+        final val peerId // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin/Long = ...): us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/JoinerReconnectEvent.Resumed.toString|toString(){}[0]
+    }
+
+    final class WindowExpired : us.tractat.kuilt.session.partition/JoinerReconnectEvent { // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin/Long, kotlin/Long) // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.Long;kotlin.Long){}[0]
+
+        final val at // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.at|{}at[0]
+            final fun <get-at>(): kotlin/Long // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.at.<get-at>|<get-at>(){}[0]
+        final val detectedAt // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.detectedAt|{}detectedAt[0]
+            final fun <get-detectedAt>(): kotlin/Long // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.detectedAt.<get-detectedAt>|<get-detectedAt>(){}[0]
+        final val peerId // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowExpired.toString|toString(){}[0]
+    }
+
+    final class WindowOpened : us.tractat.kuilt.session.partition/JoinerReconnectEvent { // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin/Long, kotlin/Long) // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.Long;kotlin.Long){}[0]
+
+        final val detectedAt // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.detectedAt|{}detectedAt[0]
+            final fun <get-detectedAt>(): kotlin/Long // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.detectedAt.<get-detectedAt>|<get-detectedAt>(){}[0]
+        final val expiresAt // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.expiresAt|{}expiresAt[0]
+            final fun <get-expiresAt>(): kotlin/Long // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.expiresAt.<get-expiresAt>|<get-expiresAt>(){}[0]
+        final val peerId // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/JoinerReconnectEvent.WindowOpened.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.session.partition/ResumeResult { // us.tractat.kuilt.session.partition/ResumeResult|null[0]
+    sealed interface HostVerdict : us.tractat.kuilt.session.partition/ResumeResult // us.tractat.kuilt.session.partition/ResumeResult.HostVerdict|null[0]
+
+    sealed interface JoinerOutcome : us.tractat.kuilt.session.partition/ResumeResult // us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome|null[0]
+
+    final class Refused : us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome { // us.tractat.kuilt.session.partition/ResumeResult.Refused|null[0]
+        constructor <init>(kotlin/String, us.tractat.kuilt.session.admit/RejectCode) // us.tractat.kuilt.session.partition/ResumeResult.Refused.<init>|<init>(kotlin.String;us.tractat.kuilt.session.admit.RejectCode){}[0]
+
+        final val code // us.tractat.kuilt.session.partition/ResumeResult.Refused.code|{}code[0]
+            final fun <get-code>(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session.partition/ResumeResult.Refused.code.<get-code>|<get-code>(){}[0]
+        final val message // us.tractat.kuilt.session.partition/ResumeResult.Refused.message|{}message[0]
+            final fun <get-message>(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.Refused.message.<get-message>|<get-message>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.Refused.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session.partition/ResumeResult.Refused.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., us.tractat.kuilt.session.admit/RejectCode = ...): us.tractat.kuilt.session.partition/ResumeResult.Refused // us.tractat.kuilt.session.partition/ResumeResult.Refused.copy|copy(kotlin.String;us.tractat.kuilt.session.admit.RejectCode){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeResult.Refused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeResult.Refused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.Refused.toString|toString(){}[0]
+    }
+
+    final class TokenInvalid : us.tractat.kuilt.session.partition/ResumeResult.HostVerdict { // us.tractat.kuilt.session.partition/ResumeResult.TokenInvalid|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.session.partition/ResumeResult.TokenInvalid.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.session.partition/ResumeResult.TokenInvalid.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.TokenInvalid.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.TokenInvalid.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.session.partition/ResumeResult.TokenInvalid // us.tractat.kuilt.session.partition/ResumeResult.TokenInvalid.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeResult.TokenInvalid.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeResult.TokenInvalid.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.TokenInvalid.toString|toString(){}[0]
+    }
+
+    final object Success : us.tractat.kuilt.session.partition/ResumeResult.HostVerdict, us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome { // us.tractat.kuilt.session.partition/ResumeResult.Success|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeResult.Success.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeResult.Success.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.Success.toString|toString(){}[0]
+    }
+
+    final object TimedOut : us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome { // us.tractat.kuilt.session.partition/ResumeResult.TimedOut|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeResult.TimedOut.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeResult.TimedOut.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.TimedOut.toString|toString(){}[0]
+    }
+
+    final object WindowClosed : us.tractat.kuilt.session.partition/ResumeResult.HostVerdict, us.tractat.kuilt.session.partition/ResumeResult.JoinerOutcome { // us.tractat.kuilt.session.partition/ResumeResult.WindowClosed|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeResult.WindowClosed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeResult.WindowClosed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.WindowClosed.toString|toString(){}[0]
+    }
+
+    final object WindowNotYetOpen : us.tractat.kuilt.session.partition/ResumeResult.HostVerdict { // us.tractat.kuilt.session.partition/ResumeResult.WindowNotYetOpen|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeResult.WindowNotYetOpen.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeResult.WindowNotYetOpen.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeResult.WindowNotYetOpen.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.session/AdmissionFailure { // us.tractat.kuilt.session/AdmissionFailure|null[0]
+    final class Rejected : us.tractat.kuilt.session/AdmissionFailure { // us.tractat.kuilt.session/AdmissionFailure.Rejected|null[0]
+        constructor <init>(kotlin/String, us.tractat.kuilt.session.admit/RejectCode = ...) // us.tractat.kuilt.session/AdmissionFailure.Rejected.<init>|<init>(kotlin.String;us.tractat.kuilt.session.admit.RejectCode){}[0]
+
+        final val code // us.tractat.kuilt.session/AdmissionFailure.Rejected.code|{}code[0]
+            final fun <get-code>(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session/AdmissionFailure.Rejected.code.<get-code>|<get-code>(){}[0]
+        final val message // us.tractat.kuilt.session/AdmissionFailure.Rejected.message|{}message[0]
+            final fun <get-message>(): kotlin/String // us.tractat.kuilt.session/AdmissionFailure.Rejected.message.<get-message>|<get-message>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session/AdmissionFailure.Rejected.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session/AdmissionFailure.Rejected.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., us.tractat.kuilt.session.admit/RejectCode = ...): us.tractat.kuilt.session/AdmissionFailure.Rejected // us.tractat.kuilt.session/AdmissionFailure.Rejected.copy|copy(kotlin.String;us.tractat.kuilt.session.admit.RejectCode){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/AdmissionFailure.Rejected.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/AdmissionFailure.Rejected.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/AdmissionFailure.Rejected.toString|toString(){}[0]
+    }
+
+    final object TimedOut : us.tractat.kuilt.session/AdmissionFailure { // us.tractat.kuilt.session/AdmissionFailure.TimedOut|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/AdmissionFailure.TimedOut.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/AdmissionFailure.TimedOut.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/AdmissionFailure.TimedOut.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.session/FailureReason { // us.tractat.kuilt.session/FailureReason|null[0]
+    final class Refused : us.tractat.kuilt.session/FailureReason { // us.tractat.kuilt.session/FailureReason.Refused|null[0]
+        constructor <init>(kotlin/String, us.tractat.kuilt.session.admit/RejectCode = ...) // us.tractat.kuilt.session/FailureReason.Refused.<init>|<init>(kotlin.String;us.tractat.kuilt.session.admit.RejectCode){}[0]
+
+        final val code // us.tractat.kuilt.session/FailureReason.Refused.code|{}code[0]
+            final fun <get-code>(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session/FailureReason.Refused.code.<get-code>|<get-code>(){}[0]
+        final val message // us.tractat.kuilt.session/FailureReason.Refused.message|{}message[0]
+            final fun <get-message>(): kotlin/String // us.tractat.kuilt.session/FailureReason.Refused.message.<get-message>|<get-message>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session/FailureReason.Refused.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session/FailureReason.Refused.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., us.tractat.kuilt.session.admit/RejectCode = ...): us.tractat.kuilt.session/FailureReason.Refused // us.tractat.kuilt.session/FailureReason.Refused.copy|copy(kotlin.String;us.tractat.kuilt.session.admit.RejectCode){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/FailureReason.Refused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/FailureReason.Refused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/FailureReason.Refused.toString|toString(){}[0]
+    }
+
+    final object Unrecoverable : us.tractat.kuilt.session/FailureReason { // us.tractat.kuilt.session/FailureReason.Unrecoverable|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/FailureReason.Unrecoverable.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/FailureReason.Unrecoverable.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/FailureReason.Unrecoverable.toString|toString(){}[0]
+    }
+
+    final object WindowExpired : us.tractat.kuilt.session/FailureReason { // us.tractat.kuilt.session/FailureReason.WindowExpired|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/FailureReason.WindowExpired.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/FailureReason.WindowExpired.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/FailureReason.WindowExpired.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.session/LeaveReason { // us.tractat.kuilt.session/LeaveReason|null[0]
+    final class Error : us.tractat.kuilt.session/LeaveReason { // us.tractat.kuilt.session/LeaveReason.Error|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.session/LeaveReason.Error.<init>|<init>(kotlin.String){}[0]
+
+        final val message // us.tractat.kuilt.session/LeaveReason.Error.message|{}message[0]
+            final fun <get-message>(): kotlin/String // us.tractat.kuilt.session/LeaveReason.Error.message.<get-message>|<get-message>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.session/LeaveReason.Error.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.session/LeaveReason.Error // us.tractat.kuilt.session/LeaveReason.Error.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/LeaveReason.Error.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/LeaveReason.Error.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/LeaveReason.Error.toString|toString(){}[0]
+    }
+
+    final object Normal : us.tractat.kuilt.session/LeaveReason { // us.tractat.kuilt.session/LeaveReason.Normal|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/LeaveReason.Normal.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/LeaveReason.Normal.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/LeaveReason.Normal.toString|toString(){}[0]
+    }
+
+    final object PartitionExpired : us.tractat.kuilt.session/LeaveReason { // us.tractat.kuilt.session/LeaveReason.PartitionExpired|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/LeaveReason.PartitionExpired.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/LeaveReason.PartitionExpired.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/LeaveReason.PartitionExpired.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.session/Liveness { // us.tractat.kuilt.session/Liveness|null[0]
+    final class Partitioned : us.tractat.kuilt.session/Liveness { // us.tractat.kuilt.session/Liveness.Partitioned|null[0]
+        constructor <init>(kotlin.time/Instant, kotlin.time/Instant) // us.tractat.kuilt.session/Liveness.Partitioned.<init>|<init>(kotlin.time.Instant;kotlin.time.Instant){}[0]
+
+        final val since // us.tractat.kuilt.session/Liveness.Partitioned.since|{}since[0]
+            final fun <get-since>(): kotlin.time/Instant // us.tractat.kuilt.session/Liveness.Partitioned.since.<get-since>|<get-since>(){}[0]
+        final val windowExpiresAt // us.tractat.kuilt.session/Liveness.Partitioned.windowExpiresAt|{}windowExpiresAt[0]
+            final fun <get-windowExpiresAt>(): kotlin.time/Instant // us.tractat.kuilt.session/Liveness.Partitioned.windowExpiresAt.<get-windowExpiresAt>|<get-windowExpiresAt>(){}[0]
+
+        final fun component1(): kotlin.time/Instant // us.tractat.kuilt.session/Liveness.Partitioned.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Instant // us.tractat.kuilt.session/Liveness.Partitioned.component2|component2(){}[0]
+        final fun copy(kotlin.time/Instant = ..., kotlin.time/Instant = ...): us.tractat.kuilt.session/Liveness.Partitioned // us.tractat.kuilt.session/Liveness.Partitioned.copy|copy(kotlin.time.Instant;kotlin.time.Instant){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/Liveness.Partitioned.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/Liveness.Partitioned.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/Liveness.Partitioned.toString|toString(){}[0]
+    }
+
+    final object Connected : us.tractat.kuilt.session/Liveness { // us.tractat.kuilt.session/Liveness.Connected|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/Liveness.Connected.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/Liveness.Connected.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/Liveness.Connected.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent|null[0]
+    final class AdmissionFailed : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed|null[0]
+        constructor <init>(us.tractat.kuilt.session/AdmissionFailure, kotlin.time/Instant) // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.<init>|<init>(us.tractat.kuilt.session.AdmissionFailure;kotlin.time.Instant){}[0]
+
+        final val at // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.at.<get-at>|<get-at>(){}[0]
+        final val reason // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.session/AdmissionFailure // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.session/AdmissionFailure // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.session/AdmissionFailure = ..., kotlin.time/Instant = ...): us.tractat.kuilt.session/MembershipEvent.AdmissionFailed // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.copy|copy(us.tractat.kuilt.session.AdmissionFailure;kotlin.time.Instant){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.AdmissionFailed.toString|toString(){}[0]
+    }
+
+    final class HostLost : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.HostLost|null[0]
+        constructor <init>(kotlin.time/Instant, us.tractat.kuilt.session/FailureReason, us.tractat.kuilt.core/FabricAvailability) // us.tractat.kuilt.session/MembershipEvent.HostLost.<init>|<init>(kotlin.time.Instant;us.tractat.kuilt.session.FailureReason;us.tractat.kuilt.core.FabricAvailability){}[0]
+
+        final val at // us.tractat.kuilt.session/MembershipEvent.HostLost.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.HostLost.at.<get-at>|<get-at>(){}[0]
+        final val localFabric // us.tractat.kuilt.session/MembershipEvent.HostLost.localFabric|{}localFabric[0]
+            final fun <get-localFabric>(): us.tractat.kuilt.core/FabricAvailability // us.tractat.kuilt.session/MembershipEvent.HostLost.localFabric.<get-localFabric>|<get-localFabric>(){}[0]
+        final val reason // us.tractat.kuilt.session/MembershipEvent.HostLost.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.session/FailureReason // us.tractat.kuilt.session/MembershipEvent.HostLost.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.HostLost.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.session/FailureReason // us.tractat.kuilt.session/MembershipEvent.HostLost.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.core/FabricAvailability // us.tractat.kuilt.session/MembershipEvent.HostLost.component3|component3(){}[0]
+        final fun copy(kotlin.time/Instant = ..., us.tractat.kuilt.session/FailureReason = ..., us.tractat.kuilt.core/FabricAvailability = ...): us.tractat.kuilt.session/MembershipEvent.HostLost // us.tractat.kuilt.session/MembershipEvent.HostLost.copy|copy(kotlin.time.Instant;us.tractat.kuilt.session.FailureReason;us.tractat.kuilt.core.FabricAvailability){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.HostLost.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.HostLost.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.HostLost.toString|toString(){}[0]
+    }
+
+    final class Joined : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.Joined|null[0]
+        constructor <init>(us.tractat.kuilt.session/Member) // us.tractat.kuilt.session/MembershipEvent.Joined.<init>|<init>(us.tractat.kuilt.session.Member){}[0]
+
+        final val member // us.tractat.kuilt.session/MembershipEvent.Joined.member|{}member[0]
+            final fun <get-member>(): us.tractat.kuilt.session/Member // us.tractat.kuilt.session/MembershipEvent.Joined.member.<get-member>|<get-member>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.session/Member // us.tractat.kuilt.session/MembershipEvent.Joined.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.session/Member = ...): us.tractat.kuilt.session/MembershipEvent.Joined // us.tractat.kuilt.session/MembershipEvent.Joined.copy|copy(us.tractat.kuilt.session.Member){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.Joined.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.Joined.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.Joined.toString|toString(){}[0]
+    }
+
+    final class Left : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.Left|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.session/LeaveReason) // us.tractat.kuilt.session/MembershipEvent.Left.<init>|<init>(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.session.LeaveReason){}[0]
+
+        final val peerId // us.tractat.kuilt.session/MembershipEvent.Left.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.Left.peerId.<get-peerId>|<get-peerId>(){}[0]
+        final val reason // us.tractat.kuilt.session/MembershipEvent.Left.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.session/LeaveReason // us.tractat.kuilt.session/MembershipEvent.Left.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.Left.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.session/LeaveReason // us.tractat.kuilt.session/MembershipEvent.Left.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.session/LeaveReason = ...): us.tractat.kuilt.session/MembershipEvent.Left // us.tractat.kuilt.session/MembershipEvent.Left.copy|copy(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.session.LeaveReason){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.Left.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.Left.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.Left.toString|toString(){}[0]
+    }
+
+    final class LocalFabricLost : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost|null[0]
+        constructor <init>(kotlin.time/Instant, kotlin/String) // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.<init>|<init>(kotlin.time.Instant;kotlin.String){}[0]
+
+        final val at // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.at.<get-at>|<get-at>(){}[0]
+        final val reason // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.component2|component2(){}[0]
+        final fun copy(kotlin.time/Instant = ..., kotlin/String = ...): us.tractat.kuilt.session/MembershipEvent.LocalFabricLost // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.copy|copy(kotlin.time.Instant;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.LocalFabricLost.toString|toString(){}[0]
+    }
+
+    final class LocalFabricRestored : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.LocalFabricRestored|null[0]
+        constructor <init>(kotlin.time/Instant) // us.tractat.kuilt.session/MembershipEvent.LocalFabricRestored.<init>|<init>(kotlin.time.Instant){}[0]
+
+        final val at // us.tractat.kuilt.session/MembershipEvent.LocalFabricRestored.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.LocalFabricRestored.at.<get-at>|<get-at>(){}[0]
+
+        final fun component1(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.LocalFabricRestored.component1|component1(){}[0]
+        final fun copy(kotlin.time/Instant = ...): us.tractat.kuilt.session/MembershipEvent.LocalFabricRestored // us.tractat.kuilt.session/MembershipEvent.LocalFabricRestored.copy|copy(kotlin.time.Instant){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.LocalFabricRestored.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.LocalFabricRestored.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.LocalFabricRestored.toString|toString(){}[0]
+    }
+
+    final class Partitioned : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.Partitioned|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin.time/Instant, us.tractat.kuilt.session/ReconnectReason, us.tractat.kuilt.core/FabricAvailability) // us.tractat.kuilt.session/MembershipEvent.Partitioned.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.time.Instant;us.tractat.kuilt.session.ReconnectReason;us.tractat.kuilt.core.FabricAvailability){}[0]
+
+        final val at // us.tractat.kuilt.session/MembershipEvent.Partitioned.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.Partitioned.at.<get-at>|<get-at>(){}[0]
+        final val localFabric // us.tractat.kuilt.session/MembershipEvent.Partitioned.localFabric|{}localFabric[0]
+            final fun <get-localFabric>(): us.tractat.kuilt.core/FabricAvailability // us.tractat.kuilt.session/MembershipEvent.Partitioned.localFabric.<get-localFabric>|<get-localFabric>(){}[0]
+        final val peerId // us.tractat.kuilt.session/MembershipEvent.Partitioned.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.Partitioned.peerId.<get-peerId>|<get-peerId>(){}[0]
+        final val reason // us.tractat.kuilt.session/MembershipEvent.Partitioned.reason|{}reason[0]
+            final fun <get-reason>(): us.tractat.kuilt.session/ReconnectReason // us.tractat.kuilt.session/MembershipEvent.Partitioned.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.Partitioned.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.Partitioned.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.session/ReconnectReason // us.tractat.kuilt.session/MembershipEvent.Partitioned.component3|component3(){}[0]
+        final fun component4(): us.tractat.kuilt.core/FabricAvailability // us.tractat.kuilt.session/MembershipEvent.Partitioned.component4|component4(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin.time/Instant = ..., us.tractat.kuilt.session/ReconnectReason = ..., us.tractat.kuilt.core/FabricAvailability = ...): us.tractat.kuilt.session/MembershipEvent.Partitioned // us.tractat.kuilt.session/MembershipEvent.Partitioned.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.time.Instant;us.tractat.kuilt.session.ReconnectReason;us.tractat.kuilt.core.FabricAvailability){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.Partitioned.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.Partitioned.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.Partitioned.toString|toString(){}[0]
+    }
+
+    final class Recovered : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.Recovered|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin.time/Instant) // us.tractat.kuilt.session/MembershipEvent.Recovered.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
+
+        final val at // us.tractat.kuilt.session/MembershipEvent.Recovered.at|{}at[0]
+            final fun <get-at>(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.Recovered.at.<get-at>|<get-at>(){}[0]
+        final val peerId // us.tractat.kuilt.session/MembershipEvent.Recovered.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.Recovered.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.Recovered.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.Recovered.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin.time/Instant = ...): us.tractat.kuilt.session/MembershipEvent.Recovered // us.tractat.kuilt.session/MembershipEvent.Recovered.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.Recovered.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.Recovered.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.Recovered.toString|toString(){}[0]
+    }
+
+    final class Resumed : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.Resumed|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId) // us.tractat.kuilt.session/MembershipEvent.Resumed.<init>|<init>(us.tractat.kuilt.core.PeerId){}[0]
+
+        final val peerId // us.tractat.kuilt.session/MembershipEvent.Resumed.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.Resumed.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.Resumed.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ...): us.tractat.kuilt.session/MembershipEvent.Resumed // us.tractat.kuilt.session/MembershipEvent.Resumed.copy|copy(us.tractat.kuilt.core.PeerId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.Resumed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.Resumed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.Resumed.toString|toString(){}[0]
+    }
+
+    final class WindowOpened : us.tractat.kuilt.session/MembershipEvent { // us.tractat.kuilt.session/MembershipEvent.WindowOpened|null[0]
+        constructor <init>(us.tractat.kuilt.core/PeerId, kotlin.time/Instant) // us.tractat.kuilt.session/MembershipEvent.WindowOpened.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
+
+        final val expiresAt // us.tractat.kuilt.session/MembershipEvent.WindowOpened.expiresAt|{}expiresAt[0]
+            final fun <get-expiresAt>(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.WindowOpened.expiresAt.<get-expiresAt>|<get-expiresAt>(){}[0]
+        final val peerId // us.tractat.kuilt.session/MembershipEvent.WindowOpened.peerId|{}peerId[0]
+            final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.WindowOpened.peerId.<get-peerId>|<get-peerId>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/MembershipEvent.WindowOpened.component1|component1(){}[0]
+        final fun component2(): kotlin.time/Instant // us.tractat.kuilt.session/MembershipEvent.WindowOpened.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin.time/Instant = ...): us.tractat.kuilt.session/MembershipEvent.WindowOpened // us.tractat.kuilt.session/MembershipEvent.WindowOpened.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.time.Instant){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MembershipEvent.WindowOpened.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MembershipEvent.WindowOpened.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/MembershipEvent.WindowOpened.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.session/ReconnectReason { // us.tractat.kuilt.session/ReconnectReason|null[0]
+    final object Backpressure : us.tractat.kuilt.session/ReconnectReason { // us.tractat.kuilt.session/ReconnectReason.Backpressure|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/ReconnectReason.Backpressure.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/ReconnectReason.Backpressure.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/ReconnectReason.Backpressure.toString|toString(){}[0]
+    }
+
+    final object LinkTimeout : us.tractat.kuilt.session/ReconnectReason { // us.tractat.kuilt.session/ReconnectReason.LinkTimeout|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/ReconnectReason.LinkTimeout.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/ReconnectReason.LinkTimeout.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/ReconnectReason.LinkTimeout.toString|toString(){}[0]
+    }
+
+    final object TransportClosed : us.tractat.kuilt.session/ReconnectReason { // us.tractat.kuilt.session/ReconnectReason.TransportClosed|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/ReconnectReason.TransportClosed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/ReconnectReason.TransportClosed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session/ReconnectReason.TransportClosed.toString|toString(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.session.election/LobbyTornException : kotlin/Exception { // us.tractat.kuilt.session.election/LobbyTornException|null[0]
+    constructor <init>(us.tractat.kuilt.core/CloseReason) // us.tractat.kuilt.session.election/LobbyTornException.<init>|<init>(us.tractat.kuilt.core.CloseReason){}[0]
+
+    final val reason // us.tractat.kuilt.session.election/LobbyTornException.reason|{}reason[0]
+        final fun <get-reason>(): us.tractat.kuilt.core/CloseReason // us.tractat.kuilt.session.election/LobbyTornException.reason.<get-reason>|<get-reason>(){}[0]
+}
+
+final class us.tractat.kuilt.session.election/NotElectedHostException : kotlin/Exception { // us.tractat.kuilt.session.election/NotElectedHostException|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.session.election/NotElectedHostException.<init>|<init>(kotlin.String){}[0]
+}
+
+final class us.tractat.kuilt.session.partition/DefaultJoinerReconnectController : us.tractat.kuilt.session.partition/JoinerReconnectController { // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController|null[0]
+    constructor <init>(us.tractat.kuilt.session.partition/RoomId, kotlin/Long = ..., kotlin/Function0<kotlin/Long>, kotlinx.coroutines/CoroutineScope) // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.<init>|<init>(us.tractat.kuilt.session.partition.RoomId;kotlin.Long;kotlin.Function0<kotlin.Long>;kotlinx.coroutines.CoroutineScope){}[0]
+
+    final val events // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.events|{}events[0]
+        final fun <get-events>(): kotlinx.coroutines.flow/SharedFlow<us.tractat.kuilt.session.partition/JoinerReconnectEvent> // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.events.<get-events>|<get-events>(){}[0]
+
+    final fun expire(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.expire|expire(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
+    final fun onPeerRecovered(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.onPeerRecovered|onPeerRecovered(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
+    final fun onPeerUnresponsive(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.onPeerUnresponsive|onPeerUnresponsive(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
+    final suspend fun tryResume(us.tractat.kuilt.session.partition/ResumeToken, kotlin/Long): us.tractat.kuilt.session.partition/ResumeResult.HostVerdict // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.tryResume|tryResume(us.tractat.kuilt.session.partition.ResumeToken;kotlin.Long){}[0]
+
+    final object Companion { // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.Companion|null[0]
+        final const val DEFAULT_RECONNECT_WINDOW_MS // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.Companion.DEFAULT_RECONNECT_WINDOW_MS|{}DEFAULT_RECONNECT_WINDOW_MS[0]
+            final fun <get-DEFAULT_RECONNECT_WINDOW_MS>(): kotlin/Long // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.Companion.DEFAULT_RECONNECT_WINDOW_MS.<get-DEFAULT_RECONNECT_WINDOW_MS>|<get-DEFAULT_RECONNECT_WINDOW_MS>(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.session.partition/ResumeToken { // us.tractat.kuilt.session.partition/ResumeToken|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.session.partition/RoomId, kotlin/Long) // us.tractat.kuilt.session.partition/ResumeToken.<init>|<init>(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.session.partition.RoomId;kotlin.Long){}[0]
+
+    final val issuedAt // us.tractat.kuilt.session.partition/ResumeToken.issuedAt|{}issuedAt[0]
+        final fun <get-issuedAt>(): kotlin/Long // us.tractat.kuilt.session.partition/ResumeToken.issuedAt.<get-issuedAt>|<get-issuedAt>(){}[0]
+    final val peerId // us.tractat.kuilt.session.partition/ResumeToken.peerId|{}peerId[0]
+        final fun <get-peerId>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.partition/ResumeToken.peerId.<get-peerId>|<get-peerId>(){}[0]
+    final val roomId // us.tractat.kuilt.session.partition/ResumeToken.roomId|{}roomId[0]
+        final fun <get-roomId>(): us.tractat.kuilt.session.partition/RoomId // us.tractat.kuilt.session.partition/ResumeToken.roomId.<get-roomId>|<get-roomId>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.partition/ResumeToken.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.session.partition/RoomId // us.tractat.kuilt.session.partition/ResumeToken.component2|component2(){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.session.partition/ResumeToken.component3|component3(){}[0]
+    final fun copy(us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.session.partition/RoomId = ..., kotlin/Long = ...): us.tractat.kuilt.session.partition/ResumeToken // us.tractat.kuilt.session.partition/ResumeToken.copy|copy(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.session.partition.RoomId;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/ResumeToken.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/ResumeToken.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/ResumeToken.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.session.partition/RoundRobinEndpointSelector : us.tractat.kuilt.session.partition/EndpointSelector { // us.tractat.kuilt.session.partition/RoundRobinEndpointSelector|null[0]
+    constructor <init>(kotlin/Int = ...) // us.tractat.kuilt.session.partition/RoundRobinEndpointSelector.<init>|<init>(kotlin.Int){}[0]
+
+    final fun next(kotlin/Int): kotlin/Int // us.tractat.kuilt.session.partition/RoundRobinEndpointSelector.next|next(kotlin.Int){}[0]
+}
+
+final class us.tractat.kuilt.session.partition/ServerClusterReconnect { // us.tractat.kuilt.session.partition/ServerClusterReconnect|null[0]
+    constructor <init>(kotlin.collections/List<us.tractat.kuilt.core/Tag>, us.tractat.kuilt.session.partition/EndpointSelector = ...) // us.tractat.kuilt.session.partition/ServerClusterReconnect.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.core.Tag>;us.tractat.kuilt.session.partition.EndpointSelector){}[0]
+
+    final fun advanceEndpoint() // us.tractat.kuilt.session.partition/ServerClusterReconnect.advanceEndpoint|advanceEndpoint(){}[0]
+    final fun clearToken() // us.tractat.kuilt.session.partition/ServerClusterReconnect.clearToken|clearToken(){}[0]
+    final fun currentEndpoint(): us.tractat.kuilt.core/Tag // us.tractat.kuilt.session.partition/ServerClusterReconnect.currentEndpoint|currentEndpoint(){}[0]
+    final fun onTransportTear() // us.tractat.kuilt.session.partition/ServerClusterReconnect.onTransportTear|onTransportTear(){}[0]
+    final fun pendingToken(): us.tractat.kuilt.session.partition/ResumeToken? // us.tractat.kuilt.session.partition/ServerClusterReconnect.pendingToken|pendingToken(){}[0]
+    final fun setToken(us.tractat.kuilt.session.partition/ResumeToken) // us.tractat.kuilt.session.partition/ServerClusterReconnect.setToken|setToken(us.tractat.kuilt.session.partition.ResumeToken){}[0]
+    final suspend fun connect(us.tractat.kuilt.core/Loom): us.tractat.kuilt.core/Seam // us.tractat.kuilt.session.partition/ServerClusterReconnect.connect|connect(us.tractat.kuilt.core.Loom){}[0]
+}
+
+final class us.tractat.kuilt.session/FramesLost : kotlin/RuntimeException { // us.tractat.kuilt.session/FramesLost|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId, kotlin/Long, kotlin/Boolean) // us.tractat.kuilt.session/FramesLost.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.Long;kotlin.Boolean){}[0]
+
+    final val claimed // us.tractat.kuilt.session/FramesLost.claimed|{}claimed[0]
+        final fun <get-claimed>(): kotlin/Boolean // us.tractat.kuilt.session/FramesLost.claimed.<get-claimed>|<get-claimed>(){}[0]
+    final val dropped // us.tractat.kuilt.session/FramesLost.dropped|{}dropped[0]
+        final fun <get-dropped>(): kotlin/Long // us.tractat.kuilt.session/FramesLost.dropped.<get-dropped>|<get-dropped>(){}[0]
+    final val member // us.tractat.kuilt.session/FramesLost.member|{}member[0]
+        final fun <get-member>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/FramesLost.member.<get-member>|<get-member>(){}[0]
+}
+
+final class us.tractat.kuilt.session/LoomRoomHost : us.tractat.kuilt.session/RoomHost { // us.tractat.kuilt.session/LoomRoomHost|null[0]
+    constructor <init>(us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/Pattern, kotlin/Function0<kotlin.time/Instant> = ..., us.tractat.kuilt.liveness/HeartbeatConfig = ...) // us.tractat.kuilt.session/LoomRoomHost.<init>|<init>(us.tractat.kuilt.core.Loom;us.tractat.kuilt.core.Pattern;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.liveness.HeartbeatConfig){}[0]
+
+    final fun close() // us.tractat.kuilt.session/LoomRoomHost.close|close(){}[0]
+    final suspend fun start(kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.session/Room, kotlin/Unit>) // us.tractat.kuilt.session/LoomRoomHost.start|start(kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.session.Room,kotlin.Unit>){}[0]
+}
+
+final class us.tractat.kuilt.session/Member { // us.tractat.kuilt.session/Member|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.session/MemberIdentity, us.tractat.kuilt.session/Liveness, us.tractat.kuilt.core/Principal? = ...) // us.tractat.kuilt.session/Member.<init>|<init>(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.session.MemberIdentity;us.tractat.kuilt.session.Liveness;us.tractat.kuilt.core.Principal?){}[0]
+
+    final val id // us.tractat.kuilt.session/Member.id|{}id[0]
+        final fun <get-id>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/Member.id.<get-id>|<get-id>(){}[0]
+    final val identity // us.tractat.kuilt.session/Member.identity|{}identity[0]
+        final fun <get-identity>(): us.tractat.kuilt.session/MemberIdentity // us.tractat.kuilt.session/Member.identity.<get-identity>|<get-identity>(){}[0]
+    final val liveness // us.tractat.kuilt.session/Member.liveness|{}liveness[0]
+        final fun <get-liveness>(): us.tractat.kuilt.session/Liveness // us.tractat.kuilt.session/Member.liveness.<get-liveness>|<get-liveness>(){}[0]
+    final val principal // us.tractat.kuilt.session/Member.principal|{}principal[0]
+        final fun <get-principal>(): us.tractat.kuilt.core/Principal? // us.tractat.kuilt.session/Member.principal.<get-principal>|<get-principal>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/Member.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.session/MemberIdentity // us.tractat.kuilt.session/Member.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.session/Liveness // us.tractat.kuilt.session/Member.component3|component3(){}[0]
+    final fun component4(): us.tractat.kuilt.core/Principal? // us.tractat.kuilt.session/Member.component4|component4(){}[0]
+    final fun copy(us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.session/MemberIdentity = ..., us.tractat.kuilt.session/Liveness = ..., us.tractat.kuilt.core/Principal? = ...): us.tractat.kuilt.session/Member // us.tractat.kuilt.session/Member.copy|copy(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.session.MemberIdentity;us.tractat.kuilt.session.Liveness;us.tractat.kuilt.core.Principal?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/Member.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/Member.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.session/Member.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.session/MemberIdentity { // us.tractat.kuilt.session/MemberIdentity|null[0]
+    constructor <init>(kotlin/String, kotlin/String, kotlin/String? = ...) // us.tractat.kuilt.session/MemberIdentity.<init>|<init>(kotlin.String;kotlin.String;kotlin.String?){}[0]
+
+    final val dedupKey // us.tractat.kuilt.session/MemberIdentity.dedupKey|{}dedupKey[0]
+        final fun <get-dedupKey>(): kotlin/String // us.tractat.kuilt.session/MemberIdentity.dedupKey.<get-dedupKey>|<get-dedupKey>(){}[0]
+    final val deviceId // us.tractat.kuilt.session/MemberIdentity.deviceId|{}deviceId[0]
+        final fun <get-deviceId>(): kotlin/String? // us.tractat.kuilt.session/MemberIdentity.deviceId.<get-deviceId>|<get-deviceId>(){}[0]
+    final val displayName // us.tractat.kuilt.session/MemberIdentity.displayName|{}displayName[0]
+        final fun <get-displayName>(): kotlin/String // us.tractat.kuilt.session/MemberIdentity.displayName.<get-displayName>|<get-displayName>(){}[0]
+    final val sessionId // us.tractat.kuilt.session/MemberIdentity.sessionId|{}sessionId[0]
+        final fun <get-sessionId>(): kotlin/String // us.tractat.kuilt.session/MemberIdentity.sessionId.<get-sessionId>|<get-sessionId>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.session/MemberIdentity.component1|component1(){}[0]
+    final fun component2(): kotlin/String // us.tractat.kuilt.session/MemberIdentity.component2|component2(){}[0]
+    final fun component3(): kotlin/String? // us.tractat.kuilt.session/MemberIdentity.component3|component3(){}[0]
+    final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/String? = ...): us.tractat.kuilt.session/MemberIdentity // us.tractat.kuilt.session/MemberIdentity.copy|copy(kotlin.String;kotlin.String;kotlin.String?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MemberIdentity.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MemberIdentity.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.session/MemberIdentity.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.session/MemberMetadata { // us.tractat.kuilt.session/MemberMetadata|null[0]
+    final val names // us.tractat.kuilt.session/MemberMetadata.names|{}names[0]
+        final fun <get-names>(): kotlin.collections/Map<us.tractat.kuilt.core/PeerId, kotlin/String> // us.tractat.kuilt.session/MemberMetadata.names.<get-names>|<get-names>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/MemberMetadata.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/MemberMetadata.hashCode|hashCode(){}[0]
+    final fun merge(us.tractat.kuilt.session/MemberMetadata): us.tractat.kuilt.session/MemberMetadata // us.tractat.kuilt.session/MemberMetadata.merge|merge(us.tractat.kuilt.session.MemberMetadata){}[0]
+    final fun set(us.tractat.kuilt.core/PeerId, kotlin/String, kotlin/Long, us.tractat.kuilt.crdt/ReplicaId): us.tractat.kuilt.session/MemberMetadata // us.tractat.kuilt.session/MemberMetadata.set|set(us.tractat.kuilt.core.PeerId;kotlin.String;kotlin.Long;us.tractat.kuilt.crdt.ReplicaId){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.session/MemberMetadata.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.session/MemberMetadata.Companion|null[0]
+        final fun empty(): us.tractat.kuilt.session/MemberMetadata // us.tractat.kuilt.session/MemberMetadata.Companion.empty|empty(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.session/ReservedRoomPrefix : kotlin/IllegalArgumentException { // us.tractat.kuilt.session/ReservedRoomPrefix|null[0]
+    constructor <init>(us.tractat.kuilt.session/RoomFramePrefix) // us.tractat.kuilt.session/ReservedRoomPrefix.<init>|<init>(us.tractat.kuilt.session.RoomFramePrefix){}[0]
+
+    final val prefix // us.tractat.kuilt.session/ReservedRoomPrefix.prefix|{}prefix[0]
+        final fun <get-prefix>(): us.tractat.kuilt.session/RoomFramePrefix // us.tractat.kuilt.session/ReservedRoomPrefix.prefix.<get-prefix>|<get-prefix>(){}[0]
+}
+
+final class us.tractat.kuilt.session/RoomFrame { // us.tractat.kuilt.session/RoomFrame|null[0]
+    constructor <init>(us.tractat.kuilt.core/PeerId, kotlin/ByteArray) // us.tractat.kuilt.session/RoomFrame.<init>|<init>(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+
+    final val payload // us.tractat.kuilt.session/RoomFrame.payload|{}payload[0]
+        final fun <get-payload>(): kotlin/ByteArray // us.tractat.kuilt.session/RoomFrame.payload.<get-payload>|<get-payload>(){}[0]
+    final val sender // us.tractat.kuilt.session/RoomFrame.sender|{}sender[0]
+        final fun <get-sender>(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/RoomFrame.sender.<get-sender>|<get-sender>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session/RoomFrame.component1|component1(){}[0]
+    final fun component2(): kotlin/ByteArray // us.tractat.kuilt.session/RoomFrame.component2|component2(){}[0]
+    final fun copy(us.tractat.kuilt.core/PeerId = ..., kotlin/ByteArray = ...): us.tractat.kuilt.session/RoomFrame // us.tractat.kuilt.session/RoomFrame.copy|copy(us.tractat.kuilt.core.PeerId;kotlin.ByteArray){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session/RoomFrame.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/RoomFrame.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.session/RoomFrame.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.session/SeamRoomFactory : us.tractat.kuilt.session/RoomFactory { // us.tractat.kuilt.session/SeamRoomFactory|null[0]
+    constructor <init>(us.tractat.kuilt.core/Loom, kotlinx.coroutines/CoroutineScope, kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.liveness/HeartbeatConfig = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Function3<us.tractat.kuilt.session.partition/RoomId, kotlinx.coroutines/CoroutineScope, kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.session.partition/JoinerReconnectController>? = ...) // us.tractat.kuilt.session/SeamRoomFactory.<init>|<init>(us.tractat.kuilt.core.Loom;kotlinx.coroutines.CoroutineScope;kotlin.Function0<kotlin.time.Instant>;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.time.Duration;kotlin.Int;kotlin.Function3<us.tractat.kuilt.session.partition.RoomId,kotlinx.coroutines.CoroutineScope,kotlin.Function0<kotlin.time.Instant>,us.tractat.kuilt.session.partition.JoinerReconnectController>?){}[0]
+
+    final suspend fun adopt(us.tractat.kuilt.core/Seam, us.tractat.kuilt.session/SessionRole, kotlin/String? = ..., kotlin/String? = ..., kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.core/Seam>? = ..., us.tractat.kuilt.session.partition/RoomId? = ...): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/SeamRoomFactory.adopt|adopt(us.tractat.kuilt.core.Seam;us.tractat.kuilt.session.SessionRole;kotlin.String?;kotlin.String?;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.core.Seam>?;us.tractat.kuilt.session.partition.RoomId?){}[0]
+    final suspend fun electLobby(us.tractat.kuilt.core/Pattern): us.tractat.kuilt.session.election/ElectionLobby // us.tractat.kuilt.session/SeamRoomFactory.electLobby|electLobby(us.tractat.kuilt.core.Pattern){}[0]
+    final suspend fun host(us.tractat.kuilt.core/Pattern, kotlin/String?, us.tractat.kuilt.session.partition/RoomId?): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/SeamRoomFactory.host|host(us.tractat.kuilt.core.Pattern;kotlin.String?;us.tractat.kuilt.session.partition.RoomId?){}[0]
+    final suspend fun join(us.tractat.kuilt.core/Tag, kotlin/String?): us.tractat.kuilt.session/Room // us.tractat.kuilt.session/SeamRoomFactory.join|join(us.tractat.kuilt.core.Tag;kotlin.String?){}[0]
+
+    final object Companion { // us.tractat.kuilt.session/SeamRoomFactory.Companion|null[0]
+        final fun systemClock(us.tractat.kuilt.core/Loom, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.liveness/HeartbeatConfig = ..., kotlin.time/Duration = ..., kotlin/Int = ..., kotlin/Function3<us.tractat.kuilt.session.partition/RoomId, kotlinx.coroutines/CoroutineScope, kotlin/Function0<kotlin.time/Instant>, us.tractat.kuilt.session.partition/JoinerReconnectController>? = ...): us.tractat.kuilt.session/SeamRoomFactory // us.tractat.kuilt.session/SeamRoomFactory.Companion.systemClock|systemClock(us.tractat.kuilt.core.Loom;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.liveness.HeartbeatConfig;kotlin.time.Duration;kotlin.Int;kotlin.Function3<us.tractat.kuilt.session.partition.RoomId,kotlinx.coroutines.CoroutineScope,kotlin.Function0<kotlin.time.Instant>,us.tractat.kuilt.session.partition.JoinerReconnectController>?){}[0]
+    }
+}
+
+final value class us.tractat.kuilt.session.partition/RoomId { // us.tractat.kuilt.session.partition/RoomId|null[0]
+    constructor <init>(kotlin/String) // us.tractat.kuilt.session.partition/RoomId.<init>|<init>(kotlin.String){}[0]
+
+    final val value // us.tractat.kuilt.session.partition/RoomId.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.session.partition/RoomId.value.<get-value>|<get-value>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.partition/RoomId.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.partition/RoomId.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.session.partition/RoomId.toString|toString(){}[0]
+}
+
+final object us.tractat.kuilt.session.admit/ProtocolVersion { // us.tractat.kuilt.session.admit/ProtocolVersion|null[0]
+    final const val CURRENT // us.tractat.kuilt.session.admit/ProtocolVersion.CURRENT|{}CURRENT[0]
+        final fun <get-CURRENT>(): kotlin/Int // us.tractat.kuilt.session.admit/ProtocolVersion.CURRENT.<get-CURRENT>|<get-CURRENT>(){}[0]
+    final const val MAX_SUPPORTED // us.tractat.kuilt.session.admit/ProtocolVersion.MAX_SUPPORTED|{}MAX_SUPPORTED[0]
+        final fun <get-MAX_SUPPORTED>(): kotlin/Int // us.tractat.kuilt.session.admit/ProtocolVersion.MAX_SUPPORTED.<get-MAX_SUPPORTED>|<get-MAX_SUPPORTED>(){}[0]
+    final const val MIN_SUPPORTED // us.tractat.kuilt.session.admit/ProtocolVersion.MIN_SUPPORTED|{}MIN_SUPPORTED[0]
+        final fun <get-MIN_SUPPORTED>(): kotlin/Int // us.tractat.kuilt.session.admit/ProtocolVersion.MIN_SUPPORTED.<get-MIN_SUPPORTED>|<get-MIN_SUPPORTED>(){}[0]
+
+    final fun isSupported(kotlin/Int?): kotlin/Boolean // us.tractat.kuilt.session.admit/ProtocolVersion.isSupported|isSupported(kotlin.Int?){}[0]
+}
+
+final object us.tractat.kuilt.session/RoomChannel { // us.tractat.kuilt.session/RoomChannel|null[0]
+    final val CHANNEL_PREFIX // us.tractat.kuilt.session/RoomChannel.CHANNEL_PREFIX|{}CHANNEL_PREFIX[0]
+        final fun <get-CHANNEL_PREFIX>(): kotlin/Byte // us.tractat.kuilt.session/RoomChannel.CHANNEL_PREFIX.<get-CHANNEL_PREFIX>|<get-CHANNEL_PREFIX>(){}[0]
+
+    final fun channelSubId(kotlin/String): kotlin/Short // us.tractat.kuilt.session/RoomChannel.channelSubId|channelSubId(kotlin.String){}[0]
+}
+
+final fun (us.tractat.kuilt.core/Seam).us.tractat.kuilt.session/withPrincipal(us.tractat.kuilt.core/Principal?): us.tractat.kuilt.core/Seam // us.tractat.kuilt.session/withPrincipal|withPrincipal@us.tractat.kuilt.core.Seam(us.tractat.kuilt.core.Principal?){}[0]
+final fun <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.session/RoomReplicator(us.tractat.kuilt.session/Room, kotlin/String, #A, kotlinx.serialization/KSerializer<#A>, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.quilter/QuilterConfig = ...): us.tractat.kuilt.quilter/Quilter<#A> // us.tractat.kuilt.session/RoomReplicator|RoomReplicator(us.tractat.kuilt.session.Room;kotlin.String;0:0;kotlinx.serialization.KSerializer<0:0>;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.quilter.QuilterConfig){0§<us.tractat.kuilt.crdt.Quilted<0:0>>}[0]
+final fun us.tractat.kuilt.session.election/electHost(kotlin.collections/Set<us.tractat.kuilt.core/PeerId>): us.tractat.kuilt.core/PeerId // us.tractat.kuilt.session.election/electHost|electHost(kotlin.collections.Set<us.tractat.kuilt.core.PeerId>){}[0]

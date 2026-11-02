@@ -1,0 +1,293 @@
+public abstract interface class us/tractat/kuilt/bolt/AppendResult {
+}
+
+public final class us/tractat/kuilt/bolt/AppendResult$Failed : us/tractat/kuilt/bolt/AppendResult {
+	public fun <init> (Ljava/lang/String;Ljava/util/Set;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/Set;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/Set;
+	public final fun component3 ()Ljava/lang/Long;
+	public final fun component4 ()Ljava/lang/Long;
+	public final fun component5 ()Ljava/lang/Throwable;
+	public final fun copy (Ljava/lang/String;Ljava/util/Set;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Throwable;)Lus/tractat/kuilt/bolt/AppendResult$Failed;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/AppendResult$Failed;Ljava/lang/String;Ljava/util/Set;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/bolt/AppendResult$Failed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCause ()Ljava/lang/Throwable;
+	public final fun getEndOffset ()Ljava/lang/Long;
+	public final fun getInsertDots ()Ljava/util/Set;
+	public final fun getOffset ()Ljava/lang/Long;
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/AppendResult$Skipped : us/tractat/kuilt/bolt/AppendResult {
+	public static final field INSTANCE Lus/tractat/kuilt/bolt/AppendResult$Skipped;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/AppendResult$Written : us/tractat/kuilt/bolt/AppendResult {
+	public fun <init> (JJILjava/util/Set;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()I
+	public final fun component4 ()Ljava/util/Set;
+	public final fun copy (JJILjava/util/Set;)Lus/tractat/kuilt/bolt/AppendResult$Written;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/AppendResult$Written;JJILjava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/bolt/AppendResult$Written;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEndOffset ()J
+	public final fun getInsertDots ()Ljava/util/Set;
+	public final fun getOffset ()J
+	public final fun getOpCount ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/ArchiveHealth {
+	public fun <init> ()V
+	public fun <init> (JJJJLjava/util/List;Lus/tractat/kuilt/bolt/DurabilityState;)V
+	public synthetic fun <init> (JJJJLjava/util/List;Lus/tractat/kuilt/bolt/DurabilityState;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()Ljava/util/List;
+	public final fun component6 ()Lus/tractat/kuilt/bolt/DurabilityState;
+	public final fun copy (JJJJLjava/util/List;Lus/tractat/kuilt/bolt/DurabilityState;)Lus/tractat/kuilt/bolt/ArchiveHealth;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/ArchiveHealth;JJJJLjava/util/List;Lus/tractat/kuilt/bolt/DurabilityState;ILjava/lang/Object;)Lus/tractat/kuilt/bolt/ArchiveHealth;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAppendsFailed ()J
+	public final fun getDurability ()Lus/tractat/kuilt/bolt/DurabilityState;
+	public final fun getFramesWritten ()J
+	public final fun getOpsArchived ()J
+	public final fun getOpsDeduplicated ()J
+	public final fun getRecentFailures ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/Archived : us/tractat/kuilt/bolt/ReplayEvent {
+	public fun <init> (JJLkotlin/time/Instant;Ljava/util/Set;Ljava/lang/String;Ljava/util/List;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()Lkotlin/time/Instant;
+	public final fun component4 ()Ljava/util/Set;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/util/List;
+	public final fun copy (JJLkotlin/time/Instant;Ljava/util/Set;Ljava/lang/String;Ljava/util/List;)Lus/tractat/kuilt/bolt/Archived;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/Archived;JJLkotlin/time/Instant;Ljava/util/Set;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/bolt/Archived;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getArrivedAt ()Lkotlin/time/Instant;
+	public final fun getEndOffset ()J
+	public final fun getInsertDots ()Ljava/util/Set;
+	public final fun getKey ()Ljava/lang/String;
+	public final fun getOffset ()J
+	public final fun getOps ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/bolt/Bolt {
+	public abstract fun append (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun availability ()Lus/tractat/kuilt/bolt/BoltAvailability;
+	public abstract fun durability ()Lus/tractat/kuilt/bolt/DurabilityState;
+	public abstract fun replay (Lus/tractat/kuilt/bolt/ReplayScope;)Lkotlinx/coroutines/flow/Flow;
+}
+
+public final class us/tractat/kuilt/bolt/BoltArchiveFormat {
+	public static final field Companion Lus/tractat/kuilt/bolt/BoltArchiveFormat$Companion;
+	public fun <init> (Lus/tractat/kuilt/crdt/OpLogCrdt;Lkotlinx/serialization/KSerializer;)V
+	public final fun getElementType ()Ljava/lang/String;
+	public final fun getOpFormat ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/BoltArchiveFormat$Companion {
+	public final fun fugue (Lkotlinx/serialization/KSerializer;)Lus/tractat/kuilt/bolt/BoltArchiveFormat;
+	public final fun rga (Lkotlinx/serialization/KSerializer;)Lus/tractat/kuilt/bolt/BoltArchiveFormat;
+}
+
+public abstract interface class us/tractat/kuilt/bolt/BoltAvailability {
+}
+
+public final class us/tractat/kuilt/bolt/BoltAvailability$Available : us/tractat/kuilt/bolt/BoltAvailability {
+	public static final field INSTANCE Lus/tractat/kuilt/bolt/BoltAvailability$Available;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/BoltAvailability$Unavailable : us/tractat/kuilt/bolt/BoltAvailability {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/bolt/BoltAvailability$Unavailable;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/BoltAvailability$Unavailable;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/bolt/BoltAvailability$Unavailable;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/BoltAvailability$Unknown : us/tractat/kuilt/bolt/BoltAvailability {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/bolt/BoltAvailability$Unknown;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/BoltAvailability$Unknown;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/bolt/BoltAvailability$Unknown;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/BoltDecorator {
+	public static final field Companion Lus/tractat/kuilt/bolt/BoltDecorator$Companion;
+	public static final field DEFAULT_FRONTIER_WINDOW I
+	public static final field DEFAULT_REMOVAL_WINDOW I
+	public static final field RETAINED_FAILURES I
+	public fun <init> (Lus/tractat/kuilt/bolt/Bolt;Lus/tractat/kuilt/bolt/BoltArchiveFormat;II)V
+	public synthetic fun <init> (Lus/tractat/kuilt/bolt/Bolt;Lus/tractat/kuilt/bolt/BoltArchiveFormat;IIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getHealth ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun publish (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/bolt/BoltDecorator$Companion {
+}
+
+public final class us/tractat/kuilt/bolt/BoltFormatException : java/lang/Exception {
+	public fun <init> (Ljava/lang/String;)V
+}
+
+public final class us/tractat/kuilt/bolt/BoltFrameKt {
+	public static final field BOLT_FORMAT_VERSION I
+	public static final fun frames (Lkotlinx/coroutines/flow/Flow;)Lkotlinx/coroutines/flow/Flow;
+}
+
+public final class us/tractat/kuilt/bolt/CleanTail : us/tractat/kuilt/bolt/ReplayEvent {
+	public static final field INSTANCE Lus/tractat/kuilt/bolt/CleanTail;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/bolt/DurabilityState {
+}
+
+public final class us/tractat/kuilt/bolt/DurabilityState$AsPromised : us/tractat/kuilt/bolt/DurabilityState {
+	public static final field INSTANCE Lus/tractat/kuilt/bolt/DurabilityState$AsPromised;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/DurabilityState$Degraded : us/tractat/kuilt/bolt/DurabilityState {
+	public fun <init> (JJLjava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (JJLjava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/Throwable;
+	public final fun copy (JJLjava/lang/String;Ljava/lang/Throwable;)Lus/tractat/kuilt/bolt/DurabilityState$Degraded;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/DurabilityState$Degraded;JJLjava/lang/String;Ljava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/bolt/DurabilityState$Degraded;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCause ()Ljava/lang/Throwable;
+	public final fun getFromOffset ()J
+	public final fun getReason ()Ljava/lang/String;
+	public final fun getToOffset ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/InMemoryBolt : us/tractat/kuilt/bolt/Bolt {
+	public static final field Companion Lus/tractat/kuilt/bolt/InMemoryBolt$Companion;
+	public static final field DEFAULT_SEGMENT_FRAME_BYTES J
+	public fun <init> (Lus/tractat/kuilt/bolt/BoltArchiveFormat;Lkotlin/time/Clock;JJ)V
+	public synthetic fun <init> (Lus/tractat/kuilt/bolt/BoltArchiveFormat;Lkotlin/time/Clock;JJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun append (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun availability ()Lus/tractat/kuilt/bolt/BoltAvailability;
+	public fun durability ()Lus/tractat/kuilt/bolt/DurabilityState;
+	public fun replay (Lus/tractat/kuilt/bolt/ReplayScope;)Lkotlinx/coroutines/flow/Flow;
+}
+
+public final class us/tractat/kuilt/bolt/InMemoryBolt$Companion {
+}
+
+public final class us/tractat/kuilt/bolt/MappedBolt : us/tractat/kuilt/bolt/Bolt {
+	public fun <init> (Ljava/io/File;Lus/tractat/kuilt/bolt/BoltArchiveFormat;Lkotlin/time/Clock;ZJJ)V
+	public synthetic fun <init> (Ljava/io/File;Lus/tractat/kuilt/bolt/BoltArchiveFormat;Lkotlin/time/Clock;ZJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun append (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun availability ()Lus/tractat/kuilt/bolt/BoltAvailability;
+	public fun durability ()Lus/tractat/kuilt/bolt/DurabilityState;
+	public fun replay (Lus/tractat/kuilt/bolt/ReplayScope;)Lkotlinx/coroutines/flow/Flow;
+}
+
+public abstract interface class us/tractat/kuilt/bolt/ReplayEvent {
+}
+
+public abstract interface class us/tractat/kuilt/bolt/ReplayScope {
+}
+
+public final class us/tractat/kuilt/bolt/ReplayScope$All : us/tractat/kuilt/bolt/ReplayScope {
+	public static final field INSTANCE Lus/tractat/kuilt/bolt/ReplayScope$All;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/ReplayScope$Arrived : us/tractat/kuilt/bolt/ReplayScope {
+	public fun <init> (Lkotlin/time/Instant;Lkotlin/time/Instant;)V
+	public final fun component1 ()Lkotlin/time/Instant;
+	public final fun component2 ()Lkotlin/time/Instant;
+	public final fun copy (Lkotlin/time/Instant;Lkotlin/time/Instant;)Lus/tractat/kuilt/bolt/ReplayScope$Arrived;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/ReplayScope$Arrived;Lkotlin/time/Instant;Lkotlin/time/Instant;ILjava/lang/Object;)Lus/tractat/kuilt/bolt/ReplayScope$Arrived;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFrom ()Lkotlin/time/Instant;
+	public final fun getUntilExclusive ()Lkotlin/time/Instant;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/ReplayScope$FromOffset : us/tractat/kuilt/bolt/ReplayScope {
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lus/tractat/kuilt/bolt/ReplayScope$FromOffset;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/ReplayScope$FromOffset;JILjava/lang/Object;)Lus/tractat/kuilt/bolt/ReplayScope$FromOffset;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOffset ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/ReplayScope$InsertsAbove : us/tractat/kuilt/bolt/ReplayScope {
+	public fun <init> (Lus/tractat/kuilt/crdt/VersionVector;)V
+	public final fun component1 ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun copy (Lus/tractat/kuilt/crdt/VersionVector;)Lus/tractat/kuilt/bolt/ReplayScope$InsertsAbove;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/ReplayScope$InsertsAbove;Lus/tractat/kuilt/crdt/VersionVector;ILjava/lang/Object;)Lus/tractat/kuilt/bolt/ReplayScope$InsertsAbove;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/Truncated : us/tractat/kuilt/bolt/ReplayEvent {
+	public fun <init> (JLus/tractat/kuilt/bolt/TruncationReason;)V
+	public final fun component1 ()J
+	public final fun component2 ()Lus/tractat/kuilt/bolt/TruncationReason;
+	public final fun copy (JLus/tractat/kuilt/bolt/TruncationReason;)Lus/tractat/kuilt/bolt/Truncated;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/bolt/Truncated;JLus/tractat/kuilt/bolt/TruncationReason;ILjava/lang/Object;)Lus/tractat/kuilt/bolt/Truncated;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAtOffset ()J
+	public final fun getReason ()Lus/tractat/kuilt/bolt/TruncationReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/bolt/TruncationReason : java/lang/Enum {
+	public static final field Frame Lus/tractat/kuilt/bolt/TruncationReason;
+	public static final field MissingRegion Lus/tractat/kuilt/bolt/TruncationReason;
+	public static final field SegmentHeader Lus/tractat/kuilt/bolt/TruncationReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/bolt/TruncationReason;
+	public static fun values ()[Lus/tractat/kuilt/bolt/TruncationReason;
+}
+

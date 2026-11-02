@@ -1,0 +1,14 @@
+public final class us/tractat/kuilt/otel/log4j2/InstallLog4j2CaptureKt {
+	public static final field APPENDER_NAME Ljava/lang/String;
+	public static final fun installLog4j2Capture (Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lus/tractat/kuilt/otel/logging/CaptureConfig;Lkotlin/time/Clock;Lkotlin/random/Random;Lkotlinx/coroutines/CoroutineScope;Lorg/apache/logging/log4j/core/LoggerContext;Lus/tractat/kuilt/otel/logging/TraceContextProvider;)Lus/tractat/kuilt/otel/log4j2/KuiltLog4j2Appender;
+	public static synthetic fun installLog4j2Capture$default (Lus/tractat/kuilt/otel/WarpLogRecordExporter;Lus/tractat/kuilt/otel/logging/CaptureConfig;Lkotlin/time/Clock;Lkotlin/random/Random;Lkotlinx/coroutines/CoroutineScope;Lorg/apache/logging/log4j/core/LoggerContext;Lus/tractat/kuilt/otel/logging/TraceContextProvider;ILjava/lang/Object;)Lus/tractat/kuilt/otel/log4j2/KuiltLog4j2Appender;
+	public static final fun uninstallLog4j2Capture (Lus/tractat/kuilt/otel/log4j2/KuiltLog4j2Appender;Lorg/apache/logging/log4j/core/LoggerContext;)V
+	public static synthetic fun uninstallLog4j2Capture$default (Lus/tractat/kuilt/otel/log4j2/KuiltLog4j2Appender;Lorg/apache/logging/log4j/core/LoggerContext;ILjava/lang/Object;)V
+}
+
+public final class us/tractat/kuilt/otel/log4j2/KuiltLog4j2Appender : org/apache/logging/log4j/core/appender/AbstractAppender {
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/otel/logging/LogCapture;Lkotlinx/coroutines/CoroutineScope;)V
+	public fun append (Lorg/apache/logging/log4j/core/LogEvent;)V
+	public fun stop ()V
+}
+

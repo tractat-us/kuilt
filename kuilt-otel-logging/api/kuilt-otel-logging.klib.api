@@ -1,0 +1,165 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-otel-logging>
+final enum class us.tractat.kuilt.otel.logging/LogLevel : kotlin/Enum<us.tractat.kuilt.otel.logging/LogLevel> { // us.tractat.kuilt.otel.logging/LogLevel|null[0]
+    enum entry DEBUG // us.tractat.kuilt.otel.logging/LogLevel.DEBUG|null[0]
+    enum entry ERROR // us.tractat.kuilt.otel.logging/LogLevel.ERROR|null[0]
+    enum entry INFO // us.tractat.kuilt.otel.logging/LogLevel.INFO|null[0]
+    enum entry TRACE // us.tractat.kuilt.otel.logging/LogLevel.TRACE|null[0]
+    enum entry WARN // us.tractat.kuilt.otel.logging/LogLevel.WARN|null[0]
+
+    final val entries // us.tractat.kuilt.otel.logging/LogLevel.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.otel.logging/LogLevel> // us.tractat.kuilt.otel.logging/LogLevel.entries.<get-entries>|<get-entries>#static(){}[0]
+    final val severityNumber // us.tractat.kuilt.otel.logging/LogLevel.severityNumber|{}severityNumber[0]
+        final fun <get-severityNumber>(): kotlin/Int // us.tractat.kuilt.otel.logging/LogLevel.severityNumber.<get-severityNumber>|<get-severityNumber>(){}[0]
+    final val severityText // us.tractat.kuilt.otel.logging/LogLevel.severityText|{}severityText[0]
+        final fun <get-severityText>(): kotlin/String // us.tractat.kuilt.otel.logging/LogLevel.severityText.<get-severityText>|<get-severityText>(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.otel.logging/LogLevel // us.tractat.kuilt.otel.logging/LogLevel.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.otel.logging/LogLevel> // us.tractat.kuilt.otel.logging/LogLevel.values|values#static(){}[0]
+}
+
+final enum class us.tractat.kuilt.otel.logging/UntracedPolicy : kotlin/Enum<us.tractat.kuilt.otel.logging/UntracedPolicy> { // us.tractat.kuilt.otel.logging/UntracedPolicy|null[0]
+    enum entry CAPTURE // us.tractat.kuilt.otel.logging/UntracedPolicy.CAPTURE|null[0]
+    enum entry DROP // us.tractat.kuilt.otel.logging/UntracedPolicy.DROP|null[0]
+
+    final val entries // us.tractat.kuilt.otel.logging/UntracedPolicy.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.otel.logging/UntracedPolicy> // us.tractat.kuilt.otel.logging/UntracedPolicy.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.otel.logging/UntracedPolicy // us.tractat.kuilt.otel.logging/UntracedPolicy.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.otel.logging/UntracedPolicy> // us.tractat.kuilt.otel.logging/UntracedPolicy.values|values#static(){}[0]
+}
+
+abstract fun interface us.tractat.kuilt.otel.logging/TraceContextProvider { // us.tractat.kuilt.otel.logging/TraceContextProvider|null[0]
+    abstract fun current(): us.tractat.kuilt.otel.logging/ActiveTrace? // us.tractat.kuilt.otel.logging/TraceContextProvider.current|current(){}[0]
+}
+
+final class us.tractat.kuilt.otel.logging/ActiveTrace { // us.tractat.kuilt.otel.logging/ActiveTrace|null[0]
+    constructor <init>(kotlinx.io.bytestring/ByteString, kotlinx.io.bytestring/ByteString, kotlin/Boolean) // us.tractat.kuilt.otel.logging/ActiveTrace.<init>|<init>(kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString;kotlin.Boolean){}[0]
+
+    final val sampled // us.tractat.kuilt.otel.logging/ActiveTrace.sampled|{}sampled[0]
+        final fun <get-sampled>(): kotlin/Boolean // us.tractat.kuilt.otel.logging/ActiveTrace.sampled.<get-sampled>|<get-sampled>(){}[0]
+    final val spanId // us.tractat.kuilt.otel.logging/ActiveTrace.spanId|{}spanId[0]
+        final fun <get-spanId>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.logging/ActiveTrace.spanId.<get-spanId>|<get-spanId>(){}[0]
+    final val traceId // us.tractat.kuilt.otel.logging/ActiveTrace.traceId|{}traceId[0]
+        final fun <get-traceId>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.logging/ActiveTrace.traceId.<get-traceId>|<get-traceId>(){}[0]
+
+    final fun component1(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.logging/ActiveTrace.component1|component1(){}[0]
+    final fun component2(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.logging/ActiveTrace.component2|component2(){}[0]
+    final fun component3(): kotlin/Boolean // us.tractat.kuilt.otel.logging/ActiveTrace.component3|component3(){}[0]
+    final fun copy(kotlinx.io.bytestring/ByteString = ..., kotlinx.io.bytestring/ByteString = ..., kotlin/Boolean = ...): us.tractat.kuilt.otel.logging/ActiveTrace // us.tractat.kuilt.otel.logging/ActiveTrace.copy|copy(kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString;kotlin.Boolean){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.logging/ActiveTrace.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.logging/ActiveTrace.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel.logging/ActiveTrace.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel.logging/CaptureConfig { // us.tractat.kuilt.otel.logging/CaptureConfig|null[0]
+    constructor <init>(us.tractat.kuilt.otel.logging/LogLevel = ..., us.tractat.kuilt.otel.logging/UntracedPolicy = ..., kotlin/Function1<us.tractat.kuilt.otel.logging/NormalizedLogEvent, kotlin.collections/Map<kotlin/String, kotlin/String>> = ...) // us.tractat.kuilt.otel.logging/CaptureConfig.<init>|<init>(us.tractat.kuilt.otel.logging.LogLevel;us.tractat.kuilt.otel.logging.UntracedPolicy;kotlin.Function1<us.tractat.kuilt.otel.logging.NormalizedLogEvent,kotlin.collections.Map<kotlin.String,kotlin.String>>){}[0]
+
+    final val attributeMapper // us.tractat.kuilt.otel.logging/CaptureConfig.attributeMapper|{}attributeMapper[0]
+        final fun <get-attributeMapper>(): kotlin/Function1<us.tractat.kuilt.otel.logging/NormalizedLogEvent, kotlin.collections/Map<kotlin/String, kotlin/String>> // us.tractat.kuilt.otel.logging/CaptureConfig.attributeMapper.<get-attributeMapper>|<get-attributeMapper>(){}[0]
+    final val minLevel // us.tractat.kuilt.otel.logging/CaptureConfig.minLevel|{}minLevel[0]
+        final fun <get-minLevel>(): us.tractat.kuilt.otel.logging/LogLevel // us.tractat.kuilt.otel.logging/CaptureConfig.minLevel.<get-minLevel>|<get-minLevel>(){}[0]
+    final val untracedPolicy // us.tractat.kuilt.otel.logging/CaptureConfig.untracedPolicy|{}untracedPolicy[0]
+        final fun <get-untracedPolicy>(): us.tractat.kuilt.otel.logging/UntracedPolicy // us.tractat.kuilt.otel.logging/CaptureConfig.untracedPolicy.<get-untracedPolicy>|<get-untracedPolicy>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.otel.logging/LogLevel // us.tractat.kuilt.otel.logging/CaptureConfig.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.otel.logging/UntracedPolicy // us.tractat.kuilt.otel.logging/CaptureConfig.component2|component2(){}[0]
+    final fun component3(): kotlin/Function1<us.tractat.kuilt.otel.logging/NormalizedLogEvent, kotlin.collections/Map<kotlin/String, kotlin/String>> // us.tractat.kuilt.otel.logging/CaptureConfig.component3|component3(){}[0]
+    final fun copy(us.tractat.kuilt.otel.logging/LogLevel = ..., us.tractat.kuilt.otel.logging/UntracedPolicy = ..., kotlin/Function1<us.tractat.kuilt.otel.logging/NormalizedLogEvent, kotlin.collections/Map<kotlin/String, kotlin/String>> = ...): us.tractat.kuilt.otel.logging/CaptureConfig // us.tractat.kuilt.otel.logging/CaptureConfig.copy|copy(us.tractat.kuilt.otel.logging.LogLevel;us.tractat.kuilt.otel.logging.UntracedPolicy;kotlin.Function1<us.tractat.kuilt.otel.logging.NormalizedLogEvent,kotlin.collections.Map<kotlin.String,kotlin.String>>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.logging/CaptureConfig.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.logging/CaptureConfig.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel.logging/CaptureConfig.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel.logging/CaptureHealth { // us.tractat.kuilt.otel.logging/CaptureHealth|null[0]
+    constructor <init>(kotlin/Long = ...) // us.tractat.kuilt.otel.logging/CaptureHealth.<init>|<init>(kotlin.Long){}[0]
+
+    final val droppedEvents // us.tractat.kuilt.otel.logging/CaptureHealth.droppedEvents|{}droppedEvents[0]
+        final fun <get-droppedEvents>(): kotlin/Long // us.tractat.kuilt.otel.logging/CaptureHealth.droppedEvents.<get-droppedEvents>|<get-droppedEvents>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.otel.logging/CaptureHealth.component1|component1(){}[0]
+    final fun copy(kotlin/Long = ...): us.tractat.kuilt.otel.logging/CaptureHealth // us.tractat.kuilt.otel.logging/CaptureHealth.copy|copy(kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.logging/CaptureHealth.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.logging/CaptureHealth.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel.logging/CaptureHealth.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.otel.logging/CoroutineContextTraceProvider : us.tractat.kuilt.otel.logging/TraceContextProvider { // us.tractat.kuilt.otel.logging/CoroutineContextTraceProvider|null[0]
+    constructor <init>() // us.tractat.kuilt.otel.logging/CoroutineContextTraceProvider.<init>|<init>(){}[0]
+
+    final fun current(): us.tractat.kuilt.otel.logging/ActiveTrace? // us.tractat.kuilt.otel.logging/CoroutineContextTraceProvider.current|current(){}[0]
+}
+
+final class us.tractat.kuilt.otel.logging/LogCapture { // us.tractat.kuilt.otel.logging/LogCapture|null[0]
+    constructor <init>(us.tractat.kuilt.otel/WarpLogRecordExporter, us.tractat.kuilt.otel.logging/CaptureConfig, kotlin.time/Clock, kotlin.random/Random, us.tractat.kuilt.otel.logging/TraceContextProvider? = ...) // us.tractat.kuilt.otel.logging/LogCapture.<init>|<init>(us.tractat.kuilt.otel.WarpLogRecordExporter;us.tractat.kuilt.otel.logging.CaptureConfig;kotlin.time.Clock;kotlin.random.Random;us.tractat.kuilt.otel.logging.TraceContextProvider?){}[0]
+
+    final fun resolveAtEdge(us.tractat.kuilt.otel.logging/NormalizedLogEvent): us.tractat.kuilt.otel.logging/ResolvedLogEvent? // us.tractat.kuilt.otel.logging/LogCapture.resolveAtEdge|resolveAtEdge(us.tractat.kuilt.otel.logging.NormalizedLogEvent){}[0]
+    final fun resolveTrace(): us.tractat.kuilt.otel.logging/ActiveTrace? // us.tractat.kuilt.otel.logging/LogCapture.resolveTrace|resolveTrace(){}[0]
+    final suspend fun capture(us.tractat.kuilt.otel.logging/ResolvedLogEvent): us.tractat.kuilt.otel/ExportResult? // us.tractat.kuilt.otel.logging/LogCapture.capture|capture(us.tractat.kuilt.otel.logging.ResolvedLogEvent){}[0]
+    final suspend fun captureAll(kotlin.collections/List<us.tractat.kuilt.otel.logging/ResolvedLogEvent>): us.tractat.kuilt.otel/ExportResult? // us.tractat.kuilt.otel.logging/LogCapture.captureAll|captureAll(kotlin.collections.List<us.tractat.kuilt.otel.logging.ResolvedLogEvent>){}[0]
+    final suspend fun captureNow(us.tractat.kuilt.otel.logging/NormalizedLogEvent): us.tractat.kuilt.otel/ExportResult? // us.tractat.kuilt.otel.logging/LogCapture.captureNow|captureNow(us.tractat.kuilt.otel.logging.NormalizedLogEvent){}[0]
+}
+
+final class us.tractat.kuilt.otel.logging/LogCaptureInstallation : kotlin/AutoCloseable { // us.tractat.kuilt.otel.logging/LogCaptureInstallation|null[0]
+    final val capture // us.tractat.kuilt.otel.logging/LogCaptureInstallation.capture|{}capture[0]
+        final fun <get-capture>(): us.tractat.kuilt.otel.logging/LogCapture // us.tractat.kuilt.otel.logging/LogCaptureInstallation.capture.<get-capture>|<get-capture>(){}[0]
+    final val health // us.tractat.kuilt.otel.logging/LogCaptureInstallation.health|{}health[0]
+        final fun <get-health>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.otel.logging/CaptureHealth> // us.tractat.kuilt.otel.logging/LogCaptureInstallation.health.<get-health>|<get-health>(){}[0]
+
+    final fun close() // us.tractat.kuilt.otel.logging/LogCaptureInstallation.close|close(){}[0]
+}
+
+final class us.tractat.kuilt.otel.logging/MutableTraceContextHolder : us.tractat.kuilt.otel.logging/TraceContextProvider { // us.tractat.kuilt.otel.logging/MutableTraceContextHolder|null[0]
+    constructor <init>(us.tractat.kuilt.otel.logging/ActiveTrace? = ...) // us.tractat.kuilt.otel.logging/MutableTraceContextHolder.<init>|<init>(us.tractat.kuilt.otel.logging.ActiveTrace?){}[0]
+
+    final fun current(): us.tractat.kuilt.otel.logging/ActiveTrace? // us.tractat.kuilt.otel.logging/MutableTraceContextHolder.current|current(){}[0]
+    final fun set(us.tractat.kuilt.otel.logging/ActiveTrace?) // us.tractat.kuilt.otel.logging/MutableTraceContextHolder.set|set(us.tractat.kuilt.otel.logging.ActiveTrace?){}[0]
+}
+
+final class us.tractat.kuilt.otel.logging/NormalizedLogEvent { // us.tractat.kuilt.otel.logging/NormalizedLogEvent|null[0]
+    constructor <init>(us.tractat.kuilt.otel.logging/LogLevel, kotlin/String, kotlin/String?, kotlin.collections/Map<kotlin/String, kotlin/String> = ..., kotlin/Long? = ...) // us.tractat.kuilt.otel.logging/NormalizedLogEvent.<init>|<init>(us.tractat.kuilt.otel.logging.LogLevel;kotlin.String;kotlin.String?;kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.Long?){}[0]
+
+    final val attributes // us.tractat.kuilt.otel.logging/NormalizedLogEvent.attributes|{}attributes[0]
+        final fun <get-attributes>(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel.logging/NormalizedLogEvent.attributes.<get-attributes>|<get-attributes>(){}[0]
+    final val emittedEpochNanos // us.tractat.kuilt.otel.logging/NormalizedLogEvent.emittedEpochNanos|{}emittedEpochNanos[0]
+        final fun <get-emittedEpochNanos>(): kotlin/Long? // us.tractat.kuilt.otel.logging/NormalizedLogEvent.emittedEpochNanos.<get-emittedEpochNanos>|<get-emittedEpochNanos>(){}[0]
+    final val level // us.tractat.kuilt.otel.logging/NormalizedLogEvent.level|{}level[0]
+        final fun <get-level>(): us.tractat.kuilt.otel.logging/LogLevel // us.tractat.kuilt.otel.logging/NormalizedLogEvent.level.<get-level>|<get-level>(){}[0]
+    final val loggerName // us.tractat.kuilt.otel.logging/NormalizedLogEvent.loggerName|{}loggerName[0]
+        final fun <get-loggerName>(): kotlin/String // us.tractat.kuilt.otel.logging/NormalizedLogEvent.loggerName.<get-loggerName>|<get-loggerName>(){}[0]
+    final val message // us.tractat.kuilt.otel.logging/NormalizedLogEvent.message|{}message[0]
+        final fun <get-message>(): kotlin/String? // us.tractat.kuilt.otel.logging/NormalizedLogEvent.message.<get-message>|<get-message>(){}[0]
+
+    final fun component1(): us.tractat.kuilt.otel.logging/LogLevel // us.tractat.kuilt.otel.logging/NormalizedLogEvent.component1|component1(){}[0]
+    final fun component2(): kotlin/String // us.tractat.kuilt.otel.logging/NormalizedLogEvent.component2|component2(){}[0]
+    final fun component3(): kotlin/String? // us.tractat.kuilt.otel.logging/NormalizedLogEvent.component3|component3(){}[0]
+    final fun component4(): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel.logging/NormalizedLogEvent.component4|component4(){}[0]
+    final fun component5(): kotlin/Long? // us.tractat.kuilt.otel.logging/NormalizedLogEvent.component5|component5(){}[0]
+    final fun copy(us.tractat.kuilt.otel.logging/LogLevel = ..., kotlin/String = ..., kotlin/String? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ..., kotlin/Long? = ...): us.tractat.kuilt.otel.logging/NormalizedLogEvent // us.tractat.kuilt.otel.logging/NormalizedLogEvent.copy|copy(us.tractat.kuilt.otel.logging.LogLevel;kotlin.String;kotlin.String?;kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.Long?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.logging/NormalizedLogEvent.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.logging/NormalizedLogEvent.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.otel.logging/NormalizedLogEvent.toString|toString(){}[0]
+}
+
+sealed class us.tractat.kuilt.otel.logging/ResolvedLogEvent // us.tractat.kuilt.otel.logging/ResolvedLogEvent|null[0]
+
+final const val us.tractat.kuilt.otel.logging/CAPTURE_BATCH_MAX // us.tractat.kuilt.otel.logging/CAPTURE_BATCH_MAX|{}CAPTURE_BATCH_MAX[0]
+    final fun <get-CAPTURE_BATCH_MAX>(): kotlin/Int // us.tractat.kuilt.otel.logging/CAPTURE_BATCH_MAX.<get-CAPTURE_BATCH_MAX>|<get-CAPTURE_BATCH_MAX>(){}[0]
+final const val us.tractat.kuilt.otel.logging/CAPTURE_QUEUE_CAPACITY // us.tractat.kuilt.otel.logging/CAPTURE_QUEUE_CAPACITY|{}CAPTURE_QUEUE_CAPACITY[0]
+    final fun <get-CAPTURE_QUEUE_CAPACITY>(): kotlin/Int // us.tractat.kuilt.otel.logging/CAPTURE_QUEUE_CAPACITY.<get-CAPTURE_QUEUE_CAPACITY>|<get-CAPTURE_QUEUE_CAPACITY>(){}[0]
+final const val us.tractat.kuilt.otel.logging/EXCEPTION_MESSAGE_ATTRIBUTE // us.tractat.kuilt.otel.logging/EXCEPTION_MESSAGE_ATTRIBUTE|{}EXCEPTION_MESSAGE_ATTRIBUTE[0]
+    final fun <get-EXCEPTION_MESSAGE_ATTRIBUTE>(): kotlin/String // us.tractat.kuilt.otel.logging/EXCEPTION_MESSAGE_ATTRIBUTE.<get-EXCEPTION_MESSAGE_ATTRIBUTE>|<get-EXCEPTION_MESSAGE_ATTRIBUTE>(){}[0]
+final const val us.tractat.kuilt.otel.logging/LOGGER_NAME_ATTRIBUTE // us.tractat.kuilt.otel.logging/LOGGER_NAME_ATTRIBUTE|{}LOGGER_NAME_ATTRIBUTE[0]
+    final fun <get-LOGGER_NAME_ATTRIBUTE>(): kotlin/String // us.tractat.kuilt.otel.logging/LOGGER_NAME_ATTRIBUTE.<get-LOGGER_NAME_ATTRIBUTE>|<get-LOGGER_NAME_ATTRIBUTE>(){}[0]
+
+final fun us.tractat.kuilt.otel.logging/defaultAttributeMapper(us.tractat.kuilt.otel.logging/NormalizedLogEvent): kotlin.collections/Map<kotlin/String, kotlin/String> // us.tractat.kuilt.otel.logging/defaultAttributeMapper|defaultAttributeMapper(us.tractat.kuilt.otel.logging.NormalizedLogEvent){}[0]
+final fun us.tractat.kuilt.otel.logging/installLogCapture(us.tractat.kuilt.otel/WarpLogRecordExporter, us.tractat.kuilt.otel.logging/CaptureConfig, kotlin.time/Clock, kotlin.random/Random, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.otel.logging/TraceContextProvider? = ...): us.tractat.kuilt.otel.logging/LogCaptureInstallation // us.tractat.kuilt.otel.logging/installLogCapture|installLogCapture(us.tractat.kuilt.otel.WarpLogRecordExporter;us.tractat.kuilt.otel.logging.CaptureConfig;kotlin.time.Clock;kotlin.random.Random;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.otel.logging.TraceContextProvider?){}[0]
+final suspend fun <#A: kotlin/Any?> us.tractat.kuilt.otel.logging/withActiveTrace(us.tractat.kuilt.otel.logging/ActiveTrace, kotlin.coroutines/SuspendFunction1<kotlinx.coroutines/CoroutineScope, #A>): #A // us.tractat.kuilt.otel.logging/withActiveTrace|withActiveTrace(us.tractat.kuilt.otel.logging.ActiveTrace;kotlin.coroutines.SuspendFunction1<kotlinx.coroutines.CoroutineScope,0:0>){0§<kotlin.Any?>}[0]
+final suspend fun <#A: kotlin/Any?> us.tractat.kuilt.otel.logging/withLogContext(kotlin.collections/Map<kotlin/String, kotlin/String>, kotlin.coroutines/SuspendFunction1<kotlinx.coroutines/CoroutineScope, #A>): #A // us.tractat.kuilt.otel.logging/withLogContext|withLogContext(kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.coroutines.SuspendFunction1<kotlinx.coroutines.CoroutineScope,0:0>){0§<kotlin.Any?>}[0]
+final suspend fun <#A: kotlin/Any?> us.tractat.kuilt.otel.logging/withLogContext(kotlin/Array<out kotlin/Pair<kotlin/String, kotlin/String>>..., kotlin.coroutines/SuspendFunction1<kotlinx.coroutines/CoroutineScope, #A>): #A // us.tractat.kuilt.otel.logging/withLogContext|withLogContext(kotlin.Array<out|kotlin.Pair<kotlin.String,kotlin.String>>...;kotlin.coroutines.SuspendFunction1<kotlinx.coroutines.CoroutineScope,0:0>){0§<kotlin.Any?>}[0]

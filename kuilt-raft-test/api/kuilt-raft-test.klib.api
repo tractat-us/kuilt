@@ -1,0 +1,122 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Alias: apple => [iosArm64, iosSimulatorArm64, macosArm64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-raft-test>
+final class us.tractat.kuilt.raft.test/FakeRaftNode : us.tractat.kuilt.raft/RaftNode { // us.tractat.kuilt.raft.test/FakeRaftNode|null[0]
+    constructor <init>(us.tractat.kuilt.raft/NodeId = ..., us.tractat.kuilt.raft/RaftRole = ..., us.tractat.kuilt.raft/NodeId? = ..., kotlin/Long = ..., us.tractat.kuilt.raft/ClientId = ..., us.tractat.kuilt.raft/ClusterConfig = ...) // us.tractat.kuilt.raft.test/FakeRaftNode.<init>|<init>(us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.RaftRole;us.tractat.kuilt.raft.NodeId?;kotlin.Long;us.tractat.kuilt.raft.ClientId;us.tractat.kuilt.raft.ClusterConfig){}[0]
+
+    final val clientId // us.tractat.kuilt.raft.test/FakeRaftNode.clientId|{}clientId[0]
+        final fun <get-clientId>(): us.tractat.kuilt.raft/ClientId // us.tractat.kuilt.raft.test/FakeRaftNode.clientId.<get-clientId>|<get-clientId>(){}[0]
+    final val closed // us.tractat.kuilt.raft.test/FakeRaftNode.closed|{}closed[0]
+        final fun <get-closed>(): kotlin/Boolean // us.tractat.kuilt.raft.test/FakeRaftNode.closed.<get-closed>|<get-closed>(){}[0]
+    final val commitIndex // us.tractat.kuilt.raft.test/FakeRaftNode.commitIndex|{}commitIndex[0]
+        final fun <get-commitIndex>(): kotlinx.coroutines.flow/StateFlow<kotlin/Long> // us.tractat.kuilt.raft.test/FakeRaftNode.commitIndex.<get-commitIndex>|<get-commitIndex>(){}[0]
+    final val committed // us.tractat.kuilt.raft.test/FakeRaftNode.committed|{}committed[0]
+        final fun <get-committed>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/Committed> // us.tractat.kuilt.raft.test/FakeRaftNode.committed.<get-committed>|<get-committed>(){}[0]
+    final val compactionFloor // us.tractat.kuilt.raft.test/FakeRaftNode.compactionFloor|{}compactionFloor[0]
+        final fun <get-compactionFloor>(): kotlinx.coroutines.flow/StateFlow<kotlin/Long> // us.tractat.kuilt.raft.test/FakeRaftNode.compactionFloor.<get-compactionFloor>|<get-compactionFloor>(){}[0]
+    final val leader // us.tractat.kuilt.raft.test/FakeRaftNode.leader|{}leader[0]
+        final fun <get-leader>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.raft/NodeId?> // us.tractat.kuilt.raft.test/FakeRaftNode.leader.<get-leader>|<get-leader>(){}[0]
+    final val membership // us.tractat.kuilt.raft.test/FakeRaftNode.membership|{}membership[0]
+        final fun <get-membership>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.raft/ClusterConfig> // us.tractat.kuilt.raft.test/FakeRaftNode.membership.<get-membership>|<get-membership>(){}[0]
+    final val proposals // us.tractat.kuilt.raft.test/FakeRaftNode.proposals|{}proposals[0]
+        final fun <get-proposals>(): kotlin.collections/List<kotlin/ByteArray> // us.tractat.kuilt.raft.test/FakeRaftNode.proposals.<get-proposals>|<get-proposals>(){}[0]
+    final val role // us.tractat.kuilt.raft.test/FakeRaftNode.role|{}role[0]
+        final fun <get-role>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.raft/RaftRole> // us.tractat.kuilt.raft.test/FakeRaftNode.role.<get-role>|<get-role>(){}[0]
+    final val selfId // us.tractat.kuilt.raft.test/FakeRaftNode.selfId|{}selfId[0]
+        final fun <get-selfId>(): us.tractat.kuilt.raft/NodeId // us.tractat.kuilt.raft.test/FakeRaftNode.selfId.<get-selfId>|<get-selfId>(){}[0]
+    final val snapshots // us.tractat.kuilt.raft.test/FakeRaftNode.snapshots|{}snapshots[0]
+        final fun <get-snapshots>(): kotlinx.coroutines.flow/MutableStateFlow<us.tractat.kuilt.raft/Snapshot?> // us.tractat.kuilt.raft.test/FakeRaftNode.snapshots.<get-snapshots>|<get-snapshots>(){}[0]
+    final val trace // us.tractat.kuilt.raft.test/FakeRaftNode.trace|{}trace[0]
+        final fun <get-trace>(): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/RaftTraceEvent> // us.tractat.kuilt.raft.test/FakeRaftNode.trace.<get-trace>|<get-trace>(){}[0]
+
+    final var proposeBehavior // us.tractat.kuilt.raft.test/FakeRaftNode.proposeBehavior|{}proposeBehavior[0]
+        final fun <get-proposeBehavior>(): kotlin.coroutines/SuspendFunction1<kotlin/ByteArray, us.tractat.kuilt.raft/LogEntry> // us.tractat.kuilt.raft.test/FakeRaftNode.proposeBehavior.<get-proposeBehavior>|<get-proposeBehavior>(){}[0]
+        final fun <set-proposeBehavior>(kotlin.coroutines/SuspendFunction1<kotlin/ByteArray, us.tractat.kuilt.raft/LogEntry>) // us.tractat.kuilt.raft.test/FakeRaftNode.proposeBehavior.<set-proposeBehavior>|<set-proposeBehavior>(kotlin.coroutines.SuspendFunction1<kotlin.ByteArray,us.tractat.kuilt.raft.LogEntry>){}[0]
+    final var readIndexBehavior // us.tractat.kuilt.raft.test/FakeRaftNode.readIndexBehavior|{}readIndexBehavior[0]
+        final fun <get-readIndexBehavior>(): kotlin.coroutines/SuspendFunction0<kotlin/Long> // us.tractat.kuilt.raft.test/FakeRaftNode.readIndexBehavior.<get-readIndexBehavior>|<get-readIndexBehavior>(){}[0]
+        final fun <set-readIndexBehavior>(kotlin.coroutines/SuspendFunction0<kotlin/Long>) // us.tractat.kuilt.raft.test/FakeRaftNode.readIndexBehavior.<set-readIndexBehavior>|<set-readIndexBehavior>(kotlin.coroutines.SuspendFunction0<kotlin.Long>){}[0]
+
+    final fun committedFrom(kotlin/Long): kotlinx.coroutines.flow/Flow<us.tractat.kuilt.raft/Committed> // us.tractat.kuilt.raft.test/FakeRaftNode.committedFrom|committedFrom(kotlin.Long){}[0]
+    final fun setCommitIndex(kotlin/Long) // us.tractat.kuilt.raft.test/FakeRaftNode.setCommitIndex|setCommitIndex(kotlin.Long){}[0]
+    final fun setCompactionFloor(kotlin/Long) // us.tractat.kuilt.raft.test/FakeRaftNode.setCompactionFloor|setCompactionFloor(kotlin.Long){}[0]
+    final fun setLeader(us.tractat.kuilt.raft/NodeId?) // us.tractat.kuilt.raft.test/FakeRaftNode.setLeader|setLeader(us.tractat.kuilt.raft.NodeId?){}[0]
+    final fun setMembership(us.tractat.kuilt.raft/ClusterConfig) // us.tractat.kuilt.raft.test/FakeRaftNode.setMembership|setMembership(us.tractat.kuilt.raft.ClusterConfig){}[0]
+    final fun setRole(us.tractat.kuilt.raft/RaftRole) // us.tractat.kuilt.raft.test/FakeRaftNode.setRole|setRole(us.tractat.kuilt.raft.RaftRole){}[0]
+    final suspend fun close() // us.tractat.kuilt.raft.test/FakeRaftNode.close|close(){}[0]
+    final suspend fun emitTrace(us.tractat.kuilt.raft/RaftTraceEvent) // us.tractat.kuilt.raft.test/FakeRaftNode.emitTrace|emitTrace(us.tractat.kuilt.raft.RaftTraceEvent){}[0]
+    final suspend fun propose(kotlin/ByteArray): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft.test/FakeRaftNode.propose|propose(kotlin.ByteArray){}[0]
+    final suspend fun propose(kotlin/ByteArray, kotlin/Long): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft.test/FakeRaftNode.propose|propose(kotlin.ByteArray;kotlin.Long){}[0]
+    final suspend fun pushCommitted(kotlin/ByteArray): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft.test/FakeRaftNode.pushCommitted|pushCommitted(kotlin.ByteArray){}[0]
+    final suspend fun pushCommitted(us.tractat.kuilt.raft/LogEntry): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft.test/FakeRaftNode.pushCommitted|pushCommitted(us.tractat.kuilt.raft.LogEntry){}[0]
+    final suspend fun pushInstall(us.tractat.kuilt.raft/Snapshot) // us.tractat.kuilt.raft.test/FakeRaftNode.pushInstall|pushInstall(us.tractat.kuilt.raft.Snapshot){}[0]
+    final suspend fun readIndex(): kotlin/Long // us.tractat.kuilt.raft.test/FakeRaftNode.readIndex|readIndex(){}[0]
+}
+
+final class us.tractat.kuilt.raft.test/MultiNodeRaftNetwork { // us.tractat.kuilt.raft.test/MultiNodeRaftNetwork|null[0]
+    constructor <init>(kotlin/Int? = ...) // us.tractat.kuilt.raft.test/MultiNodeRaftNetwork.<init>|<init>(kotlin.Int?){}[0]
+
+    final fun dropLink(us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft.test/MultiNodeRaftNetwork.dropLink|dropLink(us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId){}[0]
+    final fun heal() // us.tractat.kuilt.raft.test/MultiNodeRaftNetwork.heal|heal(){}[0]
+    final fun partition(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>) // us.tractat.kuilt.raft.test/MultiNodeRaftNetwork.partition|partition(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+    final fun transport(us.tractat.kuilt.raft/NodeId): us.tractat.kuilt.raft/RaftTransport // us.tractat.kuilt.raft.test/MultiNodeRaftNetwork.transport|transport(us.tractat.kuilt.raft.NodeId){}[0]
+    final suspend fun deliver(us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId, kotlin/ByteArray) // us.tractat.kuilt.raft.test/MultiNodeRaftNetwork.deliver|deliver(us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId;kotlin.ByteArray){}[0]
+}
+
+final class us.tractat.kuilt.raft.test/MultiNodeRaftSim { // us.tractat.kuilt.raft.test/MultiNodeRaftSim|null[0]
+    constructor <init>(kotlin.collections/List<us.tractat.kuilt.raft/NodeId>, kotlinx.coroutines/CoroutineScope, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.raft/RaftConfig = ..., kotlin/Long = ..., kotlin/Int? = ..., kotlin/Function4<us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/RaftTransport, us.tractat.kuilt.raft/RaftStorage, kotlinx.coroutines/CoroutineScope, us.tractat.kuilt.raft/RaftNode> = ...) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.raft.NodeId>;kotlinx.coroutines.CoroutineScope;kotlinx.coroutines.CoroutineScope;us.tractat.kuilt.raft.RaftConfig;kotlin.Long;kotlin.Int?;kotlin.Function4<us.tractat.kuilt.raft.NodeId,us.tractat.kuilt.raft.RaftTransport,us.tractat.kuilt.raft.RaftStorage,kotlinx.coroutines.CoroutineScope,us.tractat.kuilt.raft.RaftNode>){}[0]
+
+    final val network // us.tractat.kuilt.raft.test/MultiNodeRaftSim.network|{}network[0]
+        final fun <get-network>(): us.tractat.kuilt.raft.test/MultiNodeRaftNetwork // us.tractat.kuilt.raft.test/MultiNodeRaftSim.network.<get-network>|<get-network>(){}[0]
+    final val nodeIds // us.tractat.kuilt.raft.test/MultiNodeRaftSim.nodeIds|{}nodeIds[0]
+        final fun <get-nodeIds>(): kotlin.collections/List<us.tractat.kuilt.raft/NodeId> // us.tractat.kuilt.raft.test/MultiNodeRaftSim.nodeIds.<get-nodeIds>|<get-nodeIds>(){}[0]
+    final val nodes // us.tractat.kuilt.raft.test/MultiNodeRaftSim.nodes|{}nodes[0]
+        final fun <get-nodes>(): kotlin.collections/MutableMap<us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/RaftNode> // us.tractat.kuilt.raft.test/MultiNodeRaftSim.nodes.<get-nodes>|<get-nodes>(){}[0]
+    final val storages // us.tractat.kuilt.raft.test/MultiNodeRaftSim.storages|{}storages[0]
+        final fun <get-storages>(): kotlin.collections/Map<us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/InMemoryRaftStorage> // us.tractat.kuilt.raft.test/MultiNodeRaftSim.storages.<get-storages>|<get-storages>(){}[0]
+
+    final fun appliedState(us.tractat.kuilt.raft/NodeId): kotlin/ByteArray // us.tractat.kuilt.raft.test/MultiNodeRaftSim.appliedState|appliedState(us.tractat.kuilt.raft.NodeId){}[0]
+    final fun assertTracedInOrder(us.tractat.kuilt.raft/NodeId, kotlin/Array<out kotlin/Function1<us.tractat.kuilt.raft/RaftTraceEvent, kotlin/Boolean>>..., kotlin/String = ...) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.assertTracedInOrder|assertTracedInOrder(us.tractat.kuilt.raft.NodeId;kotlin.Array<out|kotlin.Function1<us.tractat.kuilt.raft.RaftTraceEvent,kotlin.Boolean>>...;kotlin.String){}[0]
+    final fun crash(us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.crash|crash(us.tractat.kuilt.raft.NodeId){}[0]
+    final fun dropLink(us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.dropLink|dropLink(us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.NodeId){}[0]
+    final fun followers(): kotlin.collections/List<us.tractat.kuilt.raft/RaftNode> // us.tractat.kuilt.raft.test/MultiNodeRaftSim.followers|followers(){}[0]
+    final fun heal() // us.tractat.kuilt.raft.test/MultiNodeRaftSim.heal|heal(){}[0]
+    final fun leader(): us.tractat.kuilt.raft/RaftNode? // us.tractat.kuilt.raft.test/MultiNodeRaftSim.leader|leader(){}[0]
+    final fun partition(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.partition|partition(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>){}[0]
+    final fun partitionOff(us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.partitionOff|partitionOff(us.tractat.kuilt.raft.NodeId){}[0]
+    final fun restart(us.tractat.kuilt.raft/NodeId) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.restart|restart(us.tractat.kuilt.raft.NodeId){}[0]
+    final fun traceFailure(us.tractat.kuilt.raft/NodeId, kotlin/String): kotlin/String // us.tractat.kuilt.raft.test/MultiNodeRaftSim.traceFailure|traceFailure(us.tractat.kuilt.raft.NodeId;kotlin.String){}[0]
+    final fun traceOf(us.tractat.kuilt.raft/NodeId): kotlin.collections/List<us.tractat.kuilt.raft/RaftTraceEvent> // us.tractat.kuilt.raft.test/MultiNodeRaftSim.traceOf|traceOf(us.tractat.kuilt.raft.NodeId){}[0]
+    final inline fun <#A1: reified us.tractat.kuilt.raft/RaftTraceEvent> assertNotTraced(us.tractat.kuilt.raft/NodeId, kotlin/String = ..., kotlin/Function1<#A1, kotlin/Boolean> = ...) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.assertNotTraced|assertNotTraced(us.tractat.kuilt.raft.NodeId;kotlin.String;kotlin.Function1<0:0,kotlin.Boolean>){0§<us.tractat.kuilt.raft.RaftTraceEvent>}[0]
+    final inline fun <#A1: reified us.tractat.kuilt.raft/RaftTraceEvent> assertTraced(us.tractat.kuilt.raft/NodeId, kotlin/String = ..., kotlin/Function1<#A1, kotlin/Boolean> = ...): #A1 // us.tractat.kuilt.raft.test/MultiNodeRaftSim.assertTraced|assertTraced(us.tractat.kuilt.raft.NodeId;kotlin.String;kotlin.Function1<0:0,kotlin.Boolean>){0§<us.tractat.kuilt.raft.RaftTraceEvent>}[0]
+    final suspend fun awaitCommit(kotlin/Long, kotlin.collections/Collection<us.tractat.kuilt.raft/NodeId> = ..., kotlin.time/Duration = ...) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.awaitCommit|awaitCommit(kotlin.Long;kotlin.collections.Collection<us.tractat.kuilt.raft.NodeId>;kotlin.time.Duration){}[0]
+    final suspend fun awaitLeader(kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>, kotlin.time/Duration = ...): us.tractat.kuilt.raft/RaftNode // us.tractat.kuilt.raft.test/MultiNodeRaftSim.awaitLeader|awaitLeader(kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>;kotlin.time.Duration){}[0]
+    final suspend fun awaitLeader(kotlin.time/Duration = ...): us.tractat.kuilt.raft/RaftNode // us.tractat.kuilt.raft.test/MultiNodeRaftSim.awaitLeader|awaitLeader(kotlin.time.Duration){}[0]
+    final suspend fun awaitRole(us.tractat.kuilt.raft/NodeId, us.tractat.kuilt.raft/RaftRole, kotlin.time/Duration = ...) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.awaitRole|awaitRole(us.tractat.kuilt.raft.NodeId;us.tractat.kuilt.raft.RaftRole;kotlin.time.Duration){}[0]
+    final suspend fun awaitTrue(kotlin/String, kotlin.time/Duration = ..., kotlin/Function0<kotlin/Boolean>) // us.tractat.kuilt.raft.test/MultiNodeRaftSim.awaitTrue|awaitTrue(kotlin.String;kotlin.time.Duration;kotlin.Function0<kotlin.Boolean>){}[0]
+    final suspend fun checkInvariants() // us.tractat.kuilt.raft.test/MultiNodeRaftSim.checkInvariants|checkInvariants(){}[0]
+    final suspend fun dumpState(kotlin/String): kotlin/String // us.tractat.kuilt.raft.test/MultiNodeRaftSim.dumpState|dumpState(kotlin.String){}[0]
+    final suspend fun proposeOnLeader(kotlin/ByteArray, kotlin.collections/Set<us.tractat.kuilt.raft/NodeId>? = ..., kotlin.time/Duration = ...): us.tractat.kuilt.raft/LogEntry // us.tractat.kuilt.raft.test/MultiNodeRaftSim.proposeOnLeader|proposeOnLeader(kotlin.ByteArray;kotlin.collections.Set<us.tractat.kuilt.raft.NodeId>?;kotlin.time.Duration){}[0]
+    final suspend fun settle() // us.tractat.kuilt.raft.test/MultiNodeRaftSim.settle|settle(){}[0]
+}
+
+final const val us.tractat.kuilt.raft.test/MULTI_NODE_SIM_SEED // us.tractat.kuilt.raft.test/MULTI_NODE_SIM_SEED|{}MULTI_NODE_SIM_SEED[0]
+    final fun <get-MULTI_NODE_SIM_SEED>(): kotlin/Long // us.tractat.kuilt.raft.test/MULTI_NODE_SIM_SEED.<get-MULTI_NODE_SIM_SEED>|<get-MULTI_NODE_SIM_SEED>(){}[0]
+
+final val us.tractat.kuilt.raft.test/MULTI_NODE_SIM_BASE_CONFIG // us.tractat.kuilt.raft.test/MULTI_NODE_SIM_BASE_CONFIG|{}MULTI_NODE_SIM_BASE_CONFIG[0]
+    final fun <get-MULTI_NODE_SIM_BASE_CONFIG>(): us.tractat.kuilt.raft/RaftConfig // us.tractat.kuilt.raft.test/MULTI_NODE_SIM_BASE_CONFIG.<get-MULTI_NODE_SIM_BASE_CONFIG>|<get-MULTI_NODE_SIM_BASE_CONFIG>(){}[0]
+final val us.tractat.kuilt.raft.test/RAFT_SIM_WEDGE_BACKSTOP // us.tractat.kuilt.raft.test/RAFT_SIM_WEDGE_BACKSTOP|{}RAFT_SIM_WEDGE_BACKSTOP[0]
+    final fun <get-RAFT_SIM_WEDGE_BACKSTOP>(): kotlin.time/Duration // us.tractat.kuilt.raft.test/RAFT_SIM_WEDGE_BACKSTOP.<get-RAFT_SIM_WEDGE_BACKSTOP>|<get-RAFT_SIM_WEDGE_BACKSTOP>(){}[0]
+
+final suspend fun <#A: kotlin/Any?> us.tractat.kuilt.raft.test/dumpOnWedge(us.tractat.kuilt.raft.test/MultiNodeRaftSim, kotlin/Function1<kotlin/String, kotlin/Unit> = ..., kotlin.coroutines/SuspendFunction0<#A>): #A // us.tractat.kuilt.raft.test/dumpOnWedge|dumpOnWedge(us.tractat.kuilt.raft.test.MultiNodeRaftSim;kotlin.Function1<kotlin.String,kotlin.Unit>;kotlin.coroutines.SuspendFunction0<0:0>){0§<kotlin.Any?>}[0]
+
+// Targets: [apple]
+final fun us.tractat.kuilt.raft.test/raftSimTest(kotlin/Int = ..., us.tractat.kuilt.raft/RaftConfig = ..., kotlin/Long = ..., kotlin.time/Duration = ..., kotlin.coroutines/SuspendFunction2<kotlinx.coroutines.test/TestScope, us.tractat.kuilt.raft.test/MultiNodeRaftSim, kotlin/Unit>) // us.tractat.kuilt.raft.test/raftSimTest|raftSimTest(kotlin.Int;us.tractat.kuilt.raft.RaftConfig;kotlin.Long;kotlin.time.Duration;kotlin.coroutines.SuspendFunction2<kotlinx.coroutines.test.TestScope,us.tractat.kuilt.raft.test.MultiNodeRaftSim,kotlin.Unit>){}[0]
+
+// Targets: [wasmJs]
+final fun us.tractat.kuilt.raft.test/raftSimTest(kotlin/Int = ..., us.tractat.kuilt.raft/RaftConfig = ..., kotlin/Long = ..., kotlin.time/Duration = ..., kotlin.coroutines/SuspendFunction2<kotlinx.coroutines.test/TestScope, us.tractat.kuilt.raft.test/MultiNodeRaftSim, kotlin/Unit>): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.raft.test/raftSimTest|raftSimTest(kotlin.Int;us.tractat.kuilt.raft.RaftConfig;kotlin.Long;kotlin.time.Duration;kotlin.coroutines.SuspendFunction2<kotlinx.coroutines.test.TestScope,us.tractat.kuilt.raft.test.MultiNodeRaftSim,kotlin.Unit>){}[0]

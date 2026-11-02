@@ -36,6 +36,14 @@ on:
     # 07:00 UTC daily — a low-traffic hour; runs once per day off the default branch.
     - cron: '0 7 * * *'
   workflow_dispatch:
+    inputs:
+      update_abi:
+        description: >-
+          Regenerate every module's ABI dump on macOS and upload it as the abi-dumps artifact,
+          instead of running the lane. Use it after a deliberate API change, or to refresh Apple
+          drift (#2684).
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,13 +62,10 @@ jobs:
   # the executions ci.yml's ubuntu build-native can only skip. Standalone: no
   # dependency on ci.yml, not referenced by ci-required.
   apple:
+    # A dispatch with update_abi wants the dumps, not the tests, so this job sits it out.
+    if: ${{ !inputs.update_abi }}
     runs-on: macos-latest
     timeout-minutes: 60
-    # Job-level override of the workflow default (contents: read). issues: write
-    # lets the failure-alert step below open/refresh the "apple-nightly red" issue.
-    permissions:
-      contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v7
 
@@ -216,19 +221,99 @@ jobs:
             **/build/reports/tests/
             **/build/test-results/
 
-      # Backstop: this lane is out of band and gates nothing, so a red run is
-      # silent (that's how #1299 stayed red for a week unnoticed). Mirror of
-      # publish.yml's alert: open (or refresh) ONE tracking issue per breakage.
-      # Idempotent by exact title; best-effort — the failed tests are the signal
-      # that matters, so the alert never fails the job further. Scheduled runs
-      # only: a red workflow_dispatch on a topic branch is the dispatcher's
-      # business, not a main-lane breakage.
+  # ── abi ──────────────────────────────────────────────────────────────────
+  # The macOS half of the ABI gate (#2684). ci.yml's build-jvm runs `checkKotlinAbi` on every PR
+  # on Linux, through `build` -> `check`. Linux checks every target's dump of every module whose
+  # Apple targets cross-compile there. It cannot compile the Apple targets of a module with a
+  # cinterop (today :kuilt-nw, :kuilt-otel-logging, :kuilt-warp-runtime), and KGP would then infer
+  # their Apple dump from wasmJs, so the convention plugin skips the ABI tasks for those modules
+  # off macOS and Linux checks none of their targets. They are ABI-checked on macOS only, on every
+  # target, JVM and Android included: here, so their drift surfaces within 24 h of the merge that
+  # caused it.
+  #
+  # A separate job, not a step of `apple`: that job already spends 25-55 min of its 60-min budget,
+  # and the dump compiles every target of every module. Out of band like the rest of this file.
+  #
+  # On a red check, or on a dispatch with update_abi, it runs `updateKotlinAbi` and uploads the
+  # result as the `abi-dumps` artifact. To refresh: download that artifact over the repo root, read
+  # the diff, and commit it with a sentence saying which change it records.
+  abi:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      # JDK 25 floor on aarch64, as in the `apple` job (#1597).
+      - name: Set up JDK 25
+        uses: actions/setup-java@v6
+        with:
+          java-version: '25.0.5+8.0.LTS'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      - name: Cache Kotlin/Native (~/.konan)
+        uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      # Same resource caps as the `apple` job, for the same 3 vCPU / 7 GB runner. --continue so
+      # one red module does not hide the next.
+      - name: Check the public ABI on macOS (#2684)
+        if: ${{ !inputs.update_abi }}
+        run: >-
+          ./gradlew checkKotlinAbi --continue --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      - name: Regenerate the ABI dumps
+        if: ${{ inputs.update_abi || failure() }}
+        run: >-
+          ./gradlew updateKotlinAbi --continue --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      - name: Upload the regenerated dumps
+        if: ${{ inputs.update_abi || failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: abi-dumps
+          path: kuilt-*/api/
+          if-no-files-found: error
+
+  # Backstop: this lane is out of band and gates nothing, so a red run is
+  # silent (that's how #1299 stayed red for a week unnoticed). Mirror of
+  # publish.yml's alert: open (or refresh) ONE tracking issue per breakage.
+  # Idempotent by exact title; best-effort — the failed jobs are the signal
+  # that matters, so the alert never fails the run further. Scheduled runs
+  # only: a red workflow_dispatch on a topic branch is the dispatcher's
+  # business, not a main-lane breakage. Its own job, so a red `apple` and a
+  # red `abi` both raise it.
+  alert:
+    needs: [apple, abi]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    # Job-level override of the workflow default (contents: read). issues: write
+    # lets this job open/refresh the "apple-nightly red" issue.
+    permissions:
+      contents: read
+      issues: write
+    steps:
       - name: Alert on nightly failure
-        if: failure() && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
+          # No checkout in this job, so gh needs the repository named.
+          GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMIT_SHA: ${{ github.sha }}
+          APPLE_RESULT: ${{ needs.apple.result }}
+          ABI_RESULT: ${{ needs.abi.result }}
         run: |
           set -eu
           TITLE="apple-nightly failing on main"
@@ -237,8 +322,11 @@ jobs:
 
           - Failing run: ${RUN_URL}
           - Commit: ${COMMIT_SHA}
+          - Jobs: apple=${APPLE_RESULT}, abi=${ABI_RESULT}
 
-          This is the ONLY lane that executes the Apple K/N tests (ci-required's ubuntu build skips them), so Apple-target regressions are invisible until this is green again. Test reports are attached to the run as the \`test-reports-apple\` artifact."
+          This is the ONLY lane that executes the Apple K/N tests (ci-required's ubuntu build skips them), so Apple-target regressions are invisible until this is green again. Test reports are attached to the run as the \`test-reports-apple\` artifact.
+
+          A red \`abi\` job means the public ABI on macOS no longer matches the committed dumps (#2684). The run carries the regenerated dumps as the \`abi-dumps\` artifact: unpack it over the repo root, read the diff, and commit it if the change was meant."
 
           # Best-effort label create (idempotent). Title-based search below doesn't
           # depend on it, so a failure here is tolerated.
