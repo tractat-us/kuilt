@@ -19,13 +19,7 @@ import kotlin.test.assertFailsWith
 class ConnectionSendConformanceRigTest {
 
     private class Link(private val onSend: suspend () -> Unit) : Connection {
-        var sends = 0
-            private set
-
-        override suspend fun send(frame: ByteArray) {
-            sends++
-            onSend()
-        }
+        override suspend fun send(frame: ByteArray) = onSend()
 
         override val incoming: Flow<ByteArray> = emptyFlow()
 
