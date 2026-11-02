@@ -46,8 +46,10 @@ import us.tractat.kuilt.core.freshPeerId
  * static [WebSocketAdvertisement.url]. See
  * [#1330](https://github.com/tractat-us/kuilt/issues/1330).
  *
- * **Cancelling a dial:** a [weave] cancelled before it returns leaves no socket behind, whatever
- * the handshake had reached. See [ownedWebSocketSession], which it dials through.
+ * **Cancelling a dial:** on the **CIO** or **Darwin** engine, a [weave] cancelled before it returns
+ * leaves no socket behind, whatever the handshake had reached. The **OkHttp** engine does not abort a
+ * dial the far end has not answered, so that socket lasts until OkHttp lets go. See
+ * [ownedWebSocketSession], which this dials through and which states the exceptions.
  *
  * **HttpClient lifecycle:** the [httpClient] is not closed by this loom.
  * Callers are responsible for closing it when all connections are done.

@@ -44,15 +44,16 @@ public interface Loom {
      *
      * ## A cancelled weave leaves nothing open
      *
-     * If the caller is cancelled before this returns, close whatever the dial opened before the
-     * cancellation propagates. Only a return hands anything over, and a coroutine cancelled as this
-     * resumes takes the cancellation instead of the seam, so nobody else can ever reach what was left.
-     * The far end sees a healthy peer that will never speak, for as long as the socket lasts.
+     * If the caller is cancelled before this returns, start closing whatever the dial opened before the
+     * cancellation propagates. The close may finish a moment later, but it must not depend on anyone
+     * else: only a return hands anything over, and a coroutine cancelled as this resumes takes the
+     * cancellation instead of the seam, so nobody else can ever reach what was left. The far end sees a
+     * healthy peer that will never speak, for as long as the socket lasts.
      *
      * The trap is a library that runs its handshake somewhere the caller's cancel does not reach. Ktor's
      * `webSocketSession` is one: `ownedWebSocketSession` in `:kuilt-websocket` is what to dial through
-     * instead. `NwLoom.discardUnreturnedSeam` in `:kuilt-nw` is the pattern for a seam built during the
-     * weave.
+     * instead, and its KDoc names the engine it cannot keep this promise on.
+     * `NwLoom.discardUnreturnedSeam` in `:kuilt-nw` is the pattern for a seam built during the weave.
      *
      * No conformance suite checks this: the in-memory reference never suspends in its weave, so it could
      * not fail a test of it (tracked by #3102).

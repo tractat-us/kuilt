@@ -33,11 +33,10 @@ import kotlin.random.Random
  * it, and an argument that is accepted and then ignored is worse than one that does not exist:
  *
  * - **`weaveTimeout`** — nothing in this loom puts a clock on the dial. `weave` calls
- *   [ownedWebSocketSession] and waits as long as the [httpClient] waits, so the only ceiling on a
- *   rendezvous is the one the caller configured on that client (`install(HttpTimeout)`), not
- *   anything this factory could pass. Adding one would be new wiring rather than a forwarded
- *   knob, and it would sit alongside the client's own connect timeout with undefined precedence.
- *   Bound the dial where the dial is configured. See #1430.
+ *   [ownedWebSocketSession] and waits as long as it waits, and `install(HttpTimeout)` on the
+ *   [httpClient] is no ceiling either: [ownedWebSocketSession] says why. Adding one here would be
+ *   new wiring rather than a forwarded knob. Bound a rendezvous with a timeout around the call.
+ *   See #1430.
  *
  * `policy` used to be a second such omission, for a reason that has since been fixed rather than
  * worked around: `WebSocketSeam` — this fabric's seam adapter — called
@@ -46,7 +45,7 @@ import kotlin.random.Random
  * is honoured.
  *
  * @param httpClient The Ktor client every dial goes through. **Not closed by the loom** — the
- *   caller owns its lifecycle, and it is where a rendezvous ceiling is configured.
+ *   caller owns its lifecycle.
  * @param selfId This peer's fabric identity, presented as `?peer=<id>` on every dial. Defaults to
  *   a fresh random [PeerId] per loom. Supply a stable value when the far end derives durable
  *   state from it — a cluster learner's identity must survive a reconnect.

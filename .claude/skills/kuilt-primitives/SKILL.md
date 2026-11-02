@@ -35,7 +35,7 @@ and primitive groups in order. The cookbook index splits them out.
 |a peer-supplied id straight into a `Set<PeerId>`|`PeerIdentityRegistry`|`fabrics.md#a-peer-id-off-the-wire-straight-into-a-setpeerid`|
 |a 4-byte length prefix and a reassembly loop over a socket|`framed()` → `handshaking()`|`fabrics.md#your-own-transport`|
 |that same plumbing when the transport really is just TCP|`TcpLoom.host` / `TcpLoom.join`|`fabrics.md#plain-tcp-is-already-assembled`|
-|a bare `webSocketSession`, `openOrRelease`; a socket a cancelled dial left open|`ownedWebSocketSession`|`fabrics.md#a-cancelled-dial`|
+|a bare `webSocketSession`; a socket a cancelled dial left open|`ownedWebSocketSession`|`fabrics.md#a-cancelled-dial`|
 |looping a frame back to yourself, a `peers.forEach { sendTo(it, …) }` fan-out|`broadcast`; `peers` includes `selfId`, and `sendTo(selfId, …)` throws|`fabrics.md#sending-to-yourself`|
 |a hard-coded chunk size, a `FrameTooLargeException`|`Room.maxPayloadBytes`/`Seam.maxPayloadBytes`, then `PayloadTooLarge`|`fabrics.md#payload-limits`|
 |a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn(scope, onFailure, name) { … }` — `PumpFailure.ITEM` vs `UPSTREAM`; `onFailure` returns `PumpVerdict.CONTINUE`/`STOP`|`fabrics.md#long-lived-pumps`|

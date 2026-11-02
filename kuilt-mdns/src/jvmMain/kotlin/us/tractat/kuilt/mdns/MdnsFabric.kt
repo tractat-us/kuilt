@@ -39,10 +39,11 @@ import javax.jmdns.JmDNS
  * - **`weaveTimeout`** — `weave` puts no ceiling on either path. Hosting parks on
  *   [us.tractat.kuilt.websocket.KtorServerLoom.nextLink] until a peer dials in, which is what a
  *   "wait for someone on the LAN to join" host is *for*, not an oversight; and on the joining path
- *   the only network call is `httpClient.ownedWebSocketSession(…)`, whose timeouts the caller already
- *   owns — they configure them on the [HttpClient] they hand to [httpClientFactory]. Adding the
- *   parameter would mean adding a `withTimeout` that does not exist today, which is new behaviour
- *   rather than a surfaced knob. Same reasoning, and the same conclusion, as `tcpLoomHost`.
+ *   the only network call is `httpClient.ownedWebSocketSession(…)`, which has no clock of its own, and
+ *   whose KDoc says why `install(HttpTimeout)` on that client is no ceiling. A caller bounds it with a
+ *   timeout around the call. Adding the parameter would mean adding a `withTimeout` that does not exist
+ *   today, which is new behaviour rather than a surfaced knob. Same reasoning, and the same conclusion,
+ *   as `tcpLoomHost`.
  *
  * @param serviceType The mDNS service type to advertise and browse under. Supply the canonical
  *   base form (e.g. `MDNSServiceType("_myapp._tcp")`); platform-specific suffixes are applied

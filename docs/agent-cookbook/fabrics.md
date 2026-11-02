@@ -194,8 +194,8 @@ file on every target, so the vectors cannot drift from what a kuilt peer actuall
 
 ## A cancelled dial
 
-**Intent:** you are opening a WebSocket with Ktor's `webSocketSession`, or you wrote an `openOrRelease`
-to stop what it leaks, or the far end still sees you connected after you cancelled the join.
+**Intent:** you are opening a WebSocket with Ktor's `webSocketSession`, or you wrote a wrapper to stop
+what it leaks, or the far end still sees you connected after you cancelled the join.
 **Primitive:** `HttpClient.ownedWebSocketSession(url) { … }` (`:kuilt-websocket`, every target). It
 takes the same arguments and returns the same session. `KtorClientLoom`, `KtorMeshClientLoom` and
 `voterMeshOverWebSockets` all dial through it, so reach for it only when you open a session yourself.
@@ -208,15 +208,25 @@ dial = { _, peer -> WebSocketConnection(httpClient.ownedWebSocketSession(dialUrl
 Ktor runs the handshake on the client's own scope and only waits for it, so cancelling ends the wait
 and the handshake carries on. When it finishes, the socket stays open with nothing holding it, until
 the session ends from outside or the `HttpClient` closes. Measured on real sockets: the far end saw no
-close within 15 s, on CIO, OkHttp and Darwin alike. Here a cancel mid-handshake aborts the request, and
-a cancel landing as the session arrives gives that session a normal close. Only a return makes the
-session yours.
+close within 15 s, on CIO, OkHttp and Darwin alike. Here a cancel mid-handshake aborts the request on
+CIO and Darwin, and a cancel landing as the session arrives gives that session a normal close. Only a
+return makes the session yours.
 
-Two failures change shape too. A closed `HttpClient` throws `IOException`, where Ktor's call hangs
-forever, and a cancellation that is not yours arrives as `IOException` rather than cancelling you.
+**Pick CIO or Darwin if a far end might never answer.** OkHttp does not abort a dial. After a cancel
+its socket waits on OkHttp's read timeout, about 10 s by default, and with `readTimeout(0)` it was still
+open at 30 s. A far end that answers late gets a finished upgrade and then a `1011` Close frame. kuilt
+cannot reach that socket. Darwin has one narrow exception: an answer written right behind the cancel,
+on the first dial of a process, can beat it. The function's KDoc has the numbers.
+
+Two failures change shape too. A closed `HttpClient` with no session left on it throws `IOException`,
+where Ktor's call hangs forever. With another session still open, its job stays active and the dial
+simply goes ahead: on CIO and OkHttp it reached the far end and returned a session. And a cancellation
+that is not yours arrives as `IOException` rather than cancelling you.
 
 It does not put a clock on the dial, and an `HttpClient` closed during one does not end it. Bound the
-dial with `install(HttpTimeout)` or a timeout around the call, which is an ordinary cancel.
+dial with a timeout around the call, which is an ordinary cancel. `install(HttpTimeout)` will not do it:
+Ktor turns the request timeout off for a WebSocket request, and a socket timeout also kills a healthy
+session that has gone idle.
 
 The same promise is what `Loom.weave` asks of any fabric: see its KDoc if you are writing one.
 

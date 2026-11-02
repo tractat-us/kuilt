@@ -87,8 +87,9 @@ import kotlin.time.Duration
  *   [Connection]. Both the initial formation dial and every redial route through this. The transport
  *   (WebSocket, loopback, …) and any per-peer address mapping live entirely on the caller's side.
  *
- *   **It must be cancellation-clean: if the dial is cancelled at any point, every transport resource
- *   it opened is closed before the `CancellationException` propagates** (#2587). Once `dial` returns,
+ *   **It must be cancellation-clean: if the dial is cancelled at any point, the close of every
+ *   transport resource it opened has begun before the `CancellationException` propagates, and needs
+ *   nothing further from the caller** (#2587). It may finish a moment later. Once `dial` returns,
  *   the connection is kuilt's to dispose of — a formation dial is closed by the failure teardown
  *   below, and a handshake abandoned mid-preamble is closed by the mesh itself. But kuilt's ownership
  *   **cannot begin before `dial` returns**: a coroutine cancelled *as* `dial` resumes takes the
