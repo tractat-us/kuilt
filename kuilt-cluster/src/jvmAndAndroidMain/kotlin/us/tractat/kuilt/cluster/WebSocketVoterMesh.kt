@@ -1,7 +1,6 @@
 package us.tractat.kuilt.cluster
 
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.websocket.webSocketSession
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.core.PeerId
@@ -11,6 +10,7 @@ import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.websocket.WebSocketConnection
+import us.tractat.kuilt.websocket.ownedWebSocketSession
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -102,7 +102,7 @@ public suspend fun CoroutineScope.voterMeshOverWebSockets(
     return assembleVoterMesh(
         voters = voters.map { it.nodeId },
         sourceOf = { node -> sourceByNode.getValue(node) },
-        dial = { _, peer -> WebSocketConnection(httpClient.webSocketSession(dialUrlByPeer.getValue(peer))) },
+        dial = { _, peer -> WebSocketConnection(httpClient.ownedWebSocketSession(dialUrlByPeer.getValue(peer))) },
         dispatcher = dispatcher,
         raftConfig = raftConfig,
         random = random,

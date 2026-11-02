@@ -1,7 +1,6 @@
 package us.tractat.kuilt.websocket
 
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.header
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.CoroutineDispatcher
@@ -120,7 +119,7 @@ public class KtorClientLoom(
                 queryParams[PEER_QUERY_PARAM] = selfPeerId.value
                 val urlWithPeer = appendQueryParams(advertisement.url, queryParams)
                 val wsSession =
-                    httpClient.webSocketSession(urlWithPeer) {
+                    httpClient.ownedWebSocketSession(urlWithPeer) {
                         dialContext.headers.forEach { (key, value) -> header(key, value) }
                     }
                 WebSocketSeam(

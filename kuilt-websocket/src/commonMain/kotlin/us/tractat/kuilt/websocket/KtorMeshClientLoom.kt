@@ -1,7 +1,6 @@
 package us.tractat.kuilt.websocket
 
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.websocket.webSocketSession
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import us.tractat.kuilt.core.DeliveryPolicy
@@ -101,7 +100,7 @@ public class KtorMeshClientLoom(
                     "KtorMeshClientLoom only joins WebSocketAdvertisement, got ${advertisement::class}"
                 }
                 val urlWithPeer = appendPeerQuery(advertisement.url, selfPeerId)
-                val wsSession = httpClient.webSocketSession(urlWithPeer)
+                val wsSession = httpClient.ownedWebSocketSession(urlWithPeer)
                 peerMesh(
                     selfId = selfPeerId,
                     connections = listOf(WebSocketConnection(wsSession)),
