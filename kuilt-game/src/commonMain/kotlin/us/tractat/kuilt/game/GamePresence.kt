@@ -37,9 +37,10 @@ private const val SPECTATE_DECLARED = "spectate"
  * Marker value stored under a replica's slot to declare "I am voluntarily leaving".
  *
  * Published by a voter that calls [GameSession.leave] to signal a graceful departure to the
- * host. The host observes this via [vacaters] and immediately evicts the voter via
- * [RaftNode.changeMembership] without waiting the [HeartbeatConfig.reconnectWindow] — the
- * vacate signal is the explicit path; the dead-man's-switch timeout is the crash-only fallback.
+ * host. A host running liveness monitoring observes this via [GamePresence.vacating] and
+ * immediately evicts the voter via [RaftNode.changeMembership] without waiting the
+ * [HeartbeatConfig.reconnectWindow] — the vacate signal is the explicit path; the
+ * dead-man's-switch timeout is the fallback, for a crash or a frame that was lost.
  */
 private const val VACATE_DECLARED = "vacate"
 
@@ -162,13 +163,13 @@ public class GamePresence(
     /**
      * Declare that this voter is voluntarily leaving the session.
      *
-     * The host observes this via [vacaters] and immediately evicts the voter via
-     * [RaftNode.changeMembership], without waiting the reconnect window. Call this from
-     * [GameSession.leave] before closing the session so the seat is freed promptly.
+     * A host running liveness monitoring collects [vacating] and, if it is the leader when the frame
+     * arrives, evicts the voter via [RaftNode.changeMembership] without waiting the reconnect window.
+     * [GameSession.leave] calls this.
      *
      * The vacate signal coexists with [PRESENT_DECLARED]: after calling this the replica's
-     * slot holds [VACATE_DECLARED], overwriting [PRESENT_DECLARED]. The [Quilter] delivers
-     * the delta to the host.
+     * slot holds [VACATE_DECLARED], overwriting [PRESENT_DECLARED]. This returns with the delta
+     * still queued on the [Quilter]'s scope, so a teardown straight after it can lose the frame.
      */
     public fun declareVacate(): Unit = declare(VACATE_DECLARED)
 
@@ -225,13 +226,25 @@ public class GamePresence(
     /**
      * The converged set of replicas that have declared a voluntary departure via [declareVacate].
      *
-     * The host observes this to trigger immediate eviction without waiting the reconnect window.
+     * A snapshot: the host's eviction watcher collects [vacating] rather than polling this.
      * Returns replicas whose current slot value equals [VACATE_DECLARED].
      */
-    public fun vacaters(): Set<ReplicaId> =
-        quilter.state.value.entries
-            .filterValues { entry -> entry.value == VACATE_DECLARED }
-            .keys
+    public fun vacaters(): Set<ReplicaId> = vacatersIn(quilter.state.value)
+
+    /**
+     * [vacaters] as a flow, for a watcher that has to wake when a departure lands.
+     *
+     * [announced] cannot do that job. A departing voter has already announced itself, so declaring a
+     * vacate changes the value in its slot and not the set of slots, and a [StateFlow] of that set
+     * does not emit.
+     */
+    internal val vacating: StateFlow<Set<ReplicaId>> =
+        quilter.state
+            .map { map -> vacatersIn(map) }
+            .stateIn(presenceScope, SharingStarted.Eagerly, vacatersIn(quilter.state.value))
+
+    private fun vacatersIn(map: EphemeralMap<String>): Set<ReplicaId> =
+        map.entries.filterValues { entry -> entry.value == VACATE_DECLARED }.keys
 
     /**
      * Re-opens admission by reverting the host's slot to [HOST_DECLARED].
