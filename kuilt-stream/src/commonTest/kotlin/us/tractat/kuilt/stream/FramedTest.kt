@@ -117,8 +117,9 @@ class FramedTest {
     @Test
     fun aSinkThatThrowsACancellationFailsALiveCallerWithAnOrdinaryException() = runTest {
         val thrown = assertFailsWith<IOException> { mintingLink().send(byteArrayOf(1)) }
+        val callerStillLive = currentCoroutineContext().isActive
         assertAll(
-            { assertTrue(currentCoroutineContext().isActive, "rig: this caller must be live") },
+            { assertTrue(callerStillLive, "rig: this caller must be live") },
             { assertEquals(MINTED, thrown.cause, "the transport's own exception must survive as the cause") },
         )
     }
