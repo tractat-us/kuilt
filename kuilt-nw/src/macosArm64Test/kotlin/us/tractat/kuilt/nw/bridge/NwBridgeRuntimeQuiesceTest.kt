@@ -134,6 +134,9 @@ class NwBridgeRuntimeQuiesceTest {
     /**
      * One state snapshot can name several connections, and each is its own call into the JVM. So a destroy
      * from inside the first call has to end the rest: the JVM may release the callback once the destroy returns.
+     *
+     * The forwarder starts `UNDISPATCHED`, so the first snapshot is delivered inside the registering call.
+     * That call is on the [caller] worker, so a wedge there stays a named red rather than hanging this thread.
      */
     @Test
     fun destroyFromInsideAViabilityCallbackEndsTheRestOfThatSnapshot() = withRuntime { api, handle, runtime ->
@@ -141,7 +144,7 @@ class NwBridgeRuntimeQuiesceTest {
         api.driveSetViabilityForTest(api.registerInertConnectionForTest(endpoint = null), viable = true)
         api.driveSetViabilityForTest(api.registerInertConnectionForTest(endpoint = null), viable = true)
         val connectionsInOneSnapshot = api.connectionStates.value.size
-        runtime.setConnectionViabilityCallback(NwProbe.viabilityDestroysOnItsFirstCall)
+        caller.execute(TransferMode.SAFE, { runtime }) { it.setConnectionViabilityCallback(NwProbe.viabilityDestroysOnItsFirstCall) }
 
         assertTheDestroyEndedTheSnapshot(connectionsInOneSnapshot, runtime)
     }
@@ -152,7 +155,7 @@ class NwBridgeRuntimeQuiesceTest {
         api.driveCloseForTest(api.registerInertConnectionForTest(endpoint = null), failed = false)
         api.driveCloseForTest(api.registerInertConnectionForTest(endpoint = null), failed = false)
         val connectionsInOneSnapshot = api.connectionStates.value.size
-        runtime.setConnectionClosedStateCallback(NwProbe.closedStateDestroysOnItsFirstCall)
+        caller.execute(TransferMode.SAFE, { runtime }) { it.setConnectionClosedStateCallback(NwProbe.closedStateDestroysOnItsFirstCall) }
 
         assertTheDestroyEndedTheSnapshot(connectionsInOneSnapshot, runtime)
     }
