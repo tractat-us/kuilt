@@ -187,6 +187,10 @@ public abstract class DiscoverySourceConformanceSuite {
      * arrival still in flight when this returns means the withdrawal races it: the property reds
      * on the fixture's own timing while reading as a fault in the source's leave signal.
      *
+     * A source whose feed subscribes from another coroutine (`flowOn`, `callbackFlow`,
+     * `channelFlow`) must also wait here for that subscription: the suite's start handshake does
+     * not prove it, and an event fired earlier is lost on a source without replay.
+     *
      * Non-nullable for the same reason as [newSource]: every property here starts from an arrival,
      * so a source that cannot be made to discover anything makes all of them vacuous — and would
      * do it *silently*, which is the shape this suite exists to remove.
@@ -481,10 +485,9 @@ public abstract class DiscoverySourceConformanceSuite {
      * suspension between, so under the test scheduler the caller cannot resume until that
      * subscription has happened.
      *
-     * **That holds only for a source that subscribes on the collector's own dispatcher.** A feed
-     * ending in `flowOn` subscribes from a producer on the other dispatcher, so [onStart] says
-     * nothing about it. Such a binding has to wait for the subscription itself in [causeArrival], as
-     * the JVM Multipeer binding does (#3075).
+     * **That holds only for a source that subscribes inline in the collecting coroutine**, so not
+     * through `flowOn`, `callbackFlow` or `channelFlow`. For those, [onStart] says nothing about the
+     * subscription, and the binding has to wait for it itself in [causeArrival] (#3075).
      */
     private suspend fun <T> watch(flow: Flow<T>, what: String): Watch<T> {
         val started = CompletableDeferred<Unit>()

@@ -328,8 +328,11 @@ private abstract class MultipeerJvmSuite : DiscoverySourceConformanceSuite() {
     override fun newSource(): PeerDiscoverySource {
         val lib = ConformanceNativeLib()
         val browser = lib.newBrowser()
-        return register(browser, lib, browser.departureSubscribers)
+        return register(wrap(browser), lib, browser.departureSubscribers)
     }
+
+    /** What the suite sees in front of production's [browser]; a rig overrides only this. */
+    protected open fun wrap(browser: MultipeerServiceBrowser): PeerDiscoverySource = browser
 
     /**
      * Waits — in real time — for production's browse session to reach the fake and for its departure
@@ -402,7 +405,7 @@ private abstract class MultipeerJvmSuite : DiscoverySourceConformanceSuite() {
     protected fun register(
         source: PeerDiscoverySource,
         lib: ConformanceNativeLib,
-        departureSubscribers: StateFlow<Int>? = null,
+        departureSubscribers: StateFlow<Int>?,
     ): PeerDiscoverySource = source.also { bindings[it] = Binding(lib, departureSubscribers) }
 }
 
@@ -421,12 +424,8 @@ private abstract class LateDeparturesSuite : MultipeerJvmSuite() {
 
     val departureHolds: Int get() = late.holds
 
-    override fun newSource(): PeerDiscoverySource {
-        val lib = ConformanceNativeLib()
-        val browser = lib.newBrowser()
-        late = LateDeparturesSource(browser)
-        return register(late, lib, browser.departureSubscribers)
-    }
+    override fun wrap(browser: MultipeerServiceBrowser): PeerDiscoverySource =
+        LateDeparturesSource(browser).also { late = it }
 
     /**
      * The release lives here, so deleting the wait from [causeArrival] leaves the feed held and the
@@ -449,7 +448,7 @@ private abstract class LateDeparturesSuite : MultipeerJvmSuite() {
 private abstract class RefCountedBrowseSuite : MultipeerJvmSuite() {
     override fun newSource(): PeerDiscoverySource {
         val lib = ConformanceNativeLib()
-        return register(RefCountedBrowseSource(lib), lib)
+        return register(RefCountedBrowseSource(lib), lib, null)
     }
 }
 
@@ -457,7 +456,7 @@ private abstract class RefCountedBrowseSuite : MultipeerJvmSuite() {
 private abstract class WrongKeySuite : MultipeerJvmSuite() {
     override fun newSource(): PeerDiscoverySource {
         val lib = ConformanceNativeLib()
-        return register(RefCountedBrowseSource(lib, departureKey = { ARRIVING_DISPLAY_NAME }), lib)
+        return register(RefCountedBrowseSource(lib, departureKey = { ARRIVING_DISPLAY_NAME }), lib, null)
     }
 }
 
@@ -465,7 +464,7 @@ private abstract class WrongKeySuite : MultipeerJvmSuite() {
 private abstract class LateSpuriousDepartureSuite : MultipeerJvmSuite() {
     override fun newSource(): PeerDiscoverySource {
         val lib = ConformanceNativeLib()
-        return register(LateSpuriousDepartureSource(lib), lib)
+        return register(LateSpuriousDepartureSource(lib), lib, null)
     }
 
     override fun departureFixture(source: PeerDiscoverySource): DepartureFixture = DepartureFixture.NoLeaveSignal
