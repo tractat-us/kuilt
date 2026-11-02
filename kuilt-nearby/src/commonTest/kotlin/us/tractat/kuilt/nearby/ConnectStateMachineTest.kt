@@ -1,7 +1,6 @@
 package us.tractat.kuilt.nearby
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -110,13 +109,13 @@ class ConnectStateMachineTest {
                     registry = PeerIdentityRegistry(PeerId("me")),
                 )
 
-            // trigger emits nothing → withTimeout fires on the virtual clock.
-            // ALLOW-runCatching: the assertion below is ON the captured TimeoutCancellationException — a CancellationException the test must catch; runCatchingCancellable would rethrow it and the assertion could never run.
-            val outcome = runCatching { machine.run(backgroundScope) {} }
+            // trigger emits nothing → the bound fires on the virtual clock. A plain failure and not a
+            // TimeoutCancellationException, which would cancel the caller rather than fail it (Loom.weave).
+            val outcome = runCatchingCancellable { machine.run(backgroundScope) {} }
 
             assertTrue(
-                outcome.exceptionOrNull() is TimeoutCancellationException,
-                "expected TimeoutCancellationException, got ${outcome.exceptionOrNull()}",
+                outcome.exceptionOrNull() is ConnectionFailedException,
+                "expected ConnectionFailedException, got ${outcome.exceptionOrNull()}",
             )
         }
 

@@ -1,0 +1,358 @@
+public final class us/tractat/kuilt/test/AntiEntropyDrainKt {
+	public static final fun drainAntiEntropy-7Q0yyfQ (Lkotlinx/coroutines/test/TestScope;JIJI)V
+	public static synthetic fun drainAntiEntropy-7Q0yyfQ$default (Lkotlinx/coroutines/test/TestScope;JIJIILjava/lang/Object;)V
+	public static final fun drainAntiEntropyUntil-WPwdCS8 (Lkotlinx/coroutines/test/TestScope;JILkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;)V
+	public static synthetic fun drainAntiEntropyUntil-WPwdCS8$default (Lkotlinx/coroutines/test/TestScope;JILkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)V
+}
+
+public final class us/tractat/kuilt/test/AssertionsKt {
+	public static final fun assertAll ([Lkotlin/jvm/functions/Function0;)V
+}
+
+public final class us/tractat/kuilt/test/ControllableLoom : us/tractat/kuilt/core/Loom {
+	public fun <init> ()V
+	public fun <init> (Lus/tractat/kuilt/core/DeliveryPolicy;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/DeliveryPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public final fun bufferedCount-ngToHgY (Ljava/lang/String;)I
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public final fun deliverNext-t5-yf_A (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getPolicy ()Lus/tractat/kuilt/core/DeliveryPolicy;
+	public final fun holdDelivery-ngToHgY (Ljava/lang/String;)V
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun releaseDelivery-t5-yf_A (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/test/ControllableSeam : us/tractat/kuilt/core/Seam {
+	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getPlies ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun sendTo-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/test/Direction : java/lang/Enum {
+	public static final field Both Lus/tractat/kuilt/test/Direction;
+	public static final field Inbound Lus/tractat/kuilt/test/Direction;
+	public static final field Outbound Lus/tractat/kuilt/test/Direction;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/test/Direction;
+	public static fun values ()[Lus/tractat/kuilt/test/Direction;
+}
+
+public final class us/tractat/kuilt/test/FakeLoom : us/tractat/kuilt/core/Loom {
+	public fun <init> ()V
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/test/FakeLoomKt {
+	public static final fun fakeSeamGroup (Ljava/util/List;)Ljava/util/List;
+	public static final fun fakeSeamPair-UBGw5E4 (Ljava/lang/String;Ljava/lang/String;)Lkotlin/Pair;
+}
+
+public final class us/tractat/kuilt/test/FakeSeam : us/tractat/kuilt/core/Seam {
+	public fun <init> ()V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/Set;Lus/tractat/kuilt/core/SeamState;Lus/tractat/kuilt/core/DeliveryPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/Set;Lus/tractat/kuilt/core/SeamState;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun addPeer-ngToHgY (Ljava/lang/String;)V
+	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun deliver (Lus/tractat/kuilt/core/Swatch;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun deliver-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getBroadcasts ()Ljava/util/List;
+	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getDirected ()Ljava/util/List;
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getPlies ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun removePeer-ngToHgY (Ljava/lang/String;)V
+	public fun sendTo-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun tear (Lus/tractat/kuilt/core/CloseReason;)V
+	public static synthetic fun tear$default (Lus/tractat/kuilt/test/FakeSeam;Lus/tractat/kuilt/core/CloseReason;ILjava/lang/Object;)V
+	public final fun weave ()V
+}
+
+public abstract interface class us/tractat/kuilt/test/FaultProfile {
+}
+
+public final class us/tractat/kuilt/test/FaultProfile$BufferCeiling : us/tractat/kuilt/test/FaultProfile {
+	public fun <init> (I)V
+	public final fun component1 ()I
+	public final fun copy (I)Lus/tractat/kuilt/test/FaultProfile$BufferCeiling;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/test/FaultProfile$BufferCeiling;IILjava/lang/Object;)Lus/tractat/kuilt/test/FaultProfile$BufferCeiling;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMaxOutbound ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/FaultProfile$CloseAt : us/tractat/kuilt/test/FaultProfile {
+	public fun <init> (ILus/tractat/kuilt/core/CloseReason;)V
+	public synthetic fun <init> (ILus/tractat/kuilt/core/CloseReason;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()Lus/tractat/kuilt/core/CloseReason;
+	public final fun copy (ILus/tractat/kuilt/core/CloseReason;)Lus/tractat/kuilt/test/FaultProfile$CloseAt;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/test/FaultProfile$CloseAt;ILus/tractat/kuilt/core/CloseReason;ILjava/lang/Object;)Lus/tractat/kuilt/test/FaultProfile$CloseAt;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFrameIndex ()I
+	public final fun getReason ()Lus/tractat/kuilt/core/CloseReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/FaultProfile$Composite : us/tractat/kuilt/test/FaultProfile {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/test/FaultProfile$Composite;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/test/FaultProfile$Composite;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/test/FaultProfile$Composite;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getProfiles ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/FaultProfile$DelayAll : us/tractat/kuilt/test/FaultProfile {
+	public synthetic fun <init> (JLus/tractat/kuilt/test/Direction;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (JLus/tractat/kuilt/test/Direction;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-UwyO8pc ()J
+	public final fun component2 ()Lus/tractat/kuilt/test/Direction;
+	public final fun copy-VtjQ1oo (JLus/tractat/kuilt/test/Direction;)Lus/tractat/kuilt/test/FaultProfile$DelayAll;
+	public static synthetic fun copy-VtjQ1oo$default (Lus/tractat/kuilt/test/FaultProfile$DelayAll;JLus/tractat/kuilt/test/Direction;ILjava/lang/Object;)Lus/tractat/kuilt/test/FaultProfile$DelayAll;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDelay-UwyO8pc ()J
+	public final fun getDirection ()Lus/tractat/kuilt/test/Direction;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/FaultProfile$DropAll : us/tractat/kuilt/test/FaultProfile {
+	public fun <init> ()V
+	public fun <init> (Lus/tractat/kuilt/test/Direction;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/test/Direction;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/test/Direction;
+	public final fun copy (Lus/tractat/kuilt/test/Direction;)Lus/tractat/kuilt/test/FaultProfile$DropAll;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/test/FaultProfile$DropAll;Lus/tractat/kuilt/test/Direction;ILjava/lang/Object;)Lus/tractat/kuilt/test/FaultProfile$DropAll;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDirection ()Lus/tractat/kuilt/test/Direction;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/FaultProfile$DropProbabilistic : us/tractat/kuilt/test/FaultProfile {
+	public fun <init> (DJLus/tractat/kuilt/test/Direction;)V
+	public synthetic fun <init> (DJLus/tractat/kuilt/test/Direction;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()D
+	public final fun component2 ()J
+	public final fun component3 ()Lus/tractat/kuilt/test/Direction;
+	public final fun copy (DJLus/tractat/kuilt/test/Direction;)Lus/tractat/kuilt/test/FaultProfile$DropProbabilistic;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/test/FaultProfile$DropProbabilistic;DJLus/tractat/kuilt/test/Direction;ILjava/lang/Object;)Lus/tractat/kuilt/test/FaultProfile$DropProbabilistic;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDirection ()Lus/tractat/kuilt/test/Direction;
+	public final fun getProbability ()D
+	public final fun getSeed ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/FaultProfile$DropSpecific : us/tractat/kuilt/test/FaultProfile {
+	public fun <init> (Ljava/util/Set;Lus/tractat/kuilt/test/Direction;)V
+	public synthetic fun <init> (Ljava/util/Set;Lus/tractat/kuilt/test/Direction;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/Set;
+	public final fun component2 ()Lus/tractat/kuilt/test/Direction;
+	public final fun copy (Ljava/util/Set;Lus/tractat/kuilt/test/Direction;)Lus/tractat/kuilt/test/FaultProfile$DropSpecific;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/test/FaultProfile$DropSpecific;Ljava/util/Set;Lus/tractat/kuilt/test/Direction;ILjava/lang/Object;)Lus/tractat/kuilt/test/FaultProfile$DropSpecific;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDirection ()Lus/tractat/kuilt/test/Direction;
+	public final fun getFrameIndexes ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/FaultProfile$Healthy : us/tractat/kuilt/test/FaultProfile {
+	public static final field INSTANCE Lus/tractat/kuilt/test/FaultProfile$Healthy;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/FaultProfile$ReorderWindow : us/tractat/kuilt/test/FaultProfile {
+	public fun <init> (IJLus/tractat/kuilt/test/Direction;)V
+	public synthetic fun <init> (IJLus/tractat/kuilt/test/Direction;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()J
+	public final fun component3 ()Lus/tractat/kuilt/test/Direction;
+	public final fun copy (IJLus/tractat/kuilt/test/Direction;)Lus/tractat/kuilt/test/FaultProfile$ReorderWindow;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/test/FaultProfile$ReorderWindow;IJLus/tractat/kuilt/test/Direction;ILjava/lang/Object;)Lus/tractat/kuilt/test/FaultProfile$ReorderWindow;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDirection ()Lus/tractat/kuilt/test/Direction;
+	public final fun getSeed ()J
+	public final fun getWindowSize ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/FaultyLoom : us/tractat/kuilt/core/Loom {
+	public fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/test/FaultProfile;Lus/tractat/kuilt/test/TeardownFault;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/test/FaultProfile;Lus/tractat/kuilt/test/TeardownFault;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public final fun getLinks ()Ljava/util/List;
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setFaultProfileOnAll (Lus/tractat/kuilt/test/FaultProfile;)V
+	public final fun setTeardownFaultOnAll (Lus/tractat/kuilt/test/TeardownFault;)V
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/test/FaultySeam : us/tractat/kuilt/core/Seam {
+	public fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/test/FaultProfile;Lus/tractat/kuilt/core/DeliveryPolicy;Lus/tractat/kuilt/test/TeardownFault;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/test/FaultProfile;Lus/tractat/kuilt/core/DeliveryPolicy;Lus/tractat/kuilt/test/TeardownFault;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getFramesDelayed ()J
+	public final fun getFramesDelivered ()J
+	public final fun getFramesDropped ()J
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getPlies ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getTeardownFaultsFired ()J
+	public final fun heal ()V
+	public final fun partition (Lus/tractat/kuilt/test/Direction;)V
+	public static synthetic fun partition$default (Lus/tractat/kuilt/test/FaultySeam;Lus/tractat/kuilt/test/Direction;ILjava/lang/Object;)V
+	public fun sendTo-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setFaultProfile (Lus/tractat/kuilt/test/FaultProfile;)V
+	public final fun setTeardownFault (Lus/tractat/kuilt/test/TeardownFault;)V
+}
+
+public final class us/tractat/kuilt/test/FlakyLifecycleLoom : us/tractat/kuilt/core/Loom {
+	public fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;)V
+	public fun availability ()Lus/tractat/kuilt/core/FabricAvailability;
+	public fun capability ()Lus/tractat/kuilt/core/TransportCapability;
+	public final fun getLinks ()Ljava/util/List;
+	public fun host (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun weave (Lus/tractat/kuilt/core/Rendezvous;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/test/FlakyLifecycleSeam : us/tractat/kuilt/core/Seam {
+	public fun <init> (Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;)V
+	public final fun blip-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun broadcast ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun close (Lus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun drive (Lus/tractat/kuilt/test/FlapSchedule;)Lkotlinx/coroutines/Job;
+	public final fun enterWeaving ()V
+	public final fun flapThenTear-dWUq8MI (IJLus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun flapThenTear-dWUq8MI$default (Lus/tractat/kuilt/test/FlakyLifecycleSeam;IJLus/tractat/kuilt/core/CloseReason;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun getCapability ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getPlies ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getSelfId-PaHlmAU ()Ljava/lang/String;
+	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun recover ()V
+	public fun sendTo-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun tear (Lus/tractat/kuilt/core/CloseReason;)V
+	public static synthetic fun tear$default (Lus/tractat/kuilt/test/FlakyLifecycleSeam;Lus/tractat/kuilt/core/CloseReason;ILjava/lang/Object;)V
+}
+
+public final class us/tractat/kuilt/test/FlapSchedule {
+	public synthetic fun <init> (JJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2-UwyO8pc ()J
+	public final fun component3-UwyO8pc ()J
+	public final fun component4 ()I
+	public final fun copy-vLdBGDU (JJJI)Lus/tractat/kuilt/test/FlapSchedule;
+	public static synthetic fun copy-vLdBGDU$default (Lus/tractat/kuilt/test/FlapSchedule;JJJIILjava/lang/Object;)Lus/tractat/kuilt/test/FlapSchedule;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGiveUpAfter ()I
+	public final fun getMeanDowntime-UwyO8pc ()J
+	public final fun getMeanUptime-UwyO8pc ()J
+	public final fun getSeed ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/test/TeardownFault {
+}
+
+public final class us/tractat/kuilt/test/TeardownFault$Fails : us/tractat/kuilt/test/TeardownFault {
+	public fun <init> (Ljava/lang/Throwable;)V
+	public final fun component1 ()Ljava/lang/Throwable;
+	public final fun copy (Ljava/lang/Throwable;)Lus/tractat/kuilt/test/TeardownFault$Fails;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/test/TeardownFault$Fails;Ljava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/test/TeardownFault$Fails;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCause ()Ljava/lang/Throwable;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/TeardownFault$None : us/tractat/kuilt/test/TeardownFault {
+	public static final field INSTANCE Lus/tractat/kuilt/test/TeardownFault$None;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/TeardownFault$Slow : us/tractat/kuilt/test/TeardownFault {
+	public synthetic fun <init> (JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-UwyO8pc ()J
+	public final fun copy-LRDsOJo (J)Lus/tractat/kuilt/test/TeardownFault$Slow;
+	public static synthetic fun copy-LRDsOJo$default (Lus/tractat/kuilt/test/TeardownFault$Slow;JILjava/lang/Object;)Lus/tractat/kuilt/test/TeardownFault$Slow;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDelay-UwyO8pc ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/test/WedgeBackstopKt {
+	public static final fun getTEST_WEDGE_BACKSTOP ()J
+}
+
+public final class us/tractat/kuilt/test/fabric/ConnectionPairKt {
+	public static final fun connectionPair (Lus/tractat/kuilt/core/DeliveryPolicy;Ljava/lang/Integer;Z)Lkotlin/Pair;
+	public static synthetic fun connectionPair$default (Lus/tractat/kuilt/core/DeliveryPolicy;Ljava/lang/Integer;ZILjava/lang/Object;)Lkotlin/Pair;
+	public static final fun handshakingLoomPair ()Lkotlin/Pair;
+	public static final fun handshakingLoomPair (Lkotlin/Pair;)Lkotlin/Pair;
+	public static final fun identifiedLoomPair ()Lkotlin/Pair;
+	public static final fun identifiedLoomPair (Lkotlin/Pair;)Lkotlin/Pair;
+}
+
+public final class us/tractat/kuilt/test/fabric/InMemoryConnectionSource : us/tractat/kuilt/core/fabric/ConnectionSource {
+	public fun <init> ()V
+	public fun accept (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun offer (Lus/tractat/kuilt/core/fabric/Connection;)V
+}
+
+public final class us/tractat/kuilt/test/fabric/InMemoryRoomFabric {
+	public fun <init> (Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lus/tractat/kuilt/core/RoomAuthorizer;Lkotlin/random/Random;)V
+	public synthetic fun <init> (Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lus/tractat/kuilt/core/RoomAuthorizer;Lkotlin/random/Random;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun clientLoom-E0QoqUU (Ljava/lang/String;Lkotlin/random/Random;Ljava/lang/String;)Lus/tractat/kuilt/core/Loom;
+	public static synthetic fun clientLoom-E0QoqUU$default (Lus/tractat/kuilt/test/fabric/InMemoryRoomFabric;Ljava/lang/String;Lkotlin/random/Random;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/core/Loom;
+	public final fun clientSeam-ii53kwg (Ljava/lang/String;Lkotlin/random/Random;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun clientSeam-ii53kwg$default (Lus/tractat/kuilt/test/fabric/InMemoryRoomFabric;Ljava/lang/String;Lkotlin/random/Random;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun getServerLoom ()Lus/tractat/kuilt/core/Loom;
+}
+
+public final class us/tractat/kuilt/test/fabric/MeshHarnessKt {
+	public static final fun inMemoryMeshOfSize (ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+

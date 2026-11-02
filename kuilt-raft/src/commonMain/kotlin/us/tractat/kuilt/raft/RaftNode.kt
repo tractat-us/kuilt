@@ -271,7 +271,7 @@ public interface RaftNode {
      * **A torn transport seam does not end the node.** Over a [SeamRaftTransport] whose seam is
      * torn, the node stays up and drops every send, so a follower's forward is never answered and
      * this call suspends until the caller cancels it. Nothing ends the node: the owner must watch
-     * `seam.state` and [close] the node or cancel its scope. Tracked by #3053.
+     * `seam.state` and [close] the node or cancel its scope. This gap is tracked by #3053.
      *
      * @throws LeadershipLostException if a forwarded proposal is rejected by the target leader
      *   (e.g. the leader stepped down); the caller may retry on the new leader.

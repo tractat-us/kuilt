@@ -1,0 +1,53 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-warp-ml>
+final class us.tractat.kuilt.warp/FedAvg : us.tractat.kuilt.crdt/Quilted<us.tractat.kuilt.warp/FedAvg> { // us.tractat.kuilt.warp/FedAvg|null[0]
+    final val weights // us.tractat.kuilt.warp/FedAvg.weights|{}weights[0]
+        final fun <get-weights>(): kotlin.collections/List<kotlin/Double> // us.tractat.kuilt.warp/FedAvg.weights.<get-weights>|<get-weights>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/FedAvg.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/FedAvg.hashCode|hashCode(){}[0]
+    final fun piece(us.tractat.kuilt.warp/FedAvg): us.tractat.kuilt.warp/FedAvg // us.tractat.kuilt.warp/FedAvg.piece|piece(us.tractat.kuilt.warp.FedAvg){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/FedAvg.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.warp/FedAvg.Companion|null[0]
+        final val ZERO // us.tractat.kuilt.warp/FedAvg.Companion.ZERO|{}ZERO[0]
+            final fun <get-ZERO>(): us.tractat.kuilt.warp/FedAvg // us.tractat.kuilt.warp/FedAvg.Companion.ZERO.<get-ZERO>|<get-ZERO>(){}[0]
+
+        final fun contribution(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long, kotlin.collections/List<kotlin/Double>, kotlin/Long = ...): us.tractat.kuilt.warp/FedAvg // us.tractat.kuilt.warp/FedAvg.Companion.contribution|contribution(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long;kotlin.collections.List<kotlin.Double>;kotlin.Long){}[0]
+    }
+}
+
+final class us.tractat.kuilt.warp/TrainingUpdate { // us.tractat.kuilt.warp/TrainingUpdate|null[0]
+    constructor <init>(kotlin/Long, kotlin.collections/List<kotlin/Double>) // us.tractat.kuilt.warp/TrainingUpdate.<init>|<init>(kotlin.Long;kotlin.collections.List<kotlin.Double>){}[0]
+
+    final val sampleCount // us.tractat.kuilt.warp/TrainingUpdate.sampleCount|{}sampleCount[0]
+        final fun <get-sampleCount>(): kotlin/Long // us.tractat.kuilt.warp/TrainingUpdate.sampleCount.<get-sampleCount>|<get-sampleCount>(){}[0]
+    final val weights // us.tractat.kuilt.warp/TrainingUpdate.weights|{}weights[0]
+        final fun <get-weights>(): kotlin.collections/List<kotlin/Double> // us.tractat.kuilt.warp/TrainingUpdate.weights.<get-weights>|<get-weights>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.warp/TrainingUpdate.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/List<kotlin/Double> // us.tractat.kuilt.warp/TrainingUpdate.component2|component2(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin.collections/List<kotlin/Double> = ...): us.tractat.kuilt.warp/TrainingUpdate // us.tractat.kuilt.warp/TrainingUpdate.copy|copy(kotlin.Long;kotlin.collections.List<kotlin.Double>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.warp/TrainingUpdate.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.warp/TrainingUpdate.hashCode|hashCode(){}[0]
+    final fun toContribution(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long = ...): us.tractat.kuilt.warp/FedAvg // us.tractat.kuilt.warp/TrainingUpdate.toContribution|toContribution(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.warp/TrainingUpdate.toString|toString(){}[0]
+}
+
+final object us.tractat.kuilt.warp/FedAvgKernelCodec { // us.tractat.kuilt.warp/FedAvgKernelCodec|null[0]
+    final const val RESULT_LEN // us.tractat.kuilt.warp/FedAvgKernelCodec.RESULT_LEN|{}RESULT_LEN[0]
+        final fun <get-RESULT_LEN>(): kotlin/Int // us.tractat.kuilt.warp/FedAvgKernelCodec.RESULT_LEN.<get-RESULT_LEN>|<get-RESULT_LEN>(){}[0]
+
+    final fun decodeOutput(kotlin/ByteArray): us.tractat.kuilt.warp/TrainingUpdate // us.tractat.kuilt.warp/FedAvgKernelCodec.decodeOutput|decodeOutput(kotlin.ByteArray){}[0]
+    final fun encodeInput(kotlin.collections/List<kotlin/Double>, kotlin.collections/List<kotlin/Pair<kotlin/Double, kotlin/Double>>, kotlin/Double): kotlin/ByteArray // us.tractat.kuilt.warp/FedAvgKernelCodec.encodeInput|encodeInput(kotlin.collections.List<kotlin.Double>;kotlin.collections.List<kotlin.Pair<kotlin.Double,kotlin.Double>>;kotlin.Double){}[0]
+}
+
+final object us.tractat.kuilt.warp/ReferenceTrainer { // us.tractat.kuilt.warp/ReferenceTrainer|null[0]
+    final fun step(kotlin.collections/List<kotlin/Double>, kotlin.collections/List<kotlin/Pair<kotlin/Double, kotlin/Double>>, kotlin/Double): kotlin.collections/List<kotlin/Double> // us.tractat.kuilt.warp/ReferenceTrainer.step|step(kotlin.collections.List<kotlin.Double>;kotlin.collections.List<kotlin.Pair<kotlin.Double,kotlin.Double>>;kotlin.Double){}[0]
+}

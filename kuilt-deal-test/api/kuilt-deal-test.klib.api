@@ -1,0 +1,52 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-deal-test>
+sealed interface us.tractat.kuilt.deal.test/ProofStrength { // us.tractat.kuilt.deal.test/ProofStrength|null[0]
+    final object AcceptsEverything : us.tractat.kuilt.deal.test/ProofStrength { // us.tractat.kuilt.deal.test/ProofStrength.AcceptsEverything|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal.test/ProofStrength.AcceptsEverything.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal.test/ProofStrength.AcceptsEverything.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.deal.test/ProofStrength.AcceptsEverything.toString|toString(){}[0]
+    }
+
+    final object RejectsForgeries : us.tractat.kuilt.deal.test/ProofStrength { // us.tractat.kuilt.deal.test/ProofStrength.RejectsForgeries|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.deal.test/ProofStrength.RejectsForgeries.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.deal.test/ProofStrength.RejectsForgeries.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.deal.test/ProofStrength.RejectsForgeries.toString|toString(){}[0]
+    }
+}
+
+abstract class us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite { // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite|null[0]
+    constructor <init>() // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.<init>|<init>(){}[0]
+
+    abstract fun newPeerScheme(): us.tractat.kuilt.deal/CommutativeScheme // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.newPeerScheme|newPeerScheme(){}[0]
+    abstract fun newScheme(): us.tractat.kuilt.deal/CommutativeScheme // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.newScheme|newScheme(){}[0]
+    abstract fun proofStrength(): us.tractat.kuilt.deal.test/ProofStrength // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.proofStrength|proofStrength(){}[0]
+    final fun distinctKeysProduceDistinctCiphertexts() // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.distinctKeysProduceDistinctCiphertexts|distinctKeysProduceDistinctCiphertexts(){}[0]
+    final fun encryptHidesThePlaintextAndStripRecoversIt() // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.encryptHidesThePlaintextAndStripRecoversIt|encryptHidesThePlaintextAndStripRecoversIt(){}[0]
+    final fun encryptionIsCommutative() // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.encryptionIsCommutative|encryptionIsCommutative(){}[0]
+    final fun encryptionIsCommutativeAcrossPeerInstances() // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.encryptionIsCommutativeAcrossPeerInstances|encryptionIsCommutativeAcrossPeerInstances(){}[0]
+    final fun generatedKeyPairsAreUsable() // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.generatedKeyPairsAreUsable|generatedKeyPairsAreUsable(){}[0]
+    final fun multiLayerDealAcrossPeerInstancesRecoversPlaintextRegardlessOfStripOrder() // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.multiLayerDealAcrossPeerInstancesRecoversPlaintextRegardlessOfStripOrder|multiLayerDealAcrossPeerInstancesRecoversPlaintextRegardlessOfStripOrder(){}[0]
+    final fun multiLayerDealRecoversPlaintextRegardlessOfStripOrder() // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.multiLayerDealRecoversPlaintextRegardlessOfStripOrder|multiLayerDealRecoversPlaintextRegardlessOfStripOrder(){}[0]
+    final fun verifyAcceptsHonestTransitions() // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.verifyAcceptsHonestTransitions|verifyAcceptsHonestTransitions(){}[0]
+    final fun verifyAnswersForgedTransitionsAsDeclared() // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.verifyAnswersForgedTransitionsAsDeclared|verifyAnswersForgedTransitionsAsDeclared(){}[0]
+    open fun validPlaintexts(): kotlin.collections/List<kotlin/ByteArray> // us.tractat.kuilt.deal.test/CommutativeSchemeConformanceSuite.validPlaintexts|validPlaintexts(){}[0]
+}
+
+final class us.tractat.kuilt.deal.test/XorKeystreamScheme : us.tractat.kuilt.deal/CommutativeScheme { // us.tractat.kuilt.deal.test/XorKeystreamScheme|null[0]
+    constructor <init>(kotlin.random/Random = ...) // us.tractat.kuilt.deal.test/XorKeystreamScheme.<init>|<init>(kotlin.random.Random){}[0]
+
+    final fun encrypt(kotlin/ByteArray, us.tractat.kuilt.deal/SchemeKey): kotlin/Pair<kotlin/ByteArray, us.tractat.kuilt.deal/EncryptProof> // us.tractat.kuilt.deal.test/XorKeystreamScheme.encrypt|encrypt(kotlin.ByteArray;us.tractat.kuilt.deal.SchemeKey){}[0]
+    final fun generateKey(): us.tractat.kuilt.deal/SchemeKeyPair // us.tractat.kuilt.deal.test/XorKeystreamScheme.generateKey|generateKey(){}[0]
+    final fun strip(kotlin/ByteArray, us.tractat.kuilt.deal/SchemeKey): kotlin/Pair<kotlin/ByteArray, us.tractat.kuilt.deal/StripProof> // us.tractat.kuilt.deal.test/XorKeystreamScheme.strip|strip(kotlin.ByteArray;us.tractat.kuilt.deal.SchemeKey){}[0]
+    final fun verifyEncrypt(kotlin/ByteArray, kotlin/ByteArray, us.tractat.kuilt.deal/EncryptProof, us.tractat.kuilt.deal/SchemeKey): kotlin/Boolean // us.tractat.kuilt.deal.test/XorKeystreamScheme.verifyEncrypt|verifyEncrypt(kotlin.ByteArray;kotlin.ByteArray;us.tractat.kuilt.deal.EncryptProof;us.tractat.kuilt.deal.SchemeKey){}[0]
+    final fun verifyStrip(kotlin/ByteArray, kotlin/ByteArray, us.tractat.kuilt.deal/StripProof, us.tractat.kuilt.deal/SchemeKey): kotlin/Boolean // us.tractat.kuilt.deal.test/XorKeystreamScheme.verifyStrip|verifyStrip(kotlin.ByteArray;kotlin.ByteArray;us.tractat.kuilt.deal.StripProof;us.tractat.kuilt.deal.SchemeKey){}[0]
+}
+
+final fun us.tractat.kuilt.deal.test/fakeDealSessionGroup(kotlin.collections/List<us.tractat.kuilt.core/PeerId>, kotlin/Function0<us.tractat.kuilt.deal/CommutativeScheme> = ..., kotlinx.coroutines/CoroutineScope): kotlin.collections/List<us.tractat.kuilt.deal/DealSession> // us.tractat.kuilt.deal.test/fakeDealSessionGroup|fakeDealSessionGroup(kotlin.collections.List<us.tractat.kuilt.core.PeerId>;kotlin.Function0<us.tractat.kuilt.deal.CommutativeScheme>;kotlinx.coroutines.CoroutineScope){}[0]
+final fun us.tractat.kuilt.deal.test/fakeDealSessionPair(us.tractat.kuilt.core/PeerId, us.tractat.kuilt.core/PeerId, kotlin/Function0<us.tractat.kuilt.deal/CommutativeScheme> = ..., kotlinx.coroutines/CoroutineScope): kotlin/Pair<us.tractat.kuilt.deal/DealSession, us.tractat.kuilt.deal/DealSession> // us.tractat.kuilt.deal.test/fakeDealSessionPair|fakeDealSessionPair(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.PeerId;kotlin.Function0<us.tractat.kuilt.deal.CommutativeScheme>;kotlinx.coroutines.CoroutineScope){}[0]

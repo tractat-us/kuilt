@@ -1,0 +1,137 @@
+public final class us/tractat/kuilt/warp/test/BudgetOverrunRetryKt {
+	public static final fun retryingOnlyBudgetOverruns-5fuBHu4 (Ljava/lang/String;JILkotlin/jvm/functions/Function1;Lkotlin/time/TimeSource;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun retryingOnlyBudgetOverruns-5fuBHu4$default (Ljava/lang/String;JILkotlin/jvm/functions/Function1;Lkotlin/time/TimeSource;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/warp/test/DeclaredLimitsVector {
+	public final fun getBytes ()[B
+	public final fun getInitialPages ()I
+	public final fun getMaxPages ()I
+}
+
+public final class us/tractat/kuilt/warp/test/GrowThenWriteVector {
+	public final fun getBytes ()[B
+	public final fun getMarker ()[B
+	public final fun getMemoryEndAfterGrow ()J
+	public final fun getMemoryEndBeforeGrow ()J
+	public final fun getResultSize ()I
+	public final fun markerOf ([B)[B
+	public final fun reportedPointer ([B)J
+}
+
+public final class us/tractat/kuilt/warp/test/InRangePastEndVector {
+	public final fun getBytes ()[B
+	public final fun getMemoryBytes ()J
+	public final fun getResultLength ()J
+	public final fun getResultPointer ()J
+}
+
+public final class us/tractat/kuilt/warp/test/MultiNodeWarpSim {
+	public final fun awaitResults-exY8QGI (Ljava/util/Collection;Ljava/util/Collection;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun awaitResults-exY8QGI$default (Lus/tractat/kuilt/warp/test/MultiNodeWarpSim;Ljava/util/Collection;Ljava/util/Collection;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun awaitTrue-dWUq8MI (Ljava/lang/String;JLkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun awaitTrue-dWUq8MI$default (Lus/tractat/kuilt/warp/test/MultiNodeWarpSim;Ljava/lang/String;JLkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun closeAll ()V
+	public final fun disconnect-t5-yf_A (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun dumpState (Ljava/lang/String;)Ljava/lang/String;
+	public final fun echoDescriptor-lzN7ezE (Ljava/lang/String;)Lus/tractat/kuilt/warp/TaskDescriptor;
+	public final fun enqueueEcho-fx9L7zo (Ljava/lang/String;Ljava/lang/String;)V
+	public static synthetic fun enqueueEcho-fx9L7zo$default (Lus/tractat/kuilt/warp/test/MultiNodeWarpSim;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
+	public final fun executedBy-lzN7ezE (Ljava/lang/String;)Ljava/util/List;
+	public final fun executedTaskIds ()Ljava/util/Set;
+	public final fun getLoom ()Lus/tractat/kuilt/core/InMemoryLoom;
+	public final fun getNodes ()Ljava/util/Map;
+	public final fun getPeerIds ()Ljava/util/List;
+	public final fun getQuilterConfig ()Lus/tractat/kuilt/quilter/QuilterConfig;
+	public final fun getSeams ()Ljava/util/Map;
+	public final fun getVirtualClock ()Lkotlin/jvm/functions/Function0;
+	public final fun node (I)Lus/tractat/kuilt/warp/WarpNode;
+	public final fun peer-5rZ9Wqc (I)Ljava/lang/String;
+	public final fun recordExecution-vaGe-4Y (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun settle (ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun settle$default (Lus/tractat/kuilt/warp/test/MultiNodeWarpSim;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun taskOwnedBy-JB9GAjY (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+	public static synthetic fun taskOwnedBy-JB9GAjY$default (Lus/tractat/kuilt/warp/test/MultiNodeWarpSim;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ljava/lang/String;
+	public final fun trackedEchoRegistry-ngToHgY (Ljava/lang/String;)Lus/tractat/kuilt/warp/OpRegistry;
+}
+
+public final class us/tractat/kuilt/warp/test/MultiNodeWarpSimKt {
+	public static final fun getMULTI_NODE_WARP_SIM_QUILTER_CONFIG ()Lus/tractat/kuilt/quilter/QuilterConfig;
+	public static final fun getWARP_SIM_ECHO_OP ()Ljava/lang/String;
+	public static final fun getWARP_SIM_WEDGE_BACKSTOP ()J
+	public static final fun multiNodeWarpSim (ILkotlinx/coroutines/CoroutineScope;Lkotlinx/coroutines/test/TestCoroutineScheduler;Lus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/warp/ClaimStrategy;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function4;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun multiNodeWarpSim$default (ILkotlinx/coroutines/CoroutineScope;Lkotlinx/coroutines/test/TestCoroutineScheduler;Lus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/warp/ClaimStrategy;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function4;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static final fun warpSimTest-GajXJrc (ILus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/warp/ClaimStrategy;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function4;JLkotlin/jvm/functions/Function3;)V
+	public static synthetic fun warpSimTest-GajXJrc$default (ILus/tractat/kuilt/quilter/QuilterConfig;Lus/tractat/kuilt/liveness/HeartbeatConfig;Lus/tractat/kuilt/warp/ClaimStrategy;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function4;JLkotlin/jvm/functions/Function3;ILjava/lang/Object;)V
+}
+
+public final class us/tractat/kuilt/warp/test/WarpOps : us/tractat/kuilt/warp/OpRegistrar {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/test/WarpOps;
+	public final fun getOpIds ()Ljava/util/Set;
+	public fun registerInto (Lus/tractat/kuilt/warp/OpRegistry;)V
+}
+
+public final class us/tractat/kuilt/warp/test/WarpTestOpsKt {
+	public static final fun getEcho ()Lus/tractat/kuilt/warp/Op;
+}
+
+public final class us/tractat/kuilt/warp/test/WasmKernelFixtures {
+	public static final field INSTANCE Lus/tractat/kuilt/warp/test/WasmKernelFixtures;
+	public final fun getCPU_BOMB ()[B
+	public final fun getGROW_PAST_DECLARED_MAX ()[B
+	public final fun getGROW_THEN_WRITE ()Lus/tractat/kuilt/warp/test/GrowThenWriteVector;
+	public final fun getHIGH_BIT_ALLOC_POINTER ()[B
+	public final fun getHIGH_BIT_RESULT_LENGTH ()[B
+	public final fun getHIGH_BIT_RESULT_POINTER ()[B
+	public final fun getIMPORTS ()[B
+	public final fun getINITIAL_ABOVE_DECLARED_MAX ()Lus/tractat/kuilt/warp/test/DeclaredLimitsVector;
+	public final fun getINITIAL_AT_CAP ()Lus/tractat/kuilt/warp/test/DeclaredLimitsVector;
+	public final fun getMEMORY64_MAX_2_POW_31 ()[B
+	public final fun getMEMORY64_MAX_2_POW_32 ()[B
+	public final fun getMEMORY64_WITHIN_CAP ()[B
+	public final fun getMISSING_ABI_EXPORTS ()[B
+	public final fun getMISSING_MEMORY ()[B
+	public final fun getNO_MAX_MEMORY ()[B
+	public final fun getOOB_IN_RANGE_RESULT ()Lus/tractat/kuilt/warp/test/InRangePastEndVector;
+	public final fun getOVERSIZE_INITIAL_MEMORY ()[B
+	public final fun getOVERSIZE_MAX_MEMORY ()[B
+	public final fun getREVERSE ()[B
+	public final fun getSECOND_MEMORY_NO_MAX ()[B
+	public final fun getSTART_CPU_BOMB ()[B
+	public final fun getTRAP ()[B
+}
+
+public final class us/tractat/kuilt/warp/test/WasmKernelFixturesKt {
+	public static final field ABI_WORD_SIGN_BIT J
+	public static final field WASM_PAGE_BYTES J
+}
+
+public abstract class us/tractat/kuilt/warp/test/WasmRuntimeConformanceSuite {
+	public fun <init> ()V
+	public final fun allocPointerWithHighBitSetIsBounded ()V
+	public final fun cpuBombIsBoundedByExecutionTimeout ()V
+	public final fun emptyInputReturnsEmpty ()V
+	public final fun growPastDeclaredMaxTraps ()V
+	public final fun loadAcceptsInitialMemoryExactlyAtTheCap ()V
+	public final fun loadRejectsMalformedBytes ()V
+	public final fun loadRejectsMemory64MaxPastThe32BitRange ()V
+	public final fun loadRejectsModuleDeclaringASecondMemory ()V
+	public final fun loadRejectsModuleDeclaringMemoryWithNoMax ()V
+	public final fun loadRejectsModuleMissingAbiExports ()V
+	public final fun loadRejectsModuleMissingMemory ()V
+	public final fun loadRejectsModuleWithImports ()V
+	public final fun loadRejectsModuleWithNoMaxAndOversizeInitialMemory ()V
+	public final fun loadRejectsModuleWithOversizeDeclaredMax ()V
+	public final fun loadRejectsOversizeInitialWhoseDeclaredMaxIsWithinTheCap ()V
+	public abstract fun newRuntime (Lus/tractat/kuilt/warp/WasmSandboxConfig;)Lus/tractat/kuilt/warp/WasmRuntime;
+	public final fun repeatInvokeReusesTheInstance ()V
+	public final fun resultLengthWithHighBitSetIsBounded ()V
+	public final fun resultPointerWithHighBitSetIsBounded ()V
+	public final fun resultWindowPastMemoryEndIsBounded ()V
+	public final fun resultWrittenIntoNewlyGrownMemoryIsReadBack ()V
+	public final fun startSectionCpuBombIsBoundedNotHung ()V
+	public final fun timeoutDoesNotPoisonSubsequentInvokes ()V
+	public final fun trapSurfacesAsExecutionException ()V
+	public final fun wellBehavedKernelRoundTrips ()V
+}
+

@@ -1,0 +1,139 @@
+public final class us/tractat/kuilt/cluster/AttachConnectionsKt {
+	public static final fun attachConnections (Lkotlinx/coroutines/CoroutineScope;Lkotlinx/coroutines/flow/StateFlow;Lus/tractat/kuilt/cluster/OverlayServer;Ljava/util/Set;)V
+}
+
+public final class us/tractat/kuilt/cluster/AttachmentDirectory {
+	public final fun attach-ngToHgY (Ljava/lang/String;)V
+	public final fun close ()V
+	public final fun detach-ngToHgY (Ljava/lang/String;)V
+	public final fun getEntries ()Ljava/util/Map;
+	public final fun lookup-7nlWW64 (Ljava/lang/String;)Ljava/lang/String;
+	public final fun twoTier (Ljava/util/Set;)Lus/tractat/kuilt/gossip/TwoTier;
+}
+
+public final class us/tractat/kuilt/cluster/AttachmentDirectoryKt {
+	public static final fun attachmentDirectory-8mhDAi4 (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Ljava/lang/String;Lus/tractat/kuilt/quilter/QuilterConfig;)Lus/tractat/kuilt/cluster/AttachmentDirectory;
+	public static synthetic fun attachmentDirectory-8mhDAi4$default (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Ljava/lang/String;Lus/tractat/kuilt/quilter/QuilterConfig;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/AttachmentDirectory;
+}
+
+public final class us/tractat/kuilt/cluster/ClusterClient {
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getCommitted ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getRole ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun propose ([BJLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun propose ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/cluster/ClusterClientKt {
+	public static final fun clusterClient-DMFuT84 (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/cluster/ClusterEndpoints;Ljava/lang/String;Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function0;)Lus/tractat/kuilt/cluster/ClusterClient;
+	public static synthetic fun clusterClient-DMFuT84$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/cluster/ClusterEndpoints;Ljava/lang/String;Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/ClusterClient;
+	public static final fun clusterClientWithNode (Lus/tractat/kuilt/raft/RaftNode;)Lus/tractat/kuilt/cluster/ClusterClient;
+}
+
+public final class us/tractat/kuilt/cluster/ClusterEndpoints {
+	public fun <init> (Ljava/util/List;Lus/tractat/kuilt/session/partition/EndpointSelector;)V
+	public synthetic fun <init> (Ljava/util/List;Lus/tractat/kuilt/session/partition/EndpointSelector;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Lus/tractat/kuilt/session/partition/EndpointSelector;
+	public final fun copy (Ljava/util/List;Lus/tractat/kuilt/session/partition/EndpointSelector;)Lus/tractat/kuilt/cluster/ClusterEndpoints;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/cluster/ClusterEndpoints;Ljava/util/List;Lus/tractat/kuilt/session/partition/EndpointSelector;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/ClusterEndpoints;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEndpoints ()Ljava/util/List;
+	public final fun getSelector ()Lus/tractat/kuilt/session/partition/EndpointSelector;
+	public fun hashCode ()I
+	public final fun toReconnect ()Lus/tractat/kuilt/session/partition/ServerClusterReconnect;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/cluster/CoreLearnerAdmissionKt {
+	public static final fun launchCoreLearnerAdmission (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/raft/RaftNode;Lus/tractat/kuilt/core/Seam;Ljava/util/Set;)V
+	public static final fun launchFederatedCoreAdmission (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/raft/RaftNode;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/Seam;Ljava/util/Set;)V
+}
+
+public final class us/tractat/kuilt/cluster/OverlayServer {
+	public final fun admit-t5-yf_A (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;)V
+	public final fun attachDirectoryOnly-ngToHgY (Ljava/lang/String;)V
+	public final fun close ()V
+	public final fun detachDirectoryOnly-ngToHgY (Ljava/lang/String;)V
+	public final fun evict-ngToHgY (Ljava/lang/String;)V
+	public final fun lookup-7nlWW64 (Ljava/lang/String;)Ljava/lang/String;
+	public final fun route-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/cluster/OverlayServerKt {
+	public static final field OVERLAY_UNICAST_CHANNEL Ljava/lang/String;
+	public static final fun overlayServer-zFPWSYw (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Ljava/lang/String;Lus/tractat/kuilt/quilter/QuilterConfig;)Lus/tractat/kuilt/cluster/OverlayServer;
+	public static synthetic fun overlayServer-zFPWSYw$default (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/core/Seam;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Ljava/lang/String;Lus/tractat/kuilt/quilter/QuilterConfig;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/OverlayServer;
+}
+
+public final class us/tractat/kuilt/cluster/RoutedRaftTransport : us/tractat/kuilt/raft/RaftTransport {
+	public final fun close ()V
+	public fun getIncoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun getMaxPayloadBytes ()Ljava/lang/Integer;
+	public fun getPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getSelfId-Kplb3d8 ()Ljava/lang/String;
+	public fun sendTo-0If1x5M (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/cluster/RoutedRaftTransportKt {
+	public static final fun playerRelayTransport (Lus/tractat/kuilt/raft/RaftTransport;Lus/tractat/kuilt/core/Seam;Lkotlin/jvm/functions/Function0;Lkotlinx/coroutines/CoroutineScope;)Lus/tractat/kuilt/cluster/RoutedRaftTransport;
+	public static final fun serverRelayTransport (Lus/tractat/kuilt/raft/RaftTransport;Lus/tractat/kuilt/core/Seam;Ljava/util/Set;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/cluster/RoutedRaftTransport;
+}
+
+public final class us/tractat/kuilt/cluster/RoutedUnicastRouter {
+	public final fun close ()V
+	public final fun registerLocalSpoke-t5-yf_A (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;)V
+	public final fun removeLocalSpoke-ngToHgY (Ljava/lang/String;)V
+	public final fun route-PW_baCY (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/cluster/RoutedUnicastRouterKt {
+	public static final fun routedUnicastRouter-yd06jn4 (Ljava/lang/String;Lus/tractat/kuilt/core/Seam;Lkotlin/jvm/functions/Function1;Lkotlinx/coroutines/CoroutineScope;)Lus/tractat/kuilt/cluster/RoutedUnicastRouter;
+}
+
+public final class us/tractat/kuilt/cluster/ServerCluster {
+	public final fun awaitLeader (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getCommitted ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getMesh ()Lus/tractat/kuilt/cluster/VoterMesh;
+	public final fun getOverlay ()Lus/tractat/kuilt/cluster/OverlayServer;
+	public final fun getVoterNodes ()Ljava/util/Map;
+	public final fun runRelay (Lus/tractat/kuilt/session/RoomHost;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun start (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/cluster/ServerClusterKt {
+	public static final fun serverCluster (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/cluster/ServerCluster;
+	public static final fun serverCluster (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/cluster/OverlayServer;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/cluster/ServerCluster;
+	public static synthetic fun serverCluster$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/ServerCluster;
+	public static synthetic fun serverCluster$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/cluster/OverlayServer;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/ServerCluster;
+}
+
+public final class us/tractat/kuilt/cluster/VoterMesh {
+	public final fun awaitLeader (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getCommitted ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getVoterNodes ()Ljava/util/Map;
+}
+
+public final class us/tractat/kuilt/cluster/VoterMeshKt {
+	public static final fun voterMeshFromNodes (Ljava/util/Map;Lkotlinx/coroutines/CoroutineScope;)Lus/tractat/kuilt/cluster/VoterMesh;
+}
+
+public final class us/tractat/kuilt/cluster/VoterSeamMeshKt {
+	public static final fun voterMeshOverSeams (Lkotlinx/coroutines/CoroutineScope;Ljava/util/Map;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/cluster/VoterMesh;
+	public static synthetic fun voterMeshOverSeams$default (Lkotlinx/coroutines/CoroutineScope;Ljava/util/Map;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/VoterMesh;
+}
+
+public final class us/tractat/kuilt/cluster/WebSocketVoter {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/core/fabric/ConnectionSource;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getDialUrl ()Ljava/lang/String;
+	public final fun getNodeId-Kplb3d8 ()Ljava/lang/String;
+	public final fun getSource ()Lus/tractat/kuilt/core/fabric/ConnectionSource;
+}
+
+public final class us/tractat/kuilt/cluster/WebSocketVoterMeshKt {
+	public static final fun voterMeshOverWebSockets-0m3plRQ (Lkotlinx/coroutines/CoroutineScope;Ljava/util/List;Lio/ktor/client/HttpClient;Lkotlinx/coroutines/CoroutineDispatcher;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/jvm/functions/Function1;Lkotlin/random/Random;JJJLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun voterMeshOverWebSockets-0m3plRQ$default (Lkotlinx/coroutines/CoroutineScope;Ljava/util/List;Lio/ktor/client/HttpClient;Lkotlinx/coroutines/CoroutineDispatcher;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/jvm/functions/Function1;Lkotlin/random/Random;JJJLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
