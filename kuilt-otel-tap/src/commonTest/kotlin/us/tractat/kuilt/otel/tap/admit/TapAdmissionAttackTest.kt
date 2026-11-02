@@ -6,7 +6,9 @@
 package us.tractat.kuilt.otel.tap.admit
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
@@ -50,6 +52,11 @@ import kotlin.time.Instant
  * A refusal here is asserted as a `Reject` frame the attacker received, not as the attacker's absence
  * from a roster: absence is also what a rig that never ran produces. Each test counts its rig's
  * firings for the same reason.
+ *
+ * Tests about when work runs have a second arm named `…OnAQueueingDispatcher`.
+ * [UnconfinedTestDispatcher] runs a launch in place, so on its own it cannot tell a job started
+ * undispatched from one that was queued, and neither can it hold a job back while the next frame
+ * is handled.
  */
 class TapAdmissionAttackTest {
     private val t0 = Instant.fromEpochSeconds(1_700_000_000)
@@ -173,6 +180,20 @@ class TapAdmissionAttackTest {
      */
     @Test
     fun oneChallengeAnsweredTwiceDrawsTwoDifferentTags() = runTest(UnconfinedTestDispatcher()) {
+        oneChallengeAnsweredTwice()
+    }
+
+    /**
+     * Both challenges wait in the seam, so the collector handles them with nothing run in between. A
+     * proof that queued for its turn would still be waiting when the second challenge cancelled it,
+     * and the burst would draw one answer. This is what starting the send undispatched is for.
+     */
+    @Test
+    fun oneChallengeAnsweredTwiceDrawsTwoDifferentTagsOnAQueueingDispatcher() = runTest(StandardTestDispatcher()) {
+        oneChallengeAnsweredTwice()
+    }
+
+    private suspend fun TestScope.oneChallengeAnsweredTwice() {
         val chosenNonce = ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 0x5A }
         val loom = InMemoryLoom()
         val pullerGate = loom.host(Pattern("harvest")).tokenGated(prover(), backgroundScope)
@@ -242,6 +263,15 @@ class TapAdmissionAttackTest {
      */
     @Test
     fun aStrangerWhoStopsReadingDoesNotStallThePuller() = runTest(UnconfinedTestDispatcher()) {
+        strangerWhoStopsReading()
+    }
+
+    @Test
+    fun aStrangerWhoStopsReadingDoesNotStallThePullerOnAQueueingDispatcher() = runTest(StandardTestDispatcher()) {
+        strangerWhoStopsReading()
+    }
+
+    private suspend fun TestScope.strangerWhoStopsReading() {
         val loom = InMemoryLoom()
         val pullerSeam = SendCountingSeam(loom.host(Pattern("stall")))
         val pullerGate = pullerSeam.tokenGated(prover(), backgroundScope)
@@ -273,6 +303,15 @@ class TapAdmissionAttackTest {
      */
     @Test
     fun aFloodHoldsOneParkedAnswerAndItIsTheNewest() = runTest(UnconfinedTestDispatcher()) {
+        floodHoldsOneParkedAnswer()
+    }
+
+    @Test
+    fun aFloodHoldsOneParkedAnswerAndItIsTheNewestOnAQueueingDispatcher() = runTest(StandardTestDispatcher()) {
+        floodHoldsOneParkedAnswer()
+    }
+
+    private suspend fun TestScope.floodHoldsOneParkedAnswer() {
         val loom = InMemoryLoom()
         val pullerSeam = SendCountingSeam(loom.host(Pattern("stall")))
         pullerSeam.tokenGated(prover(), backgroundScope)
@@ -304,6 +343,191 @@ class TapAdmissionAttackTest {
                     "the answer that survives must be to the newest challenge",
                 )
             },
+        )
+    }
+
+    /**
+     * Leaving must not be a way round the per-challenger bound. A stranger floods until an answer parks,
+     * leaves, and comes back under a fresh id, and nothing in the seam wakes a send parked for a peer
+     * that has gone. Each answer the puller gives clears the sends of peers who left, so the rounds do
+     * not add up. Three strangers parked at once then leave together, which is the most leaving can
+     * strand: what they held while connected, until the next challenge.
+     */
+    @Test
+    fun aStrangerWhoLeavesTakesItsParkedAnswerWithIt() = runTest(UnconfinedTestDispatcher()) {
+        strangersWhoLeave()
+    }
+
+    @Test
+    fun aStrangerWhoLeavesTakesItsParkedAnswerWithItOnAQueueingDispatcher() = runTest(StandardTestDispatcher()) {
+        strangersWhoLeave()
+    }
+
+    private suspend fun TestScope.strangersWhoLeave() {
+        val loom = InMemoryLoom()
+        val pullerSeam = SendCountingSeam(loom.host(Pattern("stall")))
+        val pullerGate = pullerSeam.tokenGated(prover(), backgroundScope)
+        val departed = mutableListOf<PeerId>()
+        fun parkedToDeparted() = departed.sumOf { pullerSeam.parkedTo(it) }
+
+        val parkedBeforeLeaving = mutableListOf<Int>()
+        val parkedAfterLeaving = List(DEPARTED_ROUNDS) { round ->
+            val stranger = loom.join(InMemoryTag("stranger-$round"))
+            floodUntilAnAnswerParks(stranger, pullerSeam)
+            parkedBeforeLeaving += pullerSeam.parkedTo(stranger.selfId)
+            stranger.close()
+            runCurrent()
+            departed += stranger.selfId
+            parkedToDeparted()
+        }
+
+        val together = List(3) { n -> loom.join(InMemoryTag("together-$n")) }
+        together.forEach { floodUntilAnAnswerParks(it, pullerSeam) }
+        val parkedTogether = together.sumOf { pullerSeam.parkedTo(it.selfId) }
+        together.forEach { it.close() }
+        runCurrent()
+        departed += together.map { it.selfId }
+        val parkedAfterLeavingTogether = parkedToDeparted()
+
+        val next = Harvester(loom.join(InMemoryTag("next")), backgroundScope)
+        runCurrent()
+        next.challenge(pullerGate.selfId, challengeNonce(0).toByteArray())
+        runCurrent()
+
+        assertAll(
+            { assertEquals(List(DEPARTED_ROUNDS) { 1 }, parkedBeforeLeaving, "rig: every round must have parked an answer") },
+            { assertEquals(List(DEPARTED_ROUNDS) { 1 }, parkedAfterLeaving, "the rounds must not add up") },
+            { assertEquals(3, parkedTogether, "rig: three strangers must each hold a parked answer") },
+            { assertEquals(3, parkedAfterLeavingTogether, "leaving strands what they held, and no more") },
+            { assertEquals(0, parkedToDeparted(), "the next challenge must clear whoever has left") },
+            { assertEquals(1, next.proofs.size, "and the next challenger must still be answered") },
+        )
+    }
+
+    /** Clearing the peers who left must not take the send of a peer who is still here. */
+    @Test
+    fun anotherPeersChallengeLeavesALivePeersParkedAnswerAlone() = runTest(UnconfinedTestDispatcher()) {
+        anotherPeersChallenge()
+    }
+
+    @Test
+    fun anotherPeersChallengeLeavesALivePeersParkedAnswerAloneOnAQueueingDispatcher() = runTest(StandardTestDispatcher()) {
+        anotherPeersChallenge()
+    }
+
+    private suspend fun TestScope.anotherPeersChallenge() {
+        val slow = PeerId("slow")
+        val other = PeerId("other")
+        val fake = FakeSeam(wornPuller, setOf(wornPuller, slow, other))
+        val seam = WedgeableSeam(fake)
+        seam.tokenGated(prover(), backgroundScope)
+        runCurrent()
+        seam.wedged += slow
+
+        fake.deliver(slow, TapAdmitMessage.encode(TapAdmitMessage.Challenge(challengeNonce(1))))
+        runCurrent()
+        val parkedFirst = seam.parked
+        fake.deliver(other, TapAdmitMessage.encode(TapAdmitMessage.Challenge(challengeNonce(2))))
+        runCurrent()
+
+        assertAll(
+            { assertEquals(1, parkedFirst, "rig: the slow peer's answer must be parked") },
+            { assertEquals(1, framesTo(fake, other) { it is TapAdmitMessage.Proof }, "rig: the other peer must have been answered") },
+            { assertEquals(1, seam.parked, "the slow peer is still here, so its answer must still be waiting") },
+        )
+    }
+
+    /**
+     * The same id back on a fresh link, which [InMemoryLoom] cannot show because it never reissues an
+     * id. The old link will never take the send parked on it, and the new one is healthy, so the answer
+     * has to go out on the new one and the old send has to go away.
+     */
+    @Test
+    fun aPeerBackOnAFreshLinkIsAnsweredThere() = runTest(UnconfinedTestDispatcher()) {
+        peerBackOnAFreshLink()
+    }
+
+    @Test
+    fun aPeerBackOnAFreshLinkIsAnsweredThereOnAQueueingDispatcher() = runTest(StandardTestDispatcher()) {
+        peerBackOnAFreshLink()
+    }
+
+    private suspend fun TestScope.peerBackOnAFreshLink() {
+        val back = PeerId("back")
+        val fake = FakeSeam(wornPuller, setOf(wornPuller, back))
+        val seam = WedgeableSeam(fake)
+        seam.tokenGated(prover(), backgroundScope)
+        runCurrent()
+        seam.wedged += back
+        val newNonce = challengeNonce(2)
+
+        fake.deliver(back, TapAdmitMessage.encode(TapAdmitMessage.Challenge(challengeNonce(1))))
+        runCurrent()
+        val parkedOnTheOldLink = seam.parked
+
+        seam.wedged -= back
+        fake.removePeer(back)
+        runCurrent()
+        fake.addPeer(back)
+        runCurrent()
+        fake.deliver(back, TapAdmitMessage.encode(TapAdmitMessage.Challenge(newNonce)))
+        runCurrent()
+
+        val answers = fake.directed.filter { (to, _) -> to == back }.map { (_, frame) -> TapAdmitMessage.decode(frame) as TapAdmitMessage.Proof }
+        assertAll(
+            { assertEquals(1, parkedOnTheOldLink, "rig: the first answer must be parked on the old link") },
+            { assertEquals(0, seam.parked, "the send parked on the old link must be gone") },
+            { assertEquals(1, answers.size, "only the answer on the new link went out") },
+            {
+                assertContentEquals(
+                    admissionTag(code, back, wornPuller, newNonce, answers.single().proverNonce),
+                    answers.single().tag.toByteArray(),
+                    "and it must answer the challenge made on the new link",
+                )
+            },
+        )
+    }
+
+    /**
+     * The verifier's half of the stall. A stranger stops reading, sends a bad proof every round, and
+     * has a second connection join and leave to move the roster. Re-challenging every unverified peer
+     * on each move gave that stranger a challenge and a reject per round, which filled its buffer at
+     * round 128 and parked the gate behind it, so the rounds here have to outlast that.
+     */
+    @Test
+    fun aStrangerChurningTheRosterDoesNotStallTheVerifier() = runTest(UnconfinedTestDispatcher()) {
+        strangerChurningTheRoster()
+    }
+
+    @Test
+    fun aStrangerChurningTheRosterDoesNotStallTheVerifierOnAQueueingDispatcher() = runTest(StandardTestDispatcher()) {
+        strangerChurningTheRoster()
+    }
+
+    private suspend fun TestScope.strangerChurningTheRoster() {
+        val loom = InMemoryLoom()
+        val deviceSeam = SendCountingSeam(loom.host(Pattern("churn")))
+        val deviceGate = deviceSeam.tokenGated(verifier(), backgroundScope)
+        val stranger = loom.join(InMemoryTag("stranger"))
+        runCurrent()
+
+        val bystanders = List(CHURN_ROUNDS) { round ->
+            stranger.sendTo(deviceSeam.selfId, forgedProofFrame())
+            runCurrent()
+            val bystander = loom.join(InMemoryTag("bystander-$round"))
+            runCurrent()
+            bystander.close()
+            runCurrent()
+            bystander.selfId
+        }
+        val pullerGate = loom.join(InMemoryTag("puller")).tokenGated(prover(), backgroundScope)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(CHURN_ROUNDS, bystanders.count { deviceSeam.deliveredTo(it) == 1 }, "rig: every arrival must have been challenged") },
+            { assertEquals(2, deviceSeam.deliveredTo(stranger.selfId), "one connection draws one challenge and one reject") },
+            { assertEquals(0, deviceSeam.parkedTo(stranger.selfId), "nothing may be parked on a gate collector") },
+            { assertTrue(pullerGate.selfId in deviceGate.peers.value, "an honest puller must still get in") },
         )
     }
 
@@ -463,7 +687,8 @@ class TapAdmissionAttackTest {
 
     /**
      * The other half of [anAdmittedIdStaysAdmittedWhoeverIsWearingIt]. One bad proof stamped with a
-     * peer's id spends the only challenge that peer has, so its real proof arrives to nothing.
+     * peer's id spends the only challenge that peer has, so its real proof arrives to nothing, and
+     * somebody else moving the roster does not bring it another.
      */
     @Test
     fun aForgedProofStampedWithAPeersIdUsesUpThatPeersChallenge() = runTest(UnconfinedTestDispatcher()) {
@@ -471,28 +696,139 @@ class TapAdmissionAttackTest {
         val gate = deviceSeam.tokenGated(verifier(), backgroundScope)
         runCurrent()
         val honest = honestProofFrame(deviceSeam)
-        val forged = TapAdmitMessage.Proof(
-            proverNonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES)),
-            tag = ByteString(ByteArray(TapAdmitMessage.Proof.TAG_BYTES)),
-        )
 
-        deviceSeam.deliver(wornPuller, TapAdmitMessage.encode(forged))
+        deviceSeam.deliver(wornPuller, forgedProofFrame())
         runCurrent()
         deviceSeam.deliver(wornPuller, honest)
+        runCurrent()
+        deviceSeam.addPeer(wornStranger)
         runCurrent()
 
         assertAll(
             { assertEquals(1, framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Reject }, "rig: the forged proof must have been refused") },
+            { assertEquals(1, framesTo(deviceSeam, wornStranger) { it is TapAdmitMessage.Challenge }, "rig: the gate must have seen the roster move") },
             { assertFalse(wornPuller in gate.peers.value, "the real proof has no challenge left to answer") },
             { assertEquals(1, framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Challenge }, "and no fresh challenge is issued") },
         )
     }
 
-    /** The proof the real puller would send to the challenge the device has issued it. */
+    /** A peer whose challenge was used up gets its way back by reconnecting, as `module.md` says. */
+    @Test
+    fun aPeerWhoseChallengeWasUsedUpGetsAFreshOneWhenItReconnects() = runTest(StandardTestDispatcher()) {
+        val deviceSeam = FakeSeam(PeerId("device"), setOf(PeerId("device"), wornPuller))
+        val gate = deviceSeam.tokenGated(verifier(), backgroundScope)
+        runCurrent()
+
+        deviceSeam.deliver(wornPuller, forgedProofFrame())
+        runCurrent()
+        reconnect(deviceSeam, wornPuller)
+        deviceSeam.deliver(wornPuller, honestProofFrame(deviceSeam))
+        runCurrent()
+
+        assertAll(
+            { assertEquals(1, framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Reject }, "rig: the forged proof must have been refused") },
+            { assertEquals(2, framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Challenge }, "the reconnect must draw a fresh challenge") },
+            { assertTrue(wornPuller in gate.peers.value, "and a real proof of it must admit") },
+        )
+    }
+
+    /** The same id back on a fresh link starts from nothing, whatever it had proved on the old one. */
+    @Test
+    fun anAdmittedPeerBackOnAFreshLinkMustProveAgain() = runTest(StandardTestDispatcher()) {
+        val deviceSeam = FakeSeam(PeerId("device"), setOf(PeerId("device"), wornPuller))
+        val gate = deviceSeam.tokenGated(verifier(), backgroundScope)
+        runCurrent()
+
+        deviceSeam.deliver(wornPuller, honestProofFrame(deviceSeam))
+        runCurrent()
+        val admittedOnTheOldLink = wornPuller in gate.peers.value
+        reconnect(deviceSeam, wornPuller)
+        val admittedOnTheNewLink = wornPuller in gate.peers.value
+        deviceSeam.deliver(wornPuller, honestProofFrame(deviceSeam))
+        runCurrent()
+
+        assertAll(
+            { assertTrue(admittedOnTheOldLink, "rig: the first proof must have admitted the id") },
+            { assertFalse(admittedOnTheNewLink, "the new link has proved nothing yet") },
+            { assertEquals(2, framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Challenge }, "the reconnect must draw a fresh challenge") },
+            { assertTrue(wornPuller in gate.peers.value, "and a real proof of it must admit") },
+        )
+    }
+
+    /**
+     * A known limit. The gate learns of a reconnect from the roster, and a roster collector only sees
+     * values, so a peer that leaves and returns before the collector looks has not moved. Nothing is
+     * issued, and the state from the old link stands.
+     */
+    @Test
+    fun aReconnectTheRosterNeverShowedDrawsNoFreshChallenge() = runTest(StandardTestDispatcher()) {
+        val deviceSeam = FakeSeam(PeerId("device"), setOf(PeerId("device"), wornPuller))
+        deviceSeam.tokenGated(verifier(), backgroundScope)
+        runCurrent()
+        val firstChallenges = framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Challenge }
+
+        deviceSeam.removePeer(wornPuller)
+        deviceSeam.addPeer(wornPuller)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(1, firstChallenges, "rig: the first arrival must have been challenged") },
+            { assertEquals(1, framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Challenge }, "no fresh challenge is issued") },
+        )
+    }
+
+    /**
+     * A challenge the fabric refused is not sent again while the peer stays, so that peer waits for a
+     * reconnect too. The roster moving never helped here: the unanswered nonce stays on record, and the
+     * old re-challenge passed over anyone holding one.
+     */
+    @Test
+    fun aChallengeThatFailedToSendWaitsForAReconnect() = runTest(StandardTestDispatcher()) {
+        val deviceSeam = FakeSeam(PeerId("device"), setOf(PeerId("device"), wornPuller))
+        var attempts = 0
+        val lossy = object : Seam by deviceSeam {
+            override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+                if (peer == wornPuller && attempts++ == 0) error("lost on the way")
+                deviceSeam.sendTo(peer, payload)
+            }
+        }
+        val gate = lossy.tokenGated(verifier(), backgroundScope)
+        runCurrent()
+        deviceSeam.addPeer(wornStranger)
+        runCurrent()
+        val attemptsWhileItStayed = attempts
+
+        reconnect(deviceSeam, wornPuller)
+        deviceSeam.deliver(wornPuller, honestProofFrame(deviceSeam))
+        runCurrent()
+
+        assertAll(
+            { assertEquals(1, attemptsWhileItStayed, "the failed challenge must not be retried while the peer stays") },
+            { assertEquals(1, framesTo(deviceSeam, wornPuller) { it is TapAdmitMessage.Challenge }, "the reconnect's challenge must go out") },
+            { assertTrue(wornPuller in gate.peers.value, "and a real proof of it must admit") },
+        )
+    }
+
+    private suspend fun TestScope.reconnect(seam: FakeSeam, peer: PeerId) {
+        seam.removePeer(peer)
+        runCurrent()
+        seam.addPeer(peer)
+        runCurrent()
+    }
+
+    private fun forgedProofFrame(): ByteArray = TapAdmitMessage.encode(
+        TapAdmitMessage.Proof(
+            proverNonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES)),
+            tag = ByteString(ByteArray(TapAdmitMessage.Proof.TAG_BYTES)),
+        ),
+    )
+
+    /** The proof the real puller would send to the challenge the device issued it last. */
     private fun honestProofFrame(deviceSeam: FakeSeam): ByteArray {
         val challenge = deviceSeam.directed
             .filter { (peer, _) -> peer == wornPuller }
-            .firstNotNullOf { (_, frame) -> TapAdmitMessage.decode(frame) as? TapAdmitMessage.Challenge }
+            .mapNotNull { (_, frame) -> TapAdmitMessage.decode(frame) as? TapAdmitMessage.Challenge }
+            .last()
         val proverNonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 0x33 })
         val tag = admissionTag(code, deviceSeam.selfId, wornPuller, challenge.nonce, proverNonce)
         return TapAdmitMessage.encode(TapAdmitMessage.Proof(proverNonce, ByteString(tag)))
@@ -692,6 +1028,8 @@ class TapAdmissionAttackTest {
         const val VERIFIER_SEED = 7
         const val PROVER_SEED = 11
         const val FLOOD_LIMIT = 10_000
+        const val DEPARTED_ROUNDS = 5
+        const val CHURN_ROUNDS = 300
     }
 }
 
@@ -716,6 +1054,29 @@ internal class SendCountingSeam(private val inner: Seam) : Seam by inner {
         } finally {
             parked[peer] = parkedTo(peer) - 1
         }
+    }
+}
+
+/**
+ * A seam with links that stop taking frames. A send to a peer in [wedged] parks until it is cancelled
+ * and never goes out, however the peer's link fares afterwards, which is what a send behind a dead link
+ * does. [parked] counts the ones still waiting.
+ */
+private class WedgeableSeam(private val inner: FakeSeam) : Seam by inner {
+    val wedged = mutableSetOf<PeerId>()
+    var parked = 0
+        private set
+
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        if (peer in wedged) {
+            parked++
+            try {
+                awaitCancellation()
+            } finally {
+                parked--
+            }
+        }
+        inner.sendTo(peer, payload)
     }
 }
 
