@@ -8,6 +8,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
@@ -26,8 +29,10 @@ import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PayloadTooLarge
@@ -41,6 +46,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.TransportCapability
+import us.tractat.kuilt.core.flushWithin
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.validFirstHop
 import us.tractat.kuilt.session.admit.AdmitMessage
@@ -2744,8 +2750,18 @@ internal class SeamRoom(
      * relayed frame under sustained overload is strictly better than growing without bound.
      *
      * [nextSeq] stamps [RelayForward.seq]; see there for why the counter is per-lane.
+     *
+     * [finished] is the highest [RelayForward.seq] the writer is done with, and the lane's half of
+     * [flush]. A marker in the queue would not work here: [BufferOverflow.DROP_OLDEST] could drop the
+     * marker. Comparing stamps is sound where it would not be on an admit lane because this lane has
+     * one enqueuer, so a stamp's order is the queue's order, and a forward overflow discards takes
+     * its turn from the next stamp up rather than leaving a gap to wait on forever.
      */
-    private class RelayLane(val queue: Channel<RelayForward>, val writer: Job) {
+    private class RelayLane(
+        val queue: Channel<RelayForward>,
+        val finished: MutableStateFlow<Long>,
+        val writer: Job,
+    ) {
         /** Monotonic enqueue counter for **this lane**. First forward on the lane is `1`. */
         val nextSeq = atomic(0L)
     }
@@ -2806,7 +2822,8 @@ internal class SeamRoom(
                 capacity = RELAY_FORWARD_CAPACITY,
                 onBufferOverflow = BufferOverflow.DROP_OLDEST,
             )
-            RelayLane(queue, scope.launch { runRelayForwardWriter(recipient, queue) })
+            val finished = MutableStateFlow(0L)
+            RelayLane(queue, finished, scope.launch { runRelayForwardWriter(recipient, queue, finished) })
         }
     }
 
@@ -2830,55 +2847,70 @@ internal class SeamRoom(
      * Drains one recipient's relay lane. Guard discipline is identical to [runAdmitFanOutWriter] —
      * see its KDoc.
      */
-    private suspend fun runRelayForwardWriter(recipient: PeerId, queue: Channel<RelayForward>) {
+    private suspend fun runRelayForwardWriter(
+        recipient: PeerId,
+        queue: Channel<RelayForward>,
+        finished: MutableStateFlow<Long>,
+    ) {
         // Writer-local: this is the only coroutine that ever dequeues this lane, so no atomic is
         // needed. Counting is per-lane; `relayDropped` aggregates across lanes.
         var expectedSeq = 1L
-        for (forward in queue) {
-            val dropped = forward.seq - expectedSeq
-            if (dropped > 0) {
-                val total = relayDropped.addAndGet(dropped)
-                logger.debug {
-                    "room.relay.drop self=${selfId.value} to=${recipient.value} reason=queue-overflow " +
-                        "dropped=$dropped total=$total capacity=$RELAY_FORWARD_CAPACITY"
-                }
-            }
-            expectedSeq = forward.seq + 1
-            // The origin checked this frame against ITS ceiling; this hop is a different fabric and
-            // may be tighter (a `framed()` link with a smaller `maxFrameSize`, or a composite whose
-            // min is set by a narrower ply). Unchecked, the overflow is *destructive* rather than
-            // lossy: `MeshSeam.sendTo` swallows the throwable into `removePeer`, so a healthy
-            // recipient is evicted as though its link died — and the `catch` below never even sees
-            // it. A drop is squarely in contract here (the relay is documented lossy), so check.
-            val hopCeiling = seam.maxPayloadBytes
-            if (hopCeiling != null && forward.bytes.size > hopCeiling) {
-                recordOversizeDrop(
-                    reason = "forward-over-hop-ceiling",
-                    to = recipient,
-                    sizeBytes = forward.bytes.size,
-                    ceilingBytes = hopCeiling,
-                )
-                continue
-            }
-            try {
-                val accepted = withTimeoutOrNull(relaySendBudget) {
-                    seam.sendTo(recipient, forward.bytes)
-                } != null
-                if (!accepted) {
+        try {
+            for (forward in queue) {
+                val dropped = forward.seq - expectedSeq
+                if (dropped > 0) {
+                    val total = relayDropped.addAndGet(dropped)
                     logger.debug {
-                        "room.relay.drop self=${selfId.value} to=${recipient.value} " +
-                            "reason=send-budget-exceeded budget=$relaySendBudget"
+                        "room.relay.drop self=${selfId.value} to=${recipient.value} reason=queue-overflow " +
+                            "dropped=$dropped total=$total capacity=$RELAY_FORWARD_CAPACITY"
                     }
                 }
-            } catch (failure: Throwable) {
-                // Genuinely OUR cancellation ends the loop; anything else — including a
-                // CancellationException a consumer's `sendTo` minted itself — is that
-                // recipient's failure and must not kill this recipient's writer.
-                currentCoroutineContext().ensureActive()
+                expectedSeq = forward.seq + 1
+                sendRelayForward(recipient, forward)
+                finished.value = forward.seq
+            }
+        } finally {
+            // However this writer ends, nothing more leaves this lane, so a flush has nothing to wait for.
+            finished.value = Long.MAX_VALUE
+        }
+    }
+
+    /** One forward, best-effort: a failure is this recipient's and is logged. Only our own cancel escapes. */
+    private suspend fun sendRelayForward(recipient: PeerId, forward: RelayForward) {
+        // The origin checked this frame against ITS ceiling; this hop is a different fabric and
+        // may be tighter (a `framed()` link with a smaller `maxFrameSize`, or a composite whose
+        // min is set by a narrower ply). Unchecked, the overflow is *destructive* rather than
+        // lossy: `MeshSeam.sendTo` swallows the throwable into `removePeer`, so a healthy
+        // recipient is evicted as though its link died — and the `catch` below never even sees
+        // it. A drop is squarely in contract here (the relay is documented lossy), so check.
+        val hopCeiling = seam.maxPayloadBytes
+        if (hopCeiling != null && forward.bytes.size > hopCeiling) {
+            recordOversizeDrop(
+                reason = "forward-over-hop-ceiling",
+                to = recipient,
+                sizeBytes = forward.bytes.size,
+                ceilingBytes = hopCeiling,
+            )
+            return
+        }
+        try {
+            val accepted = withTimeoutOrNull(relaySendBudget) {
+                seam.sendTo(recipient, forward.bytes)
+            } != null
+            if (!accepted) {
                 logger.debug {
                     "room.relay.drop self=${selfId.value} to=${recipient.value} " +
-                        "cause=${failure::class.simpleName}: ${failure.message}"
+                        "reason=send-budget-exceeded budget=$relaySendBudget"
                 }
+            }
+        } catch (failure: Throwable) {
+            // Genuinely OUR cancellation ends the loop; anything else — including a
+            // CancellationException a consumer's `sendTo` minted itself — is that
+            // recipient's failure and must not kill this recipient's writer.
+            currentCoroutineContext().ensureActive()
+            logger.debug {
+                "room.relay.drop self=${selfId.value} to=${recipient.value} " +
+                    "cause=${failure::class.simpleName}: ${failure.message}"
             }
         }
     }
@@ -2916,15 +2948,25 @@ internal class SeamRoom(
         }
     }
 
+    /** What an admit lane queues: a frame to send, or a [flush]'s marker. */
+    private sealed interface AdmitLaneItem
+
     /** One queued admit fan-out for one recipient: a frame encoded once for the whole fan-out. */
     private class AdmitFanOut(
         val bytes: ByteArray,
         /** [AdmitMessage] subclass name, carried purely so a dropped frame is nameable in the log. */
         val label: String,
-    )
+    ) : AdmitLaneItem
+
+    /**
+     * Marks a place in an admit lane for [flush]. The lane is [Channel.UNLIMITED] and never drops, and it
+     * has several enqueuers, so its queue order is the only order there is: stamps like a relay lane's
+     * could be taken in one order and enqueued in another.
+     */
+    private class AdmitBarrier(val passed: CompletableDeferred<Unit>) : AdmitLaneItem
 
     /** One recipient's admit fan-out lane: the frames waiting for that peer, and its writer. */
-    private class AdmitLane(val queue: Channel<AdmitFanOut>, val writer: Job)
+    private class AdmitLane(val queue: Channel<AdmitLaneItem>, val writer: Job)
 
     /**
      * Queued admit fan-outs, **one lane per recipient** (#2048), each drained **in enqueue order**
@@ -3011,10 +3053,10 @@ internal class SeamRoom(
      *
      * Callers must hold [lock].
      */
-    private fun admitLaneFor(recipient: PeerId): Channel<AdmitFanOut>? {
+    private fun admitLaneFor(recipient: PeerId): Channel<AdmitLaneItem>? {
         if (closed || recipient !in admittedById) return null
         return admitLanes.getOrPut(recipient) {
-            val queue = Channel<AdmitFanOut>(Channel.UNLIMITED)
+            val queue = Channel<AdmitLaneItem>(Channel.UNLIMITED)
             AdmitLane(queue, scope.launch { runAdmitFanOutWriter(recipient, queue) })
         }.queue
     }
@@ -3128,8 +3170,15 @@ internal class SeamRoom(
      * logged, exactly as before. What is guaranteed is *per-recipient order*: whatever a recipient
      * receives, it receives in the order this room raised it.
      */
-    private suspend fun runAdmitFanOutWriter(recipient: PeerId, queue: Channel<AdmitFanOut>) {
-        for (fanOut in queue) {
+    private suspend fun runAdmitFanOutWriter(recipient: PeerId, queue: Channel<AdmitLaneItem>) {
+        for (item in queue) {
+            val fanOut = when (item) {
+                is AdmitBarrier -> {
+                    item.passed.complete(Unit)
+                    continue
+                }
+                is AdmitFanOut -> item
+            }
             try {
                 val accepted = withTimeoutOrNull(fanOutSendBudget) {
                     seam.sendTo(recipient, fanOut.bytes)
@@ -3799,6 +3848,66 @@ internal class SeamRoom(
      */
     override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome =
         resumeMachine?.resume(token) ?: ResumeResult.WindowClosed
+
+    /**
+     * Drain the lanes as they stand on entry, then ask the seam. See [Room.flush].
+     *
+     * The order matters: a lane's writer hands a frame to [Seam.sendTo], so the seam's own barrier
+     * covers that frame only if it is taken after the lane has passed it.
+     */
+    override suspend fun flush(timeout: Duration): FlushOutcome = flushWithin(timeout) {
+        val laneWait = lock.withLock { if (hostLost || closed) null else laneWaitOnEntry() }
+        when {
+            laneWait == null -> FlushOutcome.Failed(IllegalStateException("room for ${selfId.value} has ended"))
+            lanesPassedBeforeTheSeamTore(laneWait) -> seam.flush(Duration.INFINITE)
+            else -> FlushOutcome.Failed(IllegalStateException("the fabric under room ${selfId.value} tore"))
+        }
+    }
+
+    /**
+     * Mark every lane now, and return the wait for those marks. Callers must hold [lock]: what is
+     * marked here is what this flush covers, so a lane's position has to be read at one moment.
+     *
+     * The relay target is read rather than marked, which needs no [lock] of its own: a forward stamped a
+     * moment before this is enqueued a moment after, and waiting for it costs only a little longer.
+     *
+     * An admit lane's wait also watches its writer: [discardLanes] cancels a lane's queue, marker
+     * included, when its member leaves the roster. A relay lane's writer reports the same by moving
+     * [RelayLane.finished] to the end.
+     */
+    private fun laneWaitOnEntry(): suspend () -> Unit {
+        val admitMarks = admitLanes.values.mapNotNull { lane ->
+            val barrier = AdmitBarrier(CompletableDeferred())
+            // The lane is unlimited, so this fails only on a lane that has already closed.
+            if (lane.queue.trySend(barrier).isSuccess) barrier to lane.writer else null
+        }
+        val relayMarks = relayLanes.values.map { lane -> lane.finished to lane.nextSeq.value }
+        return {
+            admitMarks.forEach { (barrier, writer) ->
+                select {
+                    barrier.passed.onAwait {}
+                    writer.onJoin {}
+                }
+            }
+            relayMarks.forEach { (finished, target) -> finished.first { it >= target } }
+        }
+    }
+
+    /**
+     * `true` once the lanes pass their marks; `false` if the seam tears first.
+     *
+     * A lane's send can be parked in a seam that has torn, and the lane holds on until that send's own
+     * budget runs out, up to `reconnectWindow + timeout`. That is no reason to keep a caller waiting
+     * for an answer the tear has already settled.
+     */
+    private suspend fun lanesPassedBeforeTheSeamTore(laneWait: suspend () -> Unit): Boolean = coroutineScope {
+        val tore = async { seam.state.first { it is SeamState.Torn } }
+        val passed = async { laneWait() }
+        select<Boolean> {
+            tore.onAwait { false }
+            passed.onAwait { true }
+        }.also { currentCoroutineContext().cancelChildren() }
+    }
 
     override suspend fun leave(reason: LeaveReason) {
         // Flip closed + snapshot jobs under lock; announce, cancel, and close outside.
