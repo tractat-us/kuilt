@@ -81,8 +81,9 @@ import kotlin.time.Instant
  * @param self this peer's replica identity; matches [Seam.selfId] by string value.
  * @param raft the control plane — the required consensus log mint and reshape serialize through. It
  *   must use `ClientIdentity.Auto`, the default: this plane replays from index 1 and restarts its
- *   request serials on every boot, and a `ClientIdentity.Durable` node may throw on its own entries
- *   when it replays after a restart, tracked by #3060.
+ *   request serials on every boot. Under `ClientIdentity.Durable` those reused serials can reach a
+ *   leader still holding the key, which refuses different bytes with `RequestIdConflictException`,
+ *   and a node that retained no log may throw on its own entries when it replays, tracked by #3060.
  * @param root the root group of the fairness tree (the handle consumers build [AttachmentRecord]s
  *   against), and the group every mint this peer proposes credits its supply at. **Every peer must
  *   pass an identical value** — one ledger describes one tree (#1751). A peer that passes a

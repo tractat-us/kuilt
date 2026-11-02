@@ -170,13 +170,13 @@ public class Rational private constructor(
  * **Repair where a canonical form exists; refuse only where none does** — the same split
  * [WeightSerializer] makes, and for the same reason, which applies verbatim here because a
  * [Gauge] rides the wire inside the very same [EntitlementLedger] frames a [Weight] does.
- * Both decode boundaries that carry this state — `Quilter`'s delta dispatch and the heddle
- * control plane's `applyEntry` — swallow a decode failure and drop the **entire frame**.
- * Rejecting a merely denormalized encoding would therefore discard every legitimate record
- * travelling with it, and anti-entropy would re-send the same frame forever: a silent,
- * permanent convergence wedge between two peers over a difference with no semantic content.
- * Sign-normalization and reduction have a unique correct answer, so they are applied —
- * [Rational.of] does both.
+ * A decode failure is expensive at both boundaries that carry this state. `Quilter`'s delta
+ * dispatch drops the **entire frame**, so rejecting a merely denormalized encoding would discard
+ * every legitimate record travelling with it, and anti-entropy would re-send the same frame
+ * forever: a silent, permanent convergence wedge between two peers over a difference with no
+ * semantic content. The heddle control plane's `applyEntry` latches on it, which stops the whole
+ * group at that entry. Sign-normalization and reduction have a unique correct answer, so they are
+ * applied — [Rational.of] does both.
  *
  * A **zero denominator** names no rational at all. There is nothing to repair to, and
  * substituting a default would fabricate a virtual-time claim out of hostile input — a

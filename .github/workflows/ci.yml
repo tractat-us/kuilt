@@ -1026,6 +1026,8 @@ jobs:
             kuilt-mdns/build/test-results/
             kuilt-session/build/reports/tests/
             kuilt-session/build/test-results/
+            kuilt-heddle/build/reports/tests/
+            kuilt-heddle/build/test-results/
 
   # ── nw-concurrency-probes ───────────────────────────────────────────────────
   # `:kuilt-nw`'s real-threaded probes (#2481). Same shape as concurrency-probes
