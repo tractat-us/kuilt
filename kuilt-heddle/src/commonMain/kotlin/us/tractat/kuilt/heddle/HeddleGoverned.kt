@@ -51,23 +51,27 @@ import kotlin.time.Instant
  * dependencies its path needs — the repo's "Optional ≠ tuning" rule forbids one door with a nullable
  * `RaftNode?` knob.
  *
- * **Give the control plane a dedicated Raft node.** A log entry this module can show no version of
- * heddle wrote is stepped over with a warning, but a heddle act it cannot read stops this node for
- * good: writes are refused with [GateClosed.Reason.UnreadableControlEntry], and only a build that can
- * read the entry, or an explicit offline migration of the log, recovers it. A build from before the
- * control log carried a header cannot read this one's acts at all, and drops them silently (#1738).
+ * **Give the control plane a Raft node of its own, and put nothing else on it.** A log entry this
+ * module cannot read stops this node for good, whether it is a heddle act from another version or bytes
+ * heddle never wrote, so one proposal from another state machine on [raft] stops the whole group.
+ * Writes are refused with [GateClosed.Reason.UnreadableControlEntry], and only a build that can read
+ * the entry, or starting the group on a fresh log, recovers it. A build from before the control log
+ * carried a header cannot read this one's acts at all, and drops them silently (#1738).
  *
  * **That stop is group-wide, and nothing overrides it.** Every peer applies the same log, so the same
  * bytes on the same build stop every peer at the same index. One peer on a newer build, writing an act
- * older peers cannot read, stops those older peers until they upgrade. There is deliberately no way to
- * skip an entry, since skipping is what lets peers disagree about who holds what. So upgrade a cluster
- * together.
+ * older peers cannot read, stops those older peers until they upgrade. That cost is accepted: there is
+ * deliberately no way to skip an entry, since skipping is what lets peers disagree about who holds
+ * what. So upgrade a cluster together.
  *
- * **Shared-RaftNode compaction caveat.** v1 does not publish snapshots to [raft] (log compaction is
- * off), so the control plane can replay the whole log via `committedFrom(1)`. If [raft] is a node
- * shared with another state machine that publishes snapshots, a control entry below the compaction
- * floor would be skipped on replay — give the control plane a dedicated Raft node (or one whose
- * compaction floor never advances past unreplayed control entries).
+ * **A durable log from v0.7.3 does not carry over.** Its `Mint` and `Prepare` no longer decode, so a
+ * peer stops at the first one. Start a fresh log. There is no migrator, and that is also an accepted
+ * trade rather than a gap.
+ *
+ * **No compaction.** v1 does not publish snapshots to [raft] (log compaction is off), so the control
+ * plane can replay the whole log via `committedFrom(1)`. A [raft] whose compaction floor passes an
+ * unreplayed control entry fails this plane's apply loop, rather than letting it carry on from a wrong
+ * state.
  *
  * Time is a dependency (§11): [clock] is required, never a wall-clock default.
  *
@@ -144,7 +148,7 @@ private const val GOVERNED_GENESIS_NONCE: String = "heddle-governed-genesis"
  *
  * The control verbs **suspend** until their act commits and return a [ControlOutcome] — [Applied]
  * [ControlOutcome.Applied] when admitted, or [Conflict][ControlOutcome.Conflict] carrying a structured
- * [ControlConflict] when the log serialized the act as a loser. A peer that halts at a control act it
+ * [ControlConflict] when the log serialized the act as a loser. A peer that halts at a log entry it
  * cannot read while a call is in flight answers [ControlOutcome.Indeterminate]: that act may still
  * commit, so do not treat it as a refusal. The data-plane verbs are the exact H4 calls and never
  * coordinate.
@@ -208,7 +212,7 @@ public class GovernedHeddleNode internal constructor(
      * way it closes: a reservation taken before the halt can still be completed after it.
      *
      * [GateClosed.Reason.UnreadableControlEntry] outranks everything above: once this peer has met a
-     * control act it cannot read, no [enroll] reopens the gate. See [heddleGoverned].
+     * log entry it cannot read, no [enroll] reopens the gate. See [heddleGoverned].
      */
     public val isWritable: Boolean get() = control.writeGateClosedBecause == null
 
@@ -390,7 +394,7 @@ public class GovernedHeddleNode internal constructor(
      * the one promise the barrier cannot do without. A crashed peer therefore leaves relocation
      * refused until it returns and acks, or formally departs — this design trades the availability of
      * a rare recovery operation for its correctness, and stands by that trade. A peer halted at a
-     * control act it cannot read ([GateClosed.Reason.UnreadableControlEntry]) can do neither, because
+     * log entry it cannot read ([GateClosed.Reason.UnreadableControlEntry]) can do neither, because
      * its acks and its [depart] are refused, so it blocks the fence until a build that can read the
      * entry recovers it. Use this to *see* the blockage; there is deliberately no way to proceed
      * without them.
@@ -486,7 +490,7 @@ public class GovernedHeddleNode internal constructor(
      * including a restart where the replica is already enrolled: the fold is then idempotent, but the
      * act still commits, still
      * applies, and opens the gate unless a later departure has already closed it, or this peer has
-     * halted at a control act it cannot read, in which case the call is refused without proposing
+     * halted at a log entry it cannot read, in which case the call is refused without proposing
      * (and it is also what re-attaches a lost peer's detector, #1652).
      *
      * The gate opens on this run's own applied enroll and nothing else: a third party enrolling this
