@@ -8,12 +8,16 @@ import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.StableRef
+import kotlinx.cinterop.asStableRef
 import kotlinx.cinterop.staticCFunction
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.job
 import platform.MultipeerConnectivity.MCEncryptionRequired
 import platform.MultipeerConnectivity.MCPeerID
@@ -54,8 +58,13 @@ import kotlin.time.TimeSource
  * process. The same limit applies too: these callbacks have no JNA trampoline, so what is proven is the
  * premise the JVM relies on.
  *
- * The arms named `…FromInside…` are what a plain join would break. They pass on the code before any join,
- * and they are here because `BridgePeerLink` can reach them: `BridgePeerLinkTeardownTest` runs that route.
+ * The arms named `…FromInside…` are what a plain join would break, and they are here because
+ * `BridgePeerLink` can reach them: `BridgePeerLinkTeardownTest` runs that route.
+ *
+ * A held callback is released by the thread making the call, immediately before the native call, so a
+ * caller that starts late cannot miss the hold. Past that signal the hold lasts [SESSION_HOLD_MICROS], so a
+ * caller stalled for longer between the signal and the native wait can turn a red under a mutation green.
+ * It cannot turn a green red.
  */
 @OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class, ObsoleteWorkersApi::class)
 class BridgeSessionQuiesceTest {
@@ -86,7 +95,6 @@ class BridgeSessionQuiesceTest {
         await("the data callback is entered") { SessionProbe.entered.value == 1 }
         val exitedBeforeClose = SessionProbe.exited.value
 
-        SessionProbe.release.value = true
         val exitedAtReturn = close(session)
 
         await("the held callback finishes before cleanup") { SessionProbe.exited.value == 1 }
@@ -104,7 +112,6 @@ class BridgeSessionQuiesceTest {
         await("the peer-state callback is entered") { SessionProbe.entered.value == 1 }
         val exitedBeforeClose = SessionProbe.exited.value
 
-        SessionProbe.release.value = true
         val exitedAtReturn = close(session)
 
         await("the held callback finishes before cleanup") { SessionProbe.exited.value == 1 }
@@ -144,7 +151,6 @@ class BridgeSessionQuiesceTest {
         await("the data callback is entered") { SessionProbe.entered.value == 1 }
         val exitedBeforeClose = SessionProbe.exited.value
 
-        SessionProbe.release.value = true
         link.connect("guest")
         await("mc_session_close returns inside the callback") { SessionProbe.closedInside.value == 1 }
 
@@ -176,7 +182,6 @@ class BridgeSessionQuiesceTest {
         link.deliverFrame()
         val exitedBeforeReplace = SessionProbe.exited.value
 
-        SessionProbe.release.value = true
         val runningAtReturn = replaceData(session)
         link.deliverFrame()
         await("all three frames arrive") { SessionProbe.entered.value + SessionProbe.nextEntries.value == 3 }
@@ -198,7 +203,6 @@ class BridgeSessionQuiesceTest {
         await("the old callback is entered") { SessionProbe.entered.value == 1 }
         val exitedBeforeReplace = SessionProbe.exited.value
 
-        SessionProbe.release.value = true
         val runningAtReturn = replacePeerState(session)
         await("the next callback delivers") { SessionProbe.nextEntries.value >= 1 }
         val runningAtFirstNext = SessionProbe.oldRunningAtFirstNext.value
@@ -250,6 +254,82 @@ class BridgeSessionQuiesceTest {
     }
 
     /**
+     * One roster update can name several peers, and each is its own call into the JVM. So a close from
+     * inside the first call has to end the rest: the JVM may release the callback as soon as the close returns.
+     */
+    @Test
+    fun closeFromInsideAPeerStateCallbackEndsTheRestOfThatUpdate() = withLink { link, session ->
+        val state = session.asStableRef<BridgeSessionState>().get()
+        SessionProbe.session.value = session
+        link.connect("guest-1")
+        link.connect("guest-2")
+        val rosterInOneUpdate = link.peers.value.size
+        mc_session_set_peer_state_callback(session, SessionProbe.peerClosesOnItsFirstCall)
+
+        await("mc_session_close returns inside the callback") { SessionProbe.closedInside.value == 1 }
+        await("the pump ends") { state.scope.coroutineContext.job.children.none() }
+
+        assertAll(
+            { assertEquals(3, rosterInOneUpdate, "the rig must put two peers in the one update") },
+            { assertEquals(1, SessionProbe.calls.value, "no call may follow the close") },
+            { assertEquals(0, SessionProbe.callsAfterClose.value, "no call may follow the close") },
+            { assertEquals(emptyList(), uncaughtSoFar()) },
+        )
+    }
+
+    /**
+     * The old pump is cancelled but stays in its loop, since nothing in that loop suspends. What it has left
+     * must not reach the next callback, whose own pump reports the whole roster.
+     */
+    @Test
+    fun replacingAPeerStateCallbackFromInsideItselfReportsEachPeerOnce() = withLink { link, session ->
+        val state = session.asStableRef<BridgeSessionState>().get()
+        SessionProbe.session.value = session
+        link.connect("guest-1")
+        link.connect("guest-2")
+        val rosterInOneUpdate = link.peers.value.size
+        mc_session_set_peer_state_callback(session, SessionProbe.peerReplacesItself)
+
+        await("the replacement returns inside the callback") { SessionProbe.replacedInside.value == 1 }
+        await("the old pump ends") { state.scope.coroutineContext.job.children.count() == 1 }
+        await("the next callback hears the roster") { SessionProbe.nextEntries.value >= 2 }
+        val callsToTheOld = SessionProbe.calls.value
+        val callsToTheNext = SessionProbe.nextEntries.value
+
+        close(session)
+        assertAll(
+            { assertEquals(3, rosterInOneUpdate, "the rig must put two peers in the one update") },
+            { assertEquals(1, callsToTheOld, "a replaced callback must get no further call") },
+            { assertEquals(2, callsToTheNext, "the next callback must hear each peer once") },
+            { assertEquals(emptyList(), uncaughtSoFar()) },
+        )
+    }
+
+    /**
+     * `link.incoming` is single-collection by the `Seam` contract, and the real one does not check, so this
+     * seam counts. The frame arrives through whichever pump is alive, so its delivery proves any second
+     * collection has already happened.
+     */
+    @Test
+    fun replacingTheDataCallbackNeverCollectsIncomingASecondTime() {
+        val link = CountingIncomingSeam()
+        val ref = StableRef.create(BridgeSessionState(link))
+        mc_session_set_data_callback(ref.asCPointer(), SessionProbe.dataNext)
+        await("the pump collects") { link.collections.value == 1 }
+
+        mc_session_set_data_callback(ref.asCPointer(), SessionProbe.dataNext)
+        link.frames.trySend(Swatch(payload = byteArrayOf(1), sender = PeerId("guest")))
+        await("the frame arrives") { SessionProbe.nextEntries.value == 1 }
+        val collections = link.collections.value
+
+        mc_session_close(ref.asCPointer())
+        assertAll(
+            { assertEquals(1, collections, "a replacement must keep the one pump") },
+            { assertEquals(emptyList(), uncaughtSoFar()) },
+        )
+    }
+
+    /**
      * A throw from `link.incoming` under a `SupervisorJob` is the Kotlin/Native abort route. The hook turns
      * that abort into a list entry, and [FailingIncomingSeam] counts the throw, so the rig cannot pass by
      * never having collected.
@@ -272,6 +352,7 @@ class BridgeSessionQuiesceTest {
     /** `mc_session_close`, bounded from outside. Returns the exit count read on the closing thread. */
     private fun close(session: COpaquePointer): Int {
         val returned = caller.execute(TransferMode.SAFE, { session }) { handle ->
+            SessionProbe.release.value = true
             mc_session_close(handle)
             SessionProbe.exited.value
         }
@@ -281,6 +362,7 @@ class BridgeSessionQuiesceTest {
 
     private fun replaceData(session: COpaquePointer): Int {
         val returned = caller.execute(TransferMode.SAFE, { session }) { handle ->
+            SessionProbe.release.value = true
             mc_session_set_data_callback(handle, SessionProbe.dataNext)
             SessionProbe.entered.value - SessionProbe.exited.value
         }
@@ -290,6 +372,7 @@ class BridgeSessionQuiesceTest {
 
     private fun replacePeerState(session: COpaquePointer): Int {
         val returned = caller.execute(TransferMode.SAFE, { session }) { handle ->
+            SessionProbe.release.value = true
             mc_session_set_peer_state_callback(handle, SessionProbe.peerNext)
             SessionProbe.entered.value - SessionProbe.exited.value
         }
@@ -350,6 +433,27 @@ private class FailingIncomingSeam : Seam {
     override suspend fun close(reason: CloseReason) = Unit
 }
 
+/** Only its `incoming` matters: a collection is counted, and then hands over [frames]. */
+private class CountingIncomingSeam : Seam {
+    val collections = atomic(0)
+    val frames = Channel<Swatch>(Channel.UNLIMITED)
+    override val selfId: PeerId = PeerId("self")
+    private val roster = MutableStateFlow(setOf(selfId))
+    private val lifecycle = MutableStateFlow<SeamState>(SeamState.Woven)
+    override val peers: StateFlow<Set<PeerId>> = roster.asStateFlow()
+    override val state: StateFlow<SeamState> = lifecycle.asStateFlow()
+    override val incoming: Flow<Swatch> = flow {
+        collections.incrementAndGet()
+        emitAll(frames.receiveAsFlow())
+    }
+
+    override suspend fun broadcast(payload: ByteArray) = Unit
+
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) = Unit
+
+    override suspend fun close(reason: CloseReason) = Unit
+}
+
 /** Global because a `staticCFunction` can capture nothing. */
 @OptIn(ExperimentalForeignApi::class)
 private object SessionProbe {
@@ -360,6 +464,8 @@ private object SessionProbe {
     val closedInside = atomic(0)
     val exitedWhenClosedInside = atomic(-1)
     val replacedInside = atomic(0)
+    val calls = atomic(0)
+    val callsAfterClose = atomic(0)
     val release = atomic(false)
     val session = atomic<COpaquePointer?>(null)
 
@@ -369,9 +475,27 @@ private object SessionProbe {
     val peerNext = staticCFunction { _: CPointer<ByteVar>?, _: Int -> noteNext() }
 
     val peerClosesTheSession = staticCFunction { _: CPointer<ByteVar>?, _: Int ->
+        release.value = true
         mc_session_close(session.value)
         exitedWhenClosedInside.value = exited.value
         closedInside.value = 1
+    }
+
+    val peerClosesOnItsFirstCall = staticCFunction { _: CPointer<ByteVar>?, _: Int ->
+        calls.incrementAndGet()
+        if (closedInside.value == 1) {
+            callsAfterClose.incrementAndGet()
+        } else {
+            mc_session_close(session.value)
+            closedInside.value = 1
+        }
+        Unit
+    }
+
+    val peerReplacesItself = staticCFunction { _: CPointer<ByteVar>?, _: Int ->
+        calls.incrementAndGet()
+        if (replacedInside.compareAndSet(0, 1)) mc_session_set_peer_state_callback(session.value, peerNext)
+        Unit
     }
 
     val dataReplacesItself = staticCFunction { _: CPointer<ByteVar>?, _: CPointer<ByteVar>?, _: Int ->
@@ -399,6 +523,8 @@ private object SessionProbe {
         closedInside.value = 0
         exitedWhenClosedInside.value = -1
         replacedInside.value = 0
+        calls.value = 0
+        callsAfterClose.value = 0
         release.value = false
         session.value = null
     }
