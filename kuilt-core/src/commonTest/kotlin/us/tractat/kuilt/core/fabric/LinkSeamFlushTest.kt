@@ -10,6 +10,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -316,6 +317,63 @@ class LinkSeamFlushTest {
         assertEquals(0, asked.value)
     }
 
+    /**
+     * The limit of what `Drained` promises, at its cause and on no clock but this one. A consumer that
+     * has not read everything sends a frame, the send fails on the link its peer's close ended, and the
+     * seam tears and throws away what it had not delivered. The peer's flush said `Drained`, and was right
+     * about its own end.
+     *
+     * **This reds when #3111 fixes the receiver, and that is good news:** widen the promise in
+     * `FlushOutcome` and `docs/agent-cookbook/session.md`, and turn this around. It is the deterministic
+     * half of that limit. `TcpFlushPeerTrafficLimitTest` and `WebSocketFlushPeerTrafficLimitTest` report
+     * what a real socket does, without requiring a loss, since whether a real run loses frames depends on
+     * the machine it ran on.
+     */
+    @Test
+    fun aSendThatFailsThrowsAwayWhatTheSeamHadNotDelivered() = runTest {
+        val sendsFailed = atomic(0)
+        val conn = FlushTestConnection(sendWith = {
+            sendsFailed.incrementAndGet()
+            throw IllegalStateException("the link the peer's close ended")
+        })
+        val arrived = burstReadAfterTheConsumerSends(conn)
+        assertAll(
+            { assertEquals(1, sendsFailed.value, "rig: the consumer's send reached the link and failed") },
+            { assertEquals(arrived.indices.toList(), arrived, "what arrives is an in-order prefix") },
+            {
+                assertTrue(
+                    arrived.size < INBOUND_BURST,
+                    "every frame arrived, so the receiver no longer loses them (#3111). Widen the promise in " +
+                        "FlushOutcome and session.md, and turn this test around",
+                )
+            },
+        )
+    }
+
+    /** The control: the same burst and the same send, which succeeds, and every frame arrives. */
+    @Test
+    fun aSendThatSucceedsLosesNothingTheSeamHadNotDelivered() = runTest {
+        val arrived = burstReadAfterTheConsumerSends(FlushTestConnection())
+        assertEquals(List(INBOUND_BURST) { it }, arrived, "every frame, in order")
+    }
+
+    /**
+     * A burst larger than the inbox is on the link and the read loop is parked behind the full inbox.
+     * The consumer sends, then the far side's end arrives, and only then does the consumer read.
+     */
+    private suspend fun TestScope.burstReadAfterTheConsumerSends(conn: FlushTestConnection): List<Int> {
+        val seam = seamOver(conn)
+        repeat(INBOUND_BURST) { index -> conn.arrives(byteArrayOf((index shr 8).toByte(), index.toByte())) }
+        testScheduler.advanceUntilIdle()
+        seam.broadcast(byteArrayOf(1))
+        testScheduler.advanceUntilIdle()
+        conn.remoteEnds()
+        return seam.incoming.toList().map { swatch ->
+            val head = swatch.toByteArray()
+            ((head[0].toInt() and 0xFF) shl 8) or (head[1].toInt() and 0xFF)
+        }
+    }
+
     private class ClassDelegatingSeam(inner: Seam) : Seam by inner
 
     /** A decorator written before `flush` existed: it overrides nothing, so it inherits the default. */
@@ -334,6 +392,9 @@ class LinkSeamFlushTest {
  * A connection whose [send] and [flush] are each whatever a test needs. With no `flushWith` it inherits
  * the interface default, which is the case worth testing.
  */
+/** Past the inbox, or there is nothing left for a torn seam to throw away. */
+private const val INBOUND_BURST = DeliveryPolicy.DEFAULT_CAPACITY + 16
+
 private class FlushTestConnection(
     private val sendWith: suspend () -> Unit = {},
     private val flushWith: (suspend () -> FlushOutcome)? = null,
@@ -354,6 +415,11 @@ private class FlushTestConnection(
 
     override suspend fun close() {
         inbound.close()
+    }
+
+    /** A frame from the far end, waiting to be read. */
+    fun arrives(frame: ByteArray) {
+        inbound.trySend(frame)
     }
 
     /** The far end going away, as `incoming` sees it. */
