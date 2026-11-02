@@ -570,6 +570,51 @@ class TapPullerGateTest {
         }
     }
 
+    /**
+     * The gate's own id is always in `verified`, so a frame stamped with it needs no admission unless the
+     * gate says so. No fabric hands a seam a frame from itself, but a WebSocket dialler can claim the
+     * server's id, and the review of #3100 measured forged logs reaching a puller that way. The control
+     * is the same frame from an admitted peer.
+     */
+    @Test
+    fun aFrameStampedWithThePullersOwnIdNeverReachesItsReplicator() = runTest(UnconfinedTestDispatcher()) {
+        val rig = PullerRig(this, setOf(deviceId))
+        with(rig) {
+            frameFrom(pullerId)
+            val afterTheSelfStamp = relayed.size
+            answer(deviceId, challengedBy(deviceId))
+            frameFrom(deviceId)
+
+            assertAll(
+                { assertEquals(0, afterTheSelfStamp, "a frame wearing the receiver's own id must be dropped") },
+                { assertEquals(listOf(deviceId), relayed.map { it.sender }, "control: an admitted peer's frame must arrive") },
+                { assertEquals(setOf(pullerId, deviceId), gate.peers.value, "and the roster is unchanged by the self-stamp") },
+            )
+        }
+    }
+
+    @Test
+    fun aFrameStampedWithTheDevicesOwnIdNeverReachesItsReplicator() = runTest(UnconfinedTestDispatcher()) {
+        val seam = FakeSeam(deviceId, setOf(deviceId, pullerId))
+        val gate = seam.tokenGated(verifier(), backgroundScope)
+        val relayed = mutableListOf<Swatch>()
+        backgroundScope.launch { gate.incoming.collect { relayed += it } }
+        runCurrent()
+
+        seam.deliver(deviceId, replicationFrame)
+        runCurrent()
+        val afterTheSelfStamp = relayed.size
+        seam.deliver(pullerId, TapAdmitMessage.encode(honestPullerProof(challengeTo(seam, pullerId))))
+        runCurrent()
+        seam.deliver(pullerId, replicationFrame)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(0, afterTheSelfStamp, "a frame wearing the receiver's own id must be dropped") },
+            { assertEquals(listOf(pullerId), relayed.map { it.sender }, "control: the admitted puller's frame must arrive") },
+        )
+    }
+
     private companion object {
         const val VERIFIER_SEED = 7
         const val PROVER_SEED = 11
