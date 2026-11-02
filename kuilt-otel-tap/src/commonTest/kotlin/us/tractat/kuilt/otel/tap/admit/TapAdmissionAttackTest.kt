@@ -330,12 +330,18 @@ class TapAdmissionAttackTest {
      * peers the same way, which hands this test exactly those ids; on a real fabric the attacker claims
      * them. See "What the peer ids buy" on [TokenGatedSeam].
      *
+     * The relay carries the device's answer back too, and the puller takes it, so the attacker is let in
+     * at both ends.
+     *
      * If this reds because the relay is now refused, the handshake got stronger: delete it and say so.
      */
     @Test
     fun aRelayWearingBothIdsAcrossTwoSessionsIsStillAdmitted() = runTest(UnconfinedTestDispatcher()) {
         val relay = relayAcrossTwoSessions(wearsDevicesIdToPuller = true, wearsPullersIdToDevice = true)
-        assertTrue(relay.attackerAdmitted, "this relay is not closed, and the docs must keep saying so")
+        assertAll(
+            { assertTrue(relay.attackerAdmitted, "this relay is not closed, and the docs must keep saying so") },
+            { assertTrue(relay.attackerAdmittedByPuller, "and it is not closed at the puller either") },
+        )
     }
 
     /**
@@ -501,7 +507,7 @@ class TapAdmissionAttackTest {
     private fun framesTo(seam: FakeSeam, peer: PeerId, matching: (TapAdmitMessage?) -> Boolean): Int =
         seam.directed.count { (to, frame) -> to == peer && matching(TapAdmitMessage.decode(frame)) }
 
-    private class TwoSessionRelay(val attackerAdmitted: Boolean)
+    private class TwoSessionRelay(val attackerAdmitted: Boolean, val attackerAdmittedByPuller: Boolean)
 
     /**
      * Run a relay across two [InMemoryLoom]s, each of which numbers its peers from `peer-1` in the order
@@ -533,7 +539,8 @@ class TapAdmissionAttackTest {
         }
         backgroundScope.launch {
             attackerToDevice.incoming.collect { swatch ->
-                if (TapAdmitMessage.decode(swatch.toByteArray()) is TapAdmitMessage.Challenge) {
+                val admit = TapAdmitMessage.decode(swatch.toByteArray())
+                if (admit is TapAdmitMessage.Challenge || admit is TapAdmitMessage.Proof) {
                     attackerToPuller.sendTo(pullerGate.selfId, swatch.toByteArray())
                 }
             }
@@ -559,7 +566,10 @@ class TapAdmissionAttackTest {
                 )
             },
         )
-        return TwoSessionRelay(attackerToDevice.selfId in deviceGate.peers.value)
+        return TwoSessionRelay(
+            attackerAdmitted = attackerToDevice.selfId in deviceGate.peers.value,
+            attackerAdmittedByPuller = attackerToPuller.selfId in pullerGate.peers.value,
+        )
     }
 
     // ── mixed versions ─────────────────────────────────────────────────────────────────────────
