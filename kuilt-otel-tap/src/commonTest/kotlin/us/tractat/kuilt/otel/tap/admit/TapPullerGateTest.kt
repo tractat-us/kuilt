@@ -185,8 +185,8 @@ class TapPullerGateTest {
     }
 
     /**
-     * The attack a role that both asks and answers opens up, and the reason the ids in the tag are in
-     * order. A stranger holding no code gets the puller to MAC the nonce the puller is waiting on, by
+     * The attack a role that both asks and answers opens up, and a reason the ids are in the tag. A
+     * stranger holding no code gets the puller to MAC the nonce the puller is waiting on, by
      * sending that nonce as a challenge from a second id, and hands the result back as its own answer.
      *
      * The rig checks the tag is a real one over exactly that nonce. Only the ids can refuse it.
@@ -494,6 +494,24 @@ class TapPullerGateTest {
         assertAll(
             { assertEquals(setOf(deviceGate.selfId), deviceGate.peers.value, "the device must refuse it") },
             { assertEquals(setOf(pullerGate.selfId), pullerGate.peers.value, "and it must not surface the device") },
+        )
+    }
+
+    /**
+     * A known limit (#2740). A role is fixed, and the verifier is the side that starts, so two pullers
+     * hold the same code and never find out. The control is the mesh test above, with one peer of each
+     * role.
+     */
+    @Test
+    fun twoPullersHoldingTheSameCodeNeverAdmitEachOther() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val first = loom.host(Pattern("mutual")).tokenGated(GateRole.Prover(code, Random(PROVER_SEED)), backgroundScope)
+        val second = loom.join(InMemoryTag("second")).tokenGated(GateRole.Prover(code, Random(PROVER_SEED + 1)), backgroundScope)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(setOf(first.selfId), first.peers.value) },
+            { assertEquals(setOf(second.selfId), second.peers.value) },
         )
     }
 
