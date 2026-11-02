@@ -352,6 +352,7 @@ private abstract class MultipeerJvmSuite : DiscoverySourceConformanceSuite() {
     override suspend fun causeArrival(source: PeerDiscoverySource) {
         val lib = libFor(source)
         lib.awaitBrowseSession()
+        awaitDepartureSubscriber(source)
         lib.fireFoundPeer(ARRIVING_HANDLE, ARRIVING_DISPLAY_NAME)
     }
 
