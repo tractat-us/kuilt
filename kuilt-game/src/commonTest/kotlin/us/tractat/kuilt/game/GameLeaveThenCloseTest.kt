@@ -55,12 +55,16 @@ private fun ByteArray.carriesVacate(): Boolean =
  * finishes in one go whenever it first runs, which hides one of the two windows this tests. Plain
  * counters are enough: these tests run on one test dispatcher.
  *
- * Its [close] suspends too, for [CLOSE_TIME], and only then closes [delegate]. An in-memory close never
- * reaches a suspension point, so against it a cancelled caller closes the fabric whether or not the
- * teardown is shielded, and the arms that ask about that could not fail.
+ * Its [close] takes [closeTime] and only then closes [delegate]. That number decides what `leave()` then
+ * `close()` does, so every arm picks it on purpose. At zero, as for an in-memory seam, nothing suspends
+ * between the two calls and the queued send has not run when the fabric goes. Above zero the close
+ * itself lets the send run, and a send shorter than the close gets out. A nonzero close is also what
+ * the shield arms need: against a close with no suspension point, a cancelled caller closes the fabric
+ * whether or not the teardown is shielded, and those arms could not fail.
  */
 private class HeldSendSeam(
     private val delegate: Seam,
+    private val closeTime: Duration,
     private val hold: suspend (ByteArray) -> Unit,
 ) : Seam by delegate {
     var vacateEntered = 0
@@ -73,7 +77,7 @@ private class HeldSendSeam(
         private set
 
     override suspend fun close(reason: CloseReason) {
-        delay(CLOSE_TIME)
+        delay(closeTime)
         delegate.close(reason)
     }
 
@@ -121,10 +125,13 @@ class GameLeaveThenCloseTest {
         val seam: HeldSendSeam,
     )
 
-    private suspend fun TestScope.table(hold: suspend (ByteArray) -> Unit = { delay(SEND_TIME) }): Table {
+    private suspend fun TestScope.table(
+        closeTime: Duration = Duration.ZERO,
+        hold: suspend (ByteArray) -> Unit = { delay(SEND_TIME) },
+    ): Table {
         val loom = InMemoryLoom()
         val (hostRaw, stayingRaw, leavingRaw) = seats(loom, 3)
-        val seam = HeldSendSeam(leavingRaw, hold)
+        val seam = HeldSendSeam(leavingRaw, closeTime, hold)
         val hostDeferred = async {
             backgroundScope.gameHost(
                 hostRaw,
@@ -197,6 +204,27 @@ class GameLeaveThenCloseTest {
     }
 
     /**
+     * The other way the same two calls can go, which is why `leave` only promises its best: a seam whose
+     * close takes longer than the send lets the frame out, and then the seat comes free inside the window.
+     * This is a race between a close and a send, and nothing in the caller's hands decides it.
+     */
+    @Test
+    fun leaveThenCloseGetsTheFrameOutWhenTheCloseOutlastsTheSend() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val table = table(closeTime = SEND_TIME * 2)
+
+        table.leaving.leave()
+        assertEquals(0, table.seam.vacateEntered, "precondition: leave returned with the send still queued")
+        table.leaving.close()
+        advance(halfWindow)
+
+        val voters = table.host.node.membership.value.voters
+        assertAll(
+            { assertEquals(1, table.seam.vacateHanded, "the close gave the send time to finish") },
+            { assertFalse(table.leavingId in voters, "the host freed the seat inside the window, voters were $voters") },
+        )
+    }
+
+    /**
      * What this PR does fix: once the frame does reach the host, the host acts on it inside the window.
      * The time between the calls stands in for the wait a caller cannot yet ask for.
      */
@@ -265,7 +293,7 @@ class GameLeaveThenCloseTest {
         wrap: (FakeRaftNode) -> RaftNode = { it },
     ): Lone {
         val (raw, _) = seats(InMemoryLoom(), 2)
-        val seam = HeldSendSeam(raw, hold)
+        val seam = HeldSendSeam(raw, CLOSE_TIME, hold)
         val mux = MuxSeam(seam, backgroundScope)
         val presence = GamePresence(mux.channel(2), backgroundScope, expectVirtualTime = true)
         val node = FakeRaftNode(NodeId(raw.selfId.value))

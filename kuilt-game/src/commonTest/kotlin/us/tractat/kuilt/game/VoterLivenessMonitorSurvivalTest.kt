@@ -10,6 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -17,6 +18,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.Seam
@@ -113,12 +115,23 @@ private class WatchedNode(private val delegate: RaftNode) : RaftNode by delegate
     }
 }
 
+/**
+ * A seam whose close takes a moment, so the vacate frame queued by `leave()` gets out during the close,
+ * while the node behind it has already stopped. That is the order that hands the host an eviction whose
+ * subject can no longer acknowledge it.
+ */
+private class SlowCloseSeam(private val delegate: Seam) : Seam by delegate {
+    override suspend fun close(reason: CloseReason) {
+        delay(FRAME_TIME)
+        delegate.close(reason)
+    }
+}
+
 private class RealTable(
     val hostScope: HostScope,
     val host: GameSession,
     val watched: WatchedNode,
     val joiners: List<GameSession>,
-    val joinerIds: List<NodeId>,
 )
 
 private suspend fun TestScope.realTable(seatCount: Int): RealTable {
@@ -142,7 +155,7 @@ private suspend fun TestScope.realTable(seatCount: Int): RealTable {
         )
     }
     val joinerDeferreds = rawSeats.drop(1).mapIndexed { i, raw ->
-        async { backgroundScope.gameJoin(raw, raftConfig = fastRaftConfig(seed = 2L + i)) }
+        async { backgroundScope.gameJoin(SlowCloseSeam(raw), raftConfig = fastRaftConfig(seed = 2L + i)) }
     }
     val host = hostDeferred.await()
     val joiners = joinerDeferreds.map { it.await() }
@@ -150,7 +163,7 @@ private suspend fun TestScope.realTable(seatCount: Int): RealTable {
     val node = watched ?: error("the placement built no node")
     check(host.node.membership.value.voters.size == seatCount) { "precondition: every seat is taken" }
     node.attempts.clear()
-    return RealTable(hostScope, host, node, joiners, rawSeats.drop(1).map { NodeId(it.selfId.value) })
+    return RealTable(hostScope, host, node, joiners)
 }
 
 // ── Over a rigged node ──────────────────────────────────────────────────────────────────────────
@@ -231,7 +244,8 @@ class VoterLivenessMonitorSurvivalTest {
 
     /**
      * The control for the arms below. Two seats, and the vacate lands while the leaver is still up to
-     * acknowledge its own removal, so the change commits and nothing fails.
+     * acknowledge its own removal, because it does not close until later. So the change commits and
+     * nothing fails.
      */
     @Test
     fun aVacateHeardWhileTheLeaverIsStillUpCommits() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
@@ -251,10 +265,11 @@ class VoterLivenessMonitorSurvivalTest {
     }
 
     /**
-     * Two seats, `leave()` and `close()` back to back. The eviction needs a majority of the old config,
-     * two of two, and one of them has gone. So the change cannot commit, the leader loses its quorum, and
-     * the change fails with the leadership. The host outlives that, but it is left leading nothing, and
-     * no wait in `close` is on offer to change it: a rejected shape, whose cost this arm states.
+     * Two seats, and the vacate frame gets out during a `close()` that follows straight on. The eviction
+     * needs a majority of the old config, two of two, and one of them has gone. So the change cannot
+     * commit, the leader loses its quorum, and the change fails with the leadership. The host outlives
+     * that, but it is left leading nothing, and no wait in `close` is on offer to change it: a rejected
+     * shape, whose cost this arm states.
      */
     @Test
     fun aTwoSeatLeaveThenCloseLeavesTheHostScopeActiveAndLeaderless() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
@@ -272,15 +287,34 @@ class VoterLivenessMonitorSurvivalTest {
         )
     }
 
+    /**
+     * Two seats and the frame is lost. The host's quorum goes before the reconnect window ends, so by then
+     * it is no leader and drops the signal: no eviction is even tried, and the seat stays taken.
+     */
+    @Test
+    fun aTwoSeatCloseWithNoFrameDropsTheSignalAndKeepsTheSeat() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val table = realTable(seatCount = 2)
+        val hostSees = table.host.node.membership.value.voters
+
+        table.joiners.single().close()
+        advance(PAST_THE_WINDOW)
+
+        assertAll(
+            { assertEquals(2, hostSees.size, "precondition: both seats were taken") },
+            { assertFalse(table.host.node.role.value is RaftRole.Leader, "the host lost its quorum") },
+            { assertEquals(emptyList(), table.watched.attempts, "and so did not try to evict") },
+            { assertEquals(hostSees, table.host.node.membership.value.voters, "and the seat stayed taken") },
+            { table.hostScope.assertSurvived() },
+        )
+    }
+
     /** Three seats, and both of the others go: the first eviction has nobody left to commit with. */
     @Test
     fun aTableWhereEveryoneElseLeavesLeavesTheHostScopeActive() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val table = realTable(seatCount = 3)
 
-        table.joiners.forEach { joiner ->
-            joiner.leave()
-            joiner.close()
-        }
+        table.joiners.forEach { it.leave() }
+        table.joiners.forEach { it.close() }
         advance(PAST_THE_WINDOW)
 
         assertAll(
