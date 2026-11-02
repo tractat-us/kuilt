@@ -229,7 +229,7 @@ The full procedure, including what to set and in what order, is in
 ### The honest limitations
 
 The join code keeps a stranger on the network from walking up to your phone and
-reading its logs. It is a debugging lock, and five things sit outside it.
+reading its logs. It is a debugging lock, and six things sit outside it.
 
 **Over a plain LAN WebSocket the log bytes travel unencrypted.** The join code
 controls *who is allowed to pull* — it does not encrypt the traffic, so someone
@@ -271,6 +271,13 @@ reconnects. Reading the source says Multipeer and a hub with no attestation both
 this. Nobody has yet run it. **So Multipeer is not a private path today:** its encryption
 stops a listener, and the code stops a stranger under its own name, and neither stops one
 that borrows a name.
+
+**A network blip that only the laptop sees ends the pull.** If the fabric's roster shows the
+phone leaving and coming back on the laptop's side only, the laptop forgets the phone and
+the phone never learns it has to prove itself again. Nothing re-challenges, so the laptop
+drops every frame from the phone until one side reconnects, and the pull goes quiet with no
+error. The laptop logs one warning naming the peer the first time this happens. There is
+no recovery: close the puller and start another.
 
 Under the surface: an answer is an HMAC under the code over a nonce from each side and
 both peers' ids. The phone answers the laptop's nonce the same way, and only once it has
