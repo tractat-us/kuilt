@@ -6,9 +6,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedSendChannelException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -139,8 +141,9 @@ internal class LinkSeam(
         class Barrier(val reached: CompletableDeferred<Unit>) : Outbound
     }
 
-    // Completed by `tearDown`, before any path closes `conn`. See `outboxDrained` for why that order
-    // is the guarantee, and why a flush cannot watch `outbox` for this instead.
+    // Completed by `tearDown` on every path, before that path closes `conn`, and by the writer's job if
+    // the writer ends without a tear. See `outboxDrained` for why that order is the guarantee, and why a
+    // flush cannot watch `outbox` for this instead.
     private val torn = CompletableDeferred<Unit>()
 
     // What the writer's last send threw, so a flush can say why rather than only that the seam closed.
@@ -155,7 +158,12 @@ internal class LinkSeam(
     private val connClosed = CompletableDeferred<Unit>()
 
     init {
-        scope.launch { writeLoop() }
+        // A cancellation minted by `conn.send` ends the writer with no tear, and nothing else would ever
+        // reach a marker behind it. On the job, so it covers every way the writer can end.
+        scope.launch { writeLoop() }.invokeOnCompletion { cause ->
+            writeFailure.compareAndSet(expect = null, update = cause)
+            torn.complete(Unit)
+        }
         scope.launch { readLoop() }
     }
 
@@ -201,11 +209,22 @@ internal class LinkSeam(
      * The timer covers both steps. [conn] gets no second bound of its own, and it is cancellable.
      */
     override suspend fun flush(timeout: Duration): FlushOutcome = flushWithin(timeout) {
-        if (outboxDrained()) {
-            conn.flush(Duration.INFINITE)
-        } else {
-            FlushOutcome.Failed(writeFailure.value ?: IllegalStateException(closedMessage))
-        }
+        if (outboxDrained()) connectionFlushUnlessTorn() else ended()
+    }
+
+    private fun ended() = FlushOutcome.Failed(writeFailure.value ?: IllegalStateException(closedMessage))
+
+    /**
+     * [conn]'s answer, or [ended] once the seam tears. A close from elsewhere ends a pending flush at
+     * this stage too, whether or not [conn] keeps its own obligation to end one. [torn] is checked first
+     * for the reason [outboxDrained] gives.
+     */
+    private suspend fun connectionFlushUnlessTorn(): FlushOutcome = coroutineScope {
+        val answer = async { conn.flush(Duration.INFINITE) }
+        select<FlushOutcome> {
+            torn.onAwait { ended() }
+            answer.onAwait { it }
+        }.also { answer.cancel() }
     }
 
     /**
@@ -220,10 +239,10 @@ internal class LinkSeam(
      *
      * The second cannot trust the marker alone. `Channel.close` leaves queued items readable, and a
      * connection may drop a frame after its own close and return normally, so a writer can walk past
-     * the close and reach a marker with the frames ahead of it gone. [torn] is completed before any
-     * path closes [conn], which means a frame can only be dropped that way once [torn] is complete.
-     * So preferring it can only turn a true `Drained` that raced a tear into `Failed`, which claims
-     * nothing, and never the reverse.
+     * the close and reach a marker with the frames ahead of it gone. [tearDown] completes [torn] on
+     * every path before that path can close [conn], which means a frame can only be dropped that way
+     * once [torn] is complete. So preferring it can only turn a true `Drained` that raced a tear into
+     * `Failed`, which claims nothing, and never the reverse.
      */
     private suspend fun outboxDrained(): Boolean {
         val reached = CompletableDeferred<Unit>()
@@ -326,10 +345,15 @@ internal class LinkSeam(
     // already see the collapsed roster). The `_peers.update` is idempotent (always setOf(selfId)), so
     // running it on a losing caller is harmless; `stateGate.tear` is the single-shot latch that gates
     // the one-time channel closes.
+    //
+    // `torn` goes ahead of the latch, on the losing path too. A path that loses the latch returns from
+    // here and closes `conn` straight away, while the winner may not have run another line, so anything
+    // the winner alone did after the latch could land after that close. A flush would then read `reached`
+    // with `torn` still open and say `Drained` for frames the close had just dropped.
     private fun tearDown(reason: CloseReason) {
         _peers.update { setOf(selfId) }
-        if (!stateGate.tear(reason)) return
         torn.complete(Unit)
+        if (!stateGate.tear(reason)) return
         outbox.close()
         inbox.close()
     }
