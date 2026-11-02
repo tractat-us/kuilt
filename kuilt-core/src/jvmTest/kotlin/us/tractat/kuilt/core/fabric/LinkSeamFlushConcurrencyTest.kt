@@ -31,14 +31,18 @@ import kotlin.time.Duration
  * never answers `Failed`, and it drops a frame after its own close and returns normally, so nothing
  * below the seam stops a false `Drained` from reaching the caller.
  *
- * **A rare race, so a red is strong evidence and a green on one run is weak.** Two things keep it from
- * happening: `tearDown` signalling before the latch, and the connection stage of a flush watching the
- * tear. With both undone: 83 violations in 3,720,793 flushes over 40,000 rounds, about one per 480, so
- * 3,000 rounds red all but always. **With only the signal order undone this probe stays green**, 0 in
- * 40,000 rounds, because the connection stage gives the winner time to finish. That order is pinned by
- * `LinkSeamFlushTest.aFlushCannotConfirmInsideAnotherPathsTear`, which forces the window on one thread,
- * reds every time, and is what `check` runs. This one is gated by its name, like every
- * `*ConcurrencyTest`, and runs in the `concurrency-probes` job.
+ * **A rare race, so a red is strong evidence and a green on one run is weak.** This probe found one that
+ * 3,000 local rounds kept passing: a path that lost the race to complete `torn` could close the connection
+ * while `torn` still read open. A CI runner saw it at 3 in 115,223 flushes. A 16-core laptop saw 0 in
+ * 24,635,342, until the JVM was held to its efficiency cores (`taskpolicy -c background`), where its own
+ * threads get preempted: 26 in 6,369,578, every one with `torn` open and `Torn` already written. A flush
+ * now decides by reading `state` last, and the same arms read 0 in 41,393,190. Read a green here with that
+ * in mind: without that read, 3,000 rounds on those fast cores usually pass.
+ *
+ * So what `check` runs is `LinkSeamFlushTest`: `aFlushCannotConfirmInsideAnotherPathsTear` forces the
+ * window on one thread and reds every time without the read, and `everyPathHasTornBeforeItClosesTheConnection`
+ * pins what the read rests on. This one is gated by its name, like every `*ConcurrencyTest`, and runs in
+ * the `concurrency-probes` job.
  */
 class LinkSeamFlushConcurrencyTest {
     /** Records whether each frame arrived before or after the close. Drops it silently after. */
