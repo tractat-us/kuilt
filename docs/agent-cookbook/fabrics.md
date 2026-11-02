@@ -208,9 +208,9 @@ dial = { _, peer -> WebSocketConnection(httpClient.ownedWebSocketSession(dialUrl
 Ktor runs the handshake on the client's own scope and only waits for it, so cancelling ends the wait
 and the handshake carries on. When it finishes, the socket stays open with nothing holding it, until
 the session ends from outside or the `HttpClient` closes. Measured on real sockets: the far end saw no
-close within 15 s, on CIO and OkHttp alike. Here a cancel mid-handshake aborts the request, and a cancel
-landing as the session arrives gives that session a normal close, both before the cancellation reaches
-you. Only a return makes the session yours.
+close within 15 s, on CIO, OkHttp and Darwin alike. Here a cancel mid-handshake aborts the request, and
+a cancel landing as the session arrives gives that session a normal close. Only a return makes the
+session yours.
 
 Two failures change shape too. A closed `HttpClient` throws `IOException`, where Ktor's call hangs
 forever, and a cancellation that is not yours arrives as `IOException` rather than cancelling you.

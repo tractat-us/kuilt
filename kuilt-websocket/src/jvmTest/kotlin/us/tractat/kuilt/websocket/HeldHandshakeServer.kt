@@ -50,6 +50,7 @@ internal class HeldHandshakeServer(
 
     private val requestSeen = CompletableDeferred<Unit>()
     private val dataFrameSeen = CompletableDeferred<Unit>()
+    private val closeFrameArrived = CompletableDeferred<Unit>()
     private val verdict = CompletableDeferred<FarEnd>()
 
     val url: String get() = "ws://127.0.0.1:${listener.localPort}/held"
@@ -63,6 +64,9 @@ internal class HeldHandshakeServer(
 
     /** Returns once the client has sent its first application frame over the finished upgrade. */
     suspend fun awaitDataFrame() = dataFrameSeen.await()
+
+    /** Whether a Close frame has reached this end by now. */
+    val closeFrameSeen: Boolean get() = closeFrameArrived.isCompleted
 
     /** Let the handshake finish with `101 Switching Protocols`. */
     fun finishHandshake() = answer.countDown()
@@ -117,6 +121,7 @@ internal class HeldHandshakeServer(
                 val frame = readFrame(input) ?: return FarEnd.SocketEnded
                 when (frame.opcode) {
                     OPCODE_CLOSE -> {
+                        closeFrameArrived.complete(Unit)
                         if (answersClose) answerClose(output)
                         return FarEnd.CloseFrame(frame.closeCode(), socketEnded = endsAfterClose(input))
                     }
