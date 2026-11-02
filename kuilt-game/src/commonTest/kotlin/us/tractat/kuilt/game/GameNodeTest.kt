@@ -18,12 +18,14 @@ import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.raft.AutoSerialRefusedException
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.ClientIdentity
 import us.tractat.kuilt.raft.Committed
@@ -65,8 +67,47 @@ class GameNodeTest {
         assertEquals(ClientId("durable-x"), indexed.dedupKey.clientId)
 
         // The one-argument form draws a serial nobody could have persisted, so it never reaches the node.
-        val refusal = assertFailsWith<IllegalStateException> { moves.propose(8) }
+        val refusal = assertFailsWith<AutoSerialRefusedException> { moves.propose(8) }
         assertContains(refusal.message.orEmpty(), "propose(command, requestId)")
+    }
+
+    /**
+     * [SpeculativeSequencer] applies before it proposes, so the refusal lands after the state moved.
+     * Over a real durable node, not a [us.tractat.kuilt.raft.test.FakeRaftNode], which does not refuse.
+     */
+    @Test
+    fun aRefusedSpeculativeProposeRollsBackOverARealDurableNode() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val seam = InMemoryLoom().host(Pattern("speculative-durable"))
+        val session = backgroundScope.gameNode(
+            seam,
+            voterIds = setOf(NodeId(seam.selfId.value)),
+            raftConfig = fastRaftConfig(seed = 1L),
+            identity = ClientIdentity.Durable(ClientId("durable"), issuedThrough = 0L),
+        )
+        session.node.awaitLeadership()
+        val game = object : SpeculativeGame<List<Int>, Int> {
+            override fun apply(state: List<Int>, action: Int): List<Int> = state + action
+            override fun snapshot(state: List<Int>): List<Int> = state
+            override fun restore(snapshot: List<Int>): List<Int> = snapshot
+        }
+        val sequencer = SpeculativeSequencer(TurnSequencer(session.node, Int.serializer()), game, emptyList<Int>(), backgroundScope)
+        runCurrent()
+
+        sequencer.propose(1, requestId = 1L)
+        runCurrent()
+        val stateBefore = sequencer.speculativeState.value
+        assertFailsWith<AutoSerialRefusedException> { sequencer.propose(2) }
+        val pendingAfter = sequencer.pendingCount
+        val stateAfter = sequencer.speculativeState.value
+        sequencer.propose(3, requestId = 2L)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(listOf(1), stateBefore, "the rig: the first action landed") },
+            { assertEquals(0, pendingAfter, "the refused action left no pending entry") },
+            { assertEquals(listOf(1), stateAfter, "the speculative apply was rolled back") },
+            { assertEquals(listOf(1, 3), sequencer.speculativeState.value, "and the sequencer still works") },
+        )
     }
 
     /**
