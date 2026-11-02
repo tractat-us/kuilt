@@ -41,6 +41,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import us.tractat.kuilt.core.PumpVerdict
 import us.tractat.kuilt.core.pumpIn
@@ -148,6 +149,10 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
      * Starts one forwarder. `UNDISPATCHED` so it subscribes before the registering call returns. A failure
      * reaches only the log line, since no call is left to report it through; the one known to happen is a
      * second `bytesReceived` collector being refused, and without [pumpIn] that aborts the process.
+     *
+     * [body] makes at most one call into the JVM, since the gate is passed once per item. A snapshot of
+     * [RealNwApi.connectionStates] can name several connections, so [closedChanges] and [viabilityChanges]
+     * split it first: a destroy from inside the first call ends the rest.
      */
     private fun <T> forward(name: String, items: Flow<T>, body: (T) -> Unit) {
         val gate = CallbackGate(body)
@@ -211,7 +216,7 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
 
     /**
      * Forwards the [NwConnState.Closed] entries of the unified [RealNwApi.connectionStates] STATE (#1522/#1539)
-     * to the JVM as per-connection `(id, reason)` callbacks. The collector diffs each new map snapshot against
+     * to the JVM as per-connection `(id, reason)` callbacks. [closedChanges] diffs each new map snapshot against
      * the previous one and fires the callback only for connections that became **newly [NwConnState.Closed]**
      * (Closed is monotone+dominant — once latched it never reverts — so a first-time Closed IS a new close).
      * Because it observes the transport's authoritative STATE rather than the lossy `connectionClosed` event, a
@@ -224,13 +229,17 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
      * forwards Viable/PathLost.
      */
     fun setConnectionClosedStateCallback(cb: CPointer<ConnectionClosedStateCb>) {
+        forward("connection-closed-state", closedChanges()) { (id, closed) ->
+            val r = closed.reason ?: "" // empty ⇒ graceful/null on the JVM side
+            memScoped { cb.invoke(id.value.cstr.ptr, r.cstr.ptr) }
+        }
+    }
+
+    private fun closedChanges(): Flow<Pair<NwConnectionId, NwConnState.Closed>> = flow {
         var previous = emptyMap<NwConnectionId, NwConnState>()
-        forward("connection-closed-state", api.connectionStates) { current ->
+        api.connectionStates.collect { current ->
             for ((id, st) in current) {
-                if (st is NwConnState.Closed && previous[id] !is NwConnState.Closed) {
-                    val r = st.reason ?: "" // empty ⇒ graceful/null on the JVM side
-                    memScoped { cb.invoke(id.value.cstr.ptr, r.cstr.ptr) }
-                }
+                if (st is NwConnState.Closed && previous[id] !is NwConnState.Closed) emit(id to st)
             }
             previous = current
         }
@@ -239,20 +248,26 @@ internal class NwBridgeRuntime(private val api: RealNwApi) {
     /**
      * Forwards the [NwConnState.Viable]/[NwConnState.PathLost] entries of the unified [RealNwApi.connectionStates]
      * STATE (#1509/#1539) to the JVM as per-connection `(id, viable)` callbacks (`1` = Viable, `0` = PathLost).
-     * The collector diffs each new map snapshot against the previous one and fires only for connections whose
+     * [viabilityChanges] diffs each new map snapshot against the previous one and fires only for connections whose
      * path state *changed* (a new key or a Viable↔PathLost flip). Because it observes the STATE flow,
      * intermediate transitions may coalesce under backpressure, but the LATEST value per connection is never
      * lost. [NwConnState.Closed] entries are NOT forwarded here — those are the teardown authority forwarded by
      * [setConnectionClosedStateCallback]; the JVM learns "closed" from that drop-tolerant path.
      */
     fun setConnectionViabilityCallback(cb: CPointer<ConnectionViabilityCb>) {
+        forward("connection-viability", viabilityChanges()) { (id, viable) ->
+            memScoped { cb.invoke(id.value.cstr.ptr, if (viable) 1 else 0) }
+        }
+    }
+
+    private fun viabilityChanges(): Flow<Pair<NwConnectionId, Boolean>> = flow {
         var previous = emptyMap<NwConnectionId, NwConnState>()
-        forward("connection-viability", api.connectionStates) { current ->
+        api.connectionStates.collect { current ->
             for ((id, st) in current) {
                 if (previous[id] == st) continue
                 when (st) {
-                    NwConnState.Viable -> memScoped { cb.invoke(id.value.cstr.ptr, 1) }
-                    NwConnState.PathLost -> memScoped { cb.invoke(id.value.cstr.ptr, 0) }
+                    NwConnState.Viable -> emit(id to true)
+                    NwConnState.PathLost -> emit(id to false)
                     is NwConnState.Closed -> Unit // closure is forwarded by setConnectionClosedStateCallback
                 }
             }
