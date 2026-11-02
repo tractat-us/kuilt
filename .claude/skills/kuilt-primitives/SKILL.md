@@ -19,6 +19,7 @@ and primitive groups in order. The cookbook index splits them out.
 |a heartbeat, an idle reaper, "is this peer alive"; reaping a room nobody joined; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned(since, windowExpiresAt)` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
 |a per-member reader as `room.incoming.filter { it.sender == peer }`, a member's first frame lost before its collector subscribed|`Room.incomingFrom(member)` (fails with `FramesLost`, never silently; `SeamRoomFactory(memberInboxCapacity = 0)` opts out)|`session.md#per-member-frames`|
+|a `delay` between a last send and `leave`/`close`|`Room.flush`/`Seam.flush` → `FlushOutcome`|`session.md#a-last-frame-before-leaving`|
 |a `host == selfId` check, re-electing when the host walks out mid-lobby|`SeamRoomFactory.electLobby` → `ElectionLobby.awaitRoom` → `ElectionOutcome.BecameHost` → `start()`|`session.md#host-election--the-lobby`|
 |a propose→commit turn/session facade, host election with a term|`GameSession` + `TurnSequencer`|`consensus.md#consensus--turns`|
 |a server holding the log clients propose into, a client outliving its server|`ClusterClient` (`clusterClient`/`clusterClientWithNode`) + `ServerCluster` (`serverCluster`)|`consensus.md#when-one-of-the-peers-is-a-server`|
@@ -56,7 +57,5 @@ Inside kuilt, read it directly; consumers take the first working rung:
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
-**Editing this skill:** `verifySkillDescriptionBudget` caps the eager `description:` at
-1,536 characters and rejects YAML-breaking `: `/` #`; adding a trigger means removing one.
-`verifySkillBodyBudget` caps this body at 8,192 bytes (8 KiB). Move explanatory prose to
-`docs/agent-cookbook*`, never drop a route. See kuilt's root `CLAUDE.md` for the rationale.
+**Editing this skill:** the description caps at 1,536 characters, this body at 8,192 bytes.
+Move prose to `docs/agent-cookbook*`, never drop a route. Rationale: kuilt's root `CLAUDE.md`.

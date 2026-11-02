@@ -192,6 +192,22 @@ close as EOF at a frame boundary. Implement it natively, and run its golden vect
 `kuilt-stream/wire/tcp-wire-v1.vectors.json`, as a table test. kuilt's own build checks the same
 file on every target, so the vectors cannot drift from what a kuilt peer actually sends.
 
+### Telling a caller the frames have left
+
+**Intent:** your fabric queues frames, or your transport does, and a caller wants to send and then close without losing them. You are about to add a drain to `close`, or leave a seam that reports success for a queue it never looked at.
+**Primitive:** `Connection.flush(timeout)` and `Seam.flush(timeout)`, both defaulting to `FlushOutcome.Unsupported`, plus `flushWithin` for the part every implementation has to get right. `close` stays free of waits, because it is also how a caller gets out from under a stalled writer. Over a `Connection`, `identified()` and `handshaking()` already do the seam's half: they order a marker through their own queue, then ask your connection, so a connection that inherits the default makes the seam say `Unsupported`.
+
+<!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/AgentCookbookSamples.kt#flushWithinSample -->
+```kotlin
+public suspend fun flushWithinSample(timeout: Duration, queueDrained: CompletableDeferred<Unit>): FlushOutcome =
+    flushWithin(timeout) {
+        queueDrained.await()
+        FlushOutcome.Drained
+    }
+```
+
+Report `Drained` only when an orderly close after it cannot be what loses the frames. If your `send` returns only once the frame is handed over, that is true at once: answer `Drained`, or `Failed` after a close. Otherwise ask the transport to wait. A decorator with no queue of its own delegates, and class delegation already does; one with a queue drains it first. To hold your fabric to it, take a `FlushFixture` arm in its `SeamConformanceSuite` harness. Only `FlushFixture.Holdable` can prove a flush waits, so prefer it where a test can reach the point a send blocks.
+
 ## Sending to yourself
 
 **Intent:** loop a frame back to your own peer — replay your own move locally, feed your own replicator, treat "everyone" uniformly by iterating `peers` and sending to each.

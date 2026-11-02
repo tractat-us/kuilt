@@ -609,6 +609,29 @@ a `Connection` whose `close` discards buffered input is *fine* — the mesh neve
 relies on a close to deliver anything (#2474). What a transport does still owe is
 frame boundaries and per-link FIFO, exactly as `Connection`'s KDoc states.
 
+### Telling a caller the frames have left
+
+A caller who sends a last frame and closes can lose it, because `close` waits for
+nothing. It calls `flush(timeout)` in between, and your `Connection` is asked what
+a returning `send` means.
+
+The default answer is `FlushOutcome.Unsupported`. Keep it until you know better:
+it is honest, and it costs the caller nothing but a fallback. Override it this way:
+
+- `send` returns only once the frame is handed over, such as after a sink flush or
+  an awaited send completion: answer `Drained`, or `Failed` after a close.
+- `send` returns with the frame still queued in the transport: ask the transport to
+  wait, inside `flushWithin`, which handles the timeout and the cancellation rules.
+
+`Drained` promises one thing: an orderly close after it cannot be what loses those
+frames. It says nothing about the remote peer. A flush can run while the seam's
+writer is inside `send`, so a sink that is not thread-safe stays out of it, and a
+close must end a pending flush.
+
+Hold it to the contract with a `FlushFixture` arm in your `SeamConformanceSuite`
+harness. `HoldableConnection` wraps any `Connection` and stops a send where the
+transport would, which is what lets the suite prove a flush waits.
+
 ### A real TCP cluster, end-to-end
 
 `TcpClusterExampleTest` stands up a three-peer cluster over real loopback

@@ -2014,6 +2014,24 @@ public abstract class SeamConformanceSuite {
             }
         }
 
+    /**
+     * A close gets no wait of its own: it returns with the frame still held, and that is how a caller
+     * gets out from under a stalled writer. Reds if a drain is ever added to `close`.
+     */
+    @Test
+    public fun aCloseDoesNotWaitForAHeldSend(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            forEachHeldEnd { sender, receiver, hold ->
+                hold.hold()
+                sender.sendTo(receiver.selfId, "lost".encodeToByteArray())
+                delay(FLUSH_SETTLE)
+                assertEquals(1, hold.parkedSends, FLUSH_RIG_DID_NOT_FIRE)
+                // Nothing releases the hold, so a close that drained would wedge to the backstop here.
+                sender.close()
+                assertIs<SeamState.Torn>(sender.state.value)
+            }
+        }
+
     /** The caller's own cancellation is a cancellation, and takes nothing with it. */
     @Test
     public fun cancellingAFlushLeavesTheSeamAndItsFramesAlone(): TestResult =
