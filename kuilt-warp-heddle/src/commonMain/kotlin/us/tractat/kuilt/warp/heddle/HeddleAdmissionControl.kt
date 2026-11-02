@@ -45,7 +45,7 @@ import us.tractat.kuilt.warp.WarpNode
  *    entry it cannot read. Warp has only one way to not run a task, so the task is deferred exactly
  *    as for exhaustion — but the refusal is logged with its reason, so a node that never enrolled or
  *    has halted no longer looks like an idle lane (issue #1892). A halted node's gated tasks stay
- *    deferred until a build that can read the entry, or a migrated log, recovers it (#1738).
+ *    deferred until a build that can read the entry, or a fresh log, recovers it (#1738).
  *  - **Zero consensus on the hot path.** [reserve] / [complete] are local reads and writes of
  *    already-converged holdings; admitting a task adds no consensus round. The heddle's own
  *    ledger replication is coordination-free cloth (a `Quilter`), not consensus.
