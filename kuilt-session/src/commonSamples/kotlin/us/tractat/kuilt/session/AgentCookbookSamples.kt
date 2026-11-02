@@ -4,6 +4,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.util.ExponentialBackoff
@@ -309,4 +310,21 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
 /** Send arbitrary bytes, including reserved Room prefixes, inside a named channel. */
 public suspend fun arbitraryRoomPayloadSample(room: Room, peer: PeerId, payload: ByteArray) {
     room.channel("data").sendTo(peer, payload)
+}
+
+/**
+ * Send a last frame and leave, without a `delay` guessing how long the queue takes.
+ *
+ * Returns `true` when the frame left this device before the leave. That is not the member receiving
+ * it: a sender that needs receipt has the member answer.
+ */
+public suspend fun flushThenLeaveSample(room: Room, member: PeerId, lastFrame: ByteArray): Boolean {
+    room.sendTo(member, lastFrame)
+    val outcome = room.flush(2.seconds)
+    room.leave()
+    return when (outcome) {
+        FlushOutcome.Drained -> true
+        // Not proven, not lost. This fabric cannot tell, a link stalled, or the room already ended.
+        FlushOutcome.Unsupported, FlushOutcome.TimedOut, is FlushOutcome.Failed -> false
+    }
 }

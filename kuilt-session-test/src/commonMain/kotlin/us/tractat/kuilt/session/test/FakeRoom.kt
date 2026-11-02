@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.DeliveryPolicy
 import us.tractat.kuilt.core.FabricAvailability
+import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Seam
@@ -41,6 +42,7 @@ import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
@@ -417,6 +419,17 @@ public class FakeRoom(
     }
 
     override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome = resumeResult
+
+    /**
+     * What [flush] answers while this room is live. Defaults to [FlushOutcome.Drained], since this fake
+     * records a send before returning and holds no queue. Set it to drive a consumer's other paths, in
+     * particular the [FlushOutcome.TimedOut] and [FlushOutcome.Unsupported] arms a real fabric reaches.
+     */
+    public var flushOutcome: FlushOutcome = FlushOutcome.Drained
+
+    /** A room that has left answers [FlushOutcome.Failed], as the real room does. */
+    override suspend fun flush(timeout: Duration): FlushOutcome =
+        if (left.value) FlushOutcome.Failed(IllegalStateException("this room has left")) else flushOutcome
 
     override suspend fun leave(reason: LeaveReason) {
         if (!left.compareAndSet(expect = false, update = true)) return
