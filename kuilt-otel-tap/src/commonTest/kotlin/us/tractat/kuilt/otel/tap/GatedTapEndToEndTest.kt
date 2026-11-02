@@ -5,6 +5,7 @@ package us.tractat.kuilt.otel.tap
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
@@ -14,6 +15,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
+import us.tractat.kuilt.otel.tap.admit.SendCountingSeam
 import us.tractat.kuilt.otel.tap.admit.TapAdmitMessage
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.store.InMemoryDurableStore
@@ -63,6 +65,40 @@ class GatedTapEndToEndTest {
         val pulled = c.pull()
 
         assertEquals(listOf("log 1", "log 2", "log 3"), pulled.map { it.body })
+    }
+
+    /**
+     * The harm in the terms a user sees: the laptop hosts, a stranger floods it with challenges and
+     * reads nothing, and then the phone joins. The pull has to finish anyway.
+     */
+    @Test
+    fun aStrangerWhoStopsReadingDoesNotStopThePull() = runTest(UnconfinedTestDispatcher()) {
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val loom = InMemoryLoom()
+        val pullerSeam = SendCountingSeam(loom.host(config.pattern))
+        val c = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
+            .also { client = it }
+        val stranger = loom.join(InMemoryTag("stranger"))
+
+        var sent = 0
+        while (pullerSeam.parkedTo(stranger.selfId) == 0) {
+            check(sent < 10_000) { "rig: $sent challenges and the fabric still takes every answer" }
+            val nonce = ByteString(Random(sent).nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES))
+            stranger.sendTo(pullerSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
+            sent++
+            runCurrent()
+        }
+
+        host = installLogTapJoining(
+            loom,
+            exporterWith(3),
+            backgroundScope,
+            InMemoryTag("device"),
+            config,
+            LogTapAdmission.Verify(token, clock, Random(7)),
+        )
+
+        assertEquals(listOf("log 1", "log 2", "log 3"), c.pull().map { it.body })
     }
 
     @Test

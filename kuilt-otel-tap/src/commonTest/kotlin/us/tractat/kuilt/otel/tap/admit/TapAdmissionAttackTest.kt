@@ -202,6 +202,55 @@ class TapAdmissionAttackTest {
         )
     }
 
+    // ── the stall ──────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * A stranger keeps challenging the puller and never reads a thing. Every challenge earns a proof,
+     * so the stranger controls how many frames head its way, and its unread buffer fills until the
+     * puller's next send to it suspends. That is `Seam.sendTo` doing its job: it suspends until the
+     * transport accepts the frame. The gate's job is to not be standing there when it happens, since
+     * the same collector carries every other peer's frames.
+     */
+    @Test
+    fun aStrangerWhoStopsReadingDoesNotStallThePuller() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val pullerSeam = SendCountingSeam(loom.host(Pattern("stall")))
+        val pullerGate = pullerSeam.tokenGated(prover(), backgroundScope)
+        val relayed = mutableListOf<ByteArray>()
+        backgroundScope.launch { pullerGate.incoming.collect { relayed += it.toByteArray() } }
+        val stranger = loom.join(InMemoryTag("stranger"))
+
+        floodUntilAnAnswerParks(stranger, pullerSeam)
+
+        val deviceSeam = loom.join(InMemoryTag("device"))
+        val deviceGate = deviceSeam.tokenGated(verifier(), backgroundScope)
+        runCurrent()
+        val replicationFrame = byteArrayOf(0x01, 0x02, 0x03)
+        deviceSeam.sendTo(pullerGate.selfId, replicationFrame)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(1, pullerSeam.parkedTo(stranger.selfId), "rig: an answer to the stranger must be parked in the fabric") },
+            { assertTrue(pullerSeam.deliveredTo(stranger.selfId) > 0, "rig: the stranger's buffer must have taken answers first") },
+            { assertTrue(pullerGate.selfId in deviceGate.peers.value, "the device's challenge must still be answered") },
+            { assertContentEquals(replicationFrame, relayed.singleOrNull(), "the device's frames must still reach the replicator") },
+        )
+    }
+
+    /** Challenge the puller until the fabric stops taking its answers, and return how many that took. */
+    private suspend fun TestScope.floodUntilAnAnswerParks(stranger: Seam, puller: SendCountingSeam): Int {
+        var sent = 0
+        while (puller.parkedTo(stranger.selfId) == 0) {
+            check(sent < FLOOD_LIMIT) { "rig: $sent challenges and the fabric still takes every answer" }
+            stranger.sendTo(puller.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(challengeNonce(sent))))
+            sent++
+            runCurrent()
+        }
+        return sent
+    }
+
+    private fun challengeNonce(seed: Int) = ByteString(Random(seed).nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES))
+
     // ── what this does not close ───────────────────────────────────────────────────────────────
 
     /**
@@ -425,6 +474,31 @@ class TapAdmissionAttackTest {
     private companion object {
         const val VERIFIER_SEED = 7
         const val PROVER_SEED = 11
+        const val FLOOD_LIMIT = 10_000
+    }
+}
+
+/**
+ * Counts the sends to each peer that the fabric has taken and the ones it is still sitting on, so a
+ * test can show a send really did suspend. A stall test without this passes when the buffer never
+ * filled.
+ */
+internal class SendCountingSeam(private val inner: Seam) : Seam by inner {
+    private val parked = mutableMapOf<PeerId, Int>()
+    private val delivered = mutableMapOf<PeerId, Int>()
+
+    fun parkedTo(peer: PeerId): Int = parked[peer] ?: 0
+
+    fun deliveredTo(peer: PeerId): Int = delivered[peer] ?: 0
+
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        parked[peer] = parkedTo(peer) + 1
+        try {
+            inner.sendTo(peer, payload)
+            delivered[peer] = deliveredTo(peer) + 1
+        } finally {
+            parked[peer] = parkedTo(peer) - 1
+        }
     }
 }
 
