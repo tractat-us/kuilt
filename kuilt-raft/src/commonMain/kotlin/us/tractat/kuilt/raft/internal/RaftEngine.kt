@@ -1909,8 +1909,10 @@ internal class RaftEngine(
             return
         }
         // #3123: the second election entry point, not a redundant one. [onTimeoutNow] reaches here without
-        // [onElectionTimeout], and so does a PreVote round that won its quorum after an AppendEntries
-        // delivered this node's committed removal (a same-term AppendEntries does not clear [preVoteTerm]).
+        // [onElectionTimeout] (§3.10 skips PreVote), so this is the only gate on that lane. A PreVote round
+        // cannot complete across the removal-commit edge, because a follower's commit index moves only on an
+        // accepted AppendEntries or InstallSnapshot and both clear [preVoteTerm]; for that lane the check is
+        // defence in depth.
         if (!promotable) {
             preVoteTerm = null
             debug { "startRealElection: not promotable (removal committed) — no election" }
@@ -3467,6 +3469,11 @@ internal class RaftEngine(
         // same condition from live state, so a leader outside the committed membership cannot persist by any
         // route that bypasses it. It reads the committed configuration, never only the latest: §4.2.2 has the
         // removed leader wait for C_new to commit before it steps down.
+        //
+        // Measured inert: deleting this leaves the module green. With the election gate in [promotable] the only
+        // reachable firing is a Simple(C_new) that is the window's last config entry, where [onConfigCommitted]
+        // has already stepped down. Retained because it reads the condition from live state rather than from
+        // which entry happened to be last in the window, so it outlives that argument.
         if (_role.value is RaftRole.Leader && !promotable) {
             debug { "advanceCommit: leader not promotable (removal committed) — stepping down (RemovedFromConfig)" }
             stepDownToFollower(StepDownReason.RemovedFromConfig)
