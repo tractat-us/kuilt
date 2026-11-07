@@ -143,19 +143,15 @@ class CausalMapTest {
         val votesDot = pollByA["poll"]?.entries?.get("votes")?.dots.orEmpty().single()
         val questionDot = pollByA["poll"]?.entries?.get("question")?.dots.orEmpty().single()
         val written = pollByA.piece(pollByA.write(b, "poll", "votes", 4))
-        val expectedStore = DotMap(
+        val expectedPoll = DotMap<String, DotFun<Int>>(
             mapOf(
-                "poll" to DotMap(
-                    mapOf(
-                        "question" to DotFun(mapOf(questionDot to 1)),
-                        "votes" to DotFun(mapOf(Dot(b, 1L) to 4)),
-                    ),
-                ),
+                "question" to DotFun(mapOf(questionDot to 1)),
+                "votes" to DotFun(mapOf(Dot(b, 1L) to 4)),
             ),
         )
         assertAll(
-            { assertEquals(expectedStore.entries.keys, written.keys) },
-            { assertEquals(expectedStore.entries["poll"], written["poll"]) },
+            { assertEquals(setOf("poll"), written.keys) },
+            { assertEquals(expectedPoll, written["poll"]) },
             { assertEquals(DotContext.of(questionDot, votesDot, Dot(b, 1L)), written.context) },
         )
     }
@@ -166,7 +162,7 @@ class CausalMapTest {
     @Test
     fun aLiveDotReissuedWithANewPayloadIsRejected() {
         val reissued = DotContext.EMPTY.nextDot(a)
-        assertTrue(reissued in pollByA.context)
+        assertTrue(pollByA.context.contains(reissued))
         assertFailsWith<IllegalArgumentException> {
             pollByA.apply(a, "poll", DotMap()) { _ ->
                 CausalMap.Change(DotMap(mapOf("question" to DotFun(mapOf(reissued to 7)))))
