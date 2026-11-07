@@ -4,10 +4,15 @@ import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.cluster.ClusterClient
@@ -41,7 +46,10 @@ import kotlin.time.Duration.Companion.seconds
  * Mirrors [ClusterClientFailoverE2ETest] but adds:
  *
  * - **Two concurrent learner clients** (`clientAlpha` and `clientBeta`), each with a distinct
- *   stable [NodeId], each proposing against the shared M=3 voter log.
+ *   stable [NodeId], connected and proposing at the same time against the shared M=3 voter log.
+ * - **Cross-visibility**: each client must apply the other's commands, before and after the
+ *   failover. A learner dropped from the config still gets its own proposals committed, so only
+ *   this shows it is still receiving (#3120).
  * - **Forced leader change mid-flight** via [us.tractat.kuilt.raft.RaftNode.transferLeadership]
  *   (Raft §3.10 graceful TimeoutNow path) — the voter set remains intact at M=3.
  * - **Entry-relay kill mid-propose** — relay A's scope is cancelled while at least one client
@@ -135,46 +143,49 @@ class ClusterClientMultiClientHardeningE2ETest {
 
                 withTimeout(20.seconds) { cluster.awaitLeader() }
 
-                // ── Client Alpha: connect first, propose to prove admission complete ──
-                // Membership changes are serialized (only one can be in-flight at a time),
-                // so we admit alpha, let its propose land (proving the config committed),
-                // then admit beta. This avoids a MembershipChangeInProgressException race.
-                val alphaScope = CoroutineScope(coroutineContext + Job())
-                val clientAlphaConfig = ClusterConfig(
+                // ── Both clients connect at once ──────────────────────────────────────
+                // Concurrently, on purpose: two admissions racing each other is the case #3120
+                // reported, where the second admission evicted the first learner from the config.
+                val clientConfig = ClusterConfig(
                     voters = setOf(voterA, voterB, voterC),
-                    learners = setOf(clientAlphaId),
+                    learners = setOf(clientAlphaId, clientBetaId),
                 )
+                val alphaScope = CoroutineScope(coroutineContext + Job())
+                val betaScope = CoroutineScope(coroutineContext + Job())
                 val clientAlpha: ClusterClient = alphaScope.clusterClient(
                     loom = alphaLoom,
                     clusterEndpoints = ClusterEndpoints(listOf(advA, advB)),
                     clientNodeId = clientAlphaId,
-                    clusterConfig = clientAlphaConfig,
+                    clusterConfig = clientConfig,
                     raftConfig = raftCfg,
                     clock = { Clock.System.now() },
-                )
-
-                // ── Phase 1a: alpha proposes to confirm it is fully admitted ─────────
-                val alphaCmd1 = "alpha:before-transfer".encodeToByteArray()
-                val alphaEntry1 = withTimeout(20.seconds) { clientAlpha.propose(alphaCmd1) }
-
-                // ── Client Beta: admit after alpha's config change committed ──────────
-                val betaScope = CoroutineScope(coroutineContext + Job())
-                val clientBetaConfig = ClusterConfig(
-                    voters = setOf(voterA, voterB, voterC),
-                    learners = setOf(clientAlphaId, clientBetaId),
                 )
                 val clientBeta: ClusterClient = betaScope.clusterClient(
                     loom = betaLoom,
                     clusterEndpoints = ClusterEndpoints(listOf(advA, advB)),
                     clientNodeId = clientBetaId,
-                    clusterConfig = clientBetaConfig,
+                    clusterConfig = clientConfig,
                     raftConfig = raftCfg,
                     clock = { Clock.System.now() },
                 )
 
-                // ── Phase 1b: beta proposes while cluster is still stable ─────────────
+                // What each client has applied: the cross-visibility witness. A learner the leader
+                // stopped replicating to still gets its own proposals committed, so only the OTHER
+                // client's commands show that it is still receiving the log.
+                val alphaSeen = alphaScope.appliedCommandsOf(clientAlpha)
+                val betaSeen = betaScope.appliedCommandsOf(clientBeta)
+
+                // ── Phase 1: both propose at once while the cluster is stable ─────────
+                val alphaCmd1 = "alpha:before-transfer".encodeToByteArray()
                 val betaCmd1 = "beta:before-transfer".encodeToByteArray()
-                val betaEntry1 = withTimeout(20.seconds) { clientBeta.propose(betaCmd1) }
+                val (alphaEntry1, betaEntry1) = withTimeout(20.seconds) {
+                    val alpha = async { clientAlpha.propose(alphaCmd1) }
+                    val beta = async { clientBeta.propose(betaCmd1) }
+                    alpha.await() to beta.await()
+                }
+                val phase1 = setOf("alpha:before-transfer", "beta:before-transfer")
+                withTimeout(20.seconds) { alphaSeen.first { it.containsAll(phase1) } }
+                withTimeout(20.seconds) { betaSeen.first { it.containsAll(phase1) } }
 
                 // ── Phase 2: force a graceful leader change mid-flight ────────────────
                 // Identify the current leader and pick a different voter as transfer target.
@@ -230,6 +241,12 @@ class ClusterClientMultiClientHardeningE2ETest {
                 // Wait for all 3 commands to replicate to voterC.
                 withTimeout(10.seconds) { voterCDone.await() }
 
+                // Cross-visibility after the failover too: alpha's re-admission through relay B must
+                // not have evicted beta, and alpha must still be receiving.
+                val all = setOf("alpha:before-transfer", "beta:before-transfer", "alpha:after-failover")
+                withTimeout(20.seconds) { alphaSeen.first { it.containsAll(all) } }
+                withTimeout(20.seconds) { betaSeen.first { it.containsAll(all) } }
+
                 // No-double-apply: fold all committed entries through ClientSessionTable.
                 // The retry of alphaCmd2 with the same requestId must be skipped on the
                 // second encounter (shouldApply → false).
@@ -269,4 +286,20 @@ class ClusterClientMultiClientHardeningE2ETest {
                 relayScopeB.cancel()
             }
         }
+
+    /**
+     * Collect [client]'s committed stream (single-collection: this is its only collector) and keep
+     * the set of application commands it has applied, config entries skipped.
+     */
+    private fun CoroutineScope.appliedCommandsOf(client: ClusterClient): StateFlow<Set<String>> {
+        val seen = MutableStateFlow(emptySet<String>())
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            client.committed.collect { committed ->
+                if (committed is Committed.Entry && committed.entry.config == null) {
+                    seen.update { it + committed.entry.command.decodeToString() }
+                }
+            }
+        }
+        return seen
+    }
 }

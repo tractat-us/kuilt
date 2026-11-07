@@ -109,8 +109,11 @@ starting the next, so at most one collector of any backing seam is ever live
 Server-side cluster facade: an M-voter `VoterMesh` plus a relay accept loop
 that admits learner clients via `KtorRoomHost`. Each admitted WebSocket
 connection is a two-peer Room; the server derives the learner's `NodeId` from
-the room roster, registers the connection's spoke with the `RaftRelayHub`, and
-issues a `changeMembership` to add the learner. The hub routes each learner-inbound
+the room roster and registers the connection's spoke with the `RaftRelayHub`.
+Registering is what admits it: a reconciler on every voter, acting only while that
+voter leads, commits one membership change adding every registered learner it does
+not yet have, built from its current membership. Concurrent admissions batch into
+one change and never undo each other. The hub routes each learner-inbound
 frame **by its `RaftRelay.dest`** to exactly that voter's inbound and preserves the
 true sender as `RaftRelay.origin` — no leader-sniffing, no sender-restamping in
 either direction.
