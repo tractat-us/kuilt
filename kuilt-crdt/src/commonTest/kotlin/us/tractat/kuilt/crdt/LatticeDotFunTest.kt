@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -55,16 +56,25 @@ class LatticeDotFunTest {
         // C's context and absent from its store, which is the signature of a deliberate remove.
         val removedByC = Causal(LatticeDotFun<GCounter>(), DotContext.of(d1))
         val merged = bumpedByB.piece(removedByC)
-        assertEquals(emptyMap(), merged.store.values)
-        assertEquals(merged, removedByC.piece(bumpedByB))
+        assertAll(
+            { assertEquals(emptyMap(), merged.store.values) },
+            { assertEquals(merged, removedByC.piece(bumpedByB)) },
+        )
     }
 
+    /**
+     * The causal rule every dot store shares, so this passes on [DotFun] too: it pins that the
+     * payload join did not disturb it.
+     */
     @Test
     fun anUnseenDotSurvivesEitherSide() {
         val d2 = Dot(b, 1L)
         val onlyB = Causal(LatticeDotFun(mapOf(d2 to counter(b to 1L))), DotContext.of(d2))
-        val merged = bumpedByC.piece(onlyB)
-        assertEquals(setOf(d1, d2), merged.store.dots)
+        val expected = mapOf(d1 to counter(a to 1L, c to 5L), d2 to counter(b to 1L))
+        assertAll(
+            { assertEquals(expected, bumpedByC.piece(onlyB).store.values) },
+            { assertEquals(expected, onlyB.piece(bumpedByC).store.values) },
+        )
     }
 
     /**
