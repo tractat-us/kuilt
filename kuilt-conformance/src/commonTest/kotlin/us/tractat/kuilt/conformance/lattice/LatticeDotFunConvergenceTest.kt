@@ -28,10 +28,12 @@ internal class LatticeDotFunConvergenceTest : LatticeLawSuite<Counters>() {
             LatticeOp("write", OpKind.ASSERT) { state, replicaIndex, _ ->
                 write(state, ReplicaId("R$replicaIndex"))
             },
+            // With nothing to bump it writes instead, so it is an assert on every state, the lattice
+            // bottom included (the harness leads every replica with one, #2145).
             LatticeOp("bump", OpKind.ASSERT) { state, replicaIndex, random ->
                 val held = state.store.dots.sorted()
                 if (held.isEmpty()) {
-                    state
+                    write(state, ReplicaId("R$replicaIndex"))
                 } else {
                     bump(state, held[random.nextInt(held.size)], ReplicaId("R$replicaIndex"), random.nextLong(1L, 4L))
                 }
