@@ -37,6 +37,7 @@ import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomHost
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ServerCluster")
@@ -74,7 +75,9 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ServerCluster")
  * registered learner it does not yet have, built from its current membership. No connection
  * changes membership itself, which is what used to let one admission evict another (#3120).
  * The reconciler is the sole membership writer this class runs: a caller changing membership
- * through [voterNodes] directly can race it.
+ * through [voterNodes] directly can race it. Built with a `learnerGrace`, it also removes: a learner
+ * disconnected for the grace leaves the config, and that includes one a caller added directly
+ * through [voterNodes] that never connects.
  *
  * The [RaftRelayHub] is the key integration primitive for S3b-3: it makes the voter
  * channel transports aware of dynamically-connected learner Seams without rebuilding
@@ -106,11 +109,20 @@ public class ServerCluster internal constructor(
      */
     public val overlay: OverlayServer,
     private val serverScope: CoroutineScope,
+    learnerRemoval: LearnerRemoval,
 ) {
     init {
         // One reconciler per voter; the role gate inside means only the leader acts, so leadership
-        // moving between voters needs no hand-off here.
-        mesh.voterNodes.values.forEach { serverScope.launchLearnerReconciler(it, hub.learnersFlow) }
+        // moving between voters needs no hand-off here. Under a grace, one LearnerGrace is shared
+        // by all of them, so a leadership change keeps the pending removals.
+        when (learnerRemoval) {
+            LearnerRemoval.Never ->
+                mesh.voterNodes.values.forEach { serverScope.launchLearnerReconciler(it, hub.learnersFlow) }
+            is LearnerRemoval.AfterGrace -> {
+                val grace = LearnerGrace(hub.learnersFlow, learnerRemoval.grace, serverScope)
+                mesh.voterNodes.values.forEach { serverScope.launchLearnerReconciler(it, grace) }
+            }
+        }
     }
 
     /** The live voter node map — delegates to [mesh]. */
@@ -244,6 +256,41 @@ public fun CoroutineScope.serverCluster(
     voterIds: List<NodeId>,
     raftConfig: RaftConfig,
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
+): ServerCluster = localServerCluster(host, voterIds, raftConfig, storageFactory, LearnerRemoval.Never)
+
+/**
+ * Construct a [ServerCluster] that removes a learner from the config once it has been disconnected
+ * for [learnerGrace]. Otherwise the same as the overload without it, which never removes one.
+ *
+ * Without removal the learner set grows with every [NodeId] that ever connected, and the leader keeps
+ * replicating to all of them. Use this when clients take a fresh [NodeId] per session.
+ *
+ * The grace is keyed on [NodeId], not on a connection: a client that reconnects under the same id
+ * inside it (a fresh room after a tear, or another relay after failover) is never removed, and one
+ * that reconnects after it is simply admitted again and catches up. Removal is a learner-set-only
+ * membership change, so the voter set and its quorum are untouched. A learner already in the config
+ * when this cluster starts (one admitted before a restart from durable [storageFactory]) gets a full
+ * grace to reconnect.
+ *
+ * @param learnerGrace How long a learner may stay disconnected before it is removed. Non-negative;
+ *   `Duration.ZERO` removes it as soon as its connection closes.
+ */
+public fun CoroutineScope.serverCluster(
+    host: RoomHost,
+    voterIds: List<NodeId>,
+    raftConfig: RaftConfig,
+    learnerGrace: Duration,
+    storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
+): ServerCluster =
+    localServerCluster(host, voterIds, raftConfig, storageFactory, LearnerRemoval.AfterGrace(learnerGrace))
+
+/** The overloads without a caller-supplied overlay, which build the local one. */
+private fun CoroutineScope.localServerCluster(
+    host: RoomHost,
+    voterIds: List<NodeId>,
+    raftConfig: RaftConfig,
+    storageFactory: (NodeId) -> RaftStorage,
+    learnerRemoval: LearnerRemoval,
 ): ServerCluster {
     require(voterIds.isNotEmpty()) { "voterIds must be non-empty" }
     val serverScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
@@ -253,7 +300,7 @@ public fun CoroutineScope.serverCluster(
     // its target set), attach/lookup are purely local, and the constant `{ 0 }` clock is
     // fine because AttachmentDirectory.nextTimestamp is monotonic via max(now, last + 1).
     val overlay = localOverlay(serverPeerId, serverScope)
-    return serverCluster(host, voterIds, raftConfig, overlay, serverScope, storageFactory)
+    return serverCluster(host, voterIds, raftConfig, overlay, serverScope, storageFactory, learnerRemoval)
 }
 
 /**
@@ -277,10 +324,36 @@ public fun CoroutineScope.serverCluster(
     raftConfig: RaftConfig,
     overlay: OverlayServer,
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
+): ServerCluster = federatedServerCluster(host, voterIds, raftConfig, overlay, storageFactory, LearnerRemoval.Never)
+
+/**
+ * The federated form of the [learnerGrace] overload: a caller-supplied [overlay], and a learner
+ * removed once it has been disconnected for [learnerGrace]. See that overload for the grace.
+ *
+ * @param learnerGrace How long a learner may stay disconnected before it is removed. Non-negative.
+ */
+public fun CoroutineScope.serverCluster(
+    host: RoomHost,
+    voterIds: List<NodeId>,
+    raftConfig: RaftConfig,
+    overlay: OverlayServer,
+    learnerGrace: Duration,
+    storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
+): ServerCluster =
+    federatedServerCluster(host, voterIds, raftConfig, overlay, storageFactory, LearnerRemoval.AfterGrace(learnerGrace))
+
+/** The overloads with a caller-supplied overlay. */
+private fun CoroutineScope.federatedServerCluster(
+    host: RoomHost,
+    voterIds: List<NodeId>,
+    raftConfig: RaftConfig,
+    overlay: OverlayServer,
+    storageFactory: (NodeId) -> RaftStorage,
+    learnerRemoval: LearnerRemoval,
 ): ServerCluster {
     require(voterIds.isNotEmpty()) { "voterIds must be non-empty" }
     val serverScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
-    return serverCluster(host, voterIds, raftConfig, overlay, serverScope, storageFactory)
+    return serverCluster(host, voterIds, raftConfig, overlay, serverScope, storageFactory, learnerRemoval)
 }
 
 /** Shared builder: wires the voter mesh + relay accept loop and threads [overlay] through. */
@@ -291,6 +364,7 @@ private fun serverCluster(
     overlay: OverlayServer,
     serverScope: CoroutineScope,
     storageFactory: (NodeId) -> RaftStorage,
+    learnerRemoval: LearnerRemoval,
 ): ServerCluster {
     val clusterConfig = ClusterConfig(voters = voterIds.toSet())
     val hub = RaftRelayHub(voterIds.toSet())
@@ -302,6 +376,7 @@ private fun serverCluster(
         hub = hub,
         overlay = overlay,
         serverScope = serverScope,
+        learnerRemoval = learnerRemoval,
     )
 }
 
@@ -423,6 +498,22 @@ private fun voterChannelTransport(
             // A learner dest: wrap as RaftRelay(origin = this voter) so the client credits
             // the true voter, and route down that learner's spoke by dest.
             hub.sendToLearner(fromVoter = id, learnerId = peer, bytes = message)
+        }
+    }
+}
+
+/** Whether a [ServerCluster] ever removes a learner, and after how long a disconnect. */
+internal sealed interface LearnerRemoval {
+    /** Learners are only ever added: the overloads without a grace. */
+    data object Never : LearnerRemoval
+
+    /**
+     * A learner disconnected for [grace] is removed from the config. Validated here, before any
+     * scope or voter exists, so a bad grace cannot leave voter nodes running on a scope nobody holds.
+     */
+    data class AfterGrace(val grace: Duration) : LearnerRemoval {
+        init {
+            require(!grace.isNegative()) { "learnerGrace must not be negative, was $grace" }
         }
     }
 }

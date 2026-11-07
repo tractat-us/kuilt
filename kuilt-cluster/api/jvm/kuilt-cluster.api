@@ -107,6 +107,10 @@ public final class us/tractat/kuilt/cluster/ServerClusterKt {
 	public static final fun serverCluster (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/cluster/OverlayServer;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/cluster/ServerCluster;
 	public static synthetic fun serverCluster$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/ServerCluster;
 	public static synthetic fun serverCluster$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/cluster/OverlayServer;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/ServerCluster;
+	public static final fun serverCluster-myKFqkg (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;JLkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/cluster/ServerCluster;
+	public static synthetic fun serverCluster-myKFqkg$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;JLkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/ServerCluster;
+	public static final fun serverCluster-x2RqbK4 (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/cluster/OverlayServer;JLkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/cluster/ServerCluster;
+	public static synthetic fun serverCluster-x2RqbK4$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/session/RoomHost;Ljava/util/List;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/cluster/OverlayServer;JLkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/ServerCluster;
 }
 
 public final class us/tractat/kuilt/cluster/VoterMesh {

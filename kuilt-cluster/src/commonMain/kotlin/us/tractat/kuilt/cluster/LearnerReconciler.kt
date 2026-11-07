@@ -42,11 +42,11 @@ private val LEARNER_RECONCILE_RETRY_BACKOFF = 200.milliseconds
  * previous admission had committed, evicting that learner. This loop builds every target from
  * `node.membership.value` read immediately before the call, and is level-triggered: a refused
  * attempt (`MembershipChangeInProgressException`, `NotLeaderException`, `LeadershipLostException`)
- * is followed by a fresh read, never a resend. Any other failure escapes and fails the owning scope. Admissions that arrive while a
- * change is in flight are batched into the next one, so an admission storm costs a few config
- * entries rather than one each.
+ * is followed by a fresh read, never a resend. Any other failure escapes and fails the owning scope.
+ * Admissions that arrive while a change is in flight are batched into the next one, so an admission
+ * storm costs a few config entries rather than one each.
  *
- * Additive only: an id leaving [desired] is never removed here.
+ * Additive only: an id leaving [desired] is never removed here. The [LearnerGrace] overload removes.
  *
  * The generalisation of [launchCoreLearnerAdmission], whose desired set is a seam's roster and which
  * admits one id per change. Correct only while this loop is the sole membership writer for [node];
@@ -56,18 +56,54 @@ private val LEARNER_RECONCILE_RETRY_BACKOFF = 200.milliseconds
 internal fun CoroutineScope.launchLearnerReconciler(
     node: RaftNode,
     desired: StateFlow<Set<NodeId>>,
+): Job = reconcileLearners(node, desired, snapshot = { desired.value }) { current, want ->
+    current.learners + (want - current.voters)
+}
+
+/**
+ * Keep [node]'s learner set **equal** to [grace]'s retained set for as long as [node] leads: add every
+ * learner that connects, and remove one only once it has been gone for the whole grace.
+ *
+ * Every attempt first hands the membership's learners to [LearnerGrace.retain] and builds its
+ * target from the set that returns, so a learner the config holds but that is not connected (it just
+ * left, or was admitted before a restart, or by another writer) gets a full grace rather than being
+ * removed by the first change built after it was read.
+ *
+ * Removing a learner is a learner-set-only `Simple` entry: the voter set and its quorum are
+ * untouched. Everything else is as the additive overload above describes.
+ */
+internal fun CoroutineScope.launchLearnerReconciler(
+    node: RaftNode,
+    grace: LearnerGrace,
+): Job = reconcileLearners(node, grace.retained, snapshot = grace::retain) { current, want ->
+    want - current.voters
+}
+
+/**
+ * The loop both overloads share. [wanted] wakes the gate; [snapshot] is handed the membership's
+ * learners and returns the wanted set to build from, read once so the target and anything the
+ * snapshot decided come from one view; [target] maps the membership and that set to the learner set
+ * to commit.
+ */
+private fun CoroutineScope.reconcileLearners(
+    node: RaftNode,
+    wanted: StateFlow<Set<NodeId>>,
+    snapshot: (Set<NodeId>) -> Set<NodeId>,
+    target: (current: ClusterConfig, want: Set<NodeId>) -> Set<NodeId>,
 ): Job = launch {
     while (true) {
-        // Suspend until this node leads and something desired is missing from its membership.
-        combine(desired, node.role, node.membership) { want, role, membership ->
-            role is RaftRole.Leader && missingLearners(want, membership).isNotEmpty()
+        // Suspend until this node leads and its learner set differs from the target.
+        combine(wanted, node.role, node.membership) { want, role, membership ->
+            role is RaftRole.Leader && target(membership, want) != membership.learners
         }.first { it }
 
         val current = node.membership.value
-        val missing = missingLearners(desired.value, current)
-        if (missing.isEmpty()) continue
+        val learners = target(current, snapshot(current.learners))
+        // The snapshot can close the gap by itself (a learner that just disconnected now has its
+        // grace), and the gate re-evaluates against the updated wanted set.
+        if (learners == current.learners) continue
         val refusal = try {
-            node.changeMembership(ClusterConfig(voters = current.voters, learners = current.learners + missing))
+            node.changeMembership(ClusterConfig(voters = current.voters, learners = learners))
             null
         } catch (refused: MembershipChangeInProgressException) {
             refused
@@ -80,11 +116,8 @@ internal fun CoroutineScope.launchLearnerReconciler(
         // scope: a reconciler retrying an unexpected failure forever would leave learners that never
         // receive, and no line at the default log level saying why.
         if (refusal != null) {
-            log.debug { "learner-reconciler: adding $missing refused, re-reading: $refusal" }
+            log.debug { "learner-reconciler: learners ${current.learners} -> $learners refused, re-reading: $refusal" }
             delay(LEARNER_RECONCILE_RETRY_BACKOFF)
         }
     }
 }
-
-private fun missingLearners(desired: Set<NodeId>, membership: ClusterConfig): Set<NodeId> =
-    desired - membership.voters - membership.learners

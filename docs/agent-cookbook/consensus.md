@@ -176,6 +176,12 @@ optimistic resume: every reconnect is a plain `join`, and the cost is a re-snaps
 log rather than a lost session. And `committed` keeps `RaftNode.committed`'s
 single-collection contract: collect it once per client, `shareIn` for fan-out.
 
+**A learner stays in the config until you ask for it to leave.** By default every client id that ever
+connected stays a learner, and the leader keeps replicating to all of them. When clients take a fresh
+id per session, pass `learnerGrace` to `serverCluster`: a learner disconnected that long is removed,
+and one that reconnects under the same id inside the grace never is. Removal touches no voter, so the
+quorum is unchanged, and a client that comes back later is admitted again and catches up.
+
 ## Durable consensus state
 
 **Intent:** make a Raft node remember what it knew across a restart — its current term, who it voted for in that term, the leader it established, its log and its snapshot. A node that forgets any of those can vote twice in one term, which is the single thing Raft exists to prevent. Don't write an `expect`/`actual` `RaftStorage` per platform, and don't invent a SQLite or IndexedDB schema for consensus state.
