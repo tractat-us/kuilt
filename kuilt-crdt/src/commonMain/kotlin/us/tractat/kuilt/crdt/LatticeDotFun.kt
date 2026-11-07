@@ -8,10 +8,11 @@ import kotlinx.serialization.Serializable
  *
  * [DotFun] is the store for values that never change: a dot names one write, so wherever it
  * appears it carries the same value, and [DotFun.join] keeps either copy. That premise is what an
- * MV register needs and what a per-element tombstone breaks. Marking an element deleted grows its
- * payload in place, under the dot that inserted it, because dropping the dot would orphan whatever
- * was positioned after it. One dot then carries two different values on two replicas, and keeping
- * either copy makes the join depend on which side is `this`. This store joins them instead, which
+ * MV register needs, and a per-element tombstone would break it. The motivating case is a sequence
+ * whose elements are dots (#3126): marking an element deleted has to grow its payload in place,
+ * under the dot that inserted it, because dropping the dot would orphan whatever was positioned
+ * after it. One dot then carries two different values on two replicas, and keeping either copy
+ * makes the join depend on which side is `this`. This store joins them instead, which
  * is the `DotFun⟨V⟩` of Almeida, Shoker and Baquero, *Delta State Replicated Data Types*
  * (arXiv:1603.01529, Fig. 12):
  *

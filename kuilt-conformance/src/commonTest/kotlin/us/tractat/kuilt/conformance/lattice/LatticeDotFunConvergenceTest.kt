@@ -57,7 +57,7 @@ internal class LatticeDotFunConvergenceTest : LatticeLawSuite<Counters>() {
 private fun write(state: Counters, replica: ReplicaId): Counters {
     val dot = state.context.nextDot(replica)
     return Causal(
-        LatticeDotFun(state.store.values + (dot to GCounter.ZERO.piece(GCounter.ZERO.inc(replica).delta))),
+        LatticeDotFun(state.store.values + (dot to GCounter.of(replica to 1L))),
         state.context.add(dot),
     )
 }

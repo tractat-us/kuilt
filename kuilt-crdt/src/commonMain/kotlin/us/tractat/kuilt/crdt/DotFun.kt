@@ -9,6 +9,9 @@ import kotlinx.serialization.Serializable
  * their value. As `Causal<DotFun<V>>` this is a Multi-Value Register: concurrent
  * writes each keep their (dot, value), surfacing the conflict rather than hiding it.
  *
+ * A value that grows after its dot is minted breaks that premise, and [join] then keeps whichever
+ * copy `this` holds. Use [LatticeDotFun] for such values: it joins the two.
+ *
  * Serialized by [DotFunSerializer], which emits [values] entries sorted by [Dot]
  * key so that two replicas at the same logical state produce identical bytes
  * regardless of delivery order (issue #713).

@@ -15,6 +15,10 @@ import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
  *
  * The sort matters for the same reason it does in [DotFunSerializer]: [LatticeDotFun.join] builds a
  * [LinkedHashMap] whose order depends on which operand was `this`.
+ *
+ * **The layout is [DotFunSerializer]'s exactly**, so a `DotFun<V>` blob decodes as a
+ * `LatticeDotFun<V>` and the other way round, with nothing to flag the mismatch. A frame's type is
+ * settled by whoever chose the serializer, not by the bytes.
  */
 @OptIn(ExperimentalSerializationApi::class)
 public class LatticeDotFunSerializer<V : Quilted<V>>(

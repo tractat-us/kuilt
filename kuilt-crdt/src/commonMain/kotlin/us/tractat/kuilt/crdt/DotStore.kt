@@ -2,8 +2,9 @@ package us.tractat.kuilt.crdt
 
 /**
  * A container of [Dot]s, optionally each carrying a payload. The shapes —
- * [DotSet] (presence), and later DotFun (dot → value) and DotMap (key → store) —
- * all share the one causal [join] defined here in spirit; pairing any of them
+ * [DotSet] (presence), [DotFun] (dot → value), [LatticeDotFun] (dot → a value that
+ * grows) and [DotMap] (key → store) — all share the one causal [join] defined here
+ * in spirit; pairing any of them
  * with a [DotContext] inside a [Causal] yields a full delta-state CRDT.
  */
 public interface DotStore<S : DotStore<S>> {
