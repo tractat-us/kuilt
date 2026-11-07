@@ -1998,11 +1998,11 @@ internal class RaftEngine(
         electionJob?.cancel()
         leaderAlive = true
         leaderLeaseJob?.cancel()
-        val nextIdx = state.lastLogIndex + 1L
-        otherMembers.forEach { p ->
-            state.nextIndex[p] = nextIdx
-            state.matchIndex[p] = 0L
-        }
+        // Clear, then initialise (#3124). This alone closes the cross-term hole: a peer outside the config
+        // now cannot carry a value from an earlier leadership of this node into this one. The prune in
+        // [recomputeMembership] is the leak fix, and redundant with this for safety. Do not drop this
+        // line in favour of the prune; this is the line that makes every matchIndex a this-term value.
+        state.resetPeerIndices(otherMembers, nextIndex = state.lastLogIndex + 1L)
         emitTrace(RaftTraceEvent.BecomeLeader(nextClock(), transport.selfId, state.currentTerm))
         heartbeatJob = scope.launch {
             while (true) {
@@ -2569,6 +2569,7 @@ internal class RaftEngine(
     private suspend fun onInstallSnapshotResponse(from: NodeId, m: RaftMessage.InstallSnapshotResponse) {
         if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != state.currentTerm) return
+        if (!isReplicationTarget(from)) return
         recentVoterContacts += from                // reachability signal for CheckQuorum
         readIndexTracker.recordAck(from, m.echoedRound)   // credit ACK to the round it actually responded to (BLOCKER 1a)
         confirmFreshReads()                        // ReadIndex: snapshot ACKs count as freshness evidence
@@ -3284,10 +3285,28 @@ internal class RaftEngine(
         send(from, RaftMessage.AppendEntriesResponse(state.currentTerm, true, acceptedMatchIndex, echoedRound = m.round))
     }
 
+    /**
+     * Whether a same-term replication response from [from] still concerns this leader (#3124). A
+     * response from a peer outside the replication targets answers a request sent before the peer was
+     * removed. Acting on it would re-create the per-peer state [prunePeerState] dropped, and a rejection
+     * would even resume replication to a non-member. Nothing honest is lost by ignoring it: CheckQuorum
+     * and read freshness count only voters, and adopt-on-append puts a new peer among the targets before
+     * the first AppendEntries goes to it.
+     *
+     * Callers check it after their higher-term step-down, never before, so a removed peer's higher-term
+     * response still forces the §5.1 step-down.
+     */
+    private fun isReplicationTarget(from: NodeId): Boolean {
+        val target = from in otherMembers
+        if (!target) debug { "response from ${from.value}, which is not a replication target — ignored (#3124)" }
+        return target
+    }
+
     private suspend fun onAppendEntriesResponse(from: NodeId, m: RaftMessage.AppendEntriesResponse) {
         // stale-term peer response: step down and discard
         if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != state.currentTerm) return
+        if (!isReplicationTarget(from)) return
         recentVoterContacts += from                 // reachability signal for CheckQuorum (success or failure)
         readIndexTracker.recordAck(from, m.echoedRound)   // credit ACK to the round it actually responded to (BLOCKER 1a)
         confirmFreshReads()                         // ReadIndex: check if any pending reads can now be confirmed
@@ -3839,6 +3858,7 @@ internal class RaftEngine(
         state.membershipState = newMembership
         reevaluateSelfRole()
         if (changed) {
+            prunePeerState()
             _membership.value = newMembership.effectiveConfig
             debug { "recomputeMembership: $prior → $newMembership (source=$branch)" }
             // `old` is the prior effective config — on the first ever change that is the
@@ -3850,6 +3870,25 @@ internal class RaftEngine(
                 ),
             )
         }
+    }
+
+    /**
+     * Forget the leader-side state of every peer outside the replication targets of the config just
+     * adopted (#3124): its indices, its in-flight snapshot transfer, its read-freshness evidence. A
+     * Joint's targets are both sides, so nobody still voting on either side loses anything.
+     *
+     * It runs on every change, committed or not, and in every role. Each value it drops is volatile
+     * leader state with a safe initial value, so a peer that comes back is rebuilt as if it were new.
+     * On a leader its own config entries never roll back (Leader Append-Only, §5.3). A rollback only
+     * happens on a follower, where these maps are dead state that [becomeLeader] rebuilds anyway.
+     * Pruning only once the entry commits would buy no safety, and would keep the leak open for the
+     * whole window.
+     */
+    private fun prunePeerState() {
+        val targets = otherMembers
+        state.retainPeerIndices(targets)
+        snapshotSender.retain(targets)
+        readIndexTracker.retain(targets)
     }
 
     /**
