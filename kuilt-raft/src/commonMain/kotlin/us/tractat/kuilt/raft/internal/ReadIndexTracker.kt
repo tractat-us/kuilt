@@ -164,6 +164,14 @@ internal class ReadIndexTracker {
         if (echoedRound <= round) lastAckRound[from] = echoedRound
     }
 
+    /**
+     * Forget the ack evidence of every peer outside [targets] — call on every membership change
+     * (#3124). Dropping evidence is always conservative: it can only delay a read, never confirm one.
+     */
+    fun retain(targets: Set<NodeId>) {
+        lastAckRound.keys.retainAll(targets)
+    }
+
     /** Arm the §5.4.2 leader-completeness gate: reads must not resolve before commit reaches [index]. */
     fun onNoOpAppended(index: Long) {
         currentTermNoOpIndex = index
