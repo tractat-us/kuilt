@@ -8,6 +8,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlin.test.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -113,6 +114,13 @@ class StaleMatchIndexReAddTest {
             runCatching { window.leader.changeMembership(ClusterConfig(voters = setOf(l, a, b, d))) }
         }
         delay(WINDOW)
+        // Precondition: the change was accepted, so a low commit below is a refusal to count d, not a change
+        // that never started. It does not stay pending: under the Joint, CheckQuorum needs a new-side
+        // majority of contacts too, so l steps down and the change fails with LeadershipLostException.
+        val joint = sim.storages.getValue(l).entries(window.jointIndex).firstOrNull()
+        assertTrue(joint?.config?.old != null, "precondition: l's log must hold the re-adding Joint at ${window.jointIndex}, found $joint")
+        val outcome = if (change.isCompleted) change.await() else null
+        assertFalse(outcome?.isSuccess == true, "the re-adding change completed with only l and a holding it: $outcome")
         val lCommit = window.leader.commitIndex.value
         val aCommit = sim.nodes.getValue(a).commitIndex.value
         assertTrue(

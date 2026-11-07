@@ -58,7 +58,7 @@ internal class PeerStatePruneTest {
     @Test
     fun resetForLeadershipForgetsPeersOutsideTheConfig() {
         val state = stateTracking()
-        state.resetPeerIndices(MembershipState.Simple(new).replicationTargets(self), nextIndex = 3L)
+        state.resetPeerIndices(MembershipState.Simple(new).replicationTargets(self), firstIndex = 3L)
         assertAll(
             { assertEquals(mapOf(kept to 3L), state.nextIndex.toMap()) },
             { assertEquals(mapOf(kept to 0L), state.matchIndex.toMap()) },

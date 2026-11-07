@@ -98,16 +98,16 @@ internal class RaftState(bootstrapConfig: ClusterConfig) {
     val matchIndex: MutableMap<NodeId, Long> = mutableMapOf()
 
     /**
-     * Start a leadership: forget every peer, then track [targets] from [nextIndex] with
+     * Start a leadership: forget every peer, then track [targets] from [firstIndex] with
      * `matchIndex = 0` (Figure 2's "reinitialized after election"). Clearing first is what makes
      * every `matchIndex` value one produced in this term. Overwriting only [targets] left a peer that
      * was outside the config at election time holding a value from an earlier term (#3124).
      */
-    fun resetPeerIndices(targets: Set<NodeId>, nextIndex: Long) {
-        this.nextIndex.clear()
+    fun resetPeerIndices(targets: Set<NodeId>, firstIndex: Long) {
+        nextIndex.clear()
         matchIndex.clear()
         targets.forEach { p ->
-            this.nextIndex[p] = nextIndex
+            nextIndex[p] = firstIndex
             matchIndex[p] = 0L
         }
     }

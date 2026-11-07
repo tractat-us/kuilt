@@ -2003,7 +2003,7 @@ internal class RaftEngine(
         // [recomputeMembership] also closes it, but only because this node's follower-side recompute saw
         // the removal; this line does not depend on that. It is what makes every matchIndex a this-term
         // value, which the onTimeoutNow guards below lean on. Keep both.
-        state.resetPeerIndices(otherMembers, nextIndex = state.lastLogIndex + 1L)
+        state.resetPeerIndices(otherMembers, firstIndex = state.lastLogIndex + 1L)
         emitTrace(RaftTraceEvent.BecomeLeader(nextClock(), transport.selfId, state.currentTerm))
         heartbeatJob = scope.launch {
             while (true) {

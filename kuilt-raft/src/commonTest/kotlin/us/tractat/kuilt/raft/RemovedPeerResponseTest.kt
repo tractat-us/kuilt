@@ -4,8 +4,10 @@ package us.tractat.kuilt.raft
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -16,7 +18,8 @@ import kotlin.time.Duration.Companion.milliseconds
  * and an immediate resend to whoever sent it, member or not. So a late rejection from a removed peer
  * pulled the leader back into replicating to a node outside the config, and rebuilt the
  * `nextIndex`/`matchIndex` entries the prune had just dropped. The control is the leader's own trace:
- * an `AppendEntries` addressed to the removed peer after its rejection lands.
+ * an `AppendEntries` addressed to the removed peer after its rejection lands. The injected rejection
+ * is live: with the gate in `onAppendEntriesResponse` removed, this test reds.
  */
 class RemovedPeerResponseTest {
 
@@ -39,13 +42,20 @@ class RemovedPeerResponseTest {
         sim.partitionOff(removed)
 
         val sentToRemoved = mutableListOf<RaftTraceEvent.AppendEntries>()
+        var sentToMembers = 0
         backgroundScope.launch {
-            leader.trace.collect { if (it is RaftTraceEvent.AppendEntries && it.to == removed) sentToRemoved += it }
+            leader.trace.collect {
+                if (it is RaftTraceEvent.AppendEntries) if (it.to == removed) sentToRemoved += it else sentToMembers++
+            }
         }
         sim.settle()
 
         sim.deliverAppendEntriesResponse(to = leaderId, from = removed, term = sim.storages.getValue(leaderId).term())
         delay(20.milliseconds)
-        assertEquals(emptyList(), sentToRemoved, "the leader resumed replicating to a peer outside its config")
+        assertAll(
+            // The collector is live: the leader's heartbeats to its members land in it over the same window.
+            { assertTrue(sentToMembers > 0, "control: the trace collector saw no AppendEntries at all") },
+            { assertEquals(emptyList(), sentToRemoved, "the leader resumed replicating to a peer outside its config") },
+        )
     }
 }

@@ -219,8 +219,8 @@ internal class SnapshotSender(
      */
     fun retain(targets: Set<NodeId>) {
         snapshotXfer.keys.retainAll(targets)
-        val dropped = lastStampedRound.keys - targets
-        dropped.forEach { peer -> lastStampedRound.remove(peer)?.let { prunedRoundFloor = maxOf(prunedRoundFloor, it) } }
+        lastStampedRound.filterKeys { it !in targets }.values.maxOrNull()?.let { prunedRoundFloor = maxOf(prunedRoundFloor, it) }
+        lastStampedRound.keys.retainAll(targets)
     }
 
     /** Abandon every in-flight transfer — call on leadership relinquish (leader-only state). */
