@@ -113,7 +113,10 @@ the room roster and registers the connection's spoke with the `RaftRelayHub`.
 Registering is what admits it: a reconciler on every voter, acting only while that
 voter leads, commits one membership change adding every registered learner it does
 not yet have, built from its current membership. Concurrent admissions batch into
-one change and never undo each other. The hub routes each learner-inbound
+one change and never undo each other. A learner is only ever added unless the
+cluster is built with a `learnerGrace`, in which case one disconnected for that
+long is removed; a reconnect under the same `NodeId` inside the grace keeps it.
+The hub routes each learner-inbound
 frame **by its `RaftRelay.dest`** to exactly that voter's inbound and preserves the
 true sender as `RaftRelay.origin` — no leader-sniffing, no sender-restamping in
 either direction.
