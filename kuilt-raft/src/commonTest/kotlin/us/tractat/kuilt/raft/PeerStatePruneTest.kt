@@ -29,13 +29,13 @@ internal class PeerStatePruneTest {
     private val old = ClusterConfig(voters = setOf(self, kept, removed))
     private val new = ClusterConfig(voters = setOf(self, kept))
 
-    private fun stateTracking(vararg peers: NodeId): RaftState = RaftState(old).apply {
+    private fun stateTracking(peers: List<NodeId> = listOf(kept, removed)): RaftState = RaftState(old).apply {
         peers.forEach { nextIndex[it] = 7L; matchIndex[it] = 6L }
     }
 
     @Test
     fun retainDropsOnlyPeersOutsideTheTargets() {
-        val state = stateTracking(kept, removed)
+        val state = stateTracking()
         state.retainPeerIndices(MembershipState.Simple(new).replicationTargets(self))
         assertAll(
             { assertEquals(setOf(kept), state.nextIndex.keys) },
@@ -47,7 +47,7 @@ internal class PeerStatePruneTest {
 
     @Test
     fun retainUnderAJointKeepsEveryoneOnEitherSide() {
-        val state = stateTracking(kept, removed)
+        val state = stateTracking()
         state.retainPeerIndices(MembershipState.Joint(old, new).replicationTargets(self))
         assertAll(
             { assertEquals(setOf(kept, removed), state.nextIndex.keys) },
@@ -57,7 +57,7 @@ internal class PeerStatePruneTest {
 
     @Test
     fun resetForLeadershipForgetsPeersOutsideTheConfig() {
-        val state = stateTracking(kept, removed)
+        val state = stateTracking()
         state.resetPeerIndices(MembershipState.Simple(new).replicationTargets(self), nextIndex = 3L)
         assertAll(
             { assertEquals(mapOf(kept to 3L), state.nextIndex.toMap()) },
@@ -81,9 +81,11 @@ internal class PeerStatePruneTest {
     fun aPeerReAddedInThePrunedRoundCannotStartAFreshTransferUntilTheNextRound() = raftRunTest {
         val sender = senderWithTransferTo(removed, round = 5L)
         sender.retain(setOf(kept))
+        val sameRound = sender.nextChunk(removed, META.lastIncludedIndex, META.config, round = 5L)
+        val nextRound = sender.nextChunk(removed, META.lastIncludedIndex, META.config, round = 6L)
         assertAll(
-            { assertNull(sender.nextChunk(removed, META.lastIncludedIndex, META.config, round = 5L), "same round: refused") },
-            { assertNotNull(sender.nextChunk(removed, META.lastIncludedIndex, META.config, round = 6L), "next round: starts") },
+            { assertNull(sameRound, "same round: refused") },
+            { assertNotNull(nextRound, "next round: starts") },
         )
     }
 
