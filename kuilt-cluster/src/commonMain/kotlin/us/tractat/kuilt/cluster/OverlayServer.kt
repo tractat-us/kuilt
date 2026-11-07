@@ -1,5 +1,7 @@
 package us.tractat.kuilt.cluster
 
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -76,8 +78,10 @@ public const val OVERLAY_UNICAST_CHANNEL: String = "overlay-unicast"
  * [AttachmentDirectory] (an [kotlinx.atomicfu.atomic] write clock plus a
  * lock-guarded [us.tractat.kuilt.quilter.Quilter]) and [RoutedUnicastRouter] (a
  * `reentrantLock`-guarded spoke map). Both are individually correct under a
- * multi-threaded dispatcher, so [admit]/[evict]/[route] are too. Construct one per
- * server via [overlayServer].
+ * multi-threaded dispatcher. One more lock of its own makes [admit] and [evict] each a single
+ * step across the two (#3127): without it, a re-admit landing between an eviction's two halves
+ * leaves a registered spoke whose attachment has been retracted. Nothing suspends under it.
+ * Construct one per server via [overlayServer].
  *
  * @see overlayServer for construction and wiring over the inter-server seams.
  * @see AttachmentDirectory for the replicated `player → server` directory.
@@ -88,6 +92,12 @@ public class OverlayServer internal constructor(
     private val router: RoutedUnicastRouter,
 ) {
     /**
+     * Makes [admit] and each [evict] one step. The directory and the router lock separately, so without
+     * this a re-admit could land between an eviction's two halves.
+     */
+    private val lock = reentrantLock()
+
+    /**
      * Admit a (re-)connecting [client] whose local link into this server is [link].
      *
      * Registers the local spoke **first** so that a frame which races in across the
@@ -97,7 +107,7 @@ public class OverlayServer internal constructor(
      * of the overlay consequence: the directory write supersedes the client's old
      * (dead-server) entry under last-writer-wins.
      */
-    public fun admit(client: PeerId, link: Seam) {
+    public fun admit(client: PeerId, link: Seam): Unit = lock.withLock {
         router.registerLocalSpoke(client, link)
         directory.attach(client)
     }
@@ -111,9 +121,30 @@ public class OverlayServer internal constructor(
      * re-[admit] on the new server supersedes the stale entry on its own — but a
      * clean disconnect calls it to clear the table promptly.
      */
-    public fun evict(client: PeerId) {
+    public fun evict(client: PeerId): Unit = lock.withLock {
         directory.detach(client)
         router.removeLocalSpoke(client)
+    }
+
+    /**
+     * Evict [client]'s connection over [link], and only that connection: the identity-guarded form of
+     * [evict] for a server that can hold a newer connection for the same client by the time an old one
+     * closes (a reconnect on a fresh room, or on another relay into this same server).
+     *
+     * - The local spoke goes only while it is still [link]. A newer [admit] replaced it, and owns both
+     *   halves, so nothing changes.
+     * - The directory entry is retracted only when the spoke went **and** the entry still names this
+     *   server. A converged newer attach on another server (the client failed over) is not tombstoned.
+     *   Before that attach converges here, a later-stamped detach from this server can still win under
+     *   last-writer-wins; that cross-server window is FOLLOWUP.
+     *
+     * Atomic with [admit] under this server's lock, so a concurrent re-admit cannot land between the
+     * two halves and leave a registered spoke with a retracted entry.
+     */
+    internal fun evict(client: PeerId, link: Seam): Unit = lock.withLock {
+        if (router.removeLocalSpoke(client, link) && directory.isAttachedHere(client)) {
+            directory.detach(client)
+        }
     }
 
     /**

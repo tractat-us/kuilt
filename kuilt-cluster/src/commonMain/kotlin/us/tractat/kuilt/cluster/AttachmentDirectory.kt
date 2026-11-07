@@ -117,6 +117,9 @@ public class AttachmentDirectory internal constructor(
      */
     public fun lookup(client: PeerId): PeerId? = quilter.state.value[client]
 
+    /** Whether this replica's converged map names this server as [client]'s attachment. */
+    internal fun isAttachedHere(client: PeerId): Boolean = lookup(client) == self
+
     /**
      * A [TwoTier] topology policy over [core] whose `attachment` reads this
      * directory live: the overlay always floods each player's broadcasts through
