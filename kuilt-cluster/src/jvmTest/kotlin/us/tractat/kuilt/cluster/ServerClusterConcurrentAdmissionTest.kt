@@ -61,6 +61,7 @@ import kotlin.time.Duration.Companion.seconds
  */
 class ServerClusterConcurrentAdmissionTest {
 
+    /** The shape #3120 reported: two connections admitted at the same instant, each by its own writer. */
     @Test
     fun twoConcurrentAdmissionsKeepBothLearners() = admissionTest(learnerCount = 2) { h ->
         h.startRelay()
@@ -69,8 +70,14 @@ class ServerClusterConcurrentAdmissionTest {
         h.assertAllStillAdmitted()
     }
 
+    /**
+     * Twenty arrivals spread over a second, so they straddle several membership changes: some land
+     * while a change is in flight and are batched into the next, and every later change must keep
+     * the learners an earlier one committed. Arrivals at one instant would be admitted in a single
+     * change, where replacing the learner set and adding to it cannot be told apart.
+     */
     @Test
-    fun aStormOfTwentyAdmissionsKeepsEveryLearner() = admissionTest(learnerCount = 20) { h ->
+    fun aStormOfTwentyAdmissionsKeepsEveryLearner() = admissionTest(learnerCount = 20, arrivalGap = 50.milliseconds) { h ->
         h.startRelay()
         h.awaitAllAdmitted()
         h.proposeFromEveryLearnerAndAwaitCrossVisibility()
@@ -250,8 +257,12 @@ class ServerClusterConcurrentAdmissionTest {
     }
 
     private companion object {
-        /** Virtual time for an admission storm to converge: generous against 200 ms retry backoffs. */
-        val ADMISSION_BUDGET = 30.seconds
+        /**
+         * Virtual time for an admission storm to converge: generous against 200 ms retry backoffs and a
+         * two-second arrival spread, and short enough that a non-converging run fails here, with the
+         * sim's state dump, well before the wall-clock wedge backstop.
+         */
+        val ADMISSION_BUDGET = 10.seconds
 
         /** A quiet stretch after convergence, long enough for any stale retry to have landed. */
         val SETTLE = 5.seconds
