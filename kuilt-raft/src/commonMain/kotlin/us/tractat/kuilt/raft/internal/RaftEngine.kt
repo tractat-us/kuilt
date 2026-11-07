@@ -1585,6 +1585,56 @@ internal class RaftEngine(
     private val followerRole: RaftRole
         get() = if (state.membershipState.isLearner(transport.selfId)) RaftRole.Learner else RaftRole.Follower
 
+    /**
+     * Whether this node may start an election or keep leading (#3123): false exactly when a configuration
+     * that excludes it as a voter is committed and no configuration after it names it one.
+     *
+     * Read from live state at each decision rather than kept as a flag, because it depends on the log
+     * (append, truncate, snapshot install) **and** on the commit index (`leaderCommit`, InstallSnapshot), and
+     * an edge-triggered disarm would need a hook on every one of those writes, with a missed edge a silent
+     * permanent wedge.
+     *
+     * **Why commit and not append.** Dissertation §4.2.2, last paragraph: "a server that is not part of its
+     * own latest configuration should still start new elections, as it might still be needed until the Cnew
+     * entry is committed (as in Figure 4.6)". Figure 4.6 is removing leader S1 from {S1, S2}: S2 still needs
+     * S1's vote for a majority of C_old, and S1 denies it because S2's log is behind, so S1 alone can make
+     * progress. Here that is a removed leader that crashed after appending `Simple(C_new)`, before its peer
+     * received it; gating on the latest configuration alone would leave that cluster with no candidate.
+     * §4.2.2 also says when the gate may close: the commit of C_new is "the first point when the new
+     * configuration can definitely operate without participation from the removed leader".
+     *
+     * **Why the uncommitted suffix, and not only the latest entry.** The commit index is volatile, so after a
+     * restart it falls back to the snapshot (or 0) and the latest committed configuration may predate this
+     * node's admission: a learner seed's bootstrap names no voters. Any configuration above the commit index
+     * that names this node is a change involving it that may still need it, so it stays promotable until the
+     * node learns that suffix is committed. A win in that window commits the suffix on its own term, and the
+     * leader-side check in [advanceCommit] then steps it down.
+     *
+     * A joint configuration counts both sides (§4.3). Votes and appends are answered whatever this says (§4.1).
+     */
+    private val promotable: Boolean
+        get() {
+            val self = transport.selfId
+            // The latest configuration is either in the uncommitted suffix or is the latest committed one, so
+            // naming self there settles it. This is the steady state, and it keeps the leader-side check in
+            // [advanceCommit] O(1) per commit.
+            if (state.membershipState.isVoter(self)) return true
+            // Walk the configuration entries newest first: one naming self wins; the first committed one that
+            // does not is the latest committed configuration, and nothing after it named self.
+            for (i in state.log.indices.reversed()) {
+                val entry = state.log[i]
+                val config = entry.config ?: continue
+                if (config.namesVoter(self)) return true
+                if (entry.index <= state.currentCommitIndex) return false
+            }
+            // No committed configuration in the log: the snapshot's is committed by construction; failing
+            // that, the bootstrap.
+            return state.snapshotConfig?.namesVoter(self) ?: (self in bootstrapConfig.voters)
+        }
+
+    /** True iff [id] is a voter on either side of this configuration. */
+    private fun ConfigPayload.namesVoter(id: NodeId): Boolean = id in new.voters || old?.voters?.contains(id) == true
+
     // ── Trace helper ──────────────────────────────────────────────────────────
 
     private suspend fun emitTrace(event: RaftTraceEvent) = _trace.emit(event)
@@ -1815,6 +1865,13 @@ internal class RaftEngine(
             resetElectionTimeout()
             return
         }
+        // #3123: a node whose removal is committed sends no PreVote. The timer re-arms as an idle tick, so a
+        // later configuration that names this node again is honoured at the next timeout. See [promotable].
+        if (!promotable) {
+            debug { "onElectionTimeout: not promotable (removal committed) — no campaign" }
+            resetElectionTimeout()
+            return
+        }
         val proposed = state.currentTerm + 1
         preVoteTerm = proposed
         preVoteRound++
@@ -1848,6 +1905,15 @@ internal class RaftEngine(
         if (termPinnedAtCeiling()) {
             preVoteTerm = null
             reportTermPinnedAtCeiling("election")
+            resetElectionTimeout()
+            return
+        }
+        // #3123: the second election entry point, not a redundant one. [onTimeoutNow] reaches here without
+        // [onElectionTimeout], and so does a PreVote round that won its quorum after an AppendEntries
+        // delivered this node's committed removal (a same-term AppendEntries does not clear [preVoteTerm]).
+        if (!promotable) {
+            preVoteTerm = null
+            debug { "startRealElection: not promotable (removal committed) — no election" }
             resetElectionTimeout()
             return
         }
@@ -3396,6 +3462,15 @@ internal class RaftEngine(
         readIndexTracker.onNoOpCommitted(state.currentCommitIndex).forEach { it() }
         // Config-commit side effects AFTER commitIndex is bumped — safe to call appendConfigEntry.
         committedConfigEntry?.let { onConfigCommitted(it) }
+        // #3123, §4.2.2: a leader steps down once a configuration excluding it is committed. [onConfigCommitted]
+        // does this only when that configuration is the last one committed in this window; this reads the
+        // same condition from live state, so a leader outside the committed membership cannot persist by any
+        // route that bypasses it. It reads the committed configuration, never only the latest: §4.2.2 has the
+        // removed leader wait for C_new to commit before it steps down.
+        if (_role.value is RaftRole.Leader && !promotable) {
+            debug { "advanceCommit: leader not promotable (removal committed) — stepping down (RemovedFromConfig)" }
+            stepDownToFollower(StepDownReason.RemovedFromConfig)
+        }
     }
 
     /**
