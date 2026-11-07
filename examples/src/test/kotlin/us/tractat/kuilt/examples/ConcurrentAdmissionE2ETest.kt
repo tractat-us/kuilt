@@ -3,18 +3,25 @@ package us.tractat.kuilt.examples
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import us.tractat.kuilt.cluster.ClusterClient
 import us.tractat.kuilt.cluster.ClusterEndpoints
 import us.tractat.kuilt.cluster.clusterClient
 import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.raft.ClusterConfig
+import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftConfig
 import us.tractat.kuilt.websocket.KtorClientLoom
@@ -28,16 +35,17 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * End-to-end regression test for concurrent learner admission (closes #561).
+ * End-to-end regression test for concurrent learner admission (#561, #3120).
  *
  * Two clients connect to a real M=3 cluster **at the same time** — both `clusterClient`
- * calls are launched concurrently before either has proposed anything. Without the fix,
- * the second `admitLearner` throws [us.tractat.kuilt.raft.MembershipChangeInProgressException]
- * (Raft serializes membership changes), which is swallowed silently: that learner is
- * registered as a spoke in the RaftRelayHub but never added to cluster membership, so its proposals
- * never commit (the leader never sends it AppendEntries). With the fix, `admitLearner`
- * retries the `changeMembership` call until the in-flight change commits, and both
- * clients can propose successfully.
+ * calls are launched concurrently before either has proposed anything. Two defects have lived
+ * here. #561: the second admission's `MembershipChangeInProgressException` was swallowed, so that
+ * learner was never admitted. Its fix retried the stale target, which #3120 found evicting the
+ * other learner instead. Today no connection changes membership: each voter's learner reconciler
+ * adds every registered learner from the leader's current membership.
+ *
+ * Each client's own proposal commits even after it has been evicted, so committing proves
+ * little. What this asserts is that each client applies the **other's** command.
  */
 class ConcurrentAdmissionE2ETest {
 
@@ -87,8 +95,7 @@ class ConcurrentAdmissionE2ETest {
             withTimeout(20.seconds) { cluster.awaitLeader() }
 
             // Both clients connect concurrently — neither waits for the other to be
-            // fully admitted before connecting. This races the two changeMembership
-            // calls and triggers MembershipChangeInProgressException on the second one.
+            // fully admitted before connecting, so their admissions race.
             val alphaScope = CoroutineScope(coroutineContext + Job())
             val betaScope = CoroutineScope(coroutineContext + Job())
 
@@ -110,6 +117,11 @@ class ConcurrentAdmissionE2ETest {
                 clock = { Clock.System.now() },
             )
 
+            // The only collector of each client's committed stream; started before any proposal so
+            // nothing is missed.
+            val alphaSeen = alphaScope.appliedCommandsOf(clientAlpha)
+            val betaSeen = betaScope.appliedCommandsOf(clientBeta)
+
             // Launch both proposals concurrently — if either learner was never admitted
             // to cluster membership its propose hangs forever (the leader never sends
             // AppendEntries for it), and the withTimeout here will catch that.
@@ -130,6 +142,11 @@ class ConcurrentAdmissionE2ETest {
             assertTrue(alphaEntry.index > 0, "alpha committed at log index ${alphaEntry.index}")
             assertTrue(betaEntry.index > 0, "beta committed at log index ${betaEntry.index}")
 
+            // Each client is still receiving: it has applied the other's command.
+            val both = setOf("alpha:concurrent", "beta:concurrent")
+            withTimeout(20.seconds) { alphaSeen.first { it.containsAll(both) } }
+            withTimeout(20.seconds) { betaSeen.first { it.containsAll(both) } }
+
             clientAlpha.close()
             clientBeta.close()
             alphaScope.cancel()
@@ -137,5 +154,18 @@ class ConcurrentAdmissionE2ETest {
             cluster.close()
             serverScope.cancel()
         }
+    }
+
+    /** The application commands [client] has applied, config entries skipped; its only collector. */
+    private fun CoroutineScope.appliedCommandsOf(client: ClusterClient): StateFlow<Set<String>> {
+        val seen = MutableStateFlow(emptySet<String>())
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            client.committed.collect { committed ->
+                if (committed is Committed.Entry && committed.entry.config == null) {
+                    seen.update { it + committed.entry.command.decodeToString() }
+                }
+            }
+        }
+        return seen
     }
 }

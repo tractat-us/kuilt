@@ -4,6 +4,7 @@ import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -292,7 +293,7 @@ class ClusterClientMultiClientHardeningE2ETest {
      */
     private fun CoroutineScope.appliedCommandsOf(client: ClusterClient): StateFlow<Set<String>> {
         val seen = MutableStateFlow(emptySet<String>())
-        launch {
+        launch(start = CoroutineStart.UNDISPATCHED) {
             client.committed.collect { committed ->
                 if (committed is Committed.Entry && committed.entry.config == null) {
                     seen.update { it + committed.entry.command.decodeToString() }

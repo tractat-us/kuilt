@@ -153,9 +153,10 @@ public class ServerCluster internal constructor(
 
     /**
      * Admit one accepted [room] connection as a learner: wait for the roster, derive the
-     * learner [NodeId], register its Seam as a spoke in the shared [RaftRelayHub], add it to
-     * cluster membership via the leader, then hold the room open until the connection closes
-     * or the relay scope cancels. The `finally` deregisters the spoke on disconnect.
+     * learner [NodeId], register its Seam as a spoke in the shared [RaftRelayHub] (which is what
+     * requests its admission: the leader's learner reconciler commits it), then hold the room
+     * open until the connection closes or the relay scope cancels. The `finally` deregisters the
+     * spoke on disconnect.
      */
     private suspend fun admitLearner(room: Room) {
         val admittedSet = try {

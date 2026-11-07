@@ -56,8 +56,8 @@ self-contained JVM test (`@Test`), compiled from `examples/src/test/kotlin/`.
 | `ServerClusterM3E2ETest.kt` | `ServerCluster` M=3 — three-voter consensus over real sockets |
 | `ClusterClientProductionPathE2ETest.kt` | `clusterClient` production extension — single-endpoint proposal over a real admission handshake |
 | `ClusterClientFailoverE2ETest.kt` | Cross-relay failover — relay A killed mid-session; client reconnects to relay B and continues proposing |
-| `ClusterClientMultiClientHardeningE2ETest.kt` | Two concurrent learner clients + forced leader change + entry-relay kill mid-propose |
-| `ConcurrentAdmissionE2ETest.kt` | Two clients connect simultaneously — `admitLearner` retries on `MembershipChangeInProgressException` |
+| `ClusterClientMultiClientHardeningE2ETest.kt` | Two learner clients connected at once + forced leader change + entry-relay kill mid-propose; each applies the other's commands throughout |
+| `ConcurrentAdmissionE2ETest.kt` | Two clients connect simultaneously — both are admitted and each applies the other's command |
 | `ExactlyOnceHappyPathTest.kt` | M=1 exactly-once deduplication — a retry with the same `requestId` coalesces to the original committed entry |
 | `NoDoubleApplyFailoverTest.kt` | Exactly-once under mid-flight leader change + entry-server death — round-robin retry, `ClientSessionTable` dedup |
 | `ResumeTokenFailoverTest.kt` | `ResumeToken` behaviour under real relay change — documents degradation to fresh-join when the new relay has no window |
