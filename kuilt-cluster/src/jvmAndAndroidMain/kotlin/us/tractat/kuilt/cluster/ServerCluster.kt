@@ -75,7 +75,9 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ServerCluster")
  * registered learner it does not yet have, built from its current membership. No connection
  * changes membership itself, which is what used to let one admission evict another (#3120).
  * The reconciler is the sole membership writer this class runs: a caller changing membership
- * through [voterNodes] directly can race it.
+ * through [voterNodes] directly can race it. Built with a `learnerGrace`, it also removes: a learner
+ * disconnected for the grace leaves the config, and that includes one a caller added directly
+ * through [voterNodes] that never connects.
  *
  * The [RaftRelayHub] is the key integration primitive for S3b-3: it makes the voter
  * channel transports aware of dynamically-connected learner Seams without rebuilding
@@ -254,17 +256,7 @@ public fun CoroutineScope.serverCluster(
     voterIds: List<NodeId>,
     raftConfig: RaftConfig,
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
-): ServerCluster {
-    require(voterIds.isNotEmpty()) { "voterIds must be non-empty" }
-    val serverScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
-    val serverPeerId = PeerId(voterIds.first().value)
-    // A single-server deployment replicates nothing, so the overlay rides two peerless
-    // placeholder seams: its Quilter has no peers to gossip to (it excludes `self` from
-    // its target set), attach/lookup are purely local, and the constant `{ 0 }` clock is
-    // fine because AttachmentDirectory.nextTimestamp is monotonic via max(now, last + 1).
-    val overlay = localOverlay(serverPeerId, serverScope)
-    return serverCluster(host, voterIds, raftConfig, overlay, serverScope, storageFactory, LearnerRemoval.Never)
-}
+): ServerCluster = localServerCluster(host, voterIds, raftConfig, storageFactory, LearnerRemoval.Never)
 
 /**
  * Construct a [ServerCluster] that removes a learner from the config once it has been disconnected
@@ -289,14 +281,26 @@ public fun CoroutineScope.serverCluster(
     raftConfig: RaftConfig,
     learnerGrace: Duration,
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
+): ServerCluster =
+    localServerCluster(host, voterIds, raftConfig, storageFactory, LearnerRemoval.AfterGrace(learnerGrace))
+
+/** The overloads without a caller-supplied overlay, which build the local one. */
+private fun CoroutineScope.localServerCluster(
+    host: RoomHost,
+    voterIds: List<NodeId>,
+    raftConfig: RaftConfig,
+    storageFactory: (NodeId) -> RaftStorage,
+    learnerRemoval: LearnerRemoval,
 ): ServerCluster {
     require(voterIds.isNotEmpty()) { "voterIds must be non-empty" }
-    require(!learnerGrace.isNegative()) { "learnerGrace must not be negative, was $learnerGrace" }
     val serverScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
-    val overlay = localOverlay(PeerId(voterIds.first().value), serverScope)
-    return serverCluster(
-        host, voterIds, raftConfig, overlay, serverScope, storageFactory, LearnerRemoval.AfterGrace(learnerGrace),
-    )
+    val serverPeerId = PeerId(voterIds.first().value)
+    // A single-server deployment replicates nothing, so the overlay rides two peerless
+    // placeholder seams: its Quilter has no peers to gossip to (it excludes `self` from
+    // its target set), attach/lookup are purely local, and the constant `{ 0 }` clock is
+    // fine because AttachmentDirectory.nextTimestamp is monotonic via max(now, last + 1).
+    val overlay = localOverlay(serverPeerId, serverScope)
+    return serverCluster(host, voterIds, raftConfig, overlay, serverScope, storageFactory, learnerRemoval)
 }
 
 /**
@@ -320,11 +324,7 @@ public fun CoroutineScope.serverCluster(
     raftConfig: RaftConfig,
     overlay: OverlayServer,
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
-): ServerCluster {
-    require(voterIds.isNotEmpty()) { "voterIds must be non-empty" }
-    val serverScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
-    return serverCluster(host, voterIds, raftConfig, overlay, serverScope, storageFactory, LearnerRemoval.Never)
-}
+): ServerCluster = federatedServerCluster(host, voterIds, raftConfig, overlay, storageFactory, LearnerRemoval.Never)
 
 /**
  * The federated form of the [learnerGrace] overload: a caller-supplied [overlay], and a learner
@@ -339,13 +339,21 @@ public fun CoroutineScope.serverCluster(
     overlay: OverlayServer,
     learnerGrace: Duration,
     storageFactory: (NodeId) -> RaftStorage = { InMemoryRaftStorage() },
+): ServerCluster =
+    federatedServerCluster(host, voterIds, raftConfig, overlay, storageFactory, LearnerRemoval.AfterGrace(learnerGrace))
+
+/** The overloads with a caller-supplied overlay. */
+private fun CoroutineScope.federatedServerCluster(
+    host: RoomHost,
+    voterIds: List<NodeId>,
+    raftConfig: RaftConfig,
+    overlay: OverlayServer,
+    storageFactory: (NodeId) -> RaftStorage,
+    learnerRemoval: LearnerRemoval,
 ): ServerCluster {
     require(voterIds.isNotEmpty()) { "voterIds must be non-empty" }
-    require(!learnerGrace.isNegative()) { "learnerGrace must not be negative, was $learnerGrace" }
     val serverScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
-    return serverCluster(
-        host, voterIds, raftConfig, overlay, serverScope, storageFactory, LearnerRemoval.AfterGrace(learnerGrace),
-    )
+    return serverCluster(host, voterIds, raftConfig, overlay, serverScope, storageFactory, learnerRemoval)
 }
 
 /** Shared builder: wires the voter mesh + relay accept loop and threads [overlay] through. */
@@ -499,6 +507,13 @@ internal sealed interface LearnerRemoval {
     /** Learners are only ever added: the overloads without a grace. */
     data object Never : LearnerRemoval
 
-    /** A learner disconnected for [grace] is removed from the config. */
-    data class AfterGrace(val grace: Duration) : LearnerRemoval
+    /**
+     * A learner disconnected for [grace] is removed from the config. Validated here, before any
+     * scope or voter exists, so a bad grace cannot leave voter nodes running on a scope nobody holds.
+     */
+    data class AfterGrace(val grace: Duration) : LearnerRemoval {
+        init {
+            require(!grace.isNegative()) { "learnerGrace must not be negative, was $grace" }
+        }
+    }
 }

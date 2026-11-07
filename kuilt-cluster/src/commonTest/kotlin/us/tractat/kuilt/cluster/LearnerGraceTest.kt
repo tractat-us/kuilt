@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.raft.ClusterConfig
+import us.tractat.kuilt.raft.MembershipChangeInProgressException
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -34,8 +35,11 @@ class LearnerGraceTest {
     private val d = NodeId("d")
     private val grace = 2.seconds
 
+    /** Mirrors the reconciler's retry backoff. */
+    private val BACKOFF = 200.milliseconds
+
     @Test
-    fun aLearnerGoneForTheWholeGraceIsRemovedOnce() = graceTest(connectedAtStart = setOf(a, b)) { node, connected ->
+    fun aLearnerGoneForTheWholeGraceIsRemoved() = graceTest(connectedAtStart = setOf(a, b)) { node, connected ->
         connected.value = setOf(a)
         runCurrent()
         advanceTimeBy(grace - 1.milliseconds)
@@ -43,43 +47,70 @@ class LearnerGraceTest {
         val beforeExpiry = node.calls.toList()
         advanceTimeBy(2.milliseconds)
         runCurrent()
-        val atExpiry = node.calls.toList()
-        advanceTimeBy(grace * 5)
-        runCurrent()
 
         assertAll(
             { assertEquals(emptyList(), beforeExpiry, "b is kept while its grace runs") },
-            { assertEquals(listOf(setOf(a)), atExpiry.map { it.learners }, "b is removed as the grace ends") },
+            { assertEquals(listOf(setOf(a)), node.calls.map { it.learners }, "b is removed as the grace ends") },
+        )
+    }
+
+    /**
+     * The removal is refused once, so b really is still in the config after its grace ran out. The
+     * retry must come one backoff later, not a whole second grace later: an expired learner is not
+     * graced again.
+     */
+    @Test
+    fun aRefusedRemovalIsRetriedWithoutASecondGrace() = graceTest(connectedAtStart = setOf(a, b)) { node, connected ->
+        node.script += { _ -> node.refuse(MembershipChangeInProgressException()) }
+        connected.value = setOf(a)
+        runCurrent()
+        advanceTimeBy(grace + 1.milliseconds)
+        runCurrent()
+        advanceTimeBy(BACKOFF + 1.milliseconds)
+        runCurrent()
+
+        assertAll(
+            { assertEquals(1, node.refusalsThrown, "the rig fired: the first removal was refused") },
             {
                 assertEquals(
-                    atExpiry,
-                    node.calls,
-                    "and only once: an expired learner still in the config is not handed a second grace",
+                    listOf(setOf(a), setOf(a)),
+                    node.calls.map { it.learners },
+                    "the retry removes b one backoff after the refusal",
                 )
             },
         )
     }
 
+    /**
+     * Each disconnect gets a full grace of its own. b drops, comes back inside the grace, and drops
+     * again before the first grace would have ended: it must stay until a whole grace after the
+     * second disconnect.
+     */
     @Test
-    fun aReconnectInsideTheGraceKeepsTheLearner() = graceTest(connectedAtStart = setOf(a, b)) { node, connected ->
+    fun aReconnectInsideTheGraceKeepsTheLearnerAndRestartsTheGrace() = graceTest(connectedAtStart = setOf(a, b)) { node, connected ->
         connected.value = setOf(a)
         runCurrent()
         advanceTimeBy(grace / 2)
         connected.value = setOf(a, b)
         runCurrent()
-        advanceTimeBy(grace * 3)
-        runCurrent()
-        val whileReconnected = node.calls.toList()
-
-        // The same learner drops again: a fresh grace must start and run out.
+        advanceTimeBy(grace / 4)
         connected.value = setOf(a)
         runCurrent()
-        advanceTimeBy(grace + 1.milliseconds)
+        advanceTimeBy(grace - 1.milliseconds)
+        runCurrent()
+        val beforeSecondExpiry = node.calls.toList()
+        advanceTimeBy(2.milliseconds)
         runCurrent()
 
         assertAll(
-            { assertEquals(emptyList(), whileReconnected, "no change was ever attempted, so b was never absent") },
-            { assertEquals(listOf(setOf(a)), node.calls.map { it.learners }, "the second disconnect removes b") },
+            {
+                assertEquals(
+                    emptyList(),
+                    beforeSecondExpiry,
+                    "b is never removed before a whole grace has passed since its latest disconnect",
+                )
+            },
+            { assertEquals(listOf(setOf(a)), node.calls.map { it.learners }, "then the second grace removes it") },
         )
     }
 

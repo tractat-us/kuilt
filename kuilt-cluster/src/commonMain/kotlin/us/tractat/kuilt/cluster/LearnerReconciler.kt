@@ -56,7 +56,7 @@ private val LEARNER_RECONCILE_RETRY_BACKOFF = 200.milliseconds
 internal fun CoroutineScope.launchLearnerReconciler(
     node: RaftNode,
     desired: StateFlow<Set<NodeId>>,
-): Job = reconcileLearners(node, desired, retain = {}) { current, want ->
+): Job = reconcileLearners(node, desired, snapshot = { desired.value }) { current, want ->
     current.learners + (want - current.voters)
 }
 
@@ -64,9 +64,10 @@ internal fun CoroutineScope.launchLearnerReconciler(
  * Keep [node]'s learner set **equal** to [grace]'s retained set for as long as [node] leads: add every
  * learner that connects, and remove one only once it has been gone for the whole grace.
  *
- * Every attempt first hands the membership's learners to [LearnerGrace.retain], so a learner this
- * server has not seen connected (admitted before a restart, or by another writer) gets a full grace
- * rather than being removed by the first change built after it was read.
+ * Every attempt first hands the membership's learners to [LearnerGrace.retain] and builds its
+ * target from the set that returns, so a learner the config holds but that is not connected (it just
+ * left, or was admitted before a restart, or by another writer) gets a full grace rather than being
+ * removed by the first change built after it was read.
  *
  * Removing a learner is a learner-set-only `Simple` entry: the voter set and its quorum are
  * untouched. Everything else is as the additive overload above describes.
@@ -74,18 +75,20 @@ internal fun CoroutineScope.launchLearnerReconciler(
 internal fun CoroutineScope.launchLearnerReconciler(
     node: RaftNode,
     grace: LearnerGrace,
-): Job = reconcileLearners(node, grace.retained, retain = grace::retain) { current, want ->
+): Job = reconcileLearners(node, grace.retained, snapshot = grace::retain) { current, want ->
     want - current.voters
 }
 
 /**
- * The loop both overloads share. [target] maps the current membership and the wanted set to the
- * learner set to commit; [retain] sees the membership's learners before each [target] is built.
+ * The loop both overloads share. [wanted] wakes the gate; [snapshot] is handed the membership's
+ * learners and returns the wanted set to build from, read once so the target and anything the
+ * snapshot decided come from one view; [target] maps the membership and that set to the learner set
+ * to commit.
  */
 private fun CoroutineScope.reconcileLearners(
     node: RaftNode,
     wanted: StateFlow<Set<NodeId>>,
-    retain: (Set<NodeId>) -> Unit,
+    snapshot: (Set<NodeId>) -> Set<NodeId>,
     target: (current: ClusterConfig, want: Set<NodeId>) -> Set<NodeId>,
 ): Job = launch {
     while (true) {
@@ -95,10 +98,9 @@ private fun CoroutineScope.reconcileLearners(
         }.first { it }
 
         val current = node.membership.value
-        retain(current.learners)
-        val learners = target(current, wanted.value)
-        // Retaining can close the gap by itself (a learner nobody had seen now has its grace), and
-        // the gate re-evaluates against the updated wanted set.
+        val learners = target(current, snapshot(current.learners))
+        // The snapshot can close the gap by itself (a learner that just disconnected now has its
+        // grace), and the gate re-evaluates against the updated wanted set.
         if (learners == current.learners) continue
         val refusal = try {
             node.changeMembership(ClusterConfig(voters = current.voters, learners = learners))

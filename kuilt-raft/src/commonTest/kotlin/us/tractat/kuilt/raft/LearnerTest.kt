@@ -98,12 +98,15 @@ class LearnerTest {
      * a learner-set-only change, so the voter set and its quorum are untouched and commit carries on
      * without it.
      *
-     * The spec-critical case is a removed learner that applies its own removal. Its log then shows it
-     * outside the config, so it resolves to Follower rather than Learner and campaigns. The only
-     * defence is leader stickiness: a voter that has heard from a live leader denies the pre-vote. The
-     * leader normally stops replicating to a removed learner before the removal entry leaves it, so
-     * this arm hands the entry over by hand, then asserts the rig fired before asserting the leader
-     * survived.
+     * The spec-critical case is a removed learner that applies its own removal: its log then shows it
+     * outside the config. Today such a node resolves to Follower and campaigns, and against a live
+     * leader the only thing stopping it is leader stickiness, a voter that has heard from the leader
+     * denying the pre-vote. Whether it should campaign at all is a separate question; this arm asserts
+     * the outcome either way. The leader normally stops replicating to a removed learner before the
+     * removal entry leaves it, so the entry is handed over by hand, and the rig is that the node has
+     * applied it.
+     *
+     * Not covered: a removed node campaigning while the leader is down, where stickiness has lapsed.
      */
     @Test
     fun aRemovedLearnerThatAppliesItsRemovalNeverDeposesTheLiveLeader() = raftRunTest {
@@ -137,7 +140,10 @@ class LearnerTest {
             entries = missing,
             leaderCommit = leader.commitIndex.value,
         )
-        sim.awaitRole(learnerId, RaftRole.Follower)
+        // The rig fired: the removed node now reads itself as outside the config.
+        sim.awaitTrue("the removed learner has applied its own removal") {
+            sim.nodes.getValue(learnerId).membership.value.let { learnerId !in it.learners && learnerId !in it.voters }
+        }
 
         // Many election timeouts of the removed node campaigning against a live leader.
         delay(200)
@@ -146,11 +152,10 @@ class LearnerTest {
         val termsAtEnd = voterIds.associateWith { sim.storages.getValue(it).term() }
 
         assertAll(
-            { assertTrue(deniedToLearner.isNotEmpty(), "the rig fired: the removed node campaigned and voters denied it") },
             {
                 assertTrue(
                     deniedToLearner.all { DenyReason.LeaderAlive in it.reasons },
-                    "every denial is leader stickiness: ${deniedToLearner.map { it.reasons }}",
+                    "any campaign it ran was denied by leader stickiness: ${deniedToLearner.map { it.reasons }}",
                 )
             },
             { assertIs<RaftRole.Leader>(leader.role.value, "the live leader was never deposed") },

@@ -14,19 +14,22 @@ import us.tractat.kuilt.raft.NodeId
 import kotlin.time.Duration
 
 /**
- * Which learners to keep in the config: every [connected] one, and every one that left less than
- * [grace] ago. Keyed on [NodeId], not on a connection, so a learner that reconnects under the same id
- * within [grace] (a fresh room after a tear, or another relay after failover) is never removed.
+ * Which learners to keep in the config: every [connected] one, and every one the config holds that has
+ * been disconnected for less than [grace]. Keyed on [NodeId], not on a connection, so a learner that reconnects
+ * under the same id within [grace] (a fresh room after a tear, or another relay after failover) is
+ * never removed, and each disconnect gets a full grace of its own.
  *
- * A learner the config holds but this server has never seen connected (one admitted before a voter
- * restarted from durable storage, or added by another writer) is handed a grace the first time the
- * reconciler reads it, through [retain], rather than being removed at once.
+ * Graces start in exactly one place, [retain], which the leader's reconciler calls with the config's
+ * learners immediately before it builds a target. So a learner is graced on the first read that finds
+ * it in the config but not connected, whatever the reason: it disconnected, it was admitted before a
+ * voter restarted from durable storage, or another writer added it. A learner that connects and leaves
+ * before it is ever admitted leaves nothing behind.
  *
  * Shared by every voter's reconciler, so a leadership change keeps the pending removals.
  *
- * Thread-safety: the pending map and every publish of [retained] are guarded by one lock, and nothing
- * suspends under it. Every publish reads [connected] live, so a grace that expires concurrently with a
- * reconnect leaves the learner retained: the reconnect wins.
+ * Thread-safety: the pending map, the released set and every publish of [retained] are guarded by one
+ * lock, and nothing suspends under it. Every publish reads [connected] live, so a grace that expires
+ * concurrently with a reconnect leaves the learner retained: the reconnect wins.
  *
  * @param connected the learners with a live connection, `RaftRelayHub.learnersFlow`.
  * @param grace how long a learner may stay disconnected before it leaves [retained]; non-negative.
@@ -59,35 +62,29 @@ internal class LearnerGrace(
     val retained: StateFlow<Set<NodeId>> = _retained.asStateFlow()
 
     init {
-        // Undispatched so a disconnect that lands before this collector is first scheduled is still
-        // seen as a change from the value retained started from.
+        // A reconnect ends the learner's grace (its next disconnect starts a new one), and every
+        // change republishes so the reconciler's gate sees an arrival or a departure at once.
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            connected.collect { now -> onConnectedChanged(now) }
+            connected.collect { now ->
+                lock.withLock {
+                    now.forEach { pending.remove(it)?.cancel() }
+                    released.removeAll(now)
+                    publish()
+                }
+            }
         }
     }
 
     /**
-     * Start a grace for every id in [ids] that is neither connected nor already pending. Called with
-     * the membership's learners before a target is built, so no learner is dropped without one.
+     * Start a grace for every id in [ids] that is neither connected, already pending nor released, and
+     * return the learner set to hold, read under the same lock: the one consistent view the caller
+     * builds its target from. Called with the config's learners before every target is built.
      */
-    fun retain(ids: Set<NodeId>) {
-        lock.withLock {
-            released.retainAll(ids)
-            val live = connected.value
-            val fresh = ids.filter { it !in live && it !in pending && it !in released }
-            if (fresh.isEmpty()) return
-            fresh.forEach { startGrace(it) }
-            publish()
-        }
-    }
-
-    private fun onConnectedChanged(now: Set<NodeId>) {
-        lock.withLock {
-            now.forEach { pending.remove(it)?.cancel() }
-            released.removeAll(now)
-            (_retained.value - now - pending.keys).forEach { startGrace(it) }
-            publish()
-        }
+    fun retain(ids: Set<NodeId>): Set<NodeId> = lock.withLock {
+        released.retainAll(ids)
+        val live = connected.value
+        ids.filter { it !in live && it !in pending && it !in released }.forEach { startGrace(it) }
+        publish()
     }
 
     /** Under [lock]. */
@@ -112,8 +109,10 @@ internal class LearnerGrace(
         }
     }
 
-    /** Under [lock]. */
-    private fun publish() {
-        _retained.value = connected.value + pending.keys
+    /** Under [lock]. Returns what it published. */
+    private fun publish(): Set<NodeId> {
+        val now = connected.value + pending.keys
+        _retained.value = now
+        return now
     }
 }

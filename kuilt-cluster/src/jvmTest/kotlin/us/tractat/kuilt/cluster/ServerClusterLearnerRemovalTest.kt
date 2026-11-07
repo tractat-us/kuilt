@@ -51,9 +51,19 @@ class ServerClusterLearnerRemovalTest {
         delay(grace / 2)
         h.connect(flaky)
         delay(grace * 3)
-
-        assertEquals(h.learners.toSet(), h.leaderLearners(), "a reconnect inside the grace is never removed")
+        val afterReconnect = h.leaderLearners()
         h.proposeAndAwaitCrossVisibility(among = listOf(flaky, other), tag = 1)
+
+        // A flap: it drops again, and keeps a whole grace from this disconnect.
+        h.disconnect(flaky)
+        delay(grace - 200.milliseconds)
+        val insideSecondGrace = h.leaderLearners()
+
+        assertAll(
+            { assertEquals(h.learners.toSet(), afterReconnect, "a reconnect inside the grace is never removed") },
+            { assertEquals(h.learners.toSet(), insideSecondGrace, "a second disconnect gets a full grace of its own") },
+        )
+        h.awaitLeaderLearners(h.learners.toSet() - flaky, "then that grace removes it", within = grace)
     }
 
     @Test
