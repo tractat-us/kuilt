@@ -202,22 +202,25 @@ public class ServerCluster internal constructor(
         // attachment (`client → self`) and register its app-unicast spoke — a channel
         // DISTINCT from the "raft" leg above. Register-before-membership (same ordering
         // the router follows) so a frame racing in across the core finds the spoke ready.
-        overlay.admit(admittedPeer.id, room.channel(OVERLAY_UNICAST_CHANNEL))
+        val unicastChannel = room.channel(OVERLAY_UNICAST_CHANNEL)
+        overlay.admit(admittedPeer.id, unicastChannel)
 
         // Membership is not changed here. The spoke registration above put learnerId into
         // hub.learnersFlow, and each voter's learner reconciler (launched in init) commits it from
         // the leader's current membership. Changing membership per connection, from a config read
         // here, is what let one admission evict another (#3120).
 
-        // Hold the room open until the connection closes or scope cancels.
-        // The finally block removes the learner spoke and the overlay attachment
-        // when the WebSocket closes. The spoke removal is seam-identity-guarded so a
-        // late tear from a superseded room cannot cancel a re-admitted spoke.
+        // Hold the admission while the peer is a member of this room. The host room drops it on a
+        // transport tear, on the client's goodbye and when a partition expires, and nothing else would
+        // end this coroutine: no production RoomHost cancels onRoom when its connection closes (#3127,
+        // #3129). Both removals are identity-guarded, so a late close of a room this learner has since
+        // been re-admitted past leaves the newer admission alone.
         try {
-            awaitCancellation()
+            room.roster.first { roster -> roster.none { it.id == admittedPeer.id } }
+            log.info { "server-cluster: learner $learnerId left its room" }
         } finally {
             hub.removeSpoke(learnerId, seamChannel)
-            overlay.evict(admittedPeer.id)
+            overlay.evict(admittedPeer.id, unicastChannel)
         }
     }
 
