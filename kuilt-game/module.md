@@ -98,9 +98,14 @@ scope.launch { chat.incoming.collect { frame -> renderChat(frame.payload) } }
 chat.broadcast(message.encodeToByteArray())
 ```
 
-`GameSession.close()` is a hard local teardown — it stops the node's loops, then closes the
-fabric (idempotent). It is **not** a graceful cluster departure; hand off leadership and/or
-change membership first for that.
+`GameSession.close()` is a local teardown — it stops the node's loops, then closes the fabric
+(idempotent), and waits for nothing. It is **not** a graceful cluster departure; hand off
+leadership and/or change membership first for that.
+
+`GameSession.leave()` before `close()` asks a host running liveness monitoring to free the seat
+without waiting the reconnect window. Neither call waits for that message to go out, and there is
+no way yet to wait for it, so it can be lost on any fabric. The host then holds the seat until the
+reconnect window ends.
 
 ## Driving the game — `TurnSequencer`
 

@@ -1,7 +1,10 @@
 package us.tractat.kuilt.game
 
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.NamedMux
 import us.tractat.kuilt.core.PeerId
@@ -46,6 +49,12 @@ public open class GameSession internal constructor(
      * live membership/liveness stream.
      */
     internal val lobbyPresence: GamePresence? = null,
+    /**
+     * The liveness monitor a [gameHost] given a `livenessConfig` runs on its caller's scope. [close]
+     * cancels it first, because otherwise it would go on watching and evicting through a node that is
+     * closing under it, on a scope that closing this session does not end.
+     */
+    internal val livenessMonitor: Job? = null,
 ) {
     /**
      * Returns the application [Seam] for the channel named [name], idempotent per name.
@@ -77,42 +86,66 @@ public open class GameSession internal constructor(
     public fun principalFor(peer: PeerId): Principal? = attestedPrincipals.value[peer]
 
     /**
-     * Signals a voluntary departure from the game session.
+     * Declares a voluntary departure from the game session, so that the seat can come free without
+     * waiting the reconnect window.
      *
-     * Publishes a vacate marker on the presence channel so the host immediately evicts this
-     * voter via [RaftNode.changeMembership] without waiting the reconnect window. This frees
-     * the seat for a replacement peer to join promptly.
+     * Publishes a vacate marker on the presence channel. When the frame reaches a [gameHost] that was
+     * given a `livenessConfig`, and that host is the leader, it evicts this voter via
+     * [RaftNode.changeMembership] and re-opens the seat for a replacement peer.
      *
-     * **Distinct from [close].** [leave] is a graceful cluster departure: it signals the
-     * host and then returns; the caller is responsible for calling [close] afterward to tear
-     * down the local session. [close] is always a hard local teardown with no cluster
-     * signalling.
+     * **`leave()` then [close] can lose the marker, on every fabric.** This function does not suspend,
+     * so the frame is still queued when it returns, and [close] waits for nothing, so the frame gets out
+     * only if it happens to beat the fabric's close. A caller has no way to wait for it yet: that is
+     * tracked by #2830. Until then, treat [leave] as best effort, and see [close] for what a lost marker
+     * costs.
+     *
+     * **The removal may need this peer.** The eviction commits only with a majority of the old
+     * membership, and a two-seat table has no majority without the voter that is leaving. If this peer
+     * has gone by then, the change cannot commit, and the host stops leading and cannot lead again.
+     * Nothing waits for that commit, on either side.
      *
      * **Spectators and roster-given sessions.** Calling [leave] on a spectator or on a session
-     * created by [gameNode] (no presence channel) is a no-op — those sessions are not voter
-     * seats and cannot be "vacated" in the lobby-presence sense.
+     * created by [gameNode] or [gameOverRoom] (no presence channel) is a no-op — those sessions are
+     * not voter seats and cannot be "vacated" in the lobby-presence sense.
      *
-     * **Reconnect-after-PeerLost** (resuming the old seat) is out of scope — a peer that
-     * returns after eviction joins as a new voter via a fresh [gameJoin] into the freed seat.
+     * **Reconnect-after-PeerLost** (resuming the old seat) is out of scope, and so is coming back under
+     * the same peer id: the host will not re-admit an id it evicted, so a peer that returns has to join
+     * through a fresh [gameJoin] as a new peer.
      */
     public fun leave() {
         lobbyPresence?.declareVacate()
     }
 
     /**
-     * Local teardown: stops the consensus [node]'s loops, then closes the underlying fabric.
-     * Idempotent — a second call is a no-op.
+     * Local teardown: stops the liveness monitor if this session runs one, stops the consensus [node]'s
+     * loops, then closes the underlying fabric. Idempotent — a second call is a no-op.
      *
      * Order matters: the node is stopped before the fabric is torn so its loops do not observe a
-     * closed seam mid-shutdown. This is a **hard local teardown**, not a graceful cluster
-     * departure — to leave a cluster cleanly, hand off leadership
+     * closed seam mid-shutdown. To leave a cluster cleanly as its leader, hand off leadership
      * ([RaftNode.transferLeadership]) and/or remove this peer from membership
-     * ([RaftNode.changeMembership]) first. For a voluntary voter departure use [leave] before
-     * calling [close].
+     * ([RaftNode.changeMembership]) first.
+     *
+     * **This waits for nothing, and signals nothing.** A frame still queued can be dropped, the vacate
+     * marker from [leave] included, and a seam that queues what it accepts can drop a frame it has
+     * already accepted. Then the host holds this seat until its liveness monitor sees the reconnect
+     * window pass, the same as for a crash. That frees the seat only if the host is the leader at that
+     * moment. A two-seat host will not be, having lost its quorum with this peer, and a [gameHost] given
+     * no `livenessConfig` never frees it.
+     *
+     * **It always ends closed.** The teardown is shielded, so a cancelled caller, or a caller whose
+     * timeout fires, still closes the node and the fabric, and the cancellation then goes on to the
+     * caller. The cost is that a caller's timeout does not bound a slow [Seam.close]. If stopping the
+     * node throws, the fabric is closed anyway and the throw goes on to the caller.
      */
     public open suspend fun close(reason: CloseReason = CloseReason.Normal) {
-        node.close()
-        seam.close(reason)
+        livenessMonitor?.cancel()
+        withContext(NonCancellable) {
+            try {
+                node.close()
+            } finally {
+                seam.close(reason)
+            }
+        }
     }
 
     private companion object {

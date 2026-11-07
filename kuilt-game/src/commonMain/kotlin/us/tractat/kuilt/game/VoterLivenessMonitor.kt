@@ -5,6 +5,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.plus
 import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -13,7 +14,9 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.raft.ClusterConfig
+import us.tractat.kuilt.raft.LeadershipLostException
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.changeMembershipWithRetry
@@ -26,7 +29,8 @@ import kotlin.time.Instant
  * monitor notices, removes that seat from the game's membership, re-opens the door for one
  * replacement, and starts watching the newcomer in turn. It is created and started once, on the
  * host's session scope, by [gameHost] when the caller opts into liveness monitoring; cancelling
- * that scope tears the whole monitor down with it.
+ * that scope tears the whole monitor down with it, and so does [GameSession.close], through the job
+ * [start] returns.
  *
  * ---
  *
@@ -37,21 +41,28 @@ import kotlin.time.Instant
  *
  * On [PartitionEvent.PeerLost] (leader only): evicts the dead voter via [changeMembershipWithRetry],
  * re-opens admission, runs [admitVotersUntil] for one replacement, then starts a fresh detector for
- * the new voter. Graceful leave ([GamePresence.vacaters]) triggers eviction immediately without
- * waiting the reconnect window.
+ * the new voter. A graceful leave ([GamePresence.vacating]) takes the same path as soon as its frame
+ * arrives, without waiting the reconnect window, if that frame survives the leaver's close.
  *
- * Non-leader nodes receive [PartitionEvent.PeerLost] but take no action — Raft's commit-majority
- * gate means only the leader can commit the membership change.
+ * A monitor on a non-leader receives both signals and takes no action — Raft's commit-majority gate
+ * means only the leader can commit the membership change.
  *
- * All coroutines launch on the injected [scope]; cancelling it tears them all down (the #1001-class
- * leak guard).
+ * **A membership change here can fail without anything being wrong with the host.** The voter being
+ * removed may be one the change still needs: leaving a two-seat table, or a table where everyone else
+ * has gone too, takes the old config's majority, and that voter has gone. The change then fails with
+ * the node's leadership. So a lost leadership ends that one eviction and not the host's scope, and the
+ * voter set is read back from [RaftNode.membership], since the change's outcome is unknown. Any other
+ * failure, such as [changeMembershipWithRetry] giving up, still fails the scope loudly.
  *
- * @param scope The session scope that owns every coroutine this monitor launches.
+ * All coroutines launch under one job, a child of the injected [scope]; cancelling either tears them
+ * all down (the #1001-class leak guard).
+ *
+ * @param scope The session scope that parents every coroutine this monitor launches.
  * @param node The leader [RaftNode] (may or may not currently hold the leader role).
  * @param seam The game seam (used for [PeerId] extraction and [nextVoterPeer]).
  * @param mux The [MuxSeam] wrapping [seam]; the liveness channel ([HEARTBEAT_CHANNEL]) is a view on it.
- * @param voters The mutable live voter set (shared with the admission loop; mutations are serialised
- *   by the single background eviction coroutine).
+ * @param voters The mutable live voter set (shared with the admission loop; this monitor reads and
+ *   writes it only from its single background eviction coroutine).
  * @param spectatorIds The mutable spectator NodeId set (passed to [ClusterConfig] to preserve learners).
  * @param peerCount Total configured voter count; used to re-open admission to exactly one replacement.
  * @param presence The [GamePresence] instance; used to detect vacaters and re-open/re-close admission.
@@ -59,7 +70,7 @@ import kotlin.time.Instant
  * @param clock Clock for liveness measurements; injected for virtual-time test determinism.
  */
 internal class VoterLivenessMonitor(
-    private val scope: CoroutineScope,
+    scope: CoroutineScope,
     private val node: RaftNode,
     private val seam: Seam,
     private val mux: MuxSeam,
@@ -72,6 +83,10 @@ internal class VoterLivenessMonitor(
 ) {
     private val self = NodeId(seam.selfId.value)
     private val heartbeatSeam: Seam = mux.channel(HEARTBEAT_CHANNEL)
+
+    // A plain Job rather than a supervisor, so a failure that does escape still reaches [scope].
+    private val monitorJob = Job(scope.coroutineContext[Job])
+    private val monitorScope = scope + monitorJob
 
     // Fan the liveness channel's incoming stream into a shared flow so multiple per-peer
     // [GamePerPeerSeam] instances can each subscribe independently — satisfying single-collection.
@@ -87,9 +102,9 @@ internal class VoterLivenessMonitor(
     /**
      * Starts liveness monitoring: fans the heartbeat channel, launches one detector per initial
      * voter (excluding self), and launches the graceful-leave watcher and the eviction loop. All
-     * launches are children of [scope], so cancelling it tears everything down.
+     * launches are children of the returned job, so cancelling it tears everything down.
      */
-    fun start() {
+    fun start(): Job {
         launchLivenessFan()
 
         // Start one detector per initial admitted voter (excluding self).
@@ -98,44 +113,47 @@ internal class VoterLivenessMonitor(
         }
 
         // Graceful-leave watcher: vacate signals bypass the reconnect window.
-        scope.launch { watchVacaters() }
+        monitorScope.launch { watchVacaters() }
 
         // Eviction loop: process one PeerLost at a time.
-        scope.launch { evictAndReopenAdmission() }
+        monitorScope.launch { evictAndReopenAdmission() }
+
+        return monitorJob
     }
 
     private fun launchLivenessFan() {
-        scope.launch { heartbeatSeam.incoming.collect { rawLiveness.emit(it) } }
+        monitorScope.launch { heartbeatSeam.incoming.collect { rawLiveness.emit(it) } }
     }
 
     /**
      * Launches a [HeartbeatPartitionDetector] for [voterId] and returns its [Job].
      *
-     * Delegates to the [CoroutineScope.launchDetectorFor] free function on [scope] so the returned
+     * Delegates to the [CoroutineScope.launchDetectorFor] free function on [monitorScope] so the returned
      * job owns *all* of the detector's coroutines (its heartbeat loop and inbound collector), not
      * just the events collector — cancelling the job tears the whole detector down (#1001-class
      * leak guard).
      */
     private fun launchDetectorFor(voterId: NodeId): Job =
-        scope.launchDetectorFor(voterId, heartbeatSeam, rawLiveness, evictions, config, clock)
+        monitorScope.launchDetectorFor(voterId, heartbeatSeam, rawLiveness, evictions, config, clock)
 
     /**
      * Watches for graceful-leave vacate signals on [presence] and triggers immediate eviction.
      *
-     * Polls [GamePresence.vacaters] on every Quilter state change (announced flow). When a new
-     * vacater is seen that is a current voter, sends its [NodeId] to [evictions] to bypass the
-     * reconnect window.
+     * Collects [GamePresence.vacating] and sends each new vacater's [NodeId] to [evictions], to bypass
+     * the reconnect window. That is all it does. Whether the signal can be acted on is for the eviction
+     * loop, which is the one coroutine that reads [voters] and [detectorJobs], and which decides when it
+     * reaches the signal rather than when it arrived. In particular the voter's detector keeps running
+     * until an eviction is actually under way, or a vacate heard by a non-leader would stop the only
+     * thing still able to free the seat.
      */
     private suspend fun watchVacaters() {
         val seenVacaters = mutableSetOf<NodeId>()
-        presence.announced.collect {
-            val newVacaters = presence.vacaters()
+        presence.vacating.collect { vacating ->
+            val newVacaters = vacating
                 .map { NodeId(it.value) }
-                .filter { it in voters && it !in seenVacaters && it != self }
+                .filter { it !in seenVacaters && it != self }
             newVacaters.forEach { vacaterId ->
                 seenVacaters += vacaterId
-                // Cancel the detector job for this voter — it's leaving voluntarily.
-                detectorJobs.remove(vacaterId)?.cancel()
                 evictions.trySend(vacaterId)
             }
         }
@@ -145,9 +163,10 @@ internal class VoterLivenessMonitor(
      * Processes evictions from [evictions]: removes the dead voter, re-opens admission for one
      * replacement, then starts a fresh detector for the replacement.
      *
-     * Only the Raft **leader** calls [changeMembershipWithRetry]; non-leaders skip the eviction.
-     * If leadership has transferred by the time eviction fires, the new leader's own loop handles
-     * the eviction — or the evicted peer's seat remains open until another PeerLost fires.
+     * Only the Raft **leader** calls [changeMembershipWithRetry]; non-leaders drop the signal. Only
+     * [gameHost] runs this monitor, so no other peer picks it up: a vacate dropped here costs the seat
+     * the reconnect window, and a [PartitionEvent.PeerLost] dropped here leaves the seat taken, because
+     * that voter's detector has already stopped and nothing else will fire for it.
      */
     private suspend fun evictAndReopenAdmission() {
         // Peers that have been evicted from the voter set — excluded from re-admission so a gracefully
@@ -160,38 +179,64 @@ internal class VoterLivenessMonitor(
             // Skip if already evicted (e.g. duplicate signal from detector + vacate).
             if (lostId !in voters) continue
 
-            // Cancel the stale detector job (if still running — vacate path cancels it first).
+            // Cancel the stale detector job (if still running).
             detectorJobs.remove(lostId)?.cancel()
 
-            // Remove the dead voter and commit the shrunken config.
-            voters.remove(lostId)
-            evictedVoterIds += lostId
-            node.changeMembershipWithRetry(ClusterConfig(voters = voters.toSet(), learners = spectatorIds.toSet()))
-
-            // Re-open admission so a new gameJoin can take the freed seat.
-            presence.declareAdmissionOpen()
-
-            // Admit exactly one replacement voter, excluding evicted peers so a gracefully-departing
-            // peer (still connected) cannot immediately reclaim its own freed seat.
-            val votersBeforeAdmit = voters.toSet()
-            admitVotersUntil(
-                node,
-                seam,
-                voters,
-                spectatorIds + evictedVoterIds,
-                target = votersBeforeAdmit.size + 1,
-                presence,
-            )
-
-            // Re-close admission with the refreshed voter set.
-            presence.declareAdmissionClosed(voters)
-
-            // Start a liveness detector for the replacement voter (the one not in votersBeforeAdmit).
-            val newVoterId = voters.firstOrNull { it !in votersBeforeAdmit }
-            if (newVoterId != null) {
-                detectorJobs[newVoterId] = launchDetectorFor(newVoterId)
+            try {
+                evictAndAdmitReplacement(lostId, evictedVoterIds)
+            } catch (_: LeadershipLostException) {
+                resyncAfterFailedChange()
+            } catch (_: NotLeaderException) {
+                resyncAfterFailedChange()
             }
         }
+    }
+
+    private suspend fun evictAndAdmitReplacement(lostId: NodeId, evictedVoterIds: MutableSet<NodeId>) {
+        // Remove the dead voter and commit the shrunken config.
+        voters.remove(lostId)
+        evictedVoterIds += lostId
+        node.changeMembershipWithRetry(ClusterConfig(voters = voters.toSet(), learners = spectatorIds.toSet()))
+
+        // Re-open admission so a new gameJoin can take the freed seat.
+        presence.declareAdmissionOpen()
+
+        // Admit exactly one replacement voter, excluding evicted peers so a gracefully-departing
+        // peer (still connected) cannot immediately reclaim its own freed seat.
+        val votersBeforeAdmit = voters.toSet()
+        admitVotersUntil(
+            node,
+            seam,
+            voters,
+            spectatorIds + evictedVoterIds,
+            target = votersBeforeAdmit.size + 1,
+            presence,
+        )
+
+        // Re-close admission with the refreshed voter set.
+        presence.declareAdmissionClosed(voters)
+
+        // Start a liveness detector for the replacement voter (the one not in votersBeforeAdmit).
+        val newVoterId = voters.firstOrNull { it !in votersBeforeAdmit }
+        if (newVoterId != null) {
+            detectorJobs[newVoterId] = launchDetectorFor(newVoterId)
+        }
+    }
+
+    /**
+     * A change failed with the leadership, and it may or may not have landed. Takes the voter set from
+     * [node] rather than from what was attempted, and watches any voter in it that has no detector: one
+     * the change left in place is watched again, so its seat can still come free at the end of a window.
+     * A detector left over for a voter no longer in the set is harmless: the eviction loop skips it.
+     *
+     * [RaftNode.membership] is the latest config in the log, committed or not, so this can name a set
+     * that a later leader replaces. Nothing here follows that.
+     */
+    private fun resyncAfterFailedChange() {
+        val current = node.membership.value.voters
+        voters.retainAll(current)
+        voters.addAll(current)
+        (voters - detectorJobs.keys - self).forEach { voterId -> detectorJobs[voterId] = launchDetectorFor(voterId) }
     }
 }
 
