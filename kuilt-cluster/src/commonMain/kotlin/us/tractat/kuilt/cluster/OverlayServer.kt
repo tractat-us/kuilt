@@ -74,13 +74,15 @@ public const val OVERLAY_UNICAST_CHANNEL: String = "overlay-unicast"
  *
  * ## Thread-safety
  *
- * [OverlayServer] holds no mutable state of its own — it delegates to
+ * [OverlayServer]'s state lives in the two components it delegates to:
  * [AttachmentDirectory] (an [kotlinx.atomicfu.atomic] write clock plus a
  * lock-guarded [us.tractat.kuilt.quilter.Quilter]) and [RoutedUnicastRouter] (a
  * `reentrantLock`-guarded spoke map). Both are individually correct under a
- * multi-threaded dispatcher. One more lock of its own makes [admit] and [evict] each a single
+ * multi-threaded dispatcher. Its one lock of its own makes [admit] and [evict] each a single
  * step across the two (#3127): without it, a re-admit landing between an eviction's two halves
- * leaves a registered spoke whose attachment has been retracted. Nothing suspends under it.
+ * leaves a registered spoke whose attachment has been retracted. Nothing suspends under it, and
+ * neither component calls back into this class. The two [evict] forms order their halves
+ * differently; a frame racing either order is dropped once, never fanned.
  * Construct one per server via [overlayServer].
  *
  * @see overlayServer for construction and wiring over the inter-server seams.

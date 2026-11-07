@@ -84,21 +84,24 @@ class LearnerDisconnectE2ETest {
                 raftConfig = raftCfg,
                 learnerGrace = grace,
             )
-            serverScope.launch { cluster.start() }
-            withTimeout(20.seconds) { cluster.awaitLeader() }
-
             val clientScope = CoroutineScope(coroutineContext + Job())
-            val client = connect(clientScope)
-            withTimeout(20.seconds) { client.propose("hello".encodeToByteArray()) }
-            awaitLeaderLearners(cluster, "the client is admitted") { leavingId in it }
+            try {
+                serverScope.launch { cluster.start() }
+                withTimeout(20.seconds) { cluster.awaitLeader() }
 
-            goAway(clientScope, client)
+                val client = connect(clientScope)
+                withTimeout(20.seconds) { client.propose("hello".encodeToByteArray()) }
+                awaitLeaderLearners(cluster, "the client is admitted") { leavingId in it }
 
-            awaitLeaderLearners(cluster, "the departed learner is removed after its grace") { leavingId !in it }
+                goAway(clientScope, client)
 
-            clientScope.cancel()
-            cluster.close()
-            serverScope.cancel()
+                awaitLeaderLearners(cluster, "the departed learner is removed after its grace") { leavingId !in it }
+            } finally {
+                // On failure too, so a red run does not leave a live cluster beating for the rest of the JVM.
+                clientScope.cancel()
+                cluster.close()
+                serverScope.cancel()
+            }
         }
     }
 

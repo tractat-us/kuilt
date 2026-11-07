@@ -265,11 +265,12 @@ internal class ControlledRoomHost(
             when (command) {
                 is Command.Connect -> admit(command.id)
                 is Command.Close -> {
-                    val open = connections[command.id] ?: continue
+                    // A close with nothing to close is a mistyped test, not a no-op: fail it loudly.
+                    val open = connections[command.id].orEmpty()
                     val connection = when (command.which) {
-                        Which.Newest -> open.removeLastOrNull()
-                        Which.Oldest -> open.removeFirstOrNull()
-                    } ?: continue
+                        Which.Newest -> connections[command.id]?.removeLastOrNull()
+                        Which.Oldest -> connections[command.id]?.removeFirstOrNull()
+                    } ?: error("close ${command.which} for ${command.id}, which has ${open.size} open connections")
                     when (command.how) {
                         How.Tear -> {
                             connection.room.tearSeam()
