@@ -1998,10 +1998,11 @@ internal class RaftEngine(
         electionJob?.cancel()
         leaderAlive = true
         leaderLeaseJob?.cancel()
-        // Clear, then initialise (#3124). This alone closes the cross-term hole: a peer outside the config
-        // now cannot carry a value from an earlier leadership of this node into this one. The prune in
-        // [recomputeMembership] is the leak fix, and redundant with this for safety. Do not drop this
-        // line in favour of the prune; this is the line that makes every matchIndex a this-term value.
+        // Clear, then initialise (#3124). This closes the cross-term hole by itself: a peer outside the
+        // config cannot carry a value from an earlier leadership of this node into this one. The prune in
+        // [recomputeMembership] also closes it, but only because this node's follower-side recompute saw
+        // the removal; this line does not depend on that. It is what makes every matchIndex a this-term
+        // value, which the onTimeoutNow guards below lean on. Keep both.
         state.resetPeerIndices(otherMembers, nextIndex = state.lastLogIndex + 1L)
         emitTrace(RaftTraceEvent.BecomeLeader(nextClock(), transport.selfId, state.currentTerm))
         heartbeatJob = scope.launch {
@@ -4230,15 +4231,15 @@ internal class RaftEngine(
         // already reached our term before the frame existed, and that causality survives arbitrary
         // reordering (the frame does not exist until the ACK lands).
         //
-        // The one hole in "produced this term": [becomeLeader] resets matchIndex to 0 only for
-        // `otherMembers` — the CURRENT configuration's members — and nothing ever clears the map, so a
-        // NodeId outside the config at election time keeps a stale value across the term change. A peer
-        // removed while its matchIndex was high, then re-admitted and made a transfer target, can satisfy
-        // `isTargetCaughtUp` on that stale index and be sent a TimeoutNow at a term it never adopted.
-        // This guard is therefore **fail-safe-then-retry**, not "cannot happen": the premature frame is
-        // dropped with no state touched, the in-flight transfer survives, and the next heartbeat ACK from
-        // the now-same-term target re-fires [sendTimeoutNow] correctly — well inside the transfer's
-        // one-election-timeout auto-abandon window, since heartbeatInterval << electionTimeout.
+        // "Produced this term" used to have one hole. [becomeLeader] reset matchIndex only for the
+        // current config's members and nothing cleared the map, so a peer removed while its matchIndex was
+        // high, then re-admitted and made a transfer target, could satisfy `isTargetCaughtUp` on a stale
+        // index. #3124 closed it: [becomeLeader] now clears both index maps before initialising them, and
+        // [recomputeMembership] prunes a removed peer's entry. The guard stays as **fail-safe-then-retry**
+        // all the same, because it holds without leaning on that. The premature frame is dropped with no
+        // state touched, the in-flight transfer survives, and the next heartbeat ACK from the
+        // now-same-term target re-fires [sendTimeoutNow] correctly. That lands well inside the
+        // transfer's one-election-timeout auto-abandon window, since heartbeatInterval << electionTimeout.
         //
         // Either way a node that genuinely IS behind must catch up through the ordinary election-timeout
         // path, whose pre-vote round checks its log — not through an immediate election that skips it.
@@ -4277,11 +4278,10 @@ internal class RaftEngine(
         // advances only on [onAppendEntriesResponse] / [onInstallSnapshotResponse] — both of which are
         // fed by a responder that ran [adoptLeaderForTerm] BEFORE replying. So a matchIndex value
         // produced this term proves the target pinned this leader for this term, and the pin now
-        // outlives the process. The one exception is the stale-matchIndex hole the higher-term guard
-        // above documents (a peer outside the config at election time keeps its old matchIndex), which
-        // is fail-safe-then-retry in exactly the same way: the frame is dropped with no state touched
-        // and the next heartbeat ACK re-fires [sendTimeoutNow], well inside the transfer's
-        // one-election-timeout auto-abandon window.
+        // outlives the process. The stale-matchIndex exception the higher-term guard above describes was
+        // closed by #3124. Were it ever to reopen, this guard fails safe and retries in the same way: the
+        // frame is dropped with no state touched, and the next heartbeat ACK re-fires [sendTimeoutNow]
+        // well inside the transfer's one-election-timeout auto-abandon window.
         val established = leaderForTerm
         if (from != established) {
             debug {
