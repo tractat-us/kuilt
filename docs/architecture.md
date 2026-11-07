@@ -695,8 +695,8 @@ facade. See the [star relay sub-spec](superpowers/specs/2026-06-17-star-relay-su
 for framing/addressing/back-pressure/resume details.
 
 Client onboarding is a `changeMembership` that adds the client as a learner in
-`ClusterConfig.learners`. Learner-set-only changes skip joint consensus — each
-join is a cheap simple config entry. The client is assigned a `NodeId` derived
+`ClusterConfig.learners`. Learner-set-only changes skip joint consensus, so a
+join is a cheap simple config entry, and joins that arrive together share one. The client is assigned a `NodeId` derived
 from its Seam `selfId` at join time; the server derives the same `NodeId` from
 the room roster — no explicit client identification step is needed.
 
