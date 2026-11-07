@@ -5,6 +5,7 @@ import us.tractat.kuilt.crdt.CausalMap
 import us.tractat.kuilt.crdt.DotFun
 import us.tractat.kuilt.crdt.DotMap
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 
 private typealias Doc = CausalMap<String, DotMap<String, DotFun<Int>>>
 
