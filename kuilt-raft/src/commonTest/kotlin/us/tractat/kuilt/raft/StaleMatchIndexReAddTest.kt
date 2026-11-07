@@ -7,6 +7,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import us.tractat.kuilt.core.runCatchingCancellable
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -67,7 +68,7 @@ class StaleMatchIndexReAddTest {
         sim.partition(setOf(l, d), setOf(a, b))
         val base = sim.storages.getValue(l).entries(1L).last().index
         repeat(UNCOMMITTED) { i ->
-            backgroundScope.launch { runCatching { t1.propose(byteArrayOf(i.toByte())) } }
+            backgroundScope.launch { runCatchingCancellable { t1.propose(byteArrayOf(i.toByte())) } }
         }
         delay(4.milliseconds)
         val dHolds = sim.storages.getValue(d).entries(1L).lastOrNull()?.index ?: 0L
@@ -111,7 +112,7 @@ class StaleMatchIndexReAddTest {
 
         // Re-add d as a voter. Only l and a can hold the Joint: 2 of the new side's 4.
         val change = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
-            runCatching { window.leader.changeMembership(ClusterConfig(voters = setOf(l, a, b, d))) }
+            runCatchingCancellable { window.leader.changeMembership(ClusterConfig(voters = setOf(l, a, b, d))) }
         }
         delay(WINDOW)
         // Precondition: the change was accepted, so a low commit below is a refusal to count d, not a change
