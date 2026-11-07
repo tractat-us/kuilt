@@ -76,6 +76,9 @@ internal class ServerClusterSim(
     /** Learners whose closed connection is still admitted. */
     fun admissionsStillRunningAfterClose(): List<NodeId> = host.admissionsStillRunningAfterClose()
 
+    /** [id]'s newest open connection's room. */
+    fun newestRoom(id: NodeId): FakeRoom = checkNotNull(host.newestRoom(id)) { "$id has no open connection" }
+
     /**
      * End every admission before the test scope tears the rest down. Cancelling both at once lets an
      * admission's `finally` evict from an overlay whose directory has already closed itself, which
@@ -236,8 +239,13 @@ internal class ControlledRoomHost(
     fun admissionsStillRunningAfterClose(): List<NodeId> =
         closed.filterNot { (_, connection) -> connection.admission.isCompleted }.map { it.first }
 
+    /** Each learner's open connections, oldest first. Same single owner and thread as [closed]. */
+    private val connections = mutableMapOf<NodeId, ArrayDeque<Connection>>()
+
+    /** [id]'s newest open connection's room, or `null` when it has none. */
+    fun newestRoom(id: NodeId): FakeRoom? = connections[id]?.lastOrNull()?.room
+
     override suspend fun start(onRoom: suspend (Room) -> Unit): Unit = coroutineScope {
-        val connections = mutableMapOf<NodeId, ArrayDeque<Connection>>()
         fun admit(id: NodeId) {
             val room = roomFor(id)
             val admission = launch {

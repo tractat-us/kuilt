@@ -124,10 +124,19 @@ class ServerClusterLearnerRemovalTest {
         delay(grace / 4)
         h.disconnect(flaky, ControlledRoomHost.Which.Oldest)
         delay(grace * 3)
+        val newRoom = h.newestRoom(flaky)
+        val routed = "for the new connection".encodeToByteArray()
+        h.cluster.overlay.route(PeerId(flaky.value), routed)
 
         assertAll(
             { assertEquals(h.learners.toSet(), h.leaderLearners(), "the re-admitted learner is never removed") },
-            { assertEquals(self, h.cluster.overlay.lookup(PeerId(flaky.value)), "its overlay attachment is kept") },
+            { assertEquals(self, h.cluster.overlay.lookup(PeerId(flaky.value)), "its directory entry is kept") },
+            {
+                assertTrue(
+                    newRoom.broadcasts.any { it.contentEquals(routed) },
+                    "a unicast routed to it still reaches the new connection's spoke",
+                )
+            },
         )
     }
 
