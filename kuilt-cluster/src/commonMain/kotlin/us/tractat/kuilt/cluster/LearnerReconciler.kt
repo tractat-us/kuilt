@@ -3,15 +3,16 @@ package us.tractat.kuilt.cluster
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.raft.ClusterConfig
+import us.tractat.kuilt.raft.LeadershipLostException
+import us.tractat.kuilt.raft.MembershipChangeInProgressException
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.raft.NotLeaderException
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import kotlin.time.Duration.Companion.milliseconds
@@ -39,8 +40,9 @@ private val LEARNER_RECONCILE_RETRY_BACKOFF = 200.milliseconds
  * stale read silently undoes whatever committed since. #3120 was exactly that: each admission sent
  * `voters + {itself}`, and a retry after `MembershipChangeInProgressException` re-sent it once the
  * previous admission had committed, evicting that learner. This loop builds every target from
- * `node.membership.value` read immediately before the call, and is level-triggered: a refused or
- * superseded attempt is followed by a fresh read, never a resend. Admissions that arrive while a
+ * `node.membership.value` read immediately before the call, and is level-triggered: a refused
+ * attempt (`MembershipChangeInProgressException`, `NotLeaderException`, `LeadershipLostException`)
+ * is followed by a fresh read, never a resend. Any other failure escapes and fails the owning scope. Admissions that arrive while a
  * change is in flight are batched into the next one, so an admission storm costs a few config
  * entries rather than one each.
  *
@@ -64,13 +66,21 @@ internal fun CoroutineScope.launchLearnerReconciler(
         val current = node.membership.value
         val missing = missingLearners(desired.value, current)
         if (missing.isEmpty()) continue
-        try {
+        val refusal = try {
             node.changeMembership(ClusterConfig(voters = current.voters, learners = current.learners + missing))
-        } catch (failure: Throwable) {
-            // Unshielded, and the loop's next iteration follows: only THIS job's cancellation ends it.
-            // NotLeader, LeadershipLost and MembershipChangeInProgress all mean "read again, later".
-            currentCoroutineContext().ensureActive()
-            log.debug { "learner-reconciler: adding $missing failed, re-reading: $failure" }
+            null
+        } catch (refused: MembershipChangeInProgressException) {
+            refused
+        } catch (refused: NotLeaderException) {
+            refused
+        } catch (refused: LeadershipLostException) {
+            refused
+        }
+        // The three refusals all mean "read again, later". Anything else escapes and fails the owning
+        // scope: a reconciler retrying an unexpected failure forever would leave learners that never
+        // receive, and no line at the default log level saying why.
+        if (refusal != null) {
+            log.debug { "learner-reconciler: adding $missing refused, re-reading: $refusal" }
             delay(LEARNER_RECONCILE_RETRY_BACKOFF)
         }
     }
