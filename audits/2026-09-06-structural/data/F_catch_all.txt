@@ -1,0 +1,2419 @@
+### kuilt-bolt/src/appleMain/kotlin/us/tractat/kuilt/bolt/PosixMappedBolt.kt:571
+            // Null until the first segment has spoken: the archive's offset space starts wherever its
+            // OLDEST segment says it does, not at 0.
+            var resumeOffset: Long? = null
+            for (index in maxOf(firstUnpruned - 1, 0) until views.size) {
+                val view = views[index]
+                val bytes = try {
+                    readFile(view.path).bytes
+                } catch (failure: PosixFailure) {
+                    // A segment this replay cannot read is a replay that stopped, not an archive that is
+                    // empty — and the verdict is what says so. `SegmentHeader` is the right constant even
+                    // though the file would not OPEN rather than failing a checksum: the remedy is the
+                    // same retry-later (a Data-Protection-locked device unlocks), which is what
+
+### kuilt-bolt/src/appleMain/kotlin/us/tractat/kuilt/bolt/PosixMappedBolt.kt:657
+                            "${capacityBytes - usedBytes} of $capacityBytes free",
+                        insertDots,
+                        offset,
+                    )
+                }
+                try {
+                    rollSegment(offset, allocation)
+                } catch (failure: PosixFailure) {
+                    // Nothing is remembered here on purpose: `availability` re-asks the volume rather than
+                    // replaying this answer, so a refusal cannot outlive the condition that caused it.
+                    return AppendResult.Failed(failure.reason, insertDots, offset, cause = failure)
+                }
+
+### kuilt-bolt/src/appleMain/kotlin/us/tractat/kuilt/bolt/PosixMappedBolt.kt:738
+                // same kind of mapping and is equally visible to the `read(2)` that replay and adoption
+                // both use, so a failed flush of it loses durability, not the segment.
+                //
+                // The recorded range is empty — a header carries no frame — and that is the honest shape:
+                // nothing is at risk YET, but this segment's durability is already in doubt from `offset`.
+                // The first frame's own flush starts at the same page and so resolves it either way.
+                if (synchronous) flushQuietly(mapped, 0L, header.size.toLong(), offset, headerBytes)
+            } catch (failure: PosixFailure) {
+                // Everything is undone before the failure escapes. The OLD active segment stays mapped
+                // and appendable, so a refused roll is survivable rather than the end of this bolt's
+                // life — and the half-built file is UNLINKED rather than left behind. Leaving it was a
+                // permanent wedge: the next roll recomputes the same index, `O_EXCL` fails EEXIST, and
+
+### kuilt-bolt/src/appleMain/kotlin/us/tractat/kuilt/bolt/PosixMappedBolt.kt:996
+            val names = NSFileManager.defaultManager
+                .contentsOfDirectoryAtPath(directory.withoutTrailingSlash(), error = null)
+                ?: return BoltAvailability.Unavailable("archive directory $directory could not be listed")
+            val indices = names.mapNotNull { segmentIndexOf(it as? String ?: return@mapNotNull null) }.sorted()
+            if (indices.isEmpty()) return BoltAvailability.Available
+            return try {
+                adoptSegments(indices)
+            } catch (failure: PosixFailure) {
+                // NOT the sticky wedge, and that distinction is the whole fix. A file that cannot be
+                // READ is an I/O condition — a Data-Protection-locked device, a descriptor limit, an
+                // interrupted read — and the archive behind it is intact. Wedging here made a condition
+                // that clears on its own permanently disable archiving on this instance, which is the
+
+### kuilt-bolt/src/commonMain/kotlin/us/tractat/kuilt/bolt/BoltDecorator.kt:295
+         * an archive failure. It releases the claim on its way out: nothing was written, so nothing may
+         * stay reserved, and the operations are re-offered normally on the next round.
+         */
+        private suspend fun appendOrConvert(reserved: List<Pair<Op, ArchiveKey<Id>>>): AppendResult {
+            val content = reserved.map { (op, _) -> op }
+            return try {
+                bolt.append(content)
+            } catch (cancellation: CancellationException) {
+                lock.withLock { release(reserved) }
+                throw cancellation
+            } catch (failure: Throwable) {
+                AppendResult.Failed(
+
+### kuilt-bolt/src/commonMain/kotlin/us/tractat/kuilt/bolt/BoltDecorator.kt:298
+        private suspend fun appendOrConvert(reserved: List<Pair<Op, ArchiveKey<Id>>>): AppendResult {
+            val content = reserved.map { (op, _) -> op }
+            return try {
+                bolt.append(content)
+            } catch (cancellation: CancellationException) {
+                lock.withLock { release(reserved) }
+                throw cancellation
+            } catch (failure: Throwable) {
+                AppendResult.Failed(
+                    reason = "the archive backend threw rather than reporting a refusal: $failure",
+                    insertDots = format.insertDotsOf(content),
+                    // The backend threw, so it reported no extent. `AppendResult.Failed` allows a null
+
+### kuilt-bolt/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/bolt/MappedBolt.kt:398
+                        "${capacityBytes - usedBytes} of $capacityBytes free",
+                    offset = nextOffset,
+                    cause = null,
+                )
+            }
+            return try {
+                SegmentOutcome.Ready(roll(nextOffset, sizeBytes))
+            } catch (failure: IOException) {
+                // The catchable failure the eager pre-allocation exists to produce: a full or read-only
+                // volume surfaces HERE, as a refused append, rather than as a SIGBUS on a later page.
+                SegmentOutcome.Refused("could not pre-allocate a segment under $directory: $failure", nextOffset, failure)
+            }
+
+### kuilt-bolt/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/bolt/MappedBolt.kt:449
+        private fun flushQuietly(segment: Segment) {
+            val frameBytes = segment.writePosition - headerBytes
+            val from = nextOffset - frameBytes
+            if (riggedFlushFailure != null) riggedFlushCount++
+            try {
+                segment.force(riggedFlushFailure)
+                if (forceOnAppend) ledger.flushSucceeded(from, nextOffset)
+            } catch (failure: IOException) {
+                if (forceOnAppend) {
+                    ledger.flushFailed(from, nextOffset, "could not flush ${segment.file.name}: $failure", failure)
+                }
+            }
+
+### kuilt-bolt/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/bolt/MappedBolt.kt:501
+        private fun allocate(file: File, sizeBytes: Long): MappedByteBuffer =
+            try {
+                RandomAccessFile(file, "rw").use { handle ->
+                    preallocate(handle.channel, sizeBytes)
+                    handle.channel.force(true)
+                    handle.channel.map(FileChannel.MapMode.READ_WRITE, 0L, sizeBytes)
+                }
+            } catch (failure: IOException) {
+                // A half-allocated segment is not an archive of anything — leave no ambiguity behind for
+                // the next open to have to classify.
+                file.delete()
+                throw failure
+
+### kuilt-bolt/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/bolt/MappedBolt.kt:563
+            // header. It can hold no frame — frames are only ever written after the header — so deleting
+            // it returns the space and restores a clean append point, losing nothing readable.
+            val kept = found.toMutableList()
+            try {
+                while (kept.isNotEmpty() && isEntirelyZero(kept.last())) {
+                    kept.removeAt(kept.lastIndex).delete()
+                }
+            } catch (failure: IOException) {
+                unappendable = "the newest segment under $directory could not be read: $failure"
+            }
+            // Recorded BEFORE any refusal below, so an archive this instance cannot append to is still
+            // one it can replay: `segments` is what the read path walks.
+
+### kuilt-bolt/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/bolt/MappedBolt.kt:575
+            segments += kept
+            usedBytes = kept.sumOf { it.length() }
+            nextIndex = kept.lastOrNull()?.let { segmentIndexOf(it) + 1 } ?: 0
+            if (unappendable != null) return
+            kept.lastOrNull()?.let { newest ->
+                try {
+                    reopen(newest)
+                } catch (failure: IOException) {
+                    // A read-only mount is the classic response to a disk I/O error, and it is exactly
+                    // when the application must survive. Reporting it through `availability` rather than
+                    // throwing out of `init` is the same posture `append` takes for a full disk — and an
+                    // EMPTY read-only directory already reported it that way, so this is the branch that
+
+### kuilt-bolt/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/bolt/MappedBolt.kt:837
+         * archive, a version from the future — propagates exactly as it does from [emitSegment]: the
+         * caller opened the wrong directory, and reporting that as "unprunable" would hide it until the
+         * body read raised the same thing one step later.
+         */
+        private fun baseOffsetOf(read: SegmentRead): Long? {
+            val bytes = read.inMemory ?: try {
+                readHeaderOf(read.file)
+            } catch (_: IOException) {
+                return null
+            }
+            val buffer = Buffer().apply { write(bytes, 0, minOf(bytes.size, headerBytes)) }
+            return readSegmentHeader(buffer, format.opFormat, format.elementType)?.baseOffset
+
+### kuilt-bolt/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/bolt/MappedBolt.kt:889
+            read: SegmentRead,
+            resumeOffset: Long?,
+            scope: ReplayScope,
+        ): SegmentReplay {
+            val stopsAt = resumeOffset ?: 0L
+            val bytes = try {
+                bytesOf(read)
+            } catch (_: IOException) {
+                // A segment we cannot read at all is indistinguishable, to a consumer, from one whose
+                // header will not read — and throwing would discard every intact frame ahead of it.
+                return SegmentReplay(Truncated(stopsAt, TruncationReason.SegmentHeader), stopsAt)
+            }
+
+### kuilt-bolt/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/bolt/MappedBolt.kt:1021
+             * deliberately *inside* the `try`: the translation below is the one subtlety this call site
+             * has, so a rigged failure exercises it rather than stepping around it.
+             */
+            fun force(riggedFailure: String?) {
+                try {
+                    if (riggedFailure != null) throw UncheckedIOException(IOException(riggedFailure))
+                    mapped.force()
+                } catch (failure: UncheckedIOException) {
+                    throw failure.cause ?: IOException("could not flush the mapped segment", failure)
+                }
+            }
+        }
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/VoterMesh.kt:121
+                    // can only be one the seam's own `close` minted (a close-handshake `withTimeout`) — never
+                    // our cancellation. `runCatchingCancellable` would rethrow that one case and skip every
+                    // remaining seam, leaving those inter-server sessions ESTABLISHED: precisely the zombie
+                    // voter this close exists to prevent (#1803).
+                    voterSeams.values.forEach {
+                        try {
+                            it.close()
+                        } catch (_: Throwable) {
+                            // Best-effort: one seam refusing to close must not strand its siblings open.
+                        }
+                    }
+                }
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/VoterMeshAssembly.kt:261
+            return voterMeshOverSeams(
+                voterSeams = meshes,
+                raftConfig = raftConfig,
+                meshScope = meshScope,
+                storageFactory = storageFactory,
+                ownsSeams = true,
+            )
+        } catch (e: Throwable) {
+            // Formation failed (e.g. formationTimeout fired on a stalled/crashed voter) — the caller never
+            // received a VoterMesh, so it has NO handle to close the mesh scope. Tear down everything this
+            // function started before rethrowing, or the accept-pumps drain forever and the partially-formed
+            // seams (each on its own SupervisorJob scope, NOT a child of meshScope) linger with their live
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/VoterMeshAssembly.kt:281
+                // block's Job is parented to [NonCancellable], so a `CancellationException` arriving here can
+                // only be one the seam's own `close` minted. `runCatchingCancellable` rethrows that case and
+                // skips every remaining seam, which is the same skipped-cleanup this shield was written to
+                // prevent, one level in (#1803).
+                meshes.values.forEach {
+                    try {
+                        it.close()
+                    } catch (_: Throwable) {
+                        // Best-effort: one seam refusing to close must not strand its siblings open.
+                    }
+                }
+                // And the dials no seam ever took ownership of (#2587). The loop above closes every link a
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/VoterMeshAssembly.kt:312
+                // Read under the lock, closed outside it: `close` suspends, and a suspend call inside a lock
+                // is the repo's standing no. Per-conn `try`/`catch (Throwable)` for the same reason the seam
+                // loop above has one — inside this shield a CancellationException can only be one the conn's
+                // own `close` minted, and rethrowing it would skip every remaining conn (#1803, #1824).
+                unpublishedDialsLock.withLock { unpublishedDials.toList() }.forEach {
+                    try {
+                        it.close()
+                    } catch (_: Throwable) {
+                        // Best-effort, per conn: one refusing to close must not strand its siblings open.
+                    }
+                }
+            }
+
+### kuilt-cluster/src/commonMain/kotlin/us/tractat/kuilt/cluster/VoterReconnectionSupervisor.kt:103
+                                            // close() is withTimeout-bounded throws TimeoutCancellationException
+                                            // to its caller WITHOUT cancelling that caller, and re-throwing it
+                                            // cancels this peer's redial coroutine outright: no delay, no
+                                            // retry, and mesh.peers never emits again to restart it. Type
+                                            // cannot separate that from our own cancellation; ensureActive can.
+                                            try {
+                                                conn.close()
+                                            } catch (_: Throwable) {
+                                                currentCoroutineContext().ensureActive()
+                                            }
+                                        }
+                                }
+
+### kuilt-cluster/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/cluster/ServerCluster.kt:154
+         * learner [NodeId], register its Seam as a spoke in the shared [RaftRelayHub], add it to
+         * cluster membership via the leader, then hold the room open until the connection closes
+         * or the relay scope cancels. The `finally` deregisters the spoke on disconnect.
+         */
+        private suspend fun admitLearner(room: Room) {
+            val admittedSet = try {
+                withTimeout(10.seconds) { room.roster.first { it.isNotEmpty() } }
+            } catch (e: Throwable) {
+                // Whose cancellation is this? The `withTimeout` above MINTS a
+                // `TimeoutCancellationException` and throws it at us without cancelling this job — and
+                // that timeout is the one case this `try` exists for. A `catch (CancellationException)
+                // { throw e }` here would match it first and make everything below dead code, so the
+
+### kuilt-cluster/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/cluster/ServerCluster.kt:191
+    
+            val withLearner = ClusterConfig(
+                voters = voterConfig.voters,
+                learners = voterConfig.learners + learnerId,
+            )
+            try {
+                mesh.awaitLeader().changeMembershipWithRetry(withLearner)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                log.warn(e) { "server-cluster: learner $learnerId admit failed — removing spoke" }
+                hub.removeSpoke(learnerId, seamChannel)
+
+### kuilt-cluster/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/cluster/ServerCluster.kt:193
+                voters = voterConfig.voters,
+                learners = voterConfig.learners + learnerId,
+            )
+            try {
+                mesh.awaitLeader().changeMembershipWithRetry(withLearner)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                log.warn(e) { "server-cluster: learner $learnerId admit failed — removing spoke" }
+                hub.removeSpoke(learnerId, seamChannel)
+                overlay.evict(admittedPeer.id)
+                return
+
+### kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/MeshConformanceSuite.kt:168
+                // rethrows is a `CancellationException` the fabric's `close` minted itself, and inside the shield
+                // ours is never cancelled, so that is the only kind reachable. Letting it out would escape the
+                // whole block, leaving every later seam in the mesh un-closed with its redial loop re-arming.
+                withContext(NonCancellable) {
+                    seams.forEach { seam ->
+                        try {
+                            withTimeoutOrNull(2.seconds) { seam.close() }
+                        } catch (_: Throwable) {
+                            // Best-effort: one seam refusing to close must not strand the rest of the mesh.
+                        }
+                    }
+                }
+
+### kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/RoomConformanceSuite.kt:1219
+         * forbids: a silent cancel with no assertion failure and no stack trace. So it is converted to a
+         * failure instead. Anything that is *not* a cancellation propagates untouched — this helper has
+         * no opinion about whether an operation may fail, only about how it reports failing.
+         */
+        private suspend inline fun assertNoMintedCancellation(what: String, op: () -> Unit) {
+            try {
+                op()
+            } catch (e: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                throw AssertionError(
+                    "RoomConformanceSuite: $what must not report failure as a cancellation " +
+                        "(Room.leave / Seam.close, #1826): a caller cannot distinguish it from its own " +
+
+### kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/RoomConformanceSuite.kt:1244
+         * does above: this test's own cancellation still propagates, a minted one is returned as a value
+         * for an assertion to name.
+         */
+        private suspend inline fun failureOf(op: () -> Unit): Throwable? =
+            try {
+                op()
+                null
+            } catch (failure: Throwable) {
+                currentCoroutineContext().ensureActive()
+                failure
+            }
+    
+
+### kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt:516
+                    // timeout; what it rethrows is a `CancellationException` the fabric's `close` minted itself
+                    // (`e.coroutine !== coroutine`). Inside the shield ours is never cancelled, so that is the
+                    // only kind reachable — and letting it out would escape the whole `NonCancellable` block,
+                    // skip the second close, and throw from this `finally`, masking the test's real failure.
+                    withContext(NonCancellable) {
+                        try {
+                            withTimeoutOrNull(2.seconds) { host.close() }
+                        } catch (_: Throwable) {
+                            // Best-effort: the joiner below must still be torn down.
+                        }
+                        try {
+                            withTimeoutOrNull(2.seconds) { joiner.close() }
+
+### kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt:521
+                        try {
+                            withTimeoutOrNull(2.seconds) { host.close() }
+                        } catch (_: Throwable) {
+                            // Best-effort: the joiner below must still be torn down.
+                        }
+                        try {
+                            withTimeoutOrNull(2.seconds) { joiner.close() }
+                        } catch (_: Throwable) {
+                            // Best-effort: teardown must never fail the test it is cleaning up after.
+                        }
+                    }
+                }
+
+### kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt:1133
+         * the seam minted itself — which `Seam.sendTo` forbids, and which must therefore be *reported*
+         * as the wrong exception type rather than silently cancelling the suite.
+         */
+        private suspend fun failureOf(block: suspend () -> Unit): Throwable? =
+            try {
+                block()
+                null
+            } catch (failure: Throwable) {
+                currentCoroutineContext().ensureActive()
+                failure
+            }
+    
+
+### kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt:1184
+         * propagates (never swallow a structured-concurrency cancel); if it is not, [op] minted it, and
+         * rethrowing would inflict on this test precisely the damage the obligation forbids — a silent
+         * cancel with no assertion failure and no stack trace. So it is converted to a failure instead.
+         */
+        private suspend inline fun assertNoMintedCancellation(what: String, op: () -> Unit) {
+            try {
+                op()
+            } catch (e: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                fail(
+                    "$what must not report failure as a cancellation (Seam.close, #1826): a caller cannot " +
+                        "distinguish it from its own cancellation, so it CANCELS the caller instead of " +
+
+### kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt:1392
+         * Run best-effort post-close [op], swallowing the closed-seam / dropped-peer signals a torn
+         * fabric legitimately raises (a role-split fabric may already have torn the joiner when the host
+         * closed). Cancellation is always rethrown — never swallow a structured-concurrency cancel.
+         */
+        private suspend inline fun tolerateTornChurn(op: () -> Unit) {
+            try {
+                op()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // closed seam / absent peer / torn transport — expected under post-close churn.
+            }
+
+### kuilt-conformance/src/commonMain/kotlin/us/tractat/kuilt/conformance/SeamConformanceSuite.kt:1394
+         * closed). Cancellation is always rethrown — never swallow a structured-concurrency cancel.
+         */
+        private suspend inline fun tolerateTornChurn(op: () -> Unit) {
+            try {
+                op()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // closed seam / absent peer / torn transport — expected under post-close churn.
+            }
+        }
+    
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeLoom.kt:104
+                    // a throwing `capability()` then has no already-woven transport to orphan.
+                    val roles = loom.capability().roles
+                    woven += InitialPly(id = id, seam = loom.weave(rendezvous), roles = roles)
+                }
+                // Inside the try as well: the constructor starts this composite's pumps, and anything it throws
+                // (a consumer seam's `selfId`/flow accessor) would otherwise orphan every transport above.
+                return CompositeSeam(woven, rendezvous, plies, dispatcher, policy, onPlyFailure)
+            } catch (failure: Throwable) {
+                // NonCancellable and per-ply best-effort: the failure may itself BE this coroutine's
+                // cancellation, and `Seam.close` suspends on any real transport — so an unshielded close would
+                // throw at its first suspension point and leak the very transports being reclaimed. One ply
+                // refusing to close must not stop its siblings being closed either.
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeLoom.kt:120
+                    // consumer's `close` minted itself (a close-handshake `withTimeout`), never our own.
+                    // `runCatchingCancellable` rethrows exactly that case — defeating the "one ply must not
+                    // stop its siblings" half of the paragraph above (#1803). Same shape, same reason, as
+                    // `CompositeSeam.discardOrphanedPly`.
+                    woven.forEach {
+                        try {
+                            it.seam.close(CloseReason.Normal)
+                        } catch (_: Throwable) {
+                            // Best-effort reclamation: this ply's transport is lost either way.
+                        }
+                    }
+                }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:512
+            val desiredIds = desiredSet.map { it.first }.toSet()
+            // Detach: live plies no longer desired.
+            val liveIds = lock.withLock { live.keys.toList() }
+            for (id in liveIds) {
+                if (id in desiredIds) continue
+                try {
+                    detachPly(id)
+                } catch (failure: Throwable) {
+                    // Genuinely our own cancellation → rethrow; anything else (including a
+                    // CancellationException the callee minted itself) is this ply's failure. See the KDoc.
+                    currentCoroutineContext().ensureActive()
+                    raisePlyFailure(id, PlyReconcileException.Phase.DETACH, failure)
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:535
+                // This is the cheap outer guard, not the safety net — [attachPly] fuses the same check with the
+                // registration, so dropping this one would not corrupt state. It would mean actually dialling a
+                // fresh transport (a socket, a radio) for a seam already dead, only to close it again; before
+                // BOTH checks existed the pass re-wove the entire desired set onto the corpse (#1784).
+                if (state.value is SeamState.Torn) return
+                try {
+                    attachDesiredPly(id, loom)
+                } catch (failure: Throwable) {
+                    // Genuinely our own cancellation → rethrow; anything else (including a
+                    // CancellationException the callee minted itself — a dial `withTimeout` is the common
+                    // case) is this ply's failure. See the KDoc.
+                    currentCoroutineContext().ensureActive()
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:546
+                    currentCoroutineContext().ensureActive()
+                    raisePlyFailure(id, PlyReconcileException.Phase.ATTACH, failure)
+                    // attachPly registers the handle BEFORE launching its pumps, so a throw partway through
+                    // can leave a half-built ply in `live`. Purge it — itself best-effort, since the purge
+                    // closes a consumer seam — so the next emission retries from a clean slate.
+                    try {
+                        detachPly(id)
+                    } catch (_: Throwable) {
+                        // Same discriminator; the purge's own failure is already reported by [detachPly].
+                        currentCoroutineContext().ensureActive()
+                    }
+                }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:593
+         * precisely the live transport this method exists to reclaim, with [close] single-shot and already
+         * returned. The same idiom, for the same reason, is in `NwLoom.weave`.
+         */
+        private suspend fun discardOrphanedPly(id: PlyId, seam: Seam) {
+            withContext(NonCancellable) {
+                try {
+                    seam.close(CloseReason.Normal)
+                } catch (failure: Throwable) {
+                    // Inside the shield there is no "our own cancellation" left to preserve — this block's Job
+                    // is parented to [NonCancellable] — so `ensureActive` cannot fire and every throwable,
+                    // including a `CancellationException` the consumer's `close` minted itself (a close
+                    // handshake `withTimeout`), is this ply's failure. `runCatchingCancellable` here would
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:624
+         * that guard, and a `CancellationException` escaping an `onEach` body **cancels the coroutine
+         * silently**: the pump dies, the ply stays `Woven`, and nothing is reported. That is the very defect
+         * this hook was added to make observable, reached through the hook itself.
+         */
+        private fun raisePlyFailure(id: PlyId, phase: PlyReconcileException.Phase, cause: Throwable) {
+            try {
+                onPlyFailure(PlyReconcileException(id, phase, cause))
+            } catch (_: Throwable) {
+                // Deliberately total — see the KDoc. A consumer's logger must never be able to kill a pump.
+            }
+        }
+    
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:847
+                // rather than `runCatchingCancellable`: inside the shield this block's Job is parented to
+                // [NonCancellable], so a `CancellationException` arriving here can only be one the consumer's
+                // `close` minted itself, and rethrowing it would skip the very recomputes this guard exists
+                // for. `ensureActive` is kept as the discriminator for symmetry with [reconcile]; it cannot
+                // fire here.
+                try {
+                    handle.seam.close(CloseReason.Normal)
+                } catch (failure: Throwable) {
+                    currentCoroutineContext().ensureActive()
+                    raisePlyFailure(id, PlyReconcileException.Phase.DETACH, failure)
+                }
+            }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt:1387
+         * stopped and it is out of the composite regardless" — is exactly true here, `live` having been drained
+         * and [scope] cancelled before this runs. Contrast [PlyReconcileException.Phase.SALVAGE], which exists
+         * because that claim would have been *false* for a ply that never entered the live set.
+         */
+        private suspend fun closePlyBestEffort(id: PlyId, handle: PlyHandle, reason: CloseReason) {
+            try {
+                handle.seam.close(reason)
+            } catch (failure: Throwable) {
+                currentCoroutineContext().ensureActive()
+                raisePlyFailure(id, PlyReconcileException.Phase.DETACH, failure)
+            }
+        }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/discovery/DiscoveryRoster.kt:127
+     */
+    private fun Flow<RosterEvent>.isolate(
+        source: PeerDiscoverySource,
+        onFailure: (PeerDiscoverySource, Throwable) -> Unit,
+    ): Flow<RosterEvent> = catch { failure ->
+        try {
+            onFailure(source, failure)
+        } catch (_: Throwable) {
+            // Deliberately total, `CancellationException` included, and for the same reason `pumpIn`'s
+            // `reportPumpFailure` is: this runs *inside* the guard that keeps the fold alive, so a
+            // rethrow escapes it and kills every other source — the exact defect the hook reports on.
+            // Nothing suspends in the callback's contract, so there is no cancellation of ours here for
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/LinkSeam.kt:181
+                    if (state.value !is SeamState.Torn) {
+                        // deliver suspends under SUSPEND-overflow policy — this is intentional: the
+                        // readLoop pauses until the consumer drains, propagating backpressure from the
+                        // inbox spool back to the wire. No lock is held here, so suspension is safe.
+                        inbox.deliver(Swatch(payload = bytes, sender = remoteId, sequence = ++seq))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // remote dropped — fall through to teardown
+            } finally {
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/LinkSeam.kt:183
+                        // readLoop pauses until the consumer drains, propagating backpressure from the
+                        // inbox spool back to the wire. No lock is held here, so suspension is safe.
+                        inbox.deliver(Swatch(payload = bytes, sender = remoteId, sequence = ++seq))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // remote dropped — fall through to teardown
+            } finally {
+                tearDown(CloseReason.RemoteRequested)
+            }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:543
+            // now the frame says what it is and anything other than a hello here is refused by name.
+            val remote = when (val first = MeshWire.decode(single.firstFrame())) {
+                is MeshWireFrame.Hello -> first.hello
+                MeshWireFrame.Data, MeshWireFrame.Goodbye ->
+                    throw MeshWireOutOfOrderException("mesh handshake: expected a HELLO frame first, got $first")
+            }
+            return Link(remote.peerId, single, canonicalLinkNonce(myNonce, remote.nonce), principal)
+        } catch (failure: Throwable) {
+            // Shielded so this runs when `failure` IS the cancellation; a plain catch inside, because in
+            // here a CancellationException can only be one the conn's own close minted, and rethrowing it
+            // would skip the rethrow below (#1803/#1824).
+            withContext(NonCancellable) {
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:550
+        } catch (failure: Throwable) {
+            // Shielded so this runs when `failure` IS the cancellation; a plain catch inside, because in
+            // here a CancellationException can only be one the conn's own close minted, and rethrowing it
+            // would skip the rethrow below (#1803/#1824).
+            withContext(NonCancellable) {
+                try {
+                    single.close()
+                } catch (_: Throwable) {
+                    // Best-effort: the conn refusing to close must not replace the failure being reported.
+                }
+            }
+            throw failure
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:608
+     * `broadcast`/`sendTo`'s per-conn `runCatchingCancellable { conn.send(…) }` is deliberately NOT routed
+     * here: those are sends, not closes, and rethrowing there propagates a cancellation the [Seam] contract
+     * requires `Connection.send` not to have minted in the first place.
+     */
+    private suspend fun closeBestEffort(conn: Connection) {
+        try {
+            conn.close()
+        } catch (_: Throwable) {
+            // Genuinely our own cancellation → rethrow. Anything else — including a CancellationException
+            // the conn minted itself — is this conn's failure alone; whatever follows still happens.
+            currentCoroutineContext().ensureActive()
+        }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:1092
+                        // telling us it has deduped and stopped writing here; our own dedup has not run
+                        // yet (or ran the other way). Nothing to end, and nothing to do — the remote
+                        // keeps reading this link for its whole drain, so writes we make meanwhile still
+                        // land, and our dedup will follow.
+                        MeshWireFrame.Goodbye -> endDrain(link, MeshDisplacement.Outcome.Goodbye)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Connection errored, or sent a frame this build refuses — treat as remote disconnect.
+            } finally {
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:1094
+                        // keeps reading this link for its whole drain, so writes we make meanwhile still
+                        // land, and our dedup will follow.
+                        MeshWireFrame.Goodbye -> endDrain(link, MeshDisplacement.Outcome.Goodbye)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Connection errored, or sent a frame this build refuses — treat as remote disconnect.
+            } finally {
+                // NonCancellable is NOT used here (matching the pre-#2474 shape): `removePeer` already
+                // shields its own closes. What is new is that a drained link also has to settle — its
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/fabric/MeshSeam.kt:1389
+                // can only be one the consumer's `Connection.close` minted itself (a close-handshake
+                // `withTimeout`) — never our own cancellation. `runCatchingCancellable` would rethrow that one
+                // case, abandoning every remaining conn and reintroducing the very half-open-connection leak
+                // this shield exists to prevent (#1803).
+                toClose.forEach {
+                    try {
+                        it.close()
+                    } catch (_: Throwable) {
+                        // Best-effort: one conn refusing to close must not stop its siblings being closed.
+                    }
+                }
+            }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/PumpIn.kt:142
+        onFailure: (PumpFailure, Throwable) -> Unit,
+        name: String,
+        body: suspend (T) -> Unit,
+    ): Job {
+        val guarded = onEach { value ->
+            try {
+                body(value)
+            } catch (failure: Throwable) {
+                // Genuinely our own cancellation → rethrow, so the pump stops as structured concurrency
+                // intends; anything else — INCLUDING a `CancellationException` the callee minted itself — is
+                // this item's failure. See the KDoc.
+                currentCoroutineContext().ensureActive()
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/PumpIn.kt:173
+    private fun reportPumpFailure(
+        onFailure: (PumpFailure, Throwable) -> Unit,
+        phase: PumpFailure,
+        failure: Throwable,
+    ) {
+        try {
+            onFailure(phase, failure)
+        } catch (_: Throwable) {
+            // Deliberately total, `CancellationException` included: this runs inside the pump's own guard, so
+            // a rethrow escapes it and kills the pump silently — the very defect the hook exists to report.
+        }
+    }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/RaceCollapse.kt:84
+            val drainWatcher = launch(start = CoroutineStart.UNDISPATCHED) {
+                peers.first { abortWhen(it) }
+                outcome.completeExceptionally(SeamCollapsedException(collapseReason()))
+            }
+            val work = launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    outcome.complete(body())
+                } catch (e: CancellationException) {
+                    // A CE from `work.cancel()` in the finally leaves `outcome` already completed → no-op. But a
+                    // CE that originates INSIDE `body` (e.g. a `withTimeout` firing) with nothing having cancelled
+                    // work would otherwise leave `outcome` uncompleted, hanging `outcome.await()` forever — the
+                    // exact indefinite suspension this primitive exists to prevent. Surface it, then rethrow.
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/RaceCollapse.kt:91
+                } catch (e: CancellationException) {
+                    // A CE from `work.cancel()` in the finally leaves `outcome` already completed → no-op. But a
+                    // CE that originates INSIDE `body` (e.g. a `withTimeout` firing) with nothing having cancelled
+                    // work would otherwise leave `outcome` uncompleted, hanging `outcome.await()` forever — the
+                    // exact indefinite suspension this primitive exists to prevent. Surface it, then rethrow.
+                    outcome.completeExceptionally(e)
+                    throw e
+                } catch (e: Throwable) {
+                    outcome.completeExceptionally(e)
+                }
+            }
+            try {
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/RunCatchingCancellable.kt:29
+     * of that shape were found in this repo, one of them written by an author who had read the issues and
+     * cited them in the KDoc of the pump they were breaking. Use [pumpIn], which discriminates at runtime
+     * with `ensureActive()` and also guards the upstream half this helper cannot reach at all.
+     */
+    public inline fun <R> runCatchingCancellable(block: () -> R): Result<R> =
+        try {
+            Result.success(block())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/RunCatchingCancellable.kt:31
+     * with `ensureActive()` and also guards the upstream half this helper cannot reach at all.
+     */
+    public inline fun <R> runCatchingCancellable(block: () -> R): Result<R> =
+        try {
+            Result.success(block())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+
+### kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/Spool.kt:63
+                    }
+                }
+                // SUSPEND suspends; DROP_* never suspend (the channel handles overflow). A receiver
+                // that closes concurrently races the send — it is gone, so the frame is dropped (as
+                // the pre-bounded `trySend` did) rather than surfaced to the broadcasting caller.
+                else -> try {
+                    channel.send(frame)
+                } catch (e: ClosedSendChannelException) {
+                    // receiver closed concurrently — drop
+                }
+            }
+        }
+
+### kuilt-deal/src/commonMain/kotlin/us/tractat/kuilt/deal/DealSession.kt:60
+        private val _state = MutableStateFlow(DeckState(emptyList()))
+        public val state: StateFlow<DeckState> = _state.asStateFlow()
+    
+        private val incomingJob: Job = seam.incoming
+            .onEach { swatch ->
+                val frame = try {
+                    swatch.decode(Cbor, IndexedCardOp.serializer())
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Drop a malformed/foreign frame rather than letting it cancel the
+                    // collector (which would silently halt all further op delivery).
+
+### kuilt-deal/src/commonMain/kotlin/us/tractat/kuilt/deal/DealSession.kt:62
+    
+        private val incomingJob: Job = seam.incoming
+            .onEach { swatch ->
+                val frame = try {
+                    swatch.decode(Cbor, IndexedCardOp.serializer())
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Drop a malformed/foreign frame rather than letting it cancel the
+                    // collector (which would silently halt all further op delivery).
+                    return@onEach
+                }
+
+### kuilt-deal/src/commonMain/kotlin/us/tractat/kuilt/deal/FairRandom.kt:126
+            val warnedMalformed = mutableSetOf<PeerId>()
+    
+            val collectorJob = launch {
+                seam.incoming.collect { swatch ->
+                    val sender = swatch.sender ?: return@collect
+                    val msg = try {
+                        swatch.decode(Cbor, FairRandomMessage.serializer())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (refusal: IllegalArgumentException) {
+                        // Two refusals arrive here, and one arm covers both because
+                        // SerializationException IS an IllegalArgumentException: bytes CBOR cannot
+
+### kuilt-deal/src/commonMain/kotlin/us/tractat/kuilt/deal/FairRandom.kt:128
+            val collectorJob = launch {
+                seam.incoming.collect { swatch ->
+                    val sender = swatch.sender ?: return@collect
+                    val msg = try {
+                        swatch.decode(Cbor, FairRandomMessage.serializer())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (refusal: IllegalArgumentException) {
+                        // Two refusals arrive here, and one arm covers both because
+                        // SerializationException IS an IllegalArgumentException: bytes CBOR cannot
+                        // parse, and bytes it can parse into values FairRandomMessage.Reveal will not
+                        // hold (its init { require } throws a plain IllegalArgumentException — kotlinx
+
+### kuilt-game/src/commonMain/kotlin/us/tractat/kuilt/game/SpeculativeSequencer.kt:147
+         *   is rolled back. The outcome of the underlying proposal is unknown — the caller must
+         *   treat it as lost and retry with an idempotent action or deduplication key.
+         */
+        public suspend fun propose(action: A): IndexedAction<A> {
+            applySpeculatively(action)
+            return try {
+                sequencer.propose(action)
+            } catch (e: Throwable) {
+                rollbackSpeculative()
+                throw e
+            }
+        }
+
+### kuilt-game/src/commonMain/kotlin/us/tractat/kuilt/game/SpeculativeSequencer.kt:170
+         *   awaiting commit. The speculative apply is rolled back. The caller may retry with the
+         *   same [requestId].
+         */
+        public suspend fun propose(action: A, requestId: Long): IndexedAction<A> {
+            applySpeculatively(action)
+            return try {
+                sequencer.propose(action, requestId)
+            } catch (e: Throwable) {
+                rollbackSpeculative()
+                throw e
+            }
+        }
+
+### kuilt-heddle/src/commonMain/kotlin/us/tractat/kuilt/heddle/ControlPlane.kt:505
+    
+        private suspend fun proposeWithRetry(bytes: ByteArray, requestId: Long) {
+            var attempts = 0
+            while (true) {
+                try {
+                    raft.propose(bytes, requestId)
+                    return
+                } catch (e: LeadershipLostException) {
+                    // A forwarded proposal was rejected by a stepping-down leader; retry on the next leader
+                    // with the SAME requestId (Raft §8 dedup) and requestKey (apply-side dedup) — exactly-once.
+                    if (++attempts >= MAX_PROPOSE_RETRIES) throw e
+                }
+
+### kuilt-heddle/src/commonMain/kotlin/us/tractat/kuilt/heddle/Rational.kt:213
+    
+        override fun deserialize(decoder: Decoder): Rational {
+            val (numerator, denominator) = decoder.decodeSerializableValue(Surrogate.serializer())
+            // of() already sign-normalizes n/-d to -n/d and reduces to lowest terms, so the
+            // repairable cases need no pre-pass here; it throws on what cannot be repaired.
+            return try {
+                Rational.of(numerator, denominator)
+            } catch (e: ArithmeticException) {
+                // A zero denominator (no rational named), or negate(Long.MIN_VALUE) during
+                // sign-normalization (no representable canonical form).
+                throw SerializationException("Not a valid Rational: $numerator/$denominator", e)
+            }
+
+### kuilt-heddle/src/commonMain/kotlin/us/tractat/kuilt/heddle/Weight.kt:136
+            val signNormalized = denominator < 0L
+            return try {
+                if (signNormalized) {
+                    Weight.of(checkedNegate(numerator), checkedNegate(denominator))
+                } else {
+                    Weight.of(numerator, denominator)
+                }
+            } catch (e: IllegalArgumentException) {
+                throw SerializationException("Not a valid Weight: $numerator/$denominator", e)
+            } catch (e: ArithmeticException) {
+                // checkedNegate(Long.MIN_VALUE) — no representable normalization.
+                throw SerializationException("Not a valid Weight: $numerator/$denominator", e)
+
+### kuilt-heddle/src/commonMain/kotlin/us/tractat/kuilt/heddle/Weight.kt:138
+                if (signNormalized) {
+                    Weight.of(checkedNegate(numerator), checkedNegate(denominator))
+                } else {
+                    Weight.of(numerator, denominator)
+                }
+            } catch (e: IllegalArgumentException) {
+                throw SerializationException("Not a valid Weight: $numerator/$denominator", e)
+            } catch (e: ArithmeticException) {
+                // checkedNegate(Long.MIN_VALUE) — no representable normalization.
+                throw SerializationException("Not a valid Weight: $numerator/$denominator", e)
+            }
+        }
+
+### kuilt-mdns/src/androidMain/kotlin/us/tractat/kuilt/mdns/NsdBrowser.kt:222
+                        if (resolving || queue.isEmpty()) return
+                        resolving = true
+                        queue.removeFirst()
+                    }
+                try {
+                    startResolving(next)
+                    return
+                } catch (failure: Throwable) {
+                    // Flag first, log second: the log reads off the very NsdServiceInfo that just
+                    // refused, so it is not the one statement here allowed to throw before the queue is
+                    // released again.
+                    synchronized(lock) { resolving = false }
+
+### kuilt-mdns/src/iosMain/kotlin/us/tractat/kuilt/mdns/BonjourBrowser.kt:229
+     */
+    private inline fun guarded(
+        what: String,
+        step: () -> Unit,
+    ) {
+        try {
+            step()
+        } catch (failure: Throwable) {
+            logger.debug(failure) { "$what failed" }
+        }
+    }
+    
+
+### kuilt-mdns/src/iosMain/kotlin/us/tractat/kuilt/mdns/BonjourBrowser.kt:414
+     */
+    private fun NSData.txtDictionary(): Map<Any?, NSData?> {
+        // The overwhelmingly common nil case, and the one reachable without a hostile peer.
+        if (length == 0UL) return emptyMap()
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            NSNetService.dictionaryFromTXTRecordData(this) as Map<Any?, NSData?>
+        } catch (failure: Throwable) {
+            logger.debug(failure) { "unparseable Bonjour TXT record; treating it as empty" }
+            emptyMap()
+        }
+    }
+
+### kuilt-mdns/src/jvmMain/kotlin/us/tractat/kuilt/mdns/MDNSMultiAcceptHost.kt:191
+    internal suspend fun acceptNonSelfSeam(nextLink: suspend () -> Seam): Seam {
+        while (true) {
+            val seam = nextLink()
+            if ((seam.peers.value - seam.selfId).isEmpty()) {
+                // Remote resolved to self (or presented no distinct identity): a self-dial. Drop it.
+                try {
+                    seam.close(CloseReason.Normal)
+                } catch (_: Throwable) {
+                    // Genuinely our own cancellation → re-throw. Anything else — including a
+                    // CancellationException the seam minted itself — is this seam's failure alone;
+                    // the next accept still happens.
+                    currentCoroutineContext().ensureActive()
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerCrossProcessProbe.kt:78
+                                    "[host] frame from=${frame.sender?.value} bytes=${frame.payloadSize} " +
+                                        "(elapsed ${nowMs() - t0}ms)",
+                                )
+                            }
+                        }
+                    try {
+                        withTimeout(timeoutMs) { awaitCancellation() }
+                    } catch (_: TimeoutCancellationException) {
+                        log("[host] timeout after ${timeoutMs}ms — exiting cleanly")
+                    }
+                    peersJob.cancel()
+                    incomingJob.cancel()
+
+### kuilt-multipeer/src/jvmMain/kotlin/us/tractat/kuilt/multipeer/MultipeerCrossProcessProbe.kt:189
+                                    "[joiner] frame from=${frame.sender?.value} bytes=${frame.payloadSize} " +
+                                        "(elapsed ${nowMs() - t0}ms)",
+                                )
+                            }
+                        }
+                    try {
+                        withTimeout(runForMs) { awaitCancellation() }
+                    } catch (_: TimeoutCancellationException) {
+                        log("[joiner] runForMs=${runForMs}ms elapsed — exiting cleanly")
+                    }
+                    peersJob.cancel()
+                    incomingJob.cancel()
+
+### kuilt-nearby/src/androidMain/kotlin/us/tractat/kuilt/nearby/AndroidRadioObserver.kt:138
+                when (adapter.state) {
+                    BluetoothAdapter.STATE_ON -> NearbyRadioStatus.On
+                    BluetoothAdapter.STATE_OFF -> NearbyRadioStatus.Off
+                    // TURNING_ON / TURNING_OFF: mid-transition, so claim neither. The broadcast that
+                    // carries the settled state is already on its way.
+                    else -> NearbyRadioStatus.Unknown
+                }
+            } catch (_: SecurityException) {
+                // BLUETOOTH_CONNECT not granted (API 31+). Unreadable is NOT off.
+                NearbyRadioStatus.Unknown
+            }
+        }
+
+### kuilt-nearby/src/androidMain/kotlin/us/tractat/kuilt/nearby/AndroidRadioObserver.kt:154
+            return try {
+                when (wifi.wifiState) {
+                    WifiManager.WIFI_STATE_ENABLED -> NearbyRadioStatus.On
+                    WifiManager.WIFI_STATE_DISABLED -> NearbyRadioStatus.Off
+                    // ENABLING / DISABLING / UNKNOWN: mid-transition or unreadable — claim neither.
+                    else -> NearbyRadioStatus.Unknown
+                }
+            } catch (_: SecurityException) {
+                NearbyRadioStatus.Unknown
+            }
+        }
+    }
+
+### kuilt-nearby/src/commonMain/kotlin/us/tractat/kuilt/nearby/ConnectStateMachine.kt:206
+         * to the *same* one-character id. That is a silent merge of two devices onto one identity, which
+         * is the half of the #1466 class a collision check downstream cannot see, because by then there
+         * is only one id.
+         */
+        private fun decodeAnnouncedId(bytes: ByteArray): PeerId? =
+            try {
+                PeerId(bytes.decodeToString(throwOnInvalidSequence = true))
+            } catch (_: CharacterCodingException) {
+                null
+            }
+    
+        private class HandshakeState(initialEndpoint: String?) {
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwLoom.kt:362
+            //    for a friend" back-out: a user leaving the lobby, a withTimeout wrapper, scope teardown) —
+            //    close the seam (under NonCancellable so the in-flight cancellation can't skip the close) and
+            //    rethrow unchanged.
+            try {
+                withTimeout(weaveTimeout) {
+                    seam.peers.first { it.size > 1 }
+                }
+            } catch (_: TimeoutCancellationException) {
+                log.info { "nw.loom.weave-timeout self=${selfId.value} serviceType=$serviceType after=$weaveTimeout → Unreachable" }
+                // UNCONDITIONALLY, and BEFORE the discard — a failed weave must leave behind the state that
+                // explains it, not a bare "timed out". Unconditional because the trigger's "did we see anybody"
+                // guard exists to keep the PERIODIC dump off idle devices; here the formation has demonstrably
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwLoom.kt:382
+                // the same reason the log line is: `close` wipes `settledEndpoints` and cancels every redialer.
+                val state = render(formation)
+                logFormationStuck("weave-timeout after=$weaveTimeout", state)
+                discardUnreturnedSeam(seam)
+                throw NwUnreachableException(
+                    "nw weave timed out: no peer reached for serviceType=$serviceType within $weaveTimeout | $state",
+                )
+            } catch (e: Throwable) {
+                log.info { "nw.loom.weave-aborted self=${selfId.value} serviceType=$serviceType reason=${e::class.simpleName} → closing seam so redial stops" }
+                discardUnreturnedSeam(seam)
+                throw e
+            }
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwLoom.kt:410
+         * which would replace the caller's deliberate [NwUnreachableException] (or the original abort cause) with
+         * a bare masquerading cancellation, silently cancelling the caller instead of failing it.
+         */
+        private suspend fun discardUnreturnedSeam(seam: Seam) {
+            withContext(NonCancellable) {
+                try {
+                    seam.close(CloseReason.Unreachable)
+                } catch (failure: Throwable) {
+                    log.debug { "nw.loom.discard-close-failed self=${selfId.value} reason=${failure::class.simpleName}" }
+                }
+            }
+        }
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwLoom.kt:694
+         * none of its documented elisions cover `startListening`. [ensureActive] is what tells the two apart at
+         * runtime — it throws only when THIS job is genuinely cancelled.
+         */
+        private suspend fun listenOnce(phase: String): NwListenerState.Failed? =
+            try {
+                api.startListening(serviceName, serviceType)
+                null
+            } catch (failure: Throwable) {
+                currentCoroutineContext().ensureActive()
+                log.error { "nw.listen.threw self=${selfId.value} serviceName=$serviceName phase=$phase: $failure" }
+                NwListenerState.Failed(NW_ERROR_DOMAIN_INVALID, code = 0)
+            }
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:610
+                // The framer is single-reader (only this loop touches it), so decoding outside the lock is safe.
+                // #1528 finding 1: NwFramer.decode throws FrameTooLargeException on a bad 4-byte length prefix
+                // (negative or > maxFrameSize). Guard it so a corrupt/hostile chunk on ANY live conn routes through
+                // the SAME corrupt-inbound backstop instead of escaping the collector and killing the receive loop.
+                // A real structured-concurrency cancel is always re-thrown, never swallowed.
+                val frames = try {
+                    cs.framer.decode(event.bytes)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    evictCorruptConn(connId, "framer decode failed: ${e.message}")
+                    return@collect
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:612
+                // (negative or > maxFrameSize). Guard it so a corrupt/hostile chunk on ANY live conn routes through
+                // the SAME corrupt-inbound backstop instead of escaping the collector and killing the receive loop.
+                // A real structured-concurrency cancel is always re-thrown, never swallowed.
+                val frames = try {
+                    cs.framer.decode(event.bytes)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    evictCorruptConn(connId, "framer decode failed: ${e.message}")
+                    return@collect
+                }
+                for (frame in frames) {
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:765
+         */
+        private suspend fun processFrame(connId: NwConnectionId, cs: ConnState, frame: ByteArray) {
+            // #1528 part B: a body this build cannot read must NOT throw out of the collector and kill the
+            // receive loop. Narrowly wrap ONLY the decode; a real structured-concurrency cancel is always
+            // re-thrown, never swallowed.
+            val wire = try {
+                NwWire.decode(frame)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: NwWireFormatException) {
+                // One line per refusal reason, each with its tag written as a LITERAL so the field-trail
+                // guard can see the level it is emitted at. A `"$tag …"` interpolation reads identically to
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:767
+            // #1528 part B: a body this build cannot read must NOT throw out of the collector and kill the
+            // receive loop. Narrowly wrap ONLY the decode; a real structured-concurrency cancel is always
+            // re-thrown, never swallowed.
+            val wire = try {
+                NwWire.decode(frame)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: NwWireFormatException) {
+                // One line per refusal reason, each with its tag written as a LITERAL so the field-trail
+                // guard can see the level it is emitted at. A `"$tag …"` interpolation reads identically to
+                // a human and is invisible to that guard — which is how these lines would quietly drift to
+                // DEBUG and vanish from a release capture (#2420).
+
+### kuilt-nw/src/commonMain/kotlin/us/tractat/kuilt/nw/NwSeam.kt:793
+                    is NwTruncatedFrameException -> log.warn {
+                        "nw.seam.wire.truncated connId=${connId.value} self=${selfId.value} " +
+                            "frame-bytes=${frame.size} : ${e.message} → disconnect + evict (loop preserved)"
+                    }
+                }
+                disconnectAndEvictConn(connId)
+                return
+            } catch (e: Exception) {
+                evictCorruptConn(connId, "body decode failed: ${e.message}")
+                return
+            }
+            val outcome = lock.withLock {
+
+### kuilt-nw/src/jvmMain/kotlin/us/tractat/kuilt/nw/BridgeNwApi.kt:248
+         * with no cancellation rethrow: this is a foreign callback thread, not a coroutine, and the
+         * [runBlocking] job it wraps is the only thing a `CancellationException` here could refer to.
+         */
+        private fun stageBytesReceived(event: NwBytesReceived) {
+            if (bytesReceivedStaging.trySend(event).isSuccess) return
+            try {
+                runBlocking { bytesReceivedStaging.send(event) }
+            } catch (failure: Throwable) {
+                log.debug { "nw.bridge.bytes-staged-after-close id=${event.connectionId.value}: $failure" }
+            }
+        }
+    
+
+### kuilt-nw/src/jvmMain/kotlin/us/tractat/kuilt/nw/NwCrossProcessProbe.kt:86
+                val incomingJob = launch {
+                    seam.incoming.collect { frame ->
+                        log("[host] frame from=${frame.sender?.value} bytes=${frame.payloadSize} (elapsed ${nowMs() - t0}ms)")
+                    }
+                }
+                try {
+                    withTimeout(timeoutMs) { awaitCancellation() }
+                } catch (_: TimeoutCancellationException) {
+                    log("[host] timeout after ${timeoutMs}ms — exiting cleanly")
+                }
+                peersJob.cancel()
+                incomingJob.cancel()
+
+### kuilt-nw/src/jvmMain/kotlin/us/tractat/kuilt/nw/NwCrossProcessProbe.kt:140
+                val incomingJob = launch {
+                    seam.incoming.collect { frame ->
+                        log("[joiner] frame from=${frame.sender?.value} bytes=${frame.payloadSize} (elapsed ${nowMs() - t0}ms)")
+                    }
+                }
+                try {
+                    withTimeout(runForMs) { awaitCancellation() }
+                } catch (_: TimeoutCancellationException) {
+                    log("[joiner] runForMs=${runForMs}ms elapsed — exiting cleanly")
+                }
+                peersJob.cancel()
+                incomingJob.cancel()
+
+### kuilt-otel-logging/src/commonMain/kotlin/us/tractat/kuilt/otel/logging/CapturingAppender.kt:223
+                // and so this very line is excluded from capture. Never the empty-lambda
+                // form — see InternalLoggerNameGuardTest.
+                KotlinLogging.logger(OVERFLOW_LOGGER_NAME).warn {
+                    "log capture queue overflowed (capacity=$capacity): this application is logging faster than " +
+                        "the exporter can drain, even batched, so the oldest captured events are being dropped. " +
+                        "Read LogCaptureInstallation.health.value.droppedEvents for the running total."
+                }
+            } catch (ignoredReportFailure: Throwable) {
+                // Deliberately swallowed, and deliberately NOT rethrowing cancellation:
+                // log() is a synchronous framework callback on the application's own
+                // thread, not a coroutine, so there is no cancellation of ours to honour
+                // here — only a logging backend's failure, which must not reach the
+
+### kuilt-otel-tap-test/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/test/LogDump.kt:51
+     * captured output; pass a sink-, file-, or logger-backed emitter to route them
+     * elsewhere. A failure to pull (e.g. the device never connected) is reported through
+     * [emit] rather than thrown, so a dump never masks the original test failure.
+     */
+    public suspend fun LogTapClient.dumpLogs(emit: (String) -> Unit = ::printLine) {
+        val records = try {
+            pull()
+        } catch (timeout: TimeoutCancellationException) {
+            // pull()'s own scoped timeout (e.g. the device never connected). This is a
+            // reported dump failure, NOT structured cancellation — catch it before the
+            // CancellationException clause (it is a subtype) so a dump never masks the
+            // original test failure.
+
+### kuilt-otel-tap-test/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/test/LogDump.kt:58
+        } catch (timeout: TimeoutCancellationException) {
+            // pull()'s own scoped timeout (e.g. the device never connected). This is a
+            // reported dump failure, NOT structured cancellation — catch it before the
+            // CancellationException clause (it is a subtype) so a dump never masks the
+            // original test failure.
+            emit("dumpLogs: could not pull device logs: ${timeout.message ?: timeout}")
+            return
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            emit("dumpLogs: could not pull device logs: ${failure.message ?: failure}")
+            return
+
+### kuilt-otel-tap-test/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/test/LogDump.kt:60
+            // reported dump failure, NOT structured cancellation — catch it before the
+            // CancellationException clause (it is a subtype) so a dump never masks the
+            // original test failure.
+            emit("dumpLogs: could not pull device logs: ${timeout.message ?: timeout}")
+            return
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            emit("dumpLogs: could not pull device logs: ${failure.message ?: failure}")
+            return
+        }
+        emit("--- captured device logs (${records.size}) ---")
+
+### kuilt-otel-tap-test/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/test/LogDump.kt:84
+     */
+    public suspend fun <T> LogTapClient.dumpingOnFailure(
+        emit: (String) -> Unit = ::printLine,
+        block: suspend () -> T,
+    ): T =
+        try {
+            block()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            dumpLogs(emit)
+            throw failure
+
+### kuilt-otel-tap-test/src/commonMain/kotlin/us/tractat/kuilt/otel/tap/test/LogDump.kt:86
+        emit: (String) -> Unit = ::printLine,
+        block: suspend () -> T,
+    ): T =
+        try {
+            block()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            dumpLogs(emit)
+            throw failure
+        }
+    
+
+### kuilt-raft-test/src/commonMain/kotlin/us/tractat/kuilt/raft/test/MultiNodeRaftSim.kt:303
+            within: Duration = DEFAULT_AWAIT,
+        ): LogEntry = awaitOrDump("proposeOnLeader", within) {
+            while (true) {
+                val l = leader()?.takeIf { among == null || nodeIdOf(it) in among }
+                if (l == null) { tick(); continue }
+                try {
+                    return@awaitOrDump l.propose(command)
+                } catch (_: NotLeaderException) {
+                    tick()
+                }
+            }
+            @Suppress("UNREACHABLE_CODE") error("unreachable")
+
+### kuilt-raft-test/src/commonMain/kotlin/us/tractat/kuilt/raft/test/MultiNodeRaftSim.kt:396
+        }
+    
+        private suspend fun <T> awaitOrDump(what: String, within: Duration, block: suspend () -> T): T {
+            val priorDeadline = churnDeadline
+            churnDeadline = churnEvents + MAX_ELECTION_THRASH
+            return try {
+                withTimeout(within) { block() }
+            } catch (_: TimeoutCancellationException) {
+                throw AssertionError(withContext(NonCancellable) { dumpState("$what timed out after $within") })
+            } finally {
+                churnDeadline = priorDeadline
+            }
+
+### kuilt-raft-test/src/commonMain/kotlin/us/tractat/kuilt/raft/test/MultiNodeRaftSim.kt:561
+     */
+    public suspend fun <T> dumpOnWedge(
+        sim: MultiNodeRaftSim,
+        emit: (String) -> Unit = { println(it) },
+        body: suspend () -> T,
+    ): T = try {
+        body()
+    } catch (e: CancellationException) {
+        emit(withContext(NonCancellable) { sim.dumpState(WEDGE_REASON) })
+        throw e
+    }
+    
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/internal/RaftEngine.kt:817
+                // Start actor and message subscription
+                startActor()
+                resetElectionTimeout()
+                launch {
+                    transport.incoming.collect {
+                        try {
+                            cmd.send(decodeInbound(it))
+                        } catch (_: ClosedSendChannelException) {
+                            return@collect // channel closed — node is shutting down
+                        }
+                    }
+                }
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/internal/RaftEngine.kt:3307
+        }
+    
+        private suspend fun proposeWithRequestId(command: ByteArray, requestId: Long?): LogEntry {
+            checkProposeFitsTransport(command)
+            val d = CompletableDeferred<LogEntry>()
+            try {
+                cmd.send(EngineCommand.Propose(command, requestId, d))
+            } catch (_: ClosedSendChannelException) {
+                throw NotLeaderException("node is closed")
+            }
+            try {
+                return d.await()
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/internal/RaftEngine.kt:3326
+            }
+        }
+    
+        override suspend fun readIndex(): Long {
+            val d = CompletableDeferred<Long>()
+            try {
+                cmd.send(EngineCommand.RequestReadIndex(d))
+            } catch (_: ClosedSendChannelException) {
+                throw NotLeaderException("node is closed")
+            }
+            return d.await()
+        }
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/internal/RaftEngine.kt:3565
+            }
+        }
+    
+        override suspend fun changeMembership(target: ClusterConfig): ClusterConfig {
+            val d = CompletableDeferred<ClusterConfig>()
+            try {
+                cmd.send(EngineCommand.ChangeMembership(target, d))
+            } catch (_: ClosedSendChannelException) {
+                throw NotLeaderException("node is closed")
+            }
+            return d.await()
+        }
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/internal/RaftEngine.kt:3818
+            // Append under the proposer's own dedupKey UNCHANGED — the leader must not re-stamp it (that
+            // would defeat exactly-once) and does not count it among the serials it issued itself.
+            onPropose(m.command, m.dedupKey, d)
+            scope.launch {
+                val outcome = try {
+                    val e = d.await()
+                    ForwardOutcome.Committed(e.index, e.term)
+                } catch (e: Throwable) {
+                    if (e is CancellationException) throw e
+                    if (e is NotLeaderException || e is LeadershipLostException) ForwardOutcome.NotLeader
+                    else ForwardOutcome.Failed
+                }
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/internal/RaftEngine.kt:4216
+        private suspend fun send(peer: NodeId, m: RaftMessage) =
+            transport.sendTo(peer, raftCbor.encodeToByteArray(m))
+    
+        override suspend fun transferLeadership(target: NodeId) {
+            val d = CompletableDeferred<Unit>()
+            try {
+                cmd.send(EngineCommand.TransferLeadership(target, d))
+            } catch (_: ClosedSendChannelException) {
+                throw NotLeaderException("node is closed")
+            }
+            d.await()
+        }
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/internal/RaftEngine.kt:4227
+        }
+    
+        override fun cancelTransfer() {
+            cmd.trySend(EngineCommand.CancelTransfer)
+        }
+    
+        override suspend fun close() {
+            try { cmd.send(EngineCommand.Close) } catch (_: ClosedSendChannelException) { /* already closed */ }
+        }
+    
+        private companion object {
+            /**
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/MembershipRetry.kt:44
+        maxAttempts: Int = 20,
+        retryDelay: Duration = 200.milliseconds,
+    ) {
+        repeat(maxAttempts) {
+            try {
+                changeMembership(newConfig)
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: MembershipChangeInProgressException) {
+                delay(retryDelay)
+            }
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/MembershipRetry.kt:46
+    ) {
+        repeat(maxAttempts) {
+            try {
+                changeMembership(newConfig)
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: MembershipChangeInProgressException) {
+                delay(retryDelay)
+            }
+        }
+        error("changeMembership gave up after $maxAttempts attempts for config=$newConfig")
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/SeamRaftTransport.kt:79
+         * over-budget `propose` before it can enter the log (`RaftEngine.checkProposeFitsTransport`).
+         */
+        override val maxPayloadBytes: Int? get() = seam.maxPayloadBytes
+    
+        override suspend fun sendTo(peer: NodeId, message: ByteArray) {
+            try {
+                seam.sendTo(PeerId(peer.value), message)
+            } catch (_: PeerNotConnected) {
+                // Contract (RaftTransport.sendTo): "may silently drop if peer is unreachable."
+                // A voter absent from the Seam is an ordinary partition; Raft retries on the next
+                // replication/heartbeat round. Swallowing here keeps a dropped follower from
+                // crashing the engine. PeerNotConnected is an IllegalStateException, never a
+
+### kuilt-raft/src/commonMain/kotlin/us/tractat/kuilt/raft/SeamRaftTransport.kt:85
+                seam.sendTo(PeerId(peer.value), message)
+            } catch (_: PeerNotConnected) {
+                // Contract (RaftTransport.sendTo): "may silently drop if peer is unreachable."
+                // A voter absent from the Seam is an ordinary partition; Raft retries on the next
+                // replication/heartbeat round. Swallowing here keeps a dropped follower from
+                // crashing the engine. PeerNotConnected is an IllegalStateException, never a
+                // CancellationException, so structured-concurrency cancellation still propagates.
+            } catch (tooLarge: PayloadTooLarge) {
+                // A seam that publishes a payload budget refuses an over-budget frame while Woven
+                // (#2047) — a refusal independent of peer reachability. This catch is PERMANENT, not a
+                // stopgap awaiting the propose-time bound of #2069, for three reasons:
+                //
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:137
+                // The freeze round runs INSIDE guardElection (collapse-abortable); adoption runs OUTSIDE it
+                // (finding #1) so a collapse signal cannot cancel adoptRoom mid-commit and wedge the lobby.
+                // Host monitors the current members (roster - self) for the silent-but-present collapse (#1480).
+                guardElection(collapseSignals = listOf(coElectorLostSignal(peers.value - selfId))) {
+                    runHostElection()
+                }
+                adoptAfterCommit(SessionRole.Host, memberName)
+            } catch (e: Throwable) {
+                logger.debug { "lobby.start.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
+                throw e
+            }
+        }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:247
+                    ),
+                ) {
+                    runMemberElection()
+                }
+                // Adoption OUTSIDE guardElection (finding #1): once the Commit is received the race is over,
+                // so the became-host/tear collapse signals can no longer cancel adoptRoom mid-commit.
+                ElectionOutcome.Adopted(adoptAfterCommit(SessionRole.Joiner, memberName))
+            } catch (e: PromotedToHostSignal) {
+                logger.info { "lobby.awaitRoom.promoted self=${selfId.value} roster=${e.roster.map { it.value }} → BecameHost (recovery: start() on this lobby)" }
+                ElectionOutcome.BecameHost
+            } catch (e: LobbyTornException) {
+                logger.debug { "lobby.awaitRoom.exit self=${selfId.value} collapsed: ${e.reason}" }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:250
+                }
+                // Adoption OUTSIDE guardElection (finding #1): once the Commit is received the race is over,
+                // so the became-host/tear collapse signals can no longer cancel adoptRoom mid-commit.
+                ElectionOutcome.Adopted(adoptAfterCommit(SessionRole.Joiner, memberName))
+            } catch (e: PromotedToHostSignal) {
+                logger.info { "lobby.awaitRoom.promoted self=${selfId.value} roster=${e.roster.map { it.value }} → BecameHost (recovery: start() on this lobby)" }
+                ElectionOutcome.BecameHost
+            } catch (e: LobbyTornException) {
+                logger.debug { "lobby.awaitRoom.exit self=${selfId.value} collapsed: ${e.reason}" }
+                ElectionOutcome.Torn(e.reason)
+            } catch (e: Throwable) {
+                logger.debug { "lobby.awaitRoom.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:253
+                ElectionOutcome.Adopted(adoptAfterCommit(SessionRole.Joiner, memberName))
+            } catch (e: PromotedToHostSignal) {
+                logger.info { "lobby.awaitRoom.promoted self=${selfId.value} roster=${e.roster.map { it.value }} → BecameHost (recovery: start() on this lobby)" }
+                ElectionOutcome.BecameHost
+            } catch (e: LobbyTornException) {
+                logger.debug { "lobby.awaitRoom.exit self=${selfId.value} collapsed: ${e.reason}" }
+                ElectionOutcome.Torn(e.reason)
+            } catch (e: Throwable) {
+                logger.debug { "lobby.awaitRoom.exit self=${selfId.value} threw=${e::class.simpleName}: ${e.message}" }
+                throw e
+            }
+        }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:402
+            collapseSignals: List<suspend () -> Throwable>,
+            body: suspend () -> T,
+        ): T =
+            try {
+                seam.raceCollapse(abortWhen = { false }) {
+                    if (collapseSignals.isEmpty()) body() else raceCollapseSignals(collapseSignals, body)
+                }
+            } catch (e: SeamCollapsedException) {
+                throw LobbyTornException(e.reason)
+            }
+    
+        /** Race [body] against the lobby's role-specific [collapseSignals]; the first to resolve wins. */
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:416
+            body: suspend () -> T,
+        ): T =
+            coroutineScope {
+                val outcome = CompletableDeferred<T>()
+                val work = launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        outcome.complete(body())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        outcome.completeExceptionally(e)
+                    }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/election/SeamElectionLobby.kt:418
+            coroutineScope {
+                val outcome = CompletableDeferred<T>()
+                val work = launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        outcome.complete(body())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        outcome.completeExceptionally(e)
+                    }
+                }
+                val signalJobs = collapseSignals.map { signal ->
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/partition/JoinerResumeMachine.kt:507
+                            // TimeoutCancellationException to its caller WITHOUT cancelling that caller;
+                            // re-throwing it escapes withTimeoutOrNull and cancels this reconnect outright,
+                            // so `failureReason` is never set and onReconnectFailed never runs — the machine
+                            // just stops, and the room waits on a resume that will never complete. Type
+                            // cannot separate that from our own cancellation; ensureActive can.
+                            try {
+                                throwaway.close()
+                            } catch (failure: Throwable) {
+                                currentCoroutineContext().ensureActive()
+                                logger.debug { "resume.throwaway-close-failed host=$hostId failure=$failure" }
+                            }
+                        }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/partition/JoinerResumeMachine.kt:711
+                ),
+            )
+            // Suspend send outside the lock. A genuine CancellationException propagates (correct),
+            // but must still resolve the shared deferred — a joined caller would otherwise hang.
+            // A non-cancellation send failure becomes WindowClosed for every caller of this flight.
+            val sendResult = try {
+                runCatchingCancellable { seam.broadcast(resumeMsg) }
+            } catch (e: CancellationException) {
+                abandonFlight(deferred)
+                throw e
+            }
+            if (sendResult.isFailure) {
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/RoomChannel.kt:224
+            // This channel is a [Seam], but its delegate is a **Room**, and `Room.sendTo` carries no
+            // self-send refusal — `SeamRoom.sendTo` in fact REWRITES the address, relaying through the
+            // host as `RelayDest.One(peer)` when there is one. So the Seam contract's refusal (#2428)
+            // has to be made here; there is nothing under this call to inherit it from.
+            require(peer != selfId) { "Cannot send to self — use broadcast if you intend to loop back" }
+            try {
+                room.sendTo(peer, RoomChannel.frame(subId, payload))
+            } catch (tooLarge: PayloadTooLarge) {
+                throw PayloadTooLarge(
+                    payloadBytes = payload.size,
+                    budgetBytes = (tooLarge.budgetBytes - RoomChannel.HEADER_BYTES).coerceAtLeast(0),
+                    reservedBytes = tooLarge.reservedBytes + RoomChannel.HEADER_BYTES,
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/RoomHost.kt:116
+         * cannot assume a consumer honours — is this one leave's failure. `runCatchingCancellable` would
+         * rethrow exactly that case, aborting the cleanup the shield exists to guarantee.
+         */
+        private suspend fun leaveShielded(room: Room) {
+            withContext(NonCancellable) {
+                try {
+                    room.leave(LeaveReason.Normal)
+                } catch (failure: Throwable) {
+                    logger.debug { "roomHost.leave-failed session=${pattern.sessionName} failure=$failure" }
+                }
+            }
+        }
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:2774
+                    } != null
+                    if (!accepted) {
+                        logger.debug {
+                            "room.relay.drop self=${selfId.value} to=${recipient.value} " +
+                                "reason=send-budget-exceeded budget=$relaySendBudget"
+                        }
+                    }
+                } catch (failure: Throwable) {
+                    // Genuinely OUR cancellation ends the loop; anything else — including a
+                    // CancellationException a consumer's `sendTo` minted itself — is that
+                    // recipient's failure and must not kill this recipient's writer.
+                    currentCoroutineContext().ensureActive()
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:3045
+                    if (!accepted) {
+                        logger.debug {
+                            "room.fanout.drop self=${selfId.value} to=${recipient.value} " +
+                                "message=${fanOut.label} reason=send-budget-exceeded " +
+                                "budget=$fanOutSendBudget"
+                        }
+                    }
+                } catch (failure: Throwable) {
+                    // Genuinely OUR cancellation → rethrow and end the loop; anything else (including
+                    // a CancellationException the consumer's `sendTo` minted itself) is this
+                    // recipient's failure and must not kill this recipient's writer. See the KDoc.
+                    currentCoroutineContext().ensureActive()
+
+### kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/session/SeamRoom.kt:3446
+                    ceilingBytes = seam.maxPayloadBytes,
+                )
+                return
+            }
+            if (host == null) return seam.broadcast(frame)
+            try {
+                seam.sendTo(host, frame)
+            } catch (unreachable: PeerNotConnected) {
+                // Caught rather than pre-checked `host in seam.peers.value`: the pre-check is a TOCTOU
+                // race the send itself resolves authoritatively. Narrow by type — a wedged link throws
+                // CancellationException instead, and that must still propagate.
+                logger.debug {
+
+### kuilt-store/src/commonMain/kotlin/us/tractat/kuilt/store/StoreKeyFilename.kt:167
+        return bytes.utf8ToStringOrThrow(length, filename)
+    }
+    
+    /** @see encodeStoreKeyName for why this is an [IllegalArgumentException] and not the stdlib's type. */
+    private fun String.toUtf8OrThrow(): ByteArray =
+        try {
+            encodeToByteArray(throwOnInvalidSequence = true)
+        } catch (malformed: CharacterCodingException) {
+            throw IllegalArgumentException("\"$this\" is not well-formed text and has no UTF-8 encoding", malformed)
+        }
+    
+    /** @see encodeStoreKeyName for why this is an [IllegalArgumentException] and not the stdlib's type. */
+
+### kuilt-store/src/commonMain/kotlin/us/tractat/kuilt/store/StoreKeyFilename.kt:175
+            throw IllegalArgumentException("\"$this\" is not well-formed text and has no UTF-8 encoding", malformed)
+        }
+    
+    /** @see encodeStoreKeyName for why this is an [IllegalArgumentException] and not the stdlib's type. */
+    private fun ByteArray.utf8ToStringOrThrow(length: Int, filename: String): String =
+        try {
+            decodeToString(0, length, throwOnInvalidSequence = true)
+        } catch (malformed: CharacterCodingException) {
+            throw IllegalArgumentException("\"$filename\" decodes to bytes that are not valid UTF-8", malformed)
+        }
+    
+    private fun hexValue(char: Char, filename: String): Int {
+
+### kuilt-store/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/store/FileChannelDurableStore.kt:100
+         * Moves [src] to [dest] atomically. Uses [Files.move] with
+         * [StandardCopyOption.ATOMIC_MOVE] where supported; falls back to
+         * [File.renameTo] for environments where `ATOMIC_MOVE` is not available.
+         */
+        private fun moveAtomically(src: File, dest: File) {
+            try {
+                Files.move(src.toPath(), dest.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: UnsupportedOperationException) {
+                // Android < API 26 or some non-POSIX filesystem: best-effort rename.
+                src.renameTo(dest)
+            }
+        }
+
+### kuilt-stream/src/commonMain/kotlin/us/tractat/kuilt/stream/Framed.kt:65
+            sink.flush()
+        }
+    
+        override val incoming: Flow<ByteArray> = flow {
+            while (true) {
+                val len = try {
+                    source.readInt()
+                } catch (_: EOFException) {
+                    // Clean EOF at a frame boundary — incoming completes normally.
+                    break
+                }
+                if (len < 0 || len > maxFrameSize) throw FrameTooLargeException(len, maxFrameSize)
+
+### kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/Assertions.kt:54
+     * ```
+     */
+    public fun assertAll(vararg assertions: () -> Unit) {
+        val collected = buildList {
+            for (assertion in assertions) {
+                try {
+                    assertion()
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (failure: Throwable) {
+                    add(failure)
+                }
+
+### kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/Assertions.kt:56
+    public fun assertAll(vararg assertions: () -> Unit) {
+        val collected = buildList {
+            for (assertion in assertions) {
+                try {
+                    assertion()
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (failure: Throwable) {
+                    add(failure)
+                }
+            }
+        }
+
+### kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/MidHandshakeCollapse.kt:66
+        crossinline establish: suspend () -> Unit,
+    ) {
+        val outcome = CompletableDeferred<Unit>()
+        val driver = launch {
+            try {
+                establish()
+                outcome.complete(Unit)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                outcome.completeExceptionally(e)
+            }
+
+### kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/MidHandshakeCollapse.kt:68
+        val outcome = CompletableDeferred<Unit>()
+        val driver = launch {
+            try {
+                establish()
+                outcome.complete(Unit)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                outcome.completeExceptionally(e)
+            }
+        }
+    
+
+### kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/MidHandshakeCollapse.kt:83
+        // The collapse: peer leaves the roster while the seam stays Woven (NO tear). #1466.
+        seam.removePeer(drainedPeer)
+    
+        val thrown: Throwable? =
+            try {
+                withTimeout(timeout) { outcome.await() }
+                null // establish() resolved normally
+            } catch (e: TimeoutCancellationException) {
+                driver.cancel()
+                throw AssertionError(
+                    "establishment SUSPENDED past $timeout on a mid-handshake membership drain — it must " +
+                        "abort by throwing ${E::class.simpleName} within the bound, never hang (see #1466)",
+
+### kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/MidHandshakeCollapse.kt:90
+            } catch (e: TimeoutCancellationException) {
+                driver.cancel()
+                throw AssertionError(
+                    "establishment SUSPENDED past $timeout on a mid-handshake membership drain — it must " +
+                        "abort by throwing ${E::class.simpleName} within the bound, never hang (see #1466)",
+                    e,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                e
+            }
+
+### kuilt-test/src/commonMain/kotlin/us/tractat/kuilt/test/MidHandshakeCollapse.kt:92
+                throw AssertionError(
+                    "establishment SUSPENDED past $timeout on a mid-handshake membership drain — it must " +
+                        "abort by throwing ${E::class.simpleName} within the bound, never hang (see #1466)",
+                    e,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                e
+            }
+    
+        driver.cancel()
+
+### kuilt-test/src/jvmMain/kotlin/us/tractat/kuilt/test/ConcurrencyStressHarness.kt:83
+        DebugProbes.enableCreationStackTraces = false
+        DebugProbes.install()
+        try {
+            runBlocking(Dispatchers.Default) {
+                val stage = StageTracker()
+                try {
+                    withTimeout(cap) { body(stage) }
+                } catch (e: TimeoutCancellationException) {
+                    throw AssertionError(hangReport(stage, cap), e)
+                }
+            }
+        } finally {
+
+### kuilt-test/src/jvmMain/kotlin/us/tractat/kuilt/test/ConcurrencyStressHarness.kt:115
+        append(section("FULL THREAD DUMP") { threadDump() })
+    }
+    
+    /** One labelled section, tolerating a throwing producer so one bad reader cannot hide the rest. */
+    private fun section(label: String, produce: () -> String): String {
+        val body = try {
+            produce()
+        } catch (e: Throwable) {
+            // Deliberately broad: this runs only while reporting a hang, and losing the remaining
+            // sections to a reader's own failure is strictly worse than printing what went wrong.
+            "<$label unavailable: ${e::class.simpleName}: ${e.message}>"
+        }
+
+### kuilt-test/src/jvmMain/kotlin/us/tractat/kuilt/test/ConcurrencyStressHarness.kt:279
+     * is one group (#1811). It is read off the coroutine's own context, not the rendered dump text, which
+     * carries a name only when `kotlinx.coroutines.debug` is enabled.
+     */
+    private fun censusKey(info: CoroutineInfo): String {
+        val kind = pumpKind(info)
+        val frames = try {
+            info.lastObservedStackTrace()
+        } catch (e: Throwable) {
+            // Broad on purpose: a coroutine that completes mid-walk must not take the census with it.
+            return "$kind${info.state} $STACK_UNAVAILABLE: ${e::class.simpleName}"
+        }
+        val top = frames.firstOrNull()?.toString() ?: "<no observed frame>"
+
+### kuilt-warp-runtime/src/appleMain/kotlin/us/tractat/kuilt/warp/Wasm3WasmRuntime.kt:134
+         * is still standalone, and frees the runtime if one was created.
+         */
+        private fun loadLocked(bytes: ByteArray): Op {
+            val pinnedBytes = bytes.pin()
+    
+            val module = try {
+                parseModule(pinnedBytes, bytes.size)
+            } catch (e: Throwable) {
+                pinnedBytes.unpin()
+                throw e
+            }
+    
+
+### kuilt-warp-runtime/src/appleMain/kotlin/us/tractat/kuilt/warp/Wasm3WasmRuntime.kt:146
+            // Pre-instantiation guards: the module is standalone, so free it (not a runtime) on reject.
+            val runtime = try {
+                rejectCapabilityViolations(module)
+                rejectOversizeMemory(module)
+                checkNotNull(m3_NewRuntime(environment, RUNTIME_STACK_BYTES, null)) {
+                    "wasm3: m3_NewRuntime returned null"
+                }
+            } catch (e: Throwable) {
+                m3_FreeModule(module)
+                pinnedBytes.unpin()
+                throw e
+            }
+
+### kuilt-warp-runtime/src/appleMain/kotlin/us/tractat/kuilt/warp/Wasm3WasmRuntime.kt:156
+                throw e
+            }
+    
+            // m3_LoadModule failure detaches the module (runtime = NULL) without adding it to the
+            // runtime's list, so free BOTH the still-standalone module and the runtime.
+            try {
+                loadModuleOrThrow(runtime, module)
+            } catch (e: Throwable) {
+                m3_FreeModule(module)
+                m3_FreeRuntime(runtime)
+                pinnedBytes.unpin()
+                throw e
+
+### kuilt-warp-runtime/src/appleMain/kotlin/us/tractat/kuilt/warp/Wasm3WasmRuntime.kt:169
+    
+            // Module is now owned by the runtime; m3_FreeRuntime frees it too. Do NOT free it separately.
+            val allocFn: IM3Function
+            val runFn: IM3Function
+            try {
+                allocFn = findFunctionOrThrow(runtime, "warp_alloc")
+                runFn = findFunctionOrThrow(runtime, "warp_run")
+            } catch (e: Throwable) {
+                m3_FreeRuntime(runtime)
+                pinnedBytes.unpin()
+                throw e
+            }
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:167
+         * [WasmLoadException]. Without this, a well-formed module that simply omits an ABI export
+         * would throw a non-[WasmException] that escapes the executor's terminal-error handling and
+         * triggers an anti-entropy retry storm.
+         */
+        private fun exportOrThrow(instance: Instance, name: String): ExportFunction =
+            try {
+                instance.export(name)
+            } catch (e: ChicoryException) {
+                throw WasmLoadException("missing ABI export $name", e)
+            }
+    
+        /** Shuts down the dedicated guest-execution thread. The runtime is unusable afterwards. */
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:179
+        override fun close() {
+            guestWorker.close()
+        }
+    
+        private fun parseModule(bytes: ByteArray): WasmModule =
+            try {
+                Parser.parse(bytes)
+            } catch (e: ChicoryException) {
+                throw WasmLoadException("malformed WASM module: ${e.message}", e)
+            }
+    
+        /**
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:252
+                timedRunner.run(
+                    config.executionTimeout,
+                    Callable {
+                        built = Instance.builder(module).build()
+                        NO_RESULT
+                    },
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: TimeoutException) {
+                throw WasmLoadException(
+                    "module instantiation exceeded ${config.executionTimeout} ((start)-section execution budget)",
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:254
+                    Callable {
+                        built = Instance.builder(module).build()
+                        NO_RESULT
+                    },
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: TimeoutException) {
+                throw WasmLoadException(
+                    "module instantiation exceeded ${config.executionTimeout} ((start)-section execution budget)",
+                    e,
+                )
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:259
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: TimeoutException) {
+                throw WasmLoadException(
+                    "module instantiation exceeded ${config.executionTimeout} ((start)-section execution budget)",
+                    e,
+                )
+            } catch (e: UnlinkableException) {
+                throw WasmLoadException("module capability violation (imports not allowed): ${e.message}", e)
+            } catch (e: ChicoryException) {
+                // Any other build-time failure — validation (InvalidException), a trapping (start)
+                // function (UninstantiableException), etc. — is also a terminal load failure, never a
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:261
+            } catch (e: TimeoutException) {
+                throw WasmLoadException(
+                    "module instantiation exceeded ${config.executionTimeout} ((start)-section execution budget)",
+                    e,
+                )
+            } catch (e: UnlinkableException) {
+                throw WasmLoadException("module capability violation (imports not allowed): ${e.message}", e)
+            } catch (e: ChicoryException) {
+                // Any other build-time failure — validation (InvalidException), a trapping (start)
+                // function (UninstantiableException), etc. — is also a terminal load failure, never a
+                // raw ChicoryException that escapes the executor's WasmException handling.
+                throw WasmLoadException("module failed to instantiate: ${e.message}", e)
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:296
+        ): ByteArray = withContext(Dispatchers.IO) {
+            // The whole timedRunner.run() call is the critical section: only one guest call is timed
+            // at a time, so the timeout measures execution, not time spent queued behind another op
+            // (see invokeMutex KDoc). withLock is cancellation-cooperative.
+            invokeMutex.withLock {
+                try {
+                    timedRunner.run(config.executionTimeout, Callable { runAbi(memory, allocFn, runFn, args) })
+                } catch (e: CancellationException) {
+                    // Structured-concurrency cancellation must propagate, never be swallowed into a
+                    // WasmExecutionException (the same guard BrowserWasmRuntime.compileModule keeps).
+                    throw e
+                } catch (e: WasmException) {
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:300
+            invokeMutex.withLock {
+                try {
+                    timedRunner.run(config.executionTimeout, Callable { runAbi(memory, allocFn, runFn, args) })
+                } catch (e: CancellationException) {
+                    // Structured-concurrency cancellation must propagate, never be swallowed into a
+                    // WasmExecutionException (the same guard BrowserWasmRuntime.compileModule keeps).
+                    throw e
+                } catch (e: WasmException) {
+                    // Already terminal — the common decoder's bounds rejection ([requireInBounds])
+                    // arrives as a WasmExecutionException; rethrow rather than double-wrap.
+                    throw e
+                } catch (e: TimeoutException) {
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:304
+                    // Structured-concurrency cancellation must propagate, never be swallowed into a
+                    // WasmExecutionException (the same guard BrowserWasmRuntime.compileModule keeps).
+                    throw e
+                } catch (e: WasmException) {
+                    // Already terminal — the common decoder's bounds rejection ([requireInBounds])
+                    // arrives as a WasmExecutionException; rethrow rather than double-wrap.
+                    throw e
+                } catch (e: TimeoutException) {
+                    throw WasmExecutionException("WASM execution exceeded ${config.executionTimeout}", e)
+                } catch (e: ChicoryException) {
+                    // A trap / unreachable / OOB / bad packed result / interrupt — thrown directly by
+                    // the real runner (unwrapped from ExecutionException) or by a test fake's task.call().
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:306
+                    throw e
+                } catch (e: WasmException) {
+                    // Already terminal — the common decoder's bounds rejection ([requireInBounds])
+                    // arrives as a WasmExecutionException; rethrow rather than double-wrap.
+                    throw e
+                } catch (e: TimeoutException) {
+                    throw WasmExecutionException("WASM execution exceeded ${config.executionTimeout}", e)
+                } catch (e: ChicoryException) {
+                    // A trap / unreachable / OOB / bad packed result / interrupt — thrown directly by
+                    // the real runner (unwrapped from ExecutionException) or by a test fake's task.call().
+                    throw WasmExecutionException("WASM kernel trapped: ${e.message}", e)
+                } catch (e: Exception) {
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/ChicoryWasmRuntime.kt:310
+                    throw e
+                } catch (e: TimeoutException) {
+                    throw WasmExecutionException("WASM execution exceeded ${config.executionTimeout}", e)
+                } catch (e: ChicoryException) {
+                    // A trap / unreachable / OOB / bad packed result / interrupt — thrown directly by
+                    // the real runner (unwrapped from ExecutionException) or by a test fake's task.call().
+                    throw WasmExecutionException("WASM kernel trapped: ${e.message}", e)
+                } catch (e: Exception) {
+                    throw WasmExecutionException("WASM kernel failed: ${e.message}", e)
+                }
+            }
+        }
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/GuestWorker.kt:109
+        private var closed: Boolean = false
+    
+        override fun run(timeout: Duration, task: Callable<ByteArray>): ByteArray {
+            val executor = lock.withLock { current }
+            val future = executor.submit(task)
+            try {
+                return future.get(timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+            } catch (e: TimeoutException) {
+                // Interrupt the worker; Chicory's interpreter throws ChicoryInterruptedException at
+                // the next call entry / backward branch, terminating the runaway guest.
+                future.cancel(true)
+                // Do NOT return while the runaway may still hold the worker: the caller is about to
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/GuestWorker.kt:117
+                // Interrupt the worker; Chicory's interpreter throws ChicoryInterruptedException at
+                // the next call entry / backward branch, terminating the runaway guest.
+                future.cancel(true)
+                // Do NOT return while the runaway may still hold the worker: the caller is about to
+                // release invokeMutex, and the next op would be charged for the wait behind it (#1802).
+                if (!awaitFreeWorker(executor)) discard(executor)
+                throw e
+            } catch (e: ExecutionException) {
+                // Unwrap so invoke sees the original exception (ChicoryException, etc.), not a wrapper.
+                throw e.cause ?: e
+            }
+        }
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/GuestWorker.kt:137
+         * ignoring its interrupt. Total by construction: this runs on the throw path of a
+         * [TimeoutException] the caller must still see, so nothing may escape it.
+         */
+        private fun awaitFreeWorker(poisoned: GuestExecutor): Boolean =
+            try {
+                poisoned.submit(BARRIER).get(drainGrace.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+                true
+            } catch (_: TimeoutException) {
+                false
+            } catch (_: InterruptedException) {
+                // Our own waiting thread was interrupted, so we learned nothing about the worker.
+                // Restore the flag for whoever interrupted us and take the safe branch: never reuse a
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/GuestWorker.kt:139
+         */
+        private fun awaitFreeWorker(poisoned: GuestExecutor): Boolean =
+            try {
+                poisoned.submit(BARRIER).get(drainGrace.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+                true
+            } catch (_: TimeoutException) {
+                false
+            } catch (_: InterruptedException) {
+                // Our own waiting thread was interrupted, so we learned nothing about the worker.
+                // Restore the flag for whoever interrupted us and take the safe branch: never reuse a
+                // worker that has not been proven free.
+                Thread.currentThread().interrupt()
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/GuestWorker.kt:145
+                false
+            } catch (_: InterruptedException) {
+                // Our own waiting thread was interrupted, so we learned nothing about the worker.
+                // Restore the flag for whoever interrupted us and take the safe branch: never reuse a
+                // worker that has not been proven free.
+                Thread.currentThread().interrupt()
+                false
+            } catch (_: RejectedExecutionException) {
+                // Already shut down by a concurrent close: there is no worker left to discard.
+                true
+            } catch (_: Exception) {
+                // The barrier came back some other way — an ExecutionException, or a
+
+### kuilt-warp-runtime/src/jvmMain/kotlin/us/tractat/kuilt/warp/GuestWorker.kt:148
+                // Restore the flag for whoever interrupted us and take the safe branch: never reuse a
+                // worker that has not been proven free.
+                Thread.currentThread().interrupt()
+                false
+            } catch (_: RejectedExecutionException) {
+                // Already shut down by a concurrent close: there is no worker left to discard.
+                true
+            } catch (_: Exception) {
+                // The barrier came back some other way — an ExecutionException, or a
+                // java.util.concurrent.CancellationException from a concurrent shutdownNow. Either the
+                // worker dequeued it (so it is free) or the executor is already gone. This is a plain
+                // blocking method, not a suspend one, so there is no coroutine job here whose
+
+### kuilt-warp-runtime/src/wasmJsMain/kotlin/us/tractat/kuilt/warp/BrowserWasmRuntime.kt:100
+         * this is a guard rather than a live path; it is here because the conversion is exactly the
+         * shape in which a cancellation gets eaten, and it keeps parity with
+         * [ChicoryWasmRuntime]'s guards.
+         */
+        private fun compileModule(bytes: ByteArray): JsAny =
+            try {
+                wasmCompile(bytes.toUint8Array())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                throw WasmLoadException("malformed WASM module: ${e.message}", e)
+            }
+
+### kuilt-warp-runtime/src/wasmJsMain/kotlin/us/tractat/kuilt/warp/BrowserWasmRuntime.kt:102
+         * [ChicoryWasmRuntime]'s guards.
+         */
+        private fun compileModule(bytes: ByteArray): JsAny =
+            try {
+                wasmCompile(bytes.toUint8Array())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                throw WasmLoadException("malformed WASM module: ${e.message}", e)
+            }
+    
+        private fun rejectImports(module: JsAny) {
+
+### kuilt-warp-runtime/src/wasmJsMain/kotlin/us/tractat/kuilt/warp/BrowserWasmRuntime.kt:292
+            const src =
+                "let instance = null;\n" +
+                "let loadFailure = null;\n" +
+                "onmessage = function (e) {\n" +
+                "  const m = e.data;\n" +
+                "  if (m.kind === 'load') {\n" +
+                "    try { instance = new WebAssembly.Instance(new WebAssembly.Module(m.bytes), {}); }\n" +
+                "    catch (err) { loadFailure = String((err && err.message) || err); }\n" +
+                "    return;\n" +
+                "  }\n" +
+                "  try {\n" +
+                "    if (instance === null) throw new Error('guest instantiation failed: ' + loadFailure);\n" +
+
+### kuilt-warp-runtime/src/wasmJsMain/kotlin/us/tractat/kuilt/warp/BrowserWasmRuntime.kt:306
+                "    const argPtr = exports.warp_alloc(args.length);\n" +
+                "    new Uint8Array(exports.memory.buffer).set(args, argPtr);\n" +
+                "    const packed = exports.warp_run(argPtr, args.length);\n" +
+                "    const resPtr = Number(BigInt.asUintN(32, packed >> 32n));\n" +
+                "    const resLen = Number(BigInt.asUintN(32, packed));\n" +
+                "    const result = new Uint8Array(exports.memory.buffer, resPtr, resLen).slice();\n" +
+                "    postMessage({ id: m.id, ok: true, result: result });\n" +
+                "  } catch (err) {\n" +
+                "    postMessage({ id: m.id, ok: false, message: String((err && err.message) || err) });\n" +
+                "  }\n" +
+                "};\n";
+            const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+
+### kuilt-warp-test/src/commonMain/kotlin/us/tractat/kuilt/warp/test/BudgetOverrunRetry.kt:151
+    ): T {
+        require(attempts >= 1) { "attempts must be at least 1, was $attempts" }
+        val overruns = StringBuilder()
+        repeat(attempts) { index ->
+            val started = timeSource.markNow()
+            try {
+                return scenario()
+            } catch (e: WasmExecutionException) {
+                if (BUDGET_OVERRUN_MARKER !in (e.message ?: "")) throw e
+                val overrun = "attempt ${index + 1}/$attempts overran after ${started.elapsedNow()}: ${e.message}"
+                overruns.appendLine("  $overrun")
+                // Report it NOW, not only on exhaustion: an overrun that is retried into a pass is the
+
+### kuilt-warp-test/src/commonMain/kotlin/us/tractat/kuilt/warp/test/BudgetOverrunRetry.kt:204
+                invoke()
+                best = minOf(best, sample.elapsedNow())
+            }
+            // The fastest sample, not the mean: contention can only ever make a sample slower, so the
+            // minimum is the honest floor and a single scheduling hiccup cannot set the price.
+            "took $best at best of $REFERENCE_SAMPLES invocations — the guest invocation alone, its " +
+                "runtime built and loaded before the clock started"
+        } catch (e: WasmException) {
+            "also failed after ${started.elapsedNow()} (${e.message})"
+        }
+    }
+
+### kuilt-warp-test/src/commonMain/kotlin/us/tractat/kuilt/warp/test/MultiNodeWarpSim.kt:322
+         * [awaitResults].
+         */
+        public suspend fun awaitTrue(what: String, within: Duration = DEFAULT_AWAIT, cond: () -> Boolean) {
+            try {
+                withTimeout(within) {
+                    while (!cond()) delay(TICK)
+                }
+            } catch (_: TimeoutCancellationException) {
+                throw AssertionError(dumpState("$what timed out after $within (virtual)"))
+            }
+        }
+    
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1270
+    
+            // Tiering disabled (target == null): preserve C5b behaviour — load once, register under OpId.
+            if (target == null) {
+                val bytes = withTimeoutOrNull(lf.fetchTimeout) { checkNotNull(bobbinExchange).fetch(source) }
+                    ?: return standBy(taskId, descriptor.op) // no peer served the bytes in time — transient
+                val loaded = try {
+                    lf.runtime.load(bytes)
+                } catch (e: WasmException) {
+                    return recordTerminalError(taskId, e) // verified bytes, but broken/malicious — terminal
+                }
+                val op = registerOrResolve(descriptor.op, loaded)
+                return admitAndRun(taskId, descriptor, op)
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1286
+            val cached = lock.withLock { bobbinToOp[hash] }
+            val op = cached ?: run {
+                // suspends, outside lock — bounded by fetchTimeout; a timeout stands by (transient).
+                val bytes = withTimeoutOrNull(lf.fetchTimeout) { checkNotNull(bobbinExchange).fetch(hash) }
+                    ?: return standBy(taskId, descriptor.op)
+                val loaded = try {
+                    lf.runtime.load(bytes)
+                } catch (e: WasmException) {
+                    return recordTerminalError(taskId, e) // verified bytes, but broken/malicious — terminal
+                }
+                lock.withLock { bobbinToOp.getOrPut(hash) { loaded } }
+            }
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1311
+         * Invoke [op] with [args], returning its [ByteArray] result. A [WasmException] (trap/timeout
+         * at run time) is **terminal** — it records an [OpResult.failure] via [recordTerminalError]
+         * and returns `null` so the caller short-circuits. Never swallows [WasmException] silently.
+         */
+        private suspend fun runOpOrTerminal(taskId: TaskId, op: Op, args: ByteArray): ByteArray? =
+            try {
+                op.invoke(args)
+            } catch (e: WasmException) {
+                recordTerminalError(taskId, e) // trap/timeout at run time — terminal
+            }
+    
+        /**
+
+### kuilt-warp/src/commonMain/kotlin/us/tractat/kuilt/warp/WarpNode.kt:1394
+         * into a swallow; add `currentCoroutineContext().ensureActive()` as the arm's first statement if
+         * that ever happens.
+         */
+        private fun registerOrResolve(op: OpId, loaded: Op): Op =
+            try {
+                registry.register(op, loaded)
+                loaded
+            } catch (e: IllegalStateException) { // ALLOW-ise: nothing in the `try` can suspend — see the KDoc above
+                registry.resolve(op) ?: throw e
+            }
+    
+        /**
+
+### kuilt-websocket/src/androidMain/kotlin/us/tractat/kuilt/websocket/AndroidConnectivityObserver.kt:156
+                // same tick reads the floor on a device that is plainly online.
+                update {
+                    val active = manager.activeNetwork
+                    if (active != null && manager.getNetworkCapabilities(active).isUsable()) {
+                        usable += active
+                    }
+                }
+            } catch (denied: SecurityException) {
+                // ACCESS_NETWORK_STATE not declared by the host app. Undo the CAS so `close` does not
+                // try to unregister a callback that was never accepted — which would throw in turn —
+                // and leave `reachability` at `null`, the honest "cannot tell".
+                registered.set(false)
+
+### kuilt-websocket/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/websocket/KtorRoomHost.kt:96
+            log.info { "ws.room.start path=$path sessionName=${pattern.sessionName}" }
+            coroutineScope {
+                val factory = SeamRoomFactory.systemClock(loom = loom, scope = this)
+                while (true) {
+                    val room: Room =
+                        try {
+                            factory.host(pattern)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            log.warn(e) { "ws.room.accept failure: ${e.message}" }
+                            throw e
+
+### kuilt-websocket/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/websocket/KtorRoomHost.kt:98
+                val factory = SeamRoomFactory.systemClock(loom = loom, scope = this)
+                while (true) {
+                    val room: Room =
+                        try {
+                            factory.host(pattern)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            log.warn(e) { "ws.room.accept failure: ${e.message}" }
+                            throw e
+                        }
+                    launch {
+
+### kuilt-websocket/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/websocket/KtorRoomHost.kt:105
+                        } catch (e: Throwable) {
+                            log.warn(e) { "ws.room.accept failure: ${e.message}" }
+                            throw e
+                        }
+                    launch {
+                        try {
+                            onRoom(room)
+                        } catch (e: CancellationException) {
+                            // Load-bearing, unlike the same arm in [us.tractat.kuilt.session.LoomRoomHost]
+                            // (which had no swallowing arm and so removed it as a no-op). Here the
+                            // `catch (Throwable)` below WOULD swallow it — CancellationException is an
+                            // IllegalStateException on the JVM — turning a structured-concurrency cancel
+
+### kuilt-websocket/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/websocket/KtorRoomHost.kt:112
+                        } catch (e: CancellationException) {
+                            // Load-bearing, unlike the same arm in [us.tractat.kuilt.session.LoomRoomHost]
+                            // (which had no swallowing arm and so removed it as a no-op). Here the
+                            // `catch (Throwable)` below WOULD swallow it — CancellationException is an
+                            // IllegalStateException on the JVM — turning a structured-concurrency cancel
+                            // into a logged warning. This arm is the only thing keeping that from happening.
+                            throw e
+                        } catch (e: Throwable) {
+                            log.warn(e) { "ws.room.onRoom failure: ${e.message}" }
+                        } finally {
+                            leaveShielded(room)
+                        }
+
+### kuilt-websocket/src/jvmAndAndroidMain/kotlin/us/tractat/kuilt/websocket/KtorRoomHost.kt:152
+         * leave's failure. `runCatchingCancellable` would rethrow exactly that case, aborting the cleanup the
+         * shield exists to guarantee.
+         */
+        private suspend fun leaveShielded(room: Room) {
+            withContext(NonCancellable) {
+                try {
+                    room.leave(LeaveReason.Normal)
+                } catch (failure: Throwable) {
+                    log.debug { "ws.room.leave-failed path=$path sessionName=${pattern.sessionName} failure=$failure" }
+                }
+            }
+        }
+
