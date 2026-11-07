@@ -144,17 +144,6 @@ public final class us/tractat/kuilt/crdt/CausalMap : us/tractat/kuilt/crdt/Quilt
 	public fun toString ()Ljava/lang/String;
 }
 
-public final synthetic class us/tractat/kuilt/crdt/CausalMap$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public fun <init> (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)V
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/CausalMap;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/CausalMap;)V
-	public final fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
 public final class us/tractat/kuilt/crdt/CausalMap$Change {
 	public fun <init> (Lus/tractat/kuilt/crdt/DotStore;Ljava/util/Set;)V
 	public synthetic fun <init> (Lus/tractat/kuilt/crdt/DotStore;Ljava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -171,6 +160,15 @@ public final class us/tractat/kuilt/crdt/CausalMap$Slot {
 	public final fun getStore ()Lus/tractat/kuilt/crdt/DotStore;
 	public final fun mint ()Lus/tractat/kuilt/crdt/Dot;
 	public final fun narrow (Lus/tractat/kuilt/crdt/DotStore;)Lus/tractat/kuilt/crdt/CausalMap$Slot;
+}
+
+public final class us/tractat/kuilt/crdt/CausalMapSerializer : kotlinx/serialization/KSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;)V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/CausalMap;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/CausalMap;)V
 }
 
 public final class us/tractat/kuilt/crdt/CellDelta {
