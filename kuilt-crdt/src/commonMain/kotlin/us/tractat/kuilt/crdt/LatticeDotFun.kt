@@ -30,7 +30,8 @@ import kotlinx.serialization.Serializable
  * invariant (every dot in the store is in the context), given that [V]'s own [Quilted.piece] is.
  *
  * Serialized by [LatticeDotFunSerializer], which emits entries sorted by [Dot] so the encoding is a
- * function of the logical value and not of merge order.
+ * function of the logical value and not of merge order — provided [V]'s own serializer is
+ * canonical too, since a payload is encoded by it.
  */
 @Serializable(with = LatticeDotFunSerializer::class)
 public class LatticeDotFun<V : Quilted<V>>(public val values: Map<Dot, V> = emptyMap()) : DotStore<LatticeDotFun<V>> {
