@@ -135,7 +135,7 @@ internal class MuxBase<K>(
          * An unread view retains frames up to that bound, then backpressures the shared
          * collector; it does not drop frames or grow an unbounded per-view queue.
          */
-        private val spool = Spool<Swatch>(DeliveryPolicy.Reliable)
+        private val spool = Spool<Swatch>(DeliveryPolicy.Strict)
 
         /** Guards [torn], [gate] and [_peers] together. See the class KDoc's thread-safety note. */
         private val viewLock = reentrantLock()
@@ -149,10 +149,14 @@ internal class MuxBase<K>(
         init {
             // Subscribe before channel() returns: a first send can receive an immediate reply.
             scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                sharedIncoming.filter { swatch -> framing.belongsTo(swatch) }.collect { swatch ->
-                    spool.deliver(framing.strip(swatch))
+                try {
+                    sharedIncoming.filter { swatch -> framing.belongsTo(swatch) }.collect { swatch ->
+                        spool.deliver(framing.strip(swatch))
+                    }
+                    spool.close()
+                } catch (overflow: FrameOverflow) {
+                    tear(CloseReason.Error(overflow))
                 }
-                spool.close()
             }
             // A view minted over an already-dead base is born torn: `gate` was constructed with the
             // base's value, which publishes `Torn` WITHOUT latching it, so the next mirrored update
