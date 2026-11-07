@@ -139,6 +139,17 @@ public class RoutedUnicastRouter internal constructor(
     }
 
     /**
+     * Deregister [spoke] only while its registered link is [seam] itself, and say whether it did. A
+     * newer registration for the same player (a reconnect on a fresh room) is left alone, so a late
+     * close of the old connection cannot take the new one's link away.
+     */
+    internal fun removeLocalSpoke(spoke: PeerId, seam: Seam): Boolean = lock.withLock {
+        if (localSpokes[spoke] !== seam) return@withLock false
+        localSpokes.remove(spoke)
+        true
+    }
+
+    /**
      * Route [payload] to *exactly* [recipient], crossing the core if [recipient] is
      * behind another server.
      *

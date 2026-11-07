@@ -2,6 +2,7 @@ package us.tractat.kuilt.cluster
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -81,6 +82,62 @@ class ServerClusterLearnerRemovalTest {
         h.proposeAndAwaitCrossVisibility(tag = 2)
         val behind = h.behindTheLeader(h.learners)
         assertTrue(behind.isEmpty(), "every learner, the returning one included, has the leader's log; behind: $behind")
+    }
+
+    /**
+     * #3127: the close alone ends the admission. Nothing in the harness cancels the admission
+     * coroutine, so before the fix it stayed parked forever and the learner was never removed.
+     */
+    @Test
+    fun aClosedConnectionEndsItsOwnAdmission() = removalTest { h ->
+        val (gone, _, _) = h.learners
+        h.startRelay()
+        h.awaitLeaderLearners(h.learners.toSet(), "all three admitted")
+        h.disconnect(gone)
+        delay(grace / 4)
+        assertEquals(emptyList(), h.admissionsStillRunningAfterClose(), "a closed connection's admission has returned")
+    }
+
+    /** A member that leaves the roster with its room still up (its goodbye, or an expired partition). */
+    @Test
+    fun aLearnerThatLeavesTheRoomIsRemovedAfterItsGrace() = removalTest { h ->
+        val (gone, stay1, stay2) = h.learners
+        h.startRelay()
+        h.awaitLeaderLearners(h.learners.toSet(), "all three admitted")
+        h.depart(gone)
+        h.awaitLeaderLearners(setOf(stay1, stay2), "the departed learner is removed after its grace", within = grace * 3)
+    }
+
+    /**
+     * The same learner reconnects on a second room before its first one closes, as after a half-open
+     * socket that the server only notices later. The late close of the old room must leave the new
+     * admission alone: its raft spoke (seam-identity guard in `RaftRelayHub.removeSpoke`) and its overlay
+     * attachment (link-identity guard in `OverlayServer.evict`).
+     */
+    @Test
+    fun closingASupersededConnectionKeepsTheReadmittedLearner() = removalTest { h ->
+        val (flaky, _, _) = h.learners
+        val self = PeerId(h.voters.first().value)
+        h.startRelay()
+        h.awaitLeaderLearners(h.learners.toSet(), "all three admitted")
+        h.connect(flaky)
+        delay(grace / 4)
+        h.disconnect(flaky, ControlledRoomHost.Which.Oldest)
+        delay(grace * 3)
+        val newRoom = h.newestRoom(flaky)
+        val routed = "for the new connection".encodeToByteArray()
+        h.cluster.overlay.route(PeerId(flaky.value), routed)
+
+        assertAll(
+            { assertEquals(h.learners.toSet(), h.leaderLearners(), "the re-admitted learner is never removed") },
+            { assertEquals(self, h.cluster.overlay.lookup(PeerId(flaky.value)), "its directory entry is kept") },
+            {
+                assertTrue(
+                    newRoom.broadcasts.any { it.contentEquals(routed) },
+                    "a unicast routed to it still reaches the new connection's spoke",
+                )
+            },
+        )
     }
 
     private fun removalTest(body: suspend TestScope.(ServerClusterSim) -> Unit) =

@@ -1,6 +1,7 @@
 package us.tractat.kuilt.cluster
 
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -12,6 +13,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.raft.ClusterConfig
@@ -23,6 +25,7 @@ import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_SEED
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
 import us.tractat.kuilt.raft.test.RAFT_SIM_WEDGE_BACKSTOP
 import us.tractat.kuilt.raft.test.dumpOnWedge
+import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity
@@ -60,8 +63,21 @@ internal class ServerClusterSim(
     /** A new connection for [id], as after a tear or on another relay. */
     suspend fun connect(id: NodeId) = host.connect(id)
 
-    /** Close [id]'s current connection: its admission coroutine ends and its spoke is removed. */
-    suspend fun disconnect(id: NodeId) = host.disconnect(id)
+    /**
+     * Close [id]'s [which] connection as a transport tear does. Nothing cancels its admission: it must
+     * notice the close itself, as it must in production.
+     */
+    suspend fun disconnect(id: NodeId, which: ControlledRoomHost.Which = ControlledRoomHost.Which.Newest) =
+        host.disconnect(id, which)
+
+    /** [id] leaves its newest connection's roster (a goodbye, or an expired partition); the room stays up. */
+    suspend fun depart(id: NodeId) = host.depart(id)
+
+    /** Learners whose closed connection is still admitted. */
+    fun admissionsStillRunningAfterClose(): List<NodeId> = host.admissionsStillRunningAfterClose()
+
+    /** [id]'s newest open connection's room. */
+    fun newestRoom(id: NodeId): FakeRoom = checkNotNull(host.newestRoom(id)) { "$id has no open connection" }
 
     /**
      * End every admission before the test scope tears the rest down. Cancelling both at once lets an
@@ -167,11 +183,20 @@ internal fun serverClusterSimTest(
     harness.stopRelay()
 }
 
+
 /**
  * Hands each learner's room to the relay in its own coroutine, as a real accept loop would: the
  * [initial] learners as soon as the relay starts (one every [arrivalGap]), then one per [connect].
- * [disconnect] cancels that learner's current admission coroutine, which is what a closed connection
- * does to it. Every command is applied by the accept loop itself, so its job map has one owner.
+ *
+ * A connection ends the way production ends it, never by cancelling its `onRoom` coroutine, which no
+ * production host does (#3127). [disconnect] closes it as the host-side `SeamRoom` does on a transport
+ * tear: the seam reads Torn, then the room leaves, which empties its roster. [depart] is the softer
+ * shape: the member leaves the roster (its goodbye, or a partition that expired) while the room stays
+ * up. When `onRoom` returns the host leaves the room, as `KtorRoomHost` does.
+ *
+ * Every connection keeps its own handle, so a test can close a superseded one while a newer one for the
+ * same learner is live. Every command is applied by the accept loop itself, so the handle map has one
+ * owner.
  */
 internal class ControlledRoomHost(
     private val self: PeerId,
@@ -180,19 +205,57 @@ internal class ControlledRoomHost(
 ) : RoomHost {
     private sealed interface Command {
         data class Connect(val id: NodeId) : Command
-        data class Disconnect(val id: NodeId) : Command
+        data class Close(val id: NodeId, val which: Which, val how: How) : Command
     }
+
+    /** Which of a learner's connections a [Command.Close] ends. */
+    enum class Which { Newest, Oldest }
+
+    private enum class How { Tear, Depart }
+
+    /** One accepted connection: its room and the `onRoom` coroutine admitting it. */
+    private class Connection(val room: FakeRoom, val admission: Job)
 
     private val commands = Channel<Command>(Channel.UNLIMITED)
 
+    /**
+     * Every connection a close command has ended, in close order. Appended only by the accept loop and
+     * read by the test, both on the one test dispatcher thread.
+     */
+    private val closed = mutableListOf<Pair<NodeId, Connection>>()
+
     suspend fun connect(id: NodeId) = commands.send(Command.Connect(id))
 
-    suspend fun disconnect(id: NodeId) = commands.send(Command.Disconnect(id))
+    /** Close [id]'s [which] connection as a transport tear does. */
+    suspend fun disconnect(id: NodeId, which: Which = Which.Newest) = commands.send(Command.Close(id, which, How.Tear))
+
+    /** [id] leaves its [which] connection's roster while that room stays up. */
+    suspend fun depart(id: NodeId, which: Which = Which.Newest) = commands.send(Command.Close(id, which, How.Depart))
+
+    /**
+     * The learners whose closed connection's admission is still running. Nothing cancels it, as in
+     * production, so a closed connection whose admission never notices the close stays listed here.
+     */
+    fun admissionsStillRunningAfterClose(): List<NodeId> =
+        closed.filterNot { (_, connection) -> connection.admission.isCompleted }.map { it.first }
+
+    /** Each learner's open connections, oldest first. Same single owner and thread as [closed]. */
+    private val connections = mutableMapOf<NodeId, ArrayDeque<Connection>>()
+
+    /** [id]'s newest open connection's room, or `null` when it has none. */
+    fun newestRoom(id: NodeId): FakeRoom? = connections[id]?.lastOrNull()?.room
 
     override suspend fun start(onRoom: suspend (Room) -> Unit): Unit = coroutineScope {
-        val connections = mutableMapOf<NodeId, Job>()
         fun admit(id: NodeId) {
-            connections[id] = launch { onRoom(roomFor(id)) }
+            val room = roomFor(id)
+            val admission = launch {
+                try {
+                    onRoom(room)
+                } finally {
+                    withContext(NonCancellable) { room.leave(LeaveReason.Normal) }
+                }
+            }
+            connections.getOrPut(id) { ArrayDeque() }.addLast(Connection(room, admission))
         }
         initial.forEach { id ->
             admit(id)
@@ -201,12 +264,27 @@ internal class ControlledRoomHost(
         for (command in commands) {
             when (command) {
                 is Command.Connect -> admit(command.id)
-                is Command.Disconnect -> connections.remove(command.id)?.cancelAndJoin()
+                is Command.Close -> {
+                    // A close with nothing to close is a mistyped test, not a no-op: fail it loudly.
+                    val open = connections[command.id].orEmpty()
+                    val connection = when (command.which) {
+                        Which.Newest -> connections[command.id]?.removeLastOrNull()
+                        Which.Oldest -> connections[command.id]?.removeFirstOrNull()
+                    } ?: error("close ${command.which} for ${command.id}, which has ${open.size} open connections")
+                    when (command.how) {
+                        How.Tear -> {
+                            connection.room.tearSeam()
+                            connection.room.leave(LeaveReason.Normal)
+                        }
+                        How.Depart -> connection.room.removeMember(PeerId(command.id.value))
+                    }
+                    closed += command.id to connection
+                }
             }
         }
     }
 
-    private fun roomFor(id: NodeId): Room = FakeRoom(
+    private fun roomFor(id: NodeId): FakeRoom = FakeRoom(
         selfId = self,
         initialRoster = setOf(
             Member(PeerId(id.value), MemberIdentity(displayName = id.value, sessionId = id.value), Liveness.Connected),
