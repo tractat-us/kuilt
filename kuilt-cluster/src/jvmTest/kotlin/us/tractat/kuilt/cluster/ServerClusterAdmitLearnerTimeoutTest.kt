@@ -131,6 +131,7 @@ class ServerClusterAdmitLearnerTimeoutTest {
                 directoryConfig = QuilterConfig(expectVirtualTime = true),
             ),
             serverScope = this,
+            learnerRemoval = LearnerRemoval.Never,
         )
     }
 
