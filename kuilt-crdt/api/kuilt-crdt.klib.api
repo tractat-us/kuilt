@@ -363,6 +363,61 @@ final class <#A: kotlin/Any?, #B: kotlin/Any?> us.tractat.kuilt.crdt/LWWMap : us
     }
 }
 
+final class <#A: kotlin/Any?, #B: us.tractat.kuilt.crdt/DotStore<#B>> us.tractat.kuilt.crdt/CausalMap : us.tractat.kuilt.crdt/Quilted<us.tractat.kuilt.crdt/CausalMap<#A, #B>> { // us.tractat.kuilt.crdt/CausalMap|null[0]
+    final val context // us.tractat.kuilt.crdt/CausalMap.context|{}context[0]
+        final fun <get-context>(): us.tractat.kuilt.crdt/DotContext // us.tractat.kuilt.crdt/CausalMap.context.<get-context>|<get-context>(){}[0]
+    final val keys // us.tractat.kuilt.crdt/CausalMap.keys|{}keys[0]
+        final fun <get-keys>(): kotlin.collections/Set<#A> // us.tractat.kuilt.crdt/CausalMap.keys.<get-keys>|<get-keys>(){}[0]
+
+    final fun apply(us.tractat.kuilt.crdt/ReplicaId, #A, #B, kotlin/Function1<us.tractat.kuilt.crdt/CausalMap.Slot<#B>, us.tractat.kuilt.crdt/CausalMap.Change<#B>>): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/CausalMap<#A, #B>> // us.tractat.kuilt.crdt/CausalMap.apply|apply(us.tractat.kuilt.crdt.ReplicaId;1:0;1:1;kotlin.Function1<us.tractat.kuilt.crdt.CausalMap.Slot<1:1>,us.tractat.kuilt.crdt.CausalMap.Change<1:1>>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.crdt/CausalMap.equals|equals(kotlin.Any?){}[0]
+    final fun get(#A): #B? // us.tractat.kuilt.crdt/CausalMap.get|get(1:0){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.crdt/CausalMap.hashCode|hashCode(){}[0]
+    final fun piece(us.tractat.kuilt.crdt/CausalMap<#A, #B>): us.tractat.kuilt.crdt/CausalMap<#A, #B> // us.tractat.kuilt.crdt/CausalMap.piece|piece(us.tractat.kuilt.crdt.CausalMap<1:0,1:1>){}[0]
+    final fun remove(#A): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/CausalMap<#A, #B>> // us.tractat.kuilt.crdt/CausalMap.remove|remove(1:0){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.crdt/CausalMap.toString|toString(){}[0]
+
+    final class <#A1: kotlin/Any?, #B1: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/CausalMap<#A1, #B1>> { // us.tractat.kuilt.crdt/CausalMap.$serializer|null[0]
+        constructor <init>(kotlinx.serialization/KSerializer<#A1>, kotlinx.serialization/KSerializer<#B1>) // us.tractat.kuilt.crdt/CausalMap.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>;kotlinx.serialization.KSerializer<1:1>){}[0]
+
+        final val descriptor // us.tractat.kuilt.crdt/CausalMap.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.crdt/CausalMap.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+        final val typeSerial0 // us.tractat.kuilt.crdt/CausalMap.$serializer.typeSerial0|{}typeSerial0[0]
+        final val typeSerial1 // us.tractat.kuilt.crdt/CausalMap.$serializer.typeSerial1|{}typeSerial1[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.crdt/CausalMap.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.crdt/CausalMap<#A1, #B1> // us.tractat.kuilt.crdt/CausalMap.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.crdt/CausalMap<#A1, #B1>) // us.tractat.kuilt.crdt/CausalMap.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.crdt.CausalMap<1:0,1:1>){}[0]
+        final fun typeParametersSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.crdt/CausalMap.$serializer.typeParametersSerializers|typeParametersSerializers(){}[0]
+    }
+
+    final class <#A1: us.tractat.kuilt.crdt/DotStore<#A1>> Change { // us.tractat.kuilt.crdt/CausalMap.Change|null[0]
+        constructor <init>(#A1, kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> = ...) // us.tractat.kuilt.crdt/CausalMap.Change.<init>|<init>(1:0;kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>){}[0]
+
+        final val retired // us.tractat.kuilt.crdt/CausalMap.Change.retired|{}retired[0]
+            final fun <get-retired>(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.crdt/CausalMap.Change.retired.<get-retired>|<get-retired>(){}[0]
+        final val store // us.tractat.kuilt.crdt/CausalMap.Change.store|{}store[0]
+            final fun <get-store>(): #A1 // us.tractat.kuilt.crdt/CausalMap.Change.store.<get-store>|<get-store>(){}[0]
+    }
+
+    final class <#A1: us.tractat.kuilt.crdt/DotStore<#A1>> Slot { // us.tractat.kuilt.crdt/CausalMap.Slot|null[0]
+        final val store // us.tractat.kuilt.crdt/CausalMap.Slot.store|{}store[0]
+            final fun <get-store>(): #A1 // us.tractat.kuilt.crdt/CausalMap.Slot.store.<get-store>|<get-store>(){}[0]
+
+        final fun <#A2: us.tractat.kuilt.crdt/DotStore<#A2>> narrow(#A2): us.tractat.kuilt.crdt/CausalMap.Slot<#A2> // us.tractat.kuilt.crdt/CausalMap.Slot.narrow|narrow(0:0){0§<us.tractat.kuilt.crdt.DotStore<0:0>>}[0]
+        final fun mint(): us.tractat.kuilt.crdt/Dot // us.tractat.kuilt.crdt/CausalMap.Slot.mint|mint(){}[0]
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.crdt/CausalMap.Companion|null[0]
+        final val $cachedDescriptor // us.tractat.kuilt.crdt/CausalMap.Companion.$cachedDescriptor|{}$cachedDescriptor[0]
+            final fun <get-$cachedDescriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.crdt/CausalMap.Companion.$cachedDescriptor.<get-$cachedDescriptor>|<get-$cachedDescriptor>(){}[0]
+
+        final fun <#A2: kotlin/Any?, #B2: kotlin/Any?> serializer(kotlinx.serialization/KSerializer<#A2>, kotlinx.serialization/KSerializer<#B2>): kotlinx.serialization/KSerializer<us.tractat.kuilt.crdt/CausalMap<#A2, #B2>> // us.tractat.kuilt.crdt/CausalMap.Companion.serializer|serializer(kotlinx.serialization.KSerializer<0:0>;kotlinx.serialization.KSerializer<0:1>){0§<kotlin.Any?>;1§<kotlin.Any?>}[0]
+        final fun <#A2: kotlin/Any?, #B2: us.tractat.kuilt.crdt/DotStore<#B2>> empty(): us.tractat.kuilt.crdt/CausalMap<#A2, #B2> // us.tractat.kuilt.crdt/CausalMap.Companion.empty|empty(){0§<kotlin.Any?>;1§<us.tractat.kuilt.crdt.DotStore<0:1>>}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.crdt/CausalMap.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
 final class <#A: kotlin/Any?, #B: us.tractat.kuilt.crdt/DotStore<#B>> us.tractat.kuilt.crdt/DotMap : us.tractat.kuilt.crdt/DotStore<us.tractat.kuilt.crdt/DotMap<#A, #B>> { // us.tractat.kuilt.crdt/DotMap|null[0]
     constructor <init>(kotlin.collections/Map<#A, #B> = ...) // us.tractat.kuilt.crdt/DotMap.<init>|<init>(kotlin.collections.Map<1:0,1:1>){}[0]
 
