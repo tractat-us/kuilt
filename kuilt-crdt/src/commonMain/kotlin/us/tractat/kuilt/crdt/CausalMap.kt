@@ -1,6 +1,11 @@
 package us.tractat.kuilt.crdt
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
 /**
  * A map whose keys and **everything nested under them** share one causal context, which is never
@@ -38,19 +43,17 @@ import kotlinx.serialization.Serializable
  * the whole one.
  *
  * Its join is `Causal`'s, unchanged: associative, commutative and idempotent.
+ *
+ * "Never minted twice" holds along one replica's history of absorbed states, which is how kuilt's
+ * mutators are used: two [apply] calls on the same state, without absorbing the first, mint the
+ * same dot, as any delta mutator does.
+ *
+ * Serialized by [CausalMapSerializer], as the bare `Causal<DotMap<K, V>>`.
  */
-@Serializable
+@Serializable(with = CausalMapSerializer::class)
 public class CausalMap<K, V : DotStore<V>> private constructor(
-    private val causal: Causal<DotMap<K, V>>,
+    internal val causal: Causal<DotMap<K, V>>,
 ) : Quilted<CausalMap<K, V>> {
-
-    init {
-        // A key is present exactly when its store is not bottom. `DotMap.join` and `apply` never
-        // store a bottom value; this keeps a decoded state to the same rule.
-        require(causal.store.entries.values.none { it.isBottom }) {
-            "a CausalMap never holds a key whose store is bottom: ${causal.store.entries.filterValues { it.isBottom }.keys}"
-        }
-    }
 
     /** The keys present: those whose store is not bottom. */
     public val keys: Set<K> get() = causal.store.entries.keys
@@ -88,11 +91,15 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
      * Check 4 needs [V]'s `equals` to be structural and canonical. An equal-payload re-carry at
      * the same position passes, harmlessly: it is a no-op delta.
      *
+     * **Not checked, so a mutator must keep them:** one dot sits at one position (a dot written
+     * under two nested keys passes every check, and a peer that removes one of them removes the
+     * other), and a nested store in the change is never bottom (one ships needless bytes; the
+     * join drops it).
+     *
      * **Cost:** O(|m(k)| + |v|) per call, for the checks. A wide value under one key pays that on
      * every write to it.
      *
      * @throws IllegalArgumentException if [bottom] is not bottom, or the change fails a check.
-     * @throws IllegalStateException if the [Slot] is used after [mutator] returns.
      */
     public fun apply(
         replica: ReplicaId,
@@ -173,7 +180,11 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
         public val store: V,
         private val minter: Minter,
     ) {
-        /** The next dot from the shared context, recorded so [apply] can check it is written. */
+        /**
+         * The next dot from the shared context, recorded so [apply] can check it is written.
+         *
+         * @throws IllegalStateException if called after the mutator that received this slot returned.
+         */
         public fun mint(): Dot = minter.mint()
 
         /** A slot over a store nested inside this one, minting from the same context. */
@@ -184,6 +195,10 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
      * What a mutator changed under one key: the fragment it [store]s, and the held dots it
      * [retired]. Written dots that were already held are re-carried (for a payload that grows, as
      * in [LatticeDotFun]); held dots neither written nor retired are left as they are.
+     *
+     * The paper writes a payload bump as `({d ↦ v′}, {d})`. Here that is `Change(store = {d ↦ v′})`
+     * with nothing retired: [apply] adds `d` to the context because it is written, and naming it in
+     * [retired] as well is rejected, since a retired dot is one the change takes away.
      */
     public class Change<V : DotStore<V>>(
         public val store: V,
@@ -213,5 +228,40 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
     public companion object {
         /** The empty map. */
         public fun <K, V : DotStore<V>> empty(): CausalMap<K, V> = CausalMap(Causal(DotMap(), DotContext.EMPTY))
+
+        /**
+         * A map from decoded bytes, held to the rule [apply] and the join keep: a key is present
+         * exactly when its store is not bottom. Checked here and not in the constructor, which
+         * every [piece] runs and which would otherwise walk every nested dot on each join.
+         */
+        internal fun <K, V : DotStore<V>> decoded(causal: Causal<DotMap<K, V>>): CausalMap<K, V> {
+            val bottomKeys = causal.store.entries.filterValues { it.isBottom }.keys
+            require(bottomKeys.isEmpty()) { "a CausalMap never holds a key whose store is bottom: $bottomKeys" }
+            return CausalMap(causal)
+        }
     }
+}
+
+/**
+ * [CausalMap]'s serializer: the map's `Causal<DotMap<K, V>>` exactly as [Causal]'s own serializer
+ * writes it, so it inherits the dot family's canonical order. Decoding refuses a key whose store is
+ * bottom, which no [CausalMap] path produces.
+ */
+@OptIn(ExperimentalSerializationApi::class)
+public class CausalMapSerializer<K, V : DotStore<V>>(
+    kSerializer: KSerializer<K>,
+    vSerializer: KSerializer<V>,
+) : KSerializer<CausalMap<K, V>> {
+
+    private val causalSerializer = Causal.serializer(DotMap.serializer(kSerializer, vSerializer))
+
+    override val descriptor: SerialDescriptor =
+        SerialDescriptor("us.tractat.kuilt.crdt.CausalMap", causalSerializer.descriptor)
+
+    override fun serialize(encoder: Encoder, value: CausalMap<K, V>) {
+        causalSerializer.serialize(encoder, value.causal)
+    }
+
+    override fun deserialize(decoder: Decoder): CausalMap<K, V> =
+        CausalMap.decoded(causalSerializer.deserialize(decoder))
 }

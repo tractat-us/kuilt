@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
@@ -127,11 +128,16 @@ class CausalMapTest {
         )
     }
 
-    /** A write's frame does not grow with the rest of the map. */
+    /**
+     * A write's frame does not grow with the rest of the map. Each extra key is written by its own
+     * replica, so a frame that carried the shared context would grow by one version-vector entry
+     * per key.
+     */
     @Test
     fun aWriteFrameIsFlatInTheSizeOfTheMap() {
         val ser = CausalMap.serializer(String.serializer(), DotMap.serializer(String.serializer(), DotFun.serializer(Int.serializer())))
-        fun grown(keys: Int): Doc = (0 until keys).fold(pollByA) { doc, i -> doc.then { it.write(c, "k$i", "f", i) } }
+        fun grown(keys: Int): Doc =
+            (0 until keys).fold(pollByA) { doc, i -> doc.then { it.write(ReplicaId("w$i"), "k$i", "f", i) } }
         val small = Cbor.encodeToByteArray(ser, grown(1).write(b, "poll", "votes", 4).delta)
         val large = Cbor.encodeToByteArray(ser, grown(64).write(b, "poll", "votes", 4).delta)
         assertEquals(small.size, large.size)
@@ -162,12 +168,16 @@ class CausalMapTest {
     @Test
     fun aLiveDotReissuedWithANewPayloadIsRejected() {
         val reissued = DotContext.EMPTY.nextDot(a)
-        assertTrue(pollByA.context.contains(reissued))
-        assertFailsWith<IllegalArgumentException> {
-            pollByA.apply(a, "poll", DotMap()) { _ ->
-                CausalMap.Change(DotMap(mapOf("question" to DotFun(mapOf(reissued to 7)))))
-            }
-        }
+        assertAll(
+            { assertTrue(pollByA.context.contains(reissued), "precondition: the reissued dot is already seen") },
+            {
+                assertFailsWith<IllegalArgumentException> {
+                    pollByA.apply(a, "poll", DotMap()) { _ ->
+                        CausalMap.Change(DotMap(mapOf("question" to DotFun(mapOf(reissued to 7)))))
+                    }
+                }
+            },
+        )
     }
 
     /** The same reissued dot, written under a different field: both fields would vanish. */
@@ -196,7 +206,7 @@ class CausalMapTest {
     @Test
     fun aDotFromAnotherContextIsRejected() {
         assertFailsWith<IllegalArgumentException> {
-            pollByA.apply(b, "poll", DotMap()) { slot ->
+            pollByA.apply(b, "poll", DotMap()) { _ ->
                 CausalMap.Change(DotMap(mapOf("votes" to DotFun(mapOf(Dot(c, 99L) to 1)))))
             }
         }
@@ -243,10 +253,10 @@ class CausalMapTest {
     /** Two dots in one change — a presence dot and a value dot, the shape sub-issue (d) needs. */
     @Test
     fun aChangeMayMintSeveralDots() {
-        val ser = CausalMap.empty<String, DotMap<String, DotFun<Int>>>().apply(a, "k", DotMap()) { slot ->
+        val delta = CausalMap.empty<String, DotMap<String, DotFun<Int>>>().apply(a, "k", DotMap()) { slot ->
             CausalMap.Change(DotMap(mapOf("p" to DotFun(mapOf(slot.mint() to 0)), "v" to DotFun(mapOf(slot.mint() to 1)))))
         }.delta
-        assertEquals(DotContext.of(Dot(a, 1L), Dot(a, 2L)), ser.context)
+        assertEquals(DotContext.of(Dot(a, 1L), Dot(a, 2L)), delta.context)
     }
 
     // ── A dot names one write. ───────────────────────────────────────────────────────────────
@@ -309,8 +319,16 @@ class CausalMapTest {
         val json = Json { allowStructuredMapKeys = true }
         val inner = Causal.serializer(DotMap.serializer(String.serializer(), DotFun.serializer(Int.serializer())))
         val withBottom = Causal(DotMap(mapOf("empty" to DotFun<Int>())), DotContext.EMPTY)
-        val encoded = """{"causal":${json.encodeToString(inner, withBottom)}}"""
+        val encoded = json.encodeToString(inner, withBottom)
         val ser = CausalMap.serializer(String.serializer(), DotFun.serializer(Int.serializer()))
         assertFailsWith<IllegalArgumentException> { json.decodeFromString(ser, encoded) }
+    }
+
+    /** A `CausalMap` encodes as its bare `Causal`, so the dot family's canonical sorts apply. */
+    @Test
+    fun encodesAsTheBareCausal() {
+        val inner = Causal.serializer(DotMap.serializer(String.serializer(), DotMap.serializer(String.serializer(), DotFun.serializer(Int.serializer()))))
+        val ser = CausalMap.serializer(String.serializer(), DotMap.serializer(String.serializer(), DotFun.serializer(Int.serializer())))
+        assertContentEquals(Cbor.encodeToByteArray(inner, pollByA.causal), Cbor.encodeToByteArray(ser, pollByA))
     }
 }

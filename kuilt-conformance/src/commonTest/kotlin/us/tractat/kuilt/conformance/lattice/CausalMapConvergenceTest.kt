@@ -40,8 +40,11 @@ internal class CausalMapConvergenceTest : LatticeLawSuite<Doc>() {
                 val outer = OUTERS[random.nextInt(OUTERS.size)]
                 write(state, ReplicaId("R$replicaIndex"), outer, FIELDS[random.nextInt(FIELDS.size)], random.nextInt(10))
             },
+            // Removes FOCUS, which the critical shape needs; when FOCUS is absent it removes the
+            // first key held instead, so the step is not spent on a no-op.
             LatticeOp("remove", OpKind.RETIRE) { state, _, _ ->
-                state.piece(state.remove(FOCUS))
+                val target = if (FOCUS in state.keys) FOCUS else state.keys.sorted().firstOrNull()
+                if (target == null) state else state.piece(state.remove(target))
             },
             // Removes a field the state holds, never an absent one, which would be a no-op step.
             LatticeOp("remove-field", OpKind.RETIRE) { state, replicaIndex, random ->

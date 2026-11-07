@@ -15,6 +15,10 @@ private typealias Doc = CausalMap<String, DotMap<String, DotFun<Int>>>
  * The retirement shape is the one #3126 is about: `poll` written by A, removed, and recreated by
  * A. The recreated write mints a fresh dot from the shared context rather than reusing the one the
  * remove retired.
+ *
+ * The suite's guidance is to re-assert under a *different* author, so the retired value cannot
+ * dominate the new one. Re-asserting under the same author is the point here, and it is not
+ * dominated: the shared context makes the recreated write mint `(A,2)`, not `(A,1)` again.
  */
 internal class CausalMapConformanceTest : QuiltedConformanceSuite<Doc>() {
     private val a = ReplicaId("A")
