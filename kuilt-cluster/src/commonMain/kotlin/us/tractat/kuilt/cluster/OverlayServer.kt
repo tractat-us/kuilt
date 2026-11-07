@@ -136,7 +136,7 @@ public class OverlayServer internal constructor(
      * - The directory entry is retracted only when the spoke went **and** the entry still names this
      *   server. A converged newer attach on another server (the client failed over) is not tombstoned.
      *   Before that attach converges here, a later-stamped detach from this server can still win under
-     *   last-writer-wins; that cross-server window is FOLLOWUP.
+     *   last-writer-wins; that cross-server window is #3131.
      *
      * Atomic with [admit] under this server's lock, so a concurrent re-admit cannot land between the
      * two halves and leave a registered spoke with a retracted entry.
