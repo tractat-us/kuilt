@@ -126,20 +126,36 @@ class RemovedNodeCampaignTest {
      * majority of C_old and v1 denies it, since v2's log is behind, so v1 is the only node that can make
      * progress. v1 must campaign although its latest configuration excludes it, because that
      * configuration is not committed. It wins on v2's vote alone, commits Simple({v2}) and steps down, and
-     * v2 then leads {v2}.
+     * v2 then leads {v2}. Once v1 knows its removal is committed it goes quiet.
      *
      * This pins the gate to the commit of the removal rather than its append: gating on the latest
      * configuration alone wedges this cluster permanently.
      */
     @Test
     fun aNodeWhoseRemovalIsUncommittedStillCampaignsAndUnwedgesFigure4_6() = raftRunTest {
+        runFigure4_6(v1Bootstrap = ClusterConfig(voters = setOf(v1, v2)))
+    }
+
+    /**
+     * Figure 4.6 again, with v1 booted as a learner seed. After a restart the commit index falls back to
+     * 0, so the latest committed configuration v1 can see is its bootstrap, which names no voters. The
+     * uncommitted joint entry still names v1, and that is what keeps it a candidate: a gate reading only
+     * the latest committed configuration wedges here.
+     */
+    @Test
+    fun aLearnerSeedWhoseRemovalIsUncommittedStillCampaignsAfterARestart() = raftRunTest {
+        runFigure4_6(v1Bootstrap = ClusterConfig(voters = emptySet(), learners = setOf(v1)))
+    }
+
+    private suspend fun TestScope.runFigure4_6(v1Bootstrap: ClusterConfig) {
         val config = fastRaftConfig()
         val sim = RaftSimulation(
             nodeIds = listOf(v1, v2),
             scope = this,
             nodeScope = backgroundScope,
-            nodeFactory = { _, transport, storage, nodeScope ->
-                nodeScope.raftNode(ClusterConfig(voters = setOf(v1, v2)), transport, storage, config)
+            nodeFactory = { id, transport, storage, nodeScope ->
+                val bootstrap = if (id == v1) v1Bootstrap else ClusterConfig(voters = setOf(v1, v2))
+                nodeScope.raftNode(bootstrap, transport, storage, config)
             },
         )
         // Both nodes stop before running anything, and restart from the crafted durable state.
@@ -166,6 +182,68 @@ class RemovedNodeCampaignTest {
             { assertEquals(setOf(v2), v2Leader.membership.value.voters, "v2 leads C_new = {v2}") },
             { assertEquals(0, log.attemptsBy(v1), "once its removal committed, v1 stopped campaigning") },
             { assertTrue(v1 !in log.becameLeader, "and never led again") },
+        )
+    }
+
+    /**
+     * The honest path, with nothing handed over: a leader removes itself, commits C_new and steps down
+     * (§4.2.2). It then holds its own committed removal. Before #3123 it re-armed its timer on the step
+     * down and kept campaigning; with the C_new leader also gone, nothing but its log stood between it and
+     * leading a cluster it is not in.
+     */
+    @Test
+    fun aLeaderThatRemovedItselfStopsCampaigningOnceItStepsDown() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 4)
+        val all = listOf(v1, v2, v3, v4)
+        val leader = sim.awaitLeader()
+        val removedId = all.first { sim.nodes[it] === leader }
+        val remaining = all.toSet() - removedId
+        val log = watch(sim, all)
+        leader.changeMembership(ClusterConfig(voters = remaining))
+        sim.awaitTrue("the removed leader stood down") { leader.role.value !is RaftRole.Leader }
+        val successor = sim.awaitLeader(among = remaining)
+        val successorId = all.first { sim.nodes[it] === successor }
+        log.reset()
+
+        sim.crash(successorId)
+        sim.awaitLeader(among = remaining - successorId)
+        delay(200)
+
+        assertAll(
+            { assertEquals(0, log.attemptsBy(removedId), "the removed ex-leader started no PreVote and no election") },
+            { assertTrue(removedId !in log.becameLeader, "and never led again") },
+        )
+    }
+
+    /**
+     * §3.10's TimeoutNow starts an election without PreVote, so the gate must sit on the election itself
+     * and not only on the election timeout. The frame comes from the leader v4 holds for the term, so every
+     * earlier TimeoutNow guard passes.
+     */
+    @Test
+    fun aNodeWhoseRemovalIsCommittedIgnoresTimeoutNow() = raftRunTest {
+        val sim = raftSim(this, backgroundScope, n = 4)
+        val all = listOf(v1, v2, v3, v4)
+        val leader = sim.awaitLeader(among = setOf(v1, v2, v3))
+        val leaderId = all.first { sim.nodes[it] === leader }
+        sim.changeMembershipOnLeader(ClusterConfig(voters = setOf(v1, v2, v3)))
+        sim.handOverTail(to = v4, leaderId = leaderId)
+        sim.awaitTrue("v4 knows its removal is committed") {
+            val v4Node = sim.nodes.getValue(v4)
+            v4 !in v4Node.membership.value.voters && v4Node.commitIndex.value >= leader.commitIndex.value
+        }
+        val termBefore = sim.storages.getValue(v4).term()
+        val log = watch(sim, all)
+
+        sim.deliverTimeoutNow(to = v4, from = leaderId, term = termBefore)
+        sim.settle()
+        delay(1)
+        val termAfter = sim.storages.getValue(v4).term()
+
+        assertAll(
+            { assertEquals(termBefore, termAfter, "v4 did not move its term") },
+            { assertEquals(0, log.attemptsBy(v4), "v4 started no election") },
+            { assertIs<RaftRole.Leader>(leader.role.value, "the leader was not disturbed") },
         )
     }
 
