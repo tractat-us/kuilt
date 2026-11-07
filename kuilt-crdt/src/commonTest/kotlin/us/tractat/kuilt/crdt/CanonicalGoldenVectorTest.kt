@@ -53,6 +53,7 @@ import kotlin.test.assertEquals
  * | `DotMapSerializer`'s sort | [ORSET], [ORMAP] |
  * | `DotSetSerializer`'s sort | [ORSET] |
  * | `DotFunSerializer`'s sort | [MV_REGISTER] |
+ * | `LatticeDotFunSerializer`'s sort | [LATTICE_DOT_FUN] |
  * | `ORMapEntrySerializer`'s sort | [ORMAP], [JSON_CRDT] |
  * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP], [MV_REGISTER], [DOT_CONTEXT], [JSON_CRDT] |
  * | `DotContextSerializer`'s `cloud` sort | [DOT_CONTEXT], [ORSET_ADD_DELTA], [ORSET_REMOVE_DELTA] |
@@ -190,6 +191,13 @@ class CanonicalGoldenVectorTest {
                     "MVRegister",
                 )
             },
+            {
+                assertEquals(
+                    LATTICE_DOT_FUN,
+                    hex(Causal.serializer(LatticeDotFun.serializer(GCounter.serializer())), latticeDotFun()),
+                    "LatticeDotFun",
+                )
+            },
             { assertEquals(VERSION_VECTOR, hex(VersionVector.serializer(), versionVector()), "VersionVector") },
             { assertEquals(DOT_CONTEXT, hex(DotContext.serializer(), dotContext()), "DotContext") },
             {
@@ -301,6 +309,14 @@ class CanonicalGoldenVectorTest {
             { assertEquals(4, ephemeralMap().entries.size, "EphemeralMap slots") },
             { assertEquals(2, movableTree().compactedDotCount(), "MovableTree compactedDots") },
             { assertEquals(4, mvRegister().values.size, "MVRegister concurrent values") },
+            { assertEquals(4, latticeDotFun().store.values.size, "LatticeDotFun dots") },
+            {
+                assertEquals(
+                    2,
+                    latticeDotFun().store.values.getValue(Dot(zulu, 1L)).replicas().size,
+                    "LatticeDotFun joined payload slots",
+                )
+            },
             { assertEquals(4, versionVector().entries.size, "VersionVector authors") },
             { assertEquals(4, dotContext().cloud.size, "DotContext cloud") },
             { assertEquals(2, dotContext().vv.size, "DotContext vv") },
@@ -641,6 +657,30 @@ class CanonicalGoldenVectorTest {
             .piece(MVRegister.empty<String>().set(delta, "d"))
 
     /**
+     * Four replicas each mint a dot and are absorbed out of sorted order, so the store reaches
+     * insertion order `zulu, mike, alpha, delta` against a canonical order of `alpha, delta, mike,
+     * zulu`. `mike` has also grown `zulu`'s payload, so the shared dot `(zulu, 1)` is reached
+     * through [LatticeDotFun]'s payload join and carries a two-slot [GCounter], putting that type's
+     * own canonical sort on the wire inside the store.
+     */
+    private fun latticeDotFun(): Causal<LatticeDotFun<GCounter>> {
+        fun minted(replica: ReplicaId, payload: GCounter): Causal<LatticeDotFun<GCounter>> {
+            val dot = Dot(replica, 1L)
+            return Causal(LatticeDotFun(mapOf(dot to payload)), DotContext.of(dot))
+        }
+        val zuluDot = Dot(zulu, 1L)
+        val bumpedByMike = Causal(
+            LatticeDotFun(mapOf(zuluDot to GCounter.of(zulu to 1L, mike to 2L))),
+            DotContext.of(zuluDot),
+        )
+        return minted(zulu, GCounter.of(zulu to 1L))
+            .piece(minted(mike, GCounter.of(mike to 1L)))
+            .piece(bumpedByMike)
+            .piece(minted(alpha, GCounter.of(alpha to 1L)))
+            .piece(minted(delta, GCounter.of(delta to 1L)))
+    }
+
+    /**
      * Four authors merged in a deliberately non-sorted order, so `entries` reaches insertion order
      * `zulu, mike, alpha, delta` against a canonical order of `alpha, delta, mike, zulu`.
      *
@@ -949,6 +989,12 @@ class CanonicalGoldenVectorTest {
                 "656c74616373657101ff6164bf677265706c696361646d696b656373657101ff616dbf677265706c696361647a756c756373" +
                 "657101ff617aff67636f6e74657874bf627676bf65616c706861016564656c746101646d696b6501647a756c7501ff65636c" +
                 "6f75649fffffffff"
+        const val LATTICE_DOT_FUN =
+            "bf6573746f7265bfbf677265706c69636165616c7068616373657101ffbf66636f756e7473bf65616c70686101ffffbf6772" +
+                "65706c6963616564656c74616373657101ffbf66636f756e7473bf6564656c746101ffffbf677265706c696361646d696b65" +
+                "6373657101ffbf66636f756e7473bf646d696b6501ffffbf677265706c696361647a756c756373657101ffbf66636f756e74" +
+                "73bf646d696b6502647a756c7501ffffff67636f6e74657874bf627676bf65616c706861016564656c746101646d696b6501" +
+                "647a756c7501ff65636c6f75649fffffff"
         const val VERSION_VECTOR =
             "bf67656e7472696573bf65616c706861046564656c746102646d696b6501647a756c7503ffff"
         const val DOT_CONTEXT =
