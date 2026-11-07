@@ -8,7 +8,6 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.quilter.QuilterConfig
-import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Room
@@ -122,7 +121,6 @@ class ServerClusterAdmitLearnerTimeoutTest {
         return ServerCluster(
             mesh = VoterMesh(voterNodes = emptyMap(), scope = this),
             host = OneRoomHost(room),
-            voterConfig = ClusterConfig(voters = setOf(NodeId(self.value))),
             hub = RaftRelayHub(setOf(NodeId(self.value))),
             overlay = overlayServer(
                 self = self,

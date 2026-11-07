@@ -1,7 +1,6 @@
 package us.tractat.kuilt.cluster
 
 import io.github.oshai.kotlinlogging.KotlinLogging
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
@@ -34,7 +33,6 @@ import us.tractat.kuilt.raft.RaftEnvelope
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.RaftTransport
-import us.tractat.kuilt.raft.changeMembershipWithRetry
 import us.tractat.kuilt.raft.raftNode
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Room
@@ -69,8 +67,14 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.cluster.ServerCluster")
  *    collector of the spoke's raft channel, decodes each `RaftRelay`, and routes it **by
  *    `dest`** to the addressed voter's inbound with the true origin preserved; voter sends
  *    to the learner are wrapped (origin = the true voter) back down the spoke.
- * 4. Calls [RaftNode.changeMembership] on the leader to add the learner.
- * 5. Holds the room alive via `awaitCancellation` until the connection closes.
+ * 4. Holds the room alive via `awaitCancellation` until the connection closes.
+ *
+ * Registering the spoke is also what admits the learner. Every voter runs a learner reconciler
+ * over [RaftRelayHub.learnersFlow]; the leader's commits one membership change adding every
+ * registered learner it does not yet have, built from its current membership. No connection
+ * changes membership itself, which is what used to let one admission evict another (#3120).
+ * The reconciler is the sole membership writer this class runs: a caller changing membership
+ * through [voterNodes] directly can race it.
  *
  * The [RaftRelayHub] is the key integration primitive for S3b-3: it makes the voter
  * channel transports aware of dynamically-connected learner Seams without rebuilding
@@ -89,7 +93,6 @@ public class ServerCluster internal constructor(
     /** The underlying voter mesh — exposes [VoterMesh.voterNodes] and [VoterMesh.awaitLeader]. */
     public val mesh: VoterMesh,
     private val host: RoomHost,
-    private val voterConfig: ClusterConfig,
     private val hub: RaftRelayHub,
     /**
      * The two-tier overlay this cluster admits every connection into.
@@ -104,6 +107,12 @@ public class ServerCluster internal constructor(
     public val overlay: OverlayServer,
     private val serverScope: CoroutineScope,
 ) {
+    init {
+        // One reconciler per voter; the role gate inside means only the leader acts, so leadership
+        // moving between voters needs no hand-off here.
+        mesh.voterNodes.values.forEach { serverScope.launchLearnerReconciler(it, hub.learnersFlow) }
+    }
+
     /** The live voter node map — delegates to [mesh]. */
     public val voterNodes: Map<NodeId, RaftNode> get() = mesh.voterNodes
 
@@ -170,9 +179,9 @@ public class ServerCluster internal constructor(
         log.info { "server-cluster: admitting learner $learnerId" }
 
         // Register the room Seam as a spoke so voter transports can route Raft messages
-        // to and from the learner over the WebSocket. Must happen before
-        // changeMembership so the leader can start sending AppendEntries
-        // as soon as the config change is applied.
+        // to and from the learner over the WebSocket. Registering is also what requests the
+        // learner's admission (via hub.learnersFlow), so the spoke exists before the leader
+        // sends its first AppendEntries.
         val seamChannel = room.channel("raft")
         hub.addSpoke(learnerId, seamChannel, serverScope)
 
@@ -182,20 +191,10 @@ public class ServerCluster internal constructor(
         // the router follows) so a frame racing in across the core finds the spoke ready.
         overlay.admit(admittedPeer.id, room.channel(OVERLAY_UNICAST_CHANNEL))
 
-        val withLearner = ClusterConfig(
-            voters = voterConfig.voters,
-            learners = voterConfig.learners + learnerId,
-        )
-        try {
-            mesh.awaitLeader().changeMembershipWithRetry(withLearner)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            log.warn(e) { "server-cluster: learner $learnerId admit failed — removing spoke" }
-            hub.removeSpoke(learnerId, seamChannel)
-            overlay.evict(admittedPeer.id)
-            return
-        }
+        // Membership is not changed here. The spoke registration above put learnerId into
+        // hub.learnersFlow, and each voter's learner reconciler (launched in init) commits it from
+        // the leader's current membership. Changing membership per connection, from a config read
+        // here, is what let one admission evict another (#3120).
 
         // Hold the room open until the connection closes or scope cancels.
         // The finally block removes the learner spoke and the overlay attachment
@@ -299,7 +298,6 @@ private fun serverCluster(
     return ServerCluster(
         mesh = mesh,
         host = host,
-        voterConfig = clusterConfig,
         hub = hub,
         overlay = overlay,
         serverScope = serverScope,

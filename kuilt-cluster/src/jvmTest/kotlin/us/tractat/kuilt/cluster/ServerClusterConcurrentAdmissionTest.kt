@@ -1,6 +1,8 @@
 package us.tractat.kuilt.cluster
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -32,6 +34,8 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -48,7 +52,7 @@ import kotlin.time.Duration.Companion.seconds
  * The voters **and** the learners are real [RaftNode]s on one [MultiNodeRaftSim] network, so
  * replication to a learner, and a learner's proposal forwarding, are the engine's own. Each learner's
  * connection is a [FakeRoom] whose roster names it, handed to the relay accept loop by
- * [ManyRoomsHost], which runs every admission at the same virtual instant. The [RaftRelayHub] is real
+ * [ManyRoomsHost], which runs the admissions concurrently. The [RaftRelayHub] is real
  * but carries no Raft traffic here: the sim network does. What it contributes is the admission
  * bookkeeping under test.
  *
@@ -79,13 +83,18 @@ class ServerClusterConcurrentAdmissionTest {
      * must not give a learner up because the leader it was talking to stepped down.
      */
     @Test
-    fun leadershipTransferMidStormStillAdmitsEveryLearner() = admissionTest(learnerCount = 20) { h ->
+    fun leadershipTransferMidStormStillAdmitsEveryLearner() = admissionTest(
+        learnerCount = 20,
+        // Arrivals spread over two seconds, so the transfer below lands while most are still coming:
+        // at one instant the reconciler would batch all twenty into one change before it started.
+        arrivalGap = 100.milliseconds,
+    ) { h ->
         val first = h.sim.awaitLeader(among = h.voters)
         h.startRelay()
-        // Inside the storm: some admissions have committed, most have not.
         h.sim.awaitTrue("the storm has started committing", within = 5.seconds) {
             first.membership.value.learners.isNotEmpty()
         }
+        val admittedAtTransfer = first.membership.value.learners.size
         val target = h.voters.first { h.sim.nodes.getValue(it) !== first }
         backgroundScope.launch {
             try {
@@ -99,6 +108,11 @@ class ServerClusterConcurrentAdmissionTest {
         h.sim.awaitTrue("leadership has left the first leader", within = 5.seconds) {
             h.sim.leader()?.let { it !== first } == true
         }
+        // The rig fired: the transfer began with the storm unfinished, or this arm tests nothing.
+        assertTrue(
+            admittedAtTransfer < h.learners.size,
+            "the transfer must start mid-storm; $admittedAtTransfer of ${h.learners.size} were already admitted",
+        )
         h.awaitAllAdmitted()
         h.proposeFromEveryLearnerAndAwaitCrossVisibility()
         h.assertAllStillAdmitted()
@@ -113,8 +127,20 @@ class ServerClusterConcurrentAdmissionTest {
         val learners: List<NodeId>,
         val cluster: ServerCluster,
     ) {
-        suspend fun startRelay() {
-            scope.backgroundScope.launch { cluster.start() }
+        private var relay: Job? = null
+
+        fun startRelay() {
+            relay = scope.backgroundScope.launch { cluster.start() }
+        }
+
+        /**
+         * End every admission before the test scope tears the rest down. Cancelling both at once
+         * lets an admission's `finally` evict from an overlay whose directory has already closed
+         * itself, which throws. That teardown ordering predates the reconciler and is not what is
+         * under test here.
+         */
+        suspend fun stopRelay() {
+            relay?.cancelAndJoin()
         }
 
         suspend fun awaitAllAdmitted() {
@@ -148,20 +174,24 @@ class ServerClusterConcurrentAdmissionTest {
         suspend fun assertAllStillAdmitted() {
             delay(SETTLE)
             val leader = sim.awaitLeader(among = voters)
+            val leaderId = voters.first { sim.nodes[it] === leader }
+            val leaderState = sim.appliedState(leaderId)
             assertAll(
                 { assertEquals(learners.toSet(), leader.membership.value.learners, "no learner was evicted") },
                 { assertEquals(voters, leader.membership.value.voters, "admission never touches the voter set") },
                 {
-                    assertTrue(
-                        learners.all { sim.appliedState(it).size >= learners.size },
-                        "every learner is still applying the log",
-                    )
+                    val behind = learners.filterNot { sim.appliedState(it).contentEquals(leaderState) }
+                    assertTrue(behind.isEmpty(), "every learner has applied exactly the leader's log; behind: $behind")
                 },
             )
         }
     }
 
-    private fun admissionTest(learnerCount: Int, body: suspend TestScope.(Harness) -> Unit) =
+    private fun admissionTest(
+        learnerCount: Int,
+        arrivalGap: Duration = Duration.ZERO,
+        body: suspend TestScope.(Harness) -> Unit,
+    ) =
         runTest(StandardTestDispatcher(), timeout = RAFT_SIM_WEDGE_BACKSTOP) {
             val voters = listOf(NodeId("v1"), NodeId("v2"), NodeId("v3"))
             val learners = (1..learnerCount).map { NodeId("l$it") }
@@ -182,15 +212,17 @@ class ServerClusterConcurrentAdmissionTest {
                     )
                 },
             )
-            val cluster = backgroundScope.clusterOver(sim, voters, voterConfig, learners)
-            dumpOnWedge(sim) { body(Harness(this, sim, voters.toSet(), learners, cluster)) }
+            val cluster = backgroundScope.clusterOver(sim, voters, learners, arrivalGap)
+            val harness = Harness(this, sim, voters.toSet(), learners, cluster)
+            dumpOnWedge(sim) { body(harness) }
+            harness.stopRelay()
         }
 
     private fun CoroutineScope.clusterOver(
         sim: MultiNodeRaftSim,
         voters: List<NodeId>,
-        voterConfig: ClusterConfig,
         learners: List<NodeId>,
+        arrivalGap: Duration,
     ): ServerCluster {
         val self = PeerId(voters.first().value)
         val rooms = learners.map { id ->
@@ -203,8 +235,7 @@ class ServerClusterConcurrentAdmissionTest {
         }
         return ServerCluster(
             mesh = VoterMesh(voterNodes = voters.associateWith { sim.nodes.getValue(it) }, scope = this),
-            host = ManyRoomsHost(rooms),
-            voterConfig = voterConfig,
+            host = ManyRoomsHost(rooms, arrivalGap),
             hub = RaftRelayHub(voters.toSet()),
             overlay = overlayServer(
                 self = self,
@@ -227,10 +258,16 @@ class ServerClusterConcurrentAdmissionTest {
     }
 }
 
-/** Hands every room to the relay at once, each in its own coroutine, as a real accept loop would. */
-private class ManyRoomsHost(private val rooms: List<Room>) : RoomHost {
+/**
+ * Hands each room to the relay in its own coroutine, as a real accept loop would: all at one instant,
+ * or one every [arrivalGap].
+ */
+private class ManyRoomsHost(private val rooms: List<Room>, private val arrivalGap: Duration) : RoomHost {
     override suspend fun start(onRoom: suspend (Room) -> Unit): Unit = coroutineScope {
-        rooms.forEach { room -> launch { onRoom(room) } }
+        rooms.forEach { room ->
+            launch { onRoom(room) }
+            if (arrivalGap > Duration.ZERO) delay(arrivalGap)
+        }
     }
 
     override fun close(): Unit = Unit
