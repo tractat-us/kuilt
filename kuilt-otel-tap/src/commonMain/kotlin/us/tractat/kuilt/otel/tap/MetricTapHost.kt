@@ -107,8 +107,8 @@ public class MetricTapHost internal constructor(
  * Hosts a session on [loom] and continuously offers [exporter]'s metric buffer for
  * replication to any peer that joins. The tap is fabric-agnostic: pass a loopback
  * WebSocket [Loom] for a simulator/CI puller (the default and safest choice), or a
- * LAN/peer-to-peer [Loom] to reach a real device. Discovery and admission are the
- * [Loom]'s concern, not the tap's.
+ * LAN/peer-to-peer [Loom] to reach a real device. Discovery is the [Loom]'s concern, not
+ * the tap's; who may pull is [admission]'s.
  *
  * @param loom the fabric to host the session on. Bind it to loopback by default.
  * @param exporter the device's metric buffer to offer.

@@ -104,7 +104,7 @@ public class LogTapHost internal constructor(
  * replication to any peer that joins. The tap is fabric-agnostic: pass a loopback
  * WebSocket [Loom] for a simulator/CI puller (the default and safest choice — it binds
  * only the local loopback interface), or a LAN/peer-to-peer [Loom] to reach a real
- * device. Discovery and admission are the [Loom]'s concern, not the tap's.
+ * device. Discovery is the [Loom]'s concern, not the tap's; who may pull is [admission]'s.
  *
  * @param loom the fabric to host the session on. Bind it to loopback by default.
  * @param exporter the device's captured-log buffer to offer.

@@ -88,7 +88,7 @@ class MultipeerLogTapReachTest {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
         host = installLogTap(loom, exporterWith(3), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
-        val mac = LogTapClient(loom.join(InMemoryTag("mac")), backgroundScope, config, LogTapAdmission.Present(token.code))
+        val mac = LogTapClient(loom.join(InMemoryTag("mac")), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
             .also { client = it }
 
         assertEquals(listOf("log 1", "log 2", "log 3"), mac.pull().map { it.body })
@@ -99,7 +99,7 @@ class MultipeerLogTapReachTest {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
         host = installLogTap(loom, exporterWith(3), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
-        val impostor = LogTapClient(loom.join(InMemoryTag("impostor")), backgroundScope, config, LogTapAdmission.Present("WRONGGGG"))
+        val impostor = LogTapClient(loom.join(InMemoryTag("impostor")), backgroundScope, config, LogTapAdmission.Present("WRONGGGG", Random(11)))
             .also { client = it }
 
         assertFailsWith<TimeoutCancellationException> { impostor.pull() }
@@ -118,7 +118,7 @@ class MultipeerLogTapReachTest {
         val h = installLogTap(loom, exporter, backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
             .also { host = it }
 
-        val first = LogTapClient(loom.join(InMemoryTag("mac-1")), backgroundScope, config, LogTapAdmission.Present(token.code))
+        val first = LogTapClient(loom.join(InMemoryTag("mac-1")), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
         assertEquals(listOf("log 1", "log 2", "log 3"), first.pull().map { it.body })
         first.close() // drop the link
 
@@ -127,7 +127,7 @@ class MultipeerLogTapReachTest {
         h.sync()
 
         // A fresh Mac client rejoins the same host and re-presents the code.
-        val second = LogTapClient(loom.join(InMemoryTag("mac-2")), backgroundScope, config, LogTapAdmission.Present(token.code))
+        val second = LogTapClient(loom.join(InMemoryTag("mac-2")), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
             .also { client = it }
         val secondPull = second.pull().map { it.body }
 
@@ -175,7 +175,7 @@ class MultipeerLogTapReachTest {
             loom.join(InMemoryTag("mac")),
             backgroundScope,
             metricConfig,
-            LogTapAdmission.Present(token.code),
+            LogTapAdmission.Present(token.code, Random(11)),
         ).also { metricClient = it }
 
         assertEquals(7L, mac.pull().sums.getValue(MetricKey("frames", MetricKind.SUM)))
@@ -196,7 +196,7 @@ class MultipeerLogTapReachTest {
             loom.join(InMemoryTag("impostor")),
             backgroundScope,
             metricConfig,
-            LogTapAdmission.Present("WRONGGGG"),
+            LogTapAdmission.Present("WRONGGGG", Random(11)),
         ).also { metricClient = it }
 
         assertFailsWith<TimeoutCancellationException> { impostor.pull() }

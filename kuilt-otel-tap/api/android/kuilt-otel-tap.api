@@ -9,8 +9,10 @@ public final class us/tractat/kuilt/otel/tap/LogTapAdmission$Open : us/tractat/k
 }
 
 public final class us/tractat/kuilt/otel/tap/LogTapAdmission$Present : us/tractat/kuilt/otel/tap/LogTapAdmission {
-	public fun <init> (Ljava/lang/String;)V
+	public fun <init> (Ljava/lang/String;Lkotlin/random/Random;)V
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/random/Random;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun getCode ()Ljava/lang/String;
+	public final fun getRandom ()Lkotlin/random/Random;
 }
 
 public final class us/tractat/kuilt/otel/tap/LogTapAdmission$Verify : us/tractat/kuilt/otel/tap/LogTapAdmission {
@@ -218,11 +220,14 @@ public final class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Companion {
 
 public final class us/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof : us/tractat/kuilt/otel/tap/admit/TapAdmitMessage {
 	public static final field Companion Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof$Companion;
-	public fun <init> (Lkotlinx/io/bytestring/ByteString;)V
+	public static final field TAG_BYTES I
+	public fun <init> (Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;)V
 	public final fun component1 ()Lkotlinx/io/bytestring/ByteString;
-	public final fun copy (Lkotlinx/io/bytestring/ByteString;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;Lkotlinx/io/bytestring/ByteString;ILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;
+	public final fun component2 ()Lkotlinx/io/bytestring/ByteString;
+	public final fun copy (Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;Lkotlinx/io/bytestring/ByteString;Lkotlinx/io/bytestring/ByteString;ILjava/lang/Object;)Lus/tractat/kuilt/otel/tap/admit/TapAdmitMessage$Proof;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getProverNonce ()Lkotlinx/io/bytestring/ByteString;
 	public final fun getTag ()Lkotlinx/io/bytestring/ByteString;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;

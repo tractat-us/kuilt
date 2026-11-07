@@ -69,7 +69,7 @@ class JoinCodeNotLoggedTest {
                 admission = LogTapAdmission.Verify(token, clock, Random(2)),
             )
             val good = LogTapClient(
-                admitLoom.join(InMemoryTag("good")), backgroundScope, config, LogTapAdmission.Present(token.code),
+                admitLoom.join(InMemoryTag("good")), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)),
             )
             assertEquals(listOf("log 1", "log 2"), good.pull().map { it.body }, "valid code pulls the buffer")
             good.close()
@@ -82,7 +82,7 @@ class JoinCodeNotLoggedTest {
                 admission = LogTapAdmission.Verify(token, clock, Random(3)),
             )
             val bad = LogTapClient(
-                rejectLoom.join(InMemoryTag("bad")), backgroundScope, config, LogTapAdmission.Present("WRONGGGG"),
+                rejectLoom.join(InMemoryTag("bad")), backgroundScope, config, LogTapAdmission.Present("WRONGGGG", Random(11)),
             )
             assertFailsWith<TimeoutCancellationException> { bad.pull() }
             bad.close()
