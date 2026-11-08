@@ -21,7 +21,7 @@ and primitive groups in order.
 |a per-member reader as `room.incoming.filter { it.sender == peer }`, a member's first frame lost before its collector subscribed|`Room.incomingFrom(member)` (fails with `FramesLost`, never silently; capacity `0` opts out)|`session.md#per-member-frames`|
 |a `delay` between a last send and `leave`/`close`|`Room.flush`/`Seam.flush` → `FlushOutcome` (`Unsupported` on hub, mesh, NW: keep your delay)|`session.md#a-last-frame-before-leaving`|
 |a `host == selfId` check, re-electing when the host walks out mid-lobby|`SeamRoomFactory.electLobby` → `ElectionLobby.awaitRoom` → `ElectionOutcome.BecameHost` → `start()`|`session.md#host-election--the-lobby`|
-|a test for your own `RoomHost`|`PerConnectionRoomHostConformanceSuite`/`SingleRoomHostConformanceSuite`|`session.md#testing-a-room-host`|
+|a test for your `RoomHost`|`PerConnectionRoomHostConformanceSuite`/`SingleRoomHostConformanceSuite`|`session.md#testing-a-room-host`|
 |a propose→commit turn/session facade, host election with a term|`GameSession` + `TurnSequencer`|`consensus.md#consensus--turns`|
 |a server holding the log clients propose into, a client outliving its server|`ClusterClient` (`clusterClient`/`clusterClientWithNode`) + `ServerCluster` (`serverCluster`)|`consensus.md#when-one-of-the-peers-is-a-server`|
 |a Raft term/vote/log surviving a restart, an `expect`/`actual` `RaftStorage`|`DurableStoreRaftStorage.open(store)` + `RaftStorageConformanceSuite`|`consensus.md#durable-consensus-state`|
