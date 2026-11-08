@@ -156,7 +156,7 @@ class RoomConformanceGapDeclarationTest {
      * touches the resume surface ([RoomConformanceSuite.joinerLearnsHostRoomIdOnAdmission], which
      * asserts against `resumeToken?.roomId` and so is the test that made the old
      * `resumeToken ?: return@runTest` skip self-contradictory), one plain membership property, and
-     * `Room.leave`'s two documented obligations, which are ungated core precisely because no fabric
+     * `Room.leave`'s documented obligations, which are ungated core precisely because no fabric
      * may excuse them (#2501). The resume mapping properties use their own required fixture and
      * remain obligations even when link fault injection is unavailable.
      *
@@ -170,6 +170,7 @@ class RoomConformanceGapDeclarationTest {
         suite.leaveNormalFiresLeftEventAndShrinksRoster()
         suite.leaveIsIdempotent()
         suite.leaveDoesNotReportFailureAsCancellation()
+        suite.channelStateTornAfterLeave()
         suite.resumeSuccessIsAcknowledged()
         suite.resumeNotYetOpenHasExactCode()
         suite.resumeExpiredHasExactCode()
