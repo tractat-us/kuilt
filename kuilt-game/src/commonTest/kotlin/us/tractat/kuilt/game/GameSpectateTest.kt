@@ -142,6 +142,53 @@ class GameSpectateTest {
     }
 
     /**
+     * A spectator and a voter admitted at the same time must both end up in the config, and the
+     * voter must stay a voter (#3135).
+     *
+     * Once the host returns at quorum, the background voter loop and the spectator loop run
+     * concurrently. Each change must build on the other's, so the spectator's learner-only change
+     * cannot drop the half-admitted voter, and the voter's promotion cannot drop the spectator.
+     */
+    @Test
+    fun spectatorAndVoterAdmittedConcurrentlyBothStay() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val loom = InMemoryLoom()
+        val (hostSeam, j1Seam, j2Seam, spectateSeam) = seats(loom, 4)
+        val spectatorId = NodeId(spectateSeam.selfId.value)
+        val voterIds = listOf(hostSeam, j1Seam, j2Seam).map { NodeId(it.selfId.value) }.toSet()
+
+        val hostDeferred = async {
+            backgroundScope.gameHost(
+                hostSeam,
+                peerCount = 3,
+                returnAt = ReturnPolicy.Quorum,
+                allowSpectators = true,
+                maxSpectators = 1,
+                raftConfig = fastRaftConfig(seed = 1L),
+                clock = inertTestClock,
+            )
+        }
+        val j1Deferred = async { backgroundScope.gameJoin(j1Seam, raftConfig = fastRaftConfig(seed = 2L)) }
+        val j2Deferred = async { backgroundScope.gameJoin(j2Seam, raftConfig = fastRaftConfig(seed = 4L)) }
+        val spectateDeferred = async {
+            backgroundScope.gameSpectate(spectateSeam, raftConfig = fastRaftConfig(seed = 3L))
+        }
+        val host = hostDeferred.await()
+        j1Deferred.await()
+        j2Deferred.await()
+        val spectator = spectateDeferred.await()
+
+        TurnSequencer(host.node, Int.serializer()).propose(42)
+        val spectatorSaw = withTimeoutOrNull(5.seconds) { appEntries(spectator.node).first { it == 42 } }
+        val after = host.node.membership.value
+
+        assertAll(
+            { assertEquals(voterIds, after.voters, "every voter must stay a voter: $after") },
+            { assertEquals(setOf(spectatorId), after.learners, "the spectator must stay a learner: $after") },
+            { assertEquals(42, spectatorSaw, "spectator must keep receiving committed entries") },
+        )
+    }
+
+    /**
      * A [gameJoin] call (voter intent) on a full roster must still throw [RosterFullException]
      * even when a spectator is present on the session.
      *
