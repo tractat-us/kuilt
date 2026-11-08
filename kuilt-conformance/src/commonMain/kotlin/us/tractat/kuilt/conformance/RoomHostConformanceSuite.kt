@@ -119,7 +119,7 @@ public sealed class RoomHostConformanceSuite {
     public fun scopeCancelEndsAll(): TestResult = hostCase { h ->
         val log = HandlerLog()
         val finallies = MutableStateFlow(0)
-        val running = startHost(h) { room ->
+        val running = startHost(h, log) { room ->
             log.handed(room)
             try {
                 awaitCancellation()
@@ -164,6 +164,16 @@ public sealed class RoomHostConformanceSuite {
         val rooms: StateFlow<List<Room>> = _rooms
 
         fun handed(room: Room) = _rooms.update { it + room }
+
+        /** The host's `start()`, once [startHost] has launched it. */
+        var running: Running? = null
+
+        /** What a failed wait reports: the rooms handed out, and how `start()` ended if it has. */
+        fun describe(): String {
+            val failure = running?.failure?.takeIf { it.isCompleted }?.getCompleted()
+            return "rooms handed to onRoom: ${rooms.value.size}" +
+                if (failure == null) "" else "; start() failed with $failure"
+        }
     }
 
     /** The marker a failing handler throws, so a red can tell it from any other failure. */
@@ -189,7 +199,7 @@ public sealed class RoomHostConformanceSuite {
      * Launch [RoomHost.start] on the test's background scope. A non-cancellation failure out of
      * `start()` is captured rather than allowed to fail the test scope, so a case can assert on it.
      */
-    internal fun TestScope.startHost(h: HostHarness, onRoom: suspend (Room) -> Unit): Running {
+    internal fun TestScope.startHost(h: HostHarness, log: HandlerLog, onRoom: suspend (Room) -> Unit): Running {
         val failure = CompletableDeferred<Throwable>()
         val job = backgroundScope.launch {
             try {
@@ -200,20 +210,20 @@ public sealed class RoomHostConformanceSuite {
                 failure.complete(e)
             }
         }
-        return Running(job, failure)
+        return Running(job, failure).also { log.running = it }
     }
 
     /** Connect one client and wait until it is admitted. A client that never is fails here. */
     internal suspend fun connectAdmitted(h: HostHarness, log: HandlerLog): Room {
         val client = h.connect()
-        awaitOrFail("a client to be admitted", seen = { "rooms handed to onRoom: ${log.rooms.value.size}" }) {
+        awaitOrFail("a client to be admitted", seen = { log.describe() }) {
             client.roster.first { it.isNotEmpty() }
         }
         return client
     }
 
     internal suspend fun HandlerLog.awaitRooms(count: Int, expected: String): List<Room> =
-        awaitOrFail("$expected — wanted $count", seen = { "rooms handed to onRoom: ${rooms.value.size}" }) {
+        awaitOrFail("$expected — wanted $count", seen = { describe() }) {
             rooms.first { it.size >= count }
         }
 
@@ -268,7 +278,7 @@ public abstract class PerConnectionRoomHostConformanceSuite : RoomHostConformanc
     public fun returningHandlerLeavesRoom(): TestResult = hostCase { h ->
         val log = HandlerLog()
         val returned = MutableStateFlow(0)
-        val running = startHost(h) { room ->
+        val running = startHost(h, log) { room ->
             log.handed(room)
             room.roster.first { it.isNotEmpty() }
             returned.update { it + 1 }
@@ -298,7 +308,7 @@ public abstract class PerConnectionRoomHostConformanceSuite : RoomHostConformanc
     public fun failingHandlerLeavesRoomAndLoopContinues(): TestResult = hostCase { h ->
         val log = HandlerLog()
         val threwOn = MutableStateFlow<List<Room>>(emptyList())
-        val running = startHost(h) { room ->
+        val running = startHost(h, log) { room ->
             log.handed(room)
             room.roster.first { it.isNotEmpty() }
             if (log.rooms.value.first() === room) {
@@ -347,7 +357,7 @@ public abstract class SingleRoomHostConformanceSuite : RoomHostConformanceSuite(
     public fun returningHandlerKeepsRoomLive(): TestResult = hostCase { h ->
         val log = HandlerLog()
         val returned = MutableStateFlow(0)
-        val running = startHost(h) { room ->
+        val running = startHost(h, log) { room ->
             log.handed(room)
             returned.update { it + 1 }
         }
@@ -371,7 +381,7 @@ public abstract class SingleRoomHostConformanceSuite : RoomHostConformanceSuite(
     public fun failingHandlerFailsStart(): TestResult = hostCase { h ->
         val log = HandlerLog()
         val marker = HandlerFailure("injected by SingleRoomHostConformanceSuite")
-        val running = startHost(h) { room ->
+        val running = startHost(h, log) { room ->
             log.handed(room)
             throw marker
         }
