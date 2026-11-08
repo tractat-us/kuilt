@@ -39,6 +39,7 @@ class CrdtSamplesRunTest {
             "sampleJsonCrdt" to ::sampleJsonCrdt,
             "sampleBoundedCounter" to ::sampleBoundedCounter,
             "sampleCausal" to ::sampleCausal,
+            "sampleCausalMap" to ::sampleCausalMap,
             "sampleResettableCounter" to ::sampleResettableCounter,
             "sampleBloomFilter" to ::sampleBloomFilter,
             "sampleFugue" to ::sampleFugue,

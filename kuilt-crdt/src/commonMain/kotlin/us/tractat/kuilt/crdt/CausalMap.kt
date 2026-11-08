@@ -49,6 +49,8 @@ import kotlinx.serialization.encoding.Encoder
  * same dot, as any delta mutator does.
  *
  * Serialized by [CausalMapSerializer], as the bare `Causal<DotMap<K, V>>`.
+ *
+ * @sample us.tractat.kuilt.crdt.sampleCausalMap
  */
 @Serializable(with = CausalMapSerializer::class)
 public class CausalMap<K, V : DotStore<V>> private constructor(
@@ -73,31 +75,35 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
      * Every new dot comes from [Slot.mint], which draws `next(c)` from this map's shared context
      * and records it. [Slot.narrow] hands the same minting to a nested store, so an outer mutator
      * can run an inner one. The [Change] it returns says what the key now holds *in this delta*
-     * and which of the dots it held are retired. A change whose store is bottom leaves the key
-     * out of the delta, which is how a nested remove that empties the key reads.
+     * and which of the dots it held are retired. Any bottom store nested in the change is left out
+     * of the delta, and a change whose whole store is bottom leaves the key out, which is how a
+     * nested remove that empties the key reads. Shipping a nested bottom would make the delta
+     * change under a join with itself.
      *
      * The delta is checked, and an invalid one throws [IllegalArgumentException] rather than
      * shipping. The checks exist because the bug class this type removes is a mutator minting from
      * the wrong context, and every one of them names a shape that bug takes:
-     * 1. every retired dot is held under [key], and none of them is also written;
-     * 2. every written dot was minted here or is held under [key]: no dot from another context, no
+     * 1. every written dot sits at one position: a dot under two nested keys would be retired at
+     *    both by a write that meant to retire it at one;
+     * 2. every retired dot is held under [key], and none of them is also written;
+     * 3. every written dot was minted here or is held under [key]: no dot from another context, no
      *    retired dot coming back;
-     * 3. every minted dot is written;
-     * 4. absorbing the delta keeps exactly the dots it should, `(held − retired) ∪ written`, and
+     * 4. every minted dot is written;
+     * 5. absorbing the delta keeps exactly the dots it should, `(held − retired) ∪ written`, and
      *    gives the same store from either side of the join. A dot re-carried at a different
      *    position fails the first half; a re-carried dot whose payload cannot be joined (a
      *    [DotFun] value changed in place) fails the second.
      *
-     * Check 4 needs [V]'s `equals` to be structural and canonical. An equal-payload re-carry at
+     * Check 5 needs [V]'s `equals` to be structural and canonical. An equal-payload re-carry at
      * the same position passes, harmlessly: it is a no-op delta.
      *
-     * **Not checked, so a mutator must keep them:** one dot sits at one position (a dot written
-     * under two nested keys passes every check, and a peer that removes one of them removes the
-     * other), and a nested store in the change is never bottom (one ships needless bytes; the
-     * join drops it).
+     * Check 1 looks inside [DotMap], the one in-kuilt store that nests other stores, and counts
+     * every other store as flat. A store of your own that nests dots is counted as flat too, so
+     * check 1 cannot see a dot repeated inside it.
      *
-     * **Cost:** O(|m(k)| + |v|) per call, for the checks. A wide value under one key pays that on
-     * every write to it.
+     * **Cost:** O(subtree under [key]) per delta produced, for the checks. A wide value under one
+     * key pays that on every write to it. Absorbing the delta with [piece] is a separate cost, and
+     * it walks every key, as `Causal`'s join always has.
      *
      * @throws IllegalArgumentException if [bottom] is not bottom, or the change fails a check.
      */
@@ -132,7 +138,9 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
     }
 
     private fun checkedDelta(key: K, held: V, change: Change<V>, minted: List<Dot>): Causal<DotMap<K, V>> {
-        val written = change.store.dots
+        val store = change.store.canonical()
+        val written = store.dots
+        requireOneOccurrencePerDot(store) { "a change may write each dot at one position only" }
         val heldDots = held.dots
         val retired = change.retired
         require(heldDots.containsAll(retired)) {
@@ -150,8 +158,8 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
             "every minted dot must be written; minted and dropped: ${mintedSet - written}"
         }
         val deltaContext = DotContext.witnessing(retired + written)
-        val forward = held.join(change.store, causal.context, deltaContext)
-        val backward = change.store.join(held, deltaContext, causal.context)
+        val forward = held.join(store, causal.context, deltaContext)
+        val backward = store.join(held, deltaContext, causal.context)
         require(forward.dots == (heldDots - retired) + written) {
             "absorbing the change at $key must keep (held − retired) ∪ written; " +
                 "kept ${forward.dots}, expected ${(heldDots - retired) + written}. " +
@@ -160,8 +168,8 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
         require(forward == backward) {
             "a re-carried dot's payload must join with the held one; $forward vs $backward"
         }
-        val store = if (change.store.isBottom) DotMap() else DotMap(mapOf(key to change.store))
-        return Causal(store, deltaContext)
+        val shipped = if (store.isBottom) DotMap() else DotMap(mapOf(key to store))
+        return Causal(shipped, deltaContext)
     }
 
     override fun piece(other: CausalMap<K, V>): CausalMap<K, V> = CausalMap(causal.piece(other.causal))
@@ -205,17 +213,22 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
         public val retired: Set<Dot> = emptySet(),
     )
 
-    /** `next(c)` for one [apply]: each minted dot joins the running context before the next. */
-    internal class Minter(private var context: DotContext, private val replica: ReplicaId) {
+    /**
+     * `next(c)` for one [apply], repeated: each dot is the next sequence number of [replica] that
+     * [context] has not witnessed. A local counter rather than adding each dot to [context], which
+     * would re-compact the whole shared context once per minted dot.
+     */
+    internal class Minter(private val context: DotContext, private val replica: ReplicaId) {
         private val mintedDots = mutableListOf<Dot>()
         private var closed = false
+        private var seq = context.nextDot(replica).seq
 
         val minted: List<Dot> get() = mintedDots
 
         fun mint(): Dot {
             check(!closed) { "Slot.mint() called after apply returned; a slot is valid only inside its mutator" }
-            val dot = context.nextDot(replica)
-            context = context.add(dot)
+            while (context.contains(Dot(replica, seq))) seq++
+            val dot = Dot(replica, seq++)
             mintedDots += dot
             return dot
         }
@@ -230,15 +243,45 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
         public fun <K, V : DotStore<V>> empty(): CausalMap<K, V> = CausalMap(Causal(DotMap(), DotContext.EMPTY))
 
         /**
-         * A map from decoded bytes, held to the rule [apply] and the join keep: a key is present
-         * exactly when its store is not bottom. Checked here and not in the constructor, which
-         * every [piece] runs and which would otherwise walk every nested dot on each join.
+         * A map from decoded bytes, held to the rules [apply], [remove] and the join keep:
+         * - every stored dot is witnessed by the context, or the next [apply] could mint it again;
+         * - every dot sits at one position, or retiring it at one would delete it at the other;
+         * - no store at any depth is bottom, or the state would change under a join with itself.
+         *
+         * Checked here and not in the constructor, which every [piece] runs and which would
+         * otherwise walk every nested dot on each join. Deltas arrive through the same decoder, so
+         * a frame from a peer is held to the same rules.
          */
         internal fun <K, V : DotStore<V>> decoded(causal: Causal<DotMap<K, V>>): CausalMap<K, V> {
-            val bottomKeys = causal.store.entries.filterValues { it.isBottom }.keys
-            require(bottomKeys.isEmpty()) { "a CausalMap never holds a key whose store is bottom: $bottomKeys" }
+            val store = causal.store
+            val unwitnessed = store.dots.filterNot { causal.context.contains(it) }
+            require(unwitnessed.isEmpty()) { "a CausalMap stores only dots its context has seen; not witnessed: $unwitnessed" }
+            requireOneOccurrencePerDot(store) { "a CausalMap holds each dot at one position only" }
+            require(store.canonical() == store) { "a CausalMap holds no bottom store at any depth: $store" }
             return CausalMap(causal)
         }
+    }
+}
+
+/**
+ * This store with every bottom store nested in it dropped, and nothing else changed. A join with
+ * bottom under two empty contexts keeps every dot ("live in one, not witnessed by the other") and
+ * [DotMap.join] drops each child that comes out bottom, at every depth.
+ */
+private fun <S : DotStore<S>> S.canonical(): S = join(empty, DotContext.EMPTY, DotContext.EMPTY)
+
+/**
+ * Every dot in this store, once per position it occupies. [DotStore.dots] is a set, so it cannot
+ * show a dot held under two keys. Recurses into [DotMap] only; any other store, a consumer's own
+ * included, is counted as flat.
+ */
+private fun DotStore<*>.dotOccurrences(): List<Dot> =
+    if (this is DotMap<*, *>) entries.values.flatMap { it.dotOccurrences() } else dots.toList()
+
+private inline fun requireOneOccurrencePerDot(store: DotStore<*>, message: () -> String) {
+    val occurrences = store.dotOccurrences()
+    require(occurrences.size == store.dots.size) {
+        "${message()}; at more than one position: ${occurrences.groupingBy { it }.eachCount().filterValues { it > 1 }.keys}"
     }
 }
 

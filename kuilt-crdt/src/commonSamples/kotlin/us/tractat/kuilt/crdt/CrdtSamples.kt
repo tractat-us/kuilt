@@ -398,6 +398,37 @@ internal fun sampleCausal() {
     check(!merged.store.isBottom)  // present — add wins
 }
 
+// ── CausalMap ────────────────────────────────────────────────────────────────
+
+/**
+ * A poll removed and recreated by one peer while another votes on the old one: both writes land,
+ * because every dot under every key comes from one shared context that never resets.
+ */
+@Suppress("unused")
+internal fun sampleCausalMap() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    // One field of a nested document: an MV-register write mints one dot and retires the old ones.
+    fun CausalMap<String, DotMap<String, DotFun<Int>>>.vote(replica: ReplicaId, value: Int) =
+        apply(replica, "poll", DotMap()) { slot ->
+            val votes = slot.narrow(slot.store.entries["votes"] ?: DotFun())
+            CausalMap.Change(DotMap(mapOf("votes" to DotFun(mapOf(votes.mint() to value)))), retired = votes.store.dots)
+        }
+
+    val start = CausalMap.empty<String, DotMap<String, DotFun<Int>>>().piece { it.vote(a, 3) }
+
+    // A removes the poll and recreates it; B, concurrently, votes on the old one.
+    val byA = start.piece { it.remove("poll") }.piece { it.vote(a, 5) }
+    val byB = start.piece { it.vote(b, 4) }
+
+    // A's recreated vote minted a fresh dot, not the one its remove retired, so B's peer cannot
+    // mistake it for something already seen. Both votes survive, as a conflict.
+    val merged = byA.piece(byB)
+    check(merged["poll"]?.entries?.get("votes")?.values?.values?.toSet() == setOf(4, 5))
+    check(merged == byB.piece(byA))
+}
+
 // ── ResettableCounter ─────────────────────────────────────────────────────────
 
 /**
