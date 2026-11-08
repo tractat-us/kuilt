@@ -115,6 +115,9 @@ kotlin {
         jvmMain.dependencies { implementation(libs.jna) }
         commonTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
+            // MultipeerRoomHostConformanceTest is common code (the host is pure commonMain over a Loom),
+            // so the RoomHost TCK it subclasses has to reach every test target, not only jvm and apple.
+            implementation(project(":kuilt-conformance"))
         }
         // Mirror the manual appleMain wiring for the test compilations so the
         // apple-only unit tests (MCSessionLink / MultipeerPeerLinkFactory) share

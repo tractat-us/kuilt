@@ -51,6 +51,11 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            // The RoomHost TCK, for LoomRoomHostConformanceTest. `:kuilt-conformance` api's THIS module
+            // in its main source set, and this is a TEST-only edge back the other way, so the task graph
+            // stays acyclic: :kuilt-session main -> :kuilt-conformance main -> :kuilt-session test. Same
+            // shape as :kuilt-core's and :kuilt-store's own TCK subclasses.
+            implementation(project(":kuilt-conformance"))
             implementation(project(":kuilt-crdt"))
             implementation(project(":kuilt-quilter"))
             implementation(libs.kotlinx.coroutines.test)
