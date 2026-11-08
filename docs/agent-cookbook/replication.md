@@ -171,6 +171,32 @@ check(retitle.delta.keys == setOf("title"))
 check(retitle.delta["body"] == null)
 ```
 
+**Intent:** a **nested** map where one peer removes a key and recreates it while another is still
+writing under the old one, and both writes must land. The symptom is a concurrent write that
+vanishes after a remove-and-recreate, because the recreated value started its own history and
+reused event names a peer had already seen.
+**Primitive:** `CausalMap` (`us.tractat.kuilt.crdt`).
+
+Every key and everything nested under it mints from one shared context that never resets, so a
+recreated key cannot reissue a dot. Write through `apply`, which hands the mutator a `Slot`
+(`mint()`, and `narrow` for a nested store) and checks the `Change` it returns. A `remove` resets
+the key's subtree: only writes the remover had not seen survive.
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#sampleCausalMap -->
+```kotlin
+val start = CausalMap.empty<String, DotMap<String, DotFun<Int>>>().piece { it.vote(a, 3) }
+
+// A removes the poll and recreates it; B, concurrently, votes on the old one.
+val byA = start.piece { it.remove("poll") }.piece { it.vote(a, 5) }
+val byB = start.piece { it.vote(b, 4) }
+
+// A's recreated vote minted a fresh dot, not the one its remove retired, so B's peer cannot
+// mistake it for something already seen. Both votes survive, as a conflict.
+val merged = byA.piece(byB)
+check(merged["poll"]?.entries?.get("votes")?.values?.values?.toSet() == setOf(4, 5))
+check(merged == byB.piece(byA))
+```
+
 **Intent:** replicating a CRDT live over a `Seam` by hand — collecting inbound deltas, merging them, broadcasting outbound deltas, and exposing the converged value as a `StateFlow`.
 **Primitive:** `Quilter` (`us.tractat.kuilt.quilter`). Don't drive `Seam.incoming` and delta merge/broadcast yourself.
 
