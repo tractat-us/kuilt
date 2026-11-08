@@ -2,11 +2,9 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
 
 /**
  * Custom [KSerializer] for [DotFun]`<V>` that emits [DotFun.values] entries sorted by
@@ -23,8 +21,9 @@ import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
  * This is the serializer selected by `@Serializable(with = DotFunSerializer::class)` on
  * [DotFun]. Callers obtain an instance via `DotFun.serializer(valueSerializer)`.
  *
- * **Sort order:** [sortedByCanonicalKey], the one canonical order shared with
- * [CanonicalMapSerializer] and the rest of the dot family (#1964). It is byte-identical to the
+ * **Sort order:** the one canonical order shared with the rest of the dot family (#1964): the
+ * encoding is [CanonicalMapSerializer]'s over `Dot` keys, delegated to rather than re-spelled, as
+ * [ORMapEntrySerializer] and [LatticeDotFunSerializer] do. It is byte-identical to the
  * `sortedBy { dot }` it replaced — see [DotSetSerializer].
  */
 @OptIn(ExperimentalSerializationApi::class)
@@ -32,15 +31,12 @@ public class DotFunSerializer<V>(
     private val vSerializer: KSerializer<V>,
 ) : KSerializer<DotFun<V>> {
 
-    private val mapSerializer = MapSerializer(Dot.serializer(), vSerializer)
+    private val mapSerializer = CanonicalMapSerializer(Dot.serializer(), vSerializer)
 
     override val descriptor: SerialDescriptor = mapSerializer.descriptor
 
     override fun serialize(encoder: Encoder, value: DotFun<V>) {
-        mapSerializer.serialize(
-            encoder,
-            value.values.sortedByCanonicalKey(Dot.serializer(), encoder.serializersModule),
-        )
+        mapSerializer.serialize(encoder, value.values)
     }
 
     override fun deserialize(decoder: Decoder): DotFun<V> =

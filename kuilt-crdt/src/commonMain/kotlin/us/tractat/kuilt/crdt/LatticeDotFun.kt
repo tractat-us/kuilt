@@ -41,22 +41,39 @@ public class LatticeDotFun<V : Quilted<V>>(public val values: Map<Dot, V> = empt
 
     override val empty: LatticeDotFun<V> get() = LatticeDotFun()
 
-    override fun join(other: LatticeDotFun<V>, context: DotContext, otherContext: DotContext): LatticeDotFun<V> {
-        val kept = LinkedHashMap<Dot, V>()
-        for ((dot, mine) in values) {
-            val theirs = other.values[dot]
-            when {
-                theirs != null -> kept[dot] = mine.piece(theirs)
-                !otherContext.contains(dot) -> kept[dot] = mine
-            }
-        }
-        for ((dot, theirs) in other.values) {
-            if (dot !in values && !context.contains(dot)) kept[dot] = theirs
-        }
-        return LatticeDotFun(kept)
-    }
+    override fun join(other: LatticeDotFun<V>, context: DotContext, otherContext: DotContext): LatticeDotFun<V> =
+        LatticeDotFun(joinLatticeDotValues(values, other.values, context, otherContext))
 
     override fun equals(other: Any?): Boolean = other is LatticeDotFun<*> && values == other.values
     override fun hashCode(): Int = values.hashCode()
     override fun toString(): String = "LatticeDotFun($values)"
+}
+
+/**
+ * The join of two dot → lattice-value maps, Fig. 12's `DotFun⟨V⟩`: a dot both sides hold keeps the
+ * join of its two values, a dot one side holds survives unless the other side has witnessed it.
+ * Shared by [LatticeDotFun.join] and [ORMapEntry.join], which are the same store under two names.
+ *
+ * The `dot !in mine` guard in the second loop matters even though the first loop already wrote
+ * every shared dot: without it a dot in [mine] that [context] has not witnessed — a [Causal]
+ * invariant violation, but a reachable input — would be overwritten with [theirs]' value alone.
+ */
+internal fun <V : Quilted<V>> joinLatticeDotValues(
+    mine: Map<Dot, V>,
+    theirs: Map<Dot, V>,
+    context: DotContext,
+    otherContext: DotContext,
+): Map<Dot, V> {
+    val kept = LinkedHashMap<Dot, V>()
+    for ((dot, value) in mine) {
+        val other = theirs[dot]
+        when {
+            other != null -> kept[dot] = value.piece(other)
+            !otherContext.contains(dot) -> kept[dot] = value
+        }
+    }
+    for ((dot, value) in theirs) {
+        if (dot !in mine && !context.contains(dot)) kept[dot] = value
+    }
+    return kept
 }

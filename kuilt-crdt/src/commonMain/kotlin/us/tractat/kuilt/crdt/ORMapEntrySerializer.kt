@@ -2,11 +2,9 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
 
 /**
  * Custom [KSerializer] for [ORMapEntry]`<S>` that emits [ORMapEntry.contributions] sorted by [Dot]
@@ -17,23 +15,21 @@ import us.tractat.kuilt.crdt.internal.sortedByCanonicalKey
  * [ORMapEntry.join] builds a [LinkedHashMap] whose iteration order depends on which side was `self`
  * and which was `other`; sorting before encoding makes the wire form a function of the value.
  *
- * **Sort order:** [sortedByCanonicalKey], the one canonical order shared with the rest of the dot
- * family (#1964).
+ * **Sort order:** the one canonical order shared with the rest of the dot family (#1964). The
+ * encoding is [CanonicalMapSerializer]'s over `Dot` keys, delegated to rather than re-spelled, so
+ * this class, [DotFunSerializer] and [LatticeDotFunSerializer] cannot drift apart.
  */
 @OptIn(ExperimentalSerializationApi::class)
 public class ORMapEntrySerializer<S : Quilted<S>>(
     private val valueSerializer: KSerializer<S>,
 ) : KSerializer<ORMapEntry<S>> {
 
-    private val mapSerializer = MapSerializer(Dot.serializer(), valueSerializer)
+    private val mapSerializer = CanonicalMapSerializer(Dot.serializer(), valueSerializer)
 
     override val descriptor: SerialDescriptor = mapSerializer.descriptor
 
     override fun serialize(encoder: Encoder, value: ORMapEntry<S>) {
-        mapSerializer.serialize(
-            encoder,
-            value.contributions.sortedByCanonicalKey(Dot.serializer(), encoder.serializersModule),
-        )
+        mapSerializer.serialize(encoder, value.contributions)
     }
 
     override fun deserialize(decoder: Decoder): ORMapEntry<S> =
