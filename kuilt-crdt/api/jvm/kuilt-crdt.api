@@ -1054,6 +1054,36 @@ public final class us/tractat/kuilt/crdt/LWWRegister$Companion {
 	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
 }
 
+public final class us/tractat/kuilt/crdt/LatticeDotFun : us/tractat/kuilt/crdt/DotStore {
+	public static final field Companion Lus/tractat/kuilt/crdt/LatticeDotFun$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getDots ()Ljava/util/Set;
+	public synthetic fun getEmpty ()Lus/tractat/kuilt/crdt/DotStore;
+	public fun getEmpty ()Lus/tractat/kuilt/crdt/LatticeDotFun;
+	public final fun getValues ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun isBottom ()Z
+	public synthetic fun join (Lus/tractat/kuilt/crdt/DotStore;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/DotStore;
+	public fun join (Lus/tractat/kuilt/crdt/LatticeDotFun;Lus/tractat/kuilt/crdt/DotContext;Lus/tractat/kuilt/crdt/DotContext;)Lus/tractat/kuilt/crdt/LatticeDotFun;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/crdt/LatticeDotFun$Companion {
+	public final fun serializer (Lkotlinx/serialization/KSerializer;)Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/LatticeDotFunSerializer : kotlinx/serialization/KSerializer {
+	public fun <init> (Lkotlinx/serialization/KSerializer;)V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/LatticeDotFun;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/LatticeDotFun;)V
+}
+
 public final class us/tractat/kuilt/crdt/LatticeProduct : us/tractat/kuilt/crdt/Quilted {
 	public static final field Companion Lus/tractat/kuilt/crdt/LatticeProduct$Companion;
 	public fun <init> (Lus/tractat/kuilt/crdt/Quilted;Lus/tractat/kuilt/crdt/Quilted;)V

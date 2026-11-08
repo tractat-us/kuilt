@@ -53,20 +53,7 @@ public class ORMapEntry<S : Quilted<S>>(
         other: ORMapEntry<S>,
         context: DotContext,
         otherContext: DotContext,
-    ): ORMapEntry<S> {
-        val kept = LinkedHashMap<Dot, S>()
-        for ((dot, mine) in contributions) {
-            val theirs = other.contributions[dot]
-            when {
-                theirs != null -> kept[dot] = mine.piece(theirs)
-                !otherContext.contains(dot) -> kept[dot] = mine
-            }
-        }
-        for ((dot, theirs) in other.contributions) {
-            if (dot !in contributions && !context.contains(dot)) kept[dot] = theirs
-        }
-        return ORMapEntry(kept)
-    }
+    ): ORMapEntry<S> = ORMapEntry(joinLatticeDotValues(contributions, other.contributions, context, otherContext))
 
     override fun equals(other: Any?): Boolean =
         other is ORMapEntry<*> && contributions == other.contributions

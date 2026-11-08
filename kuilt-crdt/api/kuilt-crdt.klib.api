@@ -1023,6 +1023,37 @@ final class <#A: us.tractat.kuilt.crdt/Quilted<#A>, #B: us.tractat.kuilt.crdt/Qu
     }
 }
 
+final class <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.crdt/LatticeDotFun : us.tractat.kuilt.crdt/DotStore<us.tractat.kuilt.crdt/LatticeDotFun<#A>> { // us.tractat.kuilt.crdt/LatticeDotFun|null[0]
+    constructor <init>(kotlin.collections/Map<us.tractat.kuilt.crdt/Dot, #A> = ...) // us.tractat.kuilt.crdt/LatticeDotFun.<init>|<init>(kotlin.collections.Map<us.tractat.kuilt.crdt.Dot,1:0>){}[0]
+
+    final val dots // us.tractat.kuilt.crdt/LatticeDotFun.dots|{}dots[0]
+        final fun <get-dots>(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.crdt/LatticeDotFun.dots.<get-dots>|<get-dots>(){}[0]
+    final val empty // us.tractat.kuilt.crdt/LatticeDotFun.empty|{}empty[0]
+        final fun <get-empty>(): us.tractat.kuilt.crdt/LatticeDotFun<#A> // us.tractat.kuilt.crdt/LatticeDotFun.empty.<get-empty>|<get-empty>(){}[0]
+    final val values // us.tractat.kuilt.crdt/LatticeDotFun.values|{}values[0]
+        final fun <get-values>(): kotlin.collections/Map<us.tractat.kuilt.crdt/Dot, #A> // us.tractat.kuilt.crdt/LatticeDotFun.values.<get-values>|<get-values>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.crdt/LatticeDotFun.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.crdt/LatticeDotFun.hashCode|hashCode(){}[0]
+    final fun join(us.tractat.kuilt.crdt/LatticeDotFun<#A>, us.tractat.kuilt.crdt/DotContext, us.tractat.kuilt.crdt/DotContext): us.tractat.kuilt.crdt/LatticeDotFun<#A> // us.tractat.kuilt.crdt/LatticeDotFun.join|join(us.tractat.kuilt.crdt.LatticeDotFun<1:0>;us.tractat.kuilt.crdt.DotContext;us.tractat.kuilt.crdt.DotContext){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.crdt/LatticeDotFun.toString|toString(){}[0]
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.crdt/LatticeDotFun.Companion|null[0]
+        final fun <#A2: kotlin/Any?> serializer(kotlinx.serialization/KSerializer<#A2>): kotlinx.serialization/KSerializer<us.tractat.kuilt.crdt/LatticeDotFun<#A2>> // us.tractat.kuilt.crdt/LatticeDotFun.Companion.serializer|serializer(kotlinx.serialization.KSerializer<0:0>){0§<kotlin.Any?>}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.crdt/LatticeDotFun.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
+final class <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.crdt/LatticeDotFunSerializer : kotlinx.serialization/KSerializer<us.tractat.kuilt.crdt/LatticeDotFun<#A>> { // us.tractat.kuilt.crdt/LatticeDotFunSerializer|null[0]
+    constructor <init>(kotlinx.serialization/KSerializer<#A>) // us.tractat.kuilt.crdt/LatticeDotFunSerializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>){}[0]
+
+    final val descriptor // us.tractat.kuilt.crdt/LatticeDotFunSerializer.descriptor|{}descriptor[0]
+        final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.crdt/LatticeDotFunSerializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+    final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.crdt/LatticeDotFun<#A> // us.tractat.kuilt.crdt/LatticeDotFunSerializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+    final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.crdt/LatticeDotFun<#A>) // us.tractat.kuilt.crdt/LatticeDotFunSerializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.crdt.LatticeDotFun<1:0>){}[0]
+}
+
 final class <#A: us.tractat.kuilt.crdt/Quilted<#A>> us.tractat.kuilt.crdt/ORMapEntry : us.tractat.kuilt.crdt/DotStore<us.tractat.kuilt.crdt/ORMapEntry<#A>> { // us.tractat.kuilt.crdt/ORMapEntry|null[0]
     constructor <init>(kotlin.collections/Map<us.tractat.kuilt.crdt/Dot, #A> = ...) // us.tractat.kuilt.crdt/ORMapEntry.<init>|<init>(kotlin.collections.Map<us.tractat.kuilt.crdt.Dot,1:0>){}[0]
 
