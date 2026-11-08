@@ -54,6 +54,7 @@ import kotlin.test.assertEquals
  * | `DotSetSerializer`'s sort | [ORSET] |
  * | `DotFunSerializer`'s sort | [MV_REGISTER] |
  * | `LatticeDotFunSerializer`'s sort | [LATTICE_DOT_FUN] |
+ * | `DotMapSerializer`'s sort, nested in a `CausalMap` | [CAUSAL_MAP] |
  * | `ORMapEntrySerializer`'s sort | [ORMAP], [JSON_CRDT] |
  * | `DotContextSerializer`'s `vv` sort | [ORSET], [ORMAP], [MV_REGISTER], [DOT_CONTEXT], [JSON_CRDT] |
  * | `DotContextSerializer`'s `cloud` sort | [DOT_CONTEXT], [ORSET_ADD_DELTA], [ORSET_REMOVE_DELTA] |
@@ -198,6 +199,16 @@ class CanonicalGoldenVectorTest {
                     "LatticeDotFun",
                 )
             },
+            {
+                assertEquals(
+                    CAUSAL_MAP,
+                    hex(
+                        CausalMap.serializer(String.serializer(), DotMap.serializer(String.serializer(), DotSet.serializer())),
+                        causalMap(),
+                    ),
+                    "CausalMap",
+                )
+            },
             { assertEquals(VERSION_VECTOR, hex(VersionVector.serializer(), versionVector()), "VersionVector") },
             { assertEquals(DOT_CONTEXT, hex(DotContext.serializer(), dotContext()), "DotContext") },
             {
@@ -310,6 +321,9 @@ class CanonicalGoldenVectorTest {
             { assertEquals(2, movableTree().compactedDotCount(), "MovableTree compactedDots") },
             { assertEquals(4, mvRegister().values.size, "MVRegister concurrent values") },
             { assertEquals(4, latticeDotFun().store.values.size, "LatticeDotFun dots") },
+            { assertEquals(2, causalMap().keys.size, "CausalMap keys") },
+            { assertEquals(4, causalMap()["outer"]?.entries?.size, "CausalMap nested fields") },
+            { assertEquals(1, causalMap().context.cloud.size, "CausalMap shared cloud") },
             {
                 assertEquals(
                     2,
@@ -681,6 +695,29 @@ class CanonicalGoldenVectorTest {
     }
 
     /**
+     * A shared-context map two levels deep, every write through `apply`. Four replicas each add a
+     * field under `outer`, absorbed out of sorted order, so the nested `DotMap` reaches insertion
+     * order `zulu, mike, alpha, delta` against canonical `alpha, delta, mike, zulu`; a second key
+     * keeps the outer `DotMap` multi-entry. `mike`'s field arrives as a bare delta minted after a
+     * write this state never sees, so `(mike, 2)` sits above a gap: one cloud dot in the shared
+     * context, which puts the `cloud` sort inside a `CausalMap` frame.
+     */
+    private fun causalMap(): CausalMap<String, DotMap<String, DotSet>> {
+        fun CausalMap<String, DotMap<String, DotSet>>.add(replica: ReplicaId, outer: String, field: String) =
+            apply(replica, outer, DotMap()) { slot ->
+                CausalMap.Change(DotMap(mapOf(field to DotSet(setOf(slot.mint())))))
+            }
+        val empty = CausalMap.empty<String, DotMap<String, DotSet>>()
+        val mikeUnseen = empty.piece(empty.add(mike, "elsewhere", "m"))
+        return empty
+            .piece { it.add(zulu, "outer", "zulu") }
+            .piece(mikeUnseen.add(mike, "outer", "mike"))
+            .piece { it.add(alpha, "outer", "alpha") }
+            .piece { it.add(delta, "outer", "delta") }
+            .piece { it.add(zulu, "other", "z") }
+    }
+
+    /**
      * Four authors merged in a deliberately non-sorted order, so `entries` reaches insertion order
      * `zulu, mike, alpha, delta` against a canonical order of `alpha, delta, mike, zulu`.
      *
@@ -989,6 +1026,12 @@ class CanonicalGoldenVectorTest {
                 "656c74616373657101ff6164bf677265706c696361646d696b656373657101ff616dbf677265706c696361647a756c756373" +
                 "657101ff617aff67636f6e74657874bf627676bf65616c706861016564656c746101646d696b6501647a756c7501ff65636c" +
                 "6f75649fffffffff"
+        const val CAUSAL_MAP =
+            "bf6573746f7265bf656f74686572bf617a9fbf677265706c696361647a756c756373657102ffffff656f75746572bf65616c" +
+                "7068619fbf677265706c69636165616c7068616373657101ffff6564656c74619fbf677265706c6963616564656c74616373" +
+                "657101ffff646d696b659fbf677265706c696361646d696b656373657102ffff647a756c759fbf677265706c696361647a75" +
+                "6c756373657101ffffffff67636f6e74657874bf627676bf65616c706861016564656c746101647a756c7502ff65636c6f75" +
+                "649fbf677265706c696361646d696b656373657102ffffffff"
         const val LATTICE_DOT_FUN =
             "bf6573746f7265bfbf677265706c69636165616c7068616373657101ffbf66636f756e7473bf65616c70686101ffffbf6772" +
                 "65706c6963616564656c74616373657101ffbf66636f756e7473bf6564656c746101ffffbf677265706c696361646d696b65" +

@@ -6,6 +6,10 @@ package us.tractat.kuilt.crdt
  * grows) and [DotMap] (key → store) — all share the one causal [join] defined here
  * in spirit; pairing any of them
  * with a [DotContext] inside a [Causal] yields a full delta-state CRDT.
+ *
+ * [DotMap] is the one store that nests other stores, and [CausalMap] relies on that: since
+ * [dots] is a set, it counts a dot held at two positions by recursing into [DotMap] and taking
+ * every other store as flat. A new store that nests dots belongs in that count too.
  */
 public interface DotStore<S : DotStore<S>> {
     /** Every dot currently live in this store. */
