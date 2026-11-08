@@ -24,6 +24,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.core.SeamStateGate
 import us.tractat.kuilt.core.Spool
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.session.FailureReason
@@ -184,10 +185,14 @@ public class FakeRoom(
      */
     private val _rosterPeers = MutableStateFlow(initialRoster.mapTo(mutableSetOf()) { it.id } + selfId)
 
-    /** Seam state forwarded to channel views. Use [tearSeam] to simulate transport closure. */
-    // ALLOW-bareSeamState: one writer. [tearSeam] is the only site that writes it, and it is driven
-    // by the test rather than by a transport callback, so there is no concurrent second writer.
-    private val _seamState = MutableStateFlow<SeamState>(SeamState.Woven)
+    /**
+     * Seam state forwarded to channel views. [tearSeam] tears it to simulate a transport closure, and
+     * [leave] tears it because a room that has left reads `Torn` on every view (#3129).
+     *
+     * A [SeamStateGate] because there are two writers, and whichever tears first must win: a leave
+     * after a transport tear must not overwrite the reason the tear published.
+     */
+    private val seamGate = SeamStateGate(SeamState.Woven)
 
     private val eventsChannel = Channel<MembershipEvent>(
         capacity = DeliveryPolicy.DEFAULT_CAPACITY,
@@ -439,6 +444,14 @@ public class FakeRoom(
         _roster.value = emptySet()
         _rosterPeers.value = setOf(selfId)
         inboxLock.withLock { memberInboxes.values.toList().also { memberInboxes.clear() } }.forEach { it.close() }
+        // Last, as the real room closes its seam last: a reader woken by the Torn already reads the
+        // empty roster. The reason maps as the real room maps it.
+        seamGate.tear(
+            when (reason) {
+                is LeaveReason.Error -> CloseReason.Error(RuntimeException(reason.message))
+                is LeaveReason.Normal, is LeaveReason.PartitionExpired -> CloseReason.Normal
+            },
+        )
     }
 
     // ── Test-driver helpers ───────────────────────────────────────────────────
@@ -625,12 +638,13 @@ public class FakeRoom(
     override fun channel(id: String): Seam = channelViews.getOrPut(id) { FakeChannelSeam(id) }
 
     /**
-     * Transition the seam state to [SeamState.Torn]. Channel views forward [state] from
-     * [_seamState], so tearing the seam winds down any [us.tractat.kuilt.crdt.replicator.Quilter]
-     * subscribed to the channel.
+     * Transition the seam state to [SeamState.Torn]. Channel views forward their state from this
+     * room's seam, so tearing the seam winds down any [us.tractat.kuilt.crdt.replicator.Quilter]
+     * subscribed to the channel. A no-op once the seam is torn, by this or by [leave]: the first
+     * reason stands.
      */
     public fun tearSeam(reason: CloseReason = CloseReason.Normal) {
-        _seamState.value = SeamState.Torn(reason)
+        seamGate.tear(reason)
     }
 
     /**
@@ -659,13 +673,13 @@ public class FakeRoom(
      *   bounded [Spool] (policy from [FakeRoom.channelPolicy]).
      * - `broadcast`/`sendTo` record arbitrary payloads through the room's private recording helpers,
      *   bypassing raw-send prefix refusal (no channel framing added — the fake is not a protocol layer).
-     * - `state` forwards [_seamState].
+     * - `state` forwards the room's seam state, which [tearSeam] and [leave] tear.
      * - `close` is a no-op — the [FakeRoom] owns the lifecycle.
      */
     public inner class FakeChannelSeam(public val id: String) : Seam {
         override val selfId: PeerId get() = this@FakeRoom.selfId
         override val peers: StateFlow<Set<PeerId>> get() = _rosterPeers.asStateFlow()
-        override val state: StateFlow<SeamState> get() = _seamState.asStateFlow()
+        override val state: StateFlow<SeamState> get() = seamGate.state
 
         private val spool = Spool<Swatch>(channelPolicy)
         override val incoming: Flow<Swatch> = spool.incoming
