@@ -477,3 +477,27 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
 `awaitRoom` suspends indefinitely while the lobby is simply empty or still weaving in, or while the elected host is alive and has not called `start()` — that is a lobby doing its job, not a collapse, and the weave-in case is why `host == selfId` on its own does **not** mean you were promoted (during weave-in you are momentarily the lowest id you can see). An app that wants a limit sets its own: cancel the call, then `leave()`.
 
 **Abandoning a lobby requires `leave()`.** A lobby left open stays on the mesh, and it answers its peers' heartbeat pings until its own election collapses. So a host's `start()`, which has no overall bound, keeps retrying for an acknowledgement from a member that has walked away without leaving.
+
+## Testing a room host
+
+**Intent:** you are writing your own `RoomHost`, or wrapping a shipped one, and want to know it hands rooms to `onRoom` and takes them back the way the shipped hosts do. Don't hand-roll a test per host for "the room is left when the scope is cancelled".
+**Primitive:** subclass `PerConnectionRoomHostConformanceSuite` (`:kuilt-conformance`) for a host that opens one room per accepted connection, or `SingleRoomHostConformanceSuite` for a host that opens one room and hands it out once. Both are arms of the sealed `RoomHostConformanceSuite`, so you pick the arm your host is and get only the cases that apply to it.
+
+What it pins, for both arms: cancelling the scope that runs `start()` ends every handler still running and leaves every room. A per-connection host leaves a room once its handler returns or fails, and goes on accepting. A single-room host's room stays live after its handler returns, and a handler failure fails `start()`. What a tear does to a handler that is still running is not pinned here: #3129 records why that is not settled.
+
+A room counts as left when its channel views read `Torn`. Your `connect` has to keep the client connected for the whole case and must never redial; `SeamRoomFactory.adopt(seam, SessionRole.Joiner)` builds a client that does neither.
+
+<!-- verbatim from kuilt-session/src/commonTest/kotlin/us/tractat/kuilt/session/LoomRoomHostConformanceTest.kt#LoomRoomHostConformanceTest -->
+```kotlin
+class LoomRoomHostConformanceTest : SingleRoomHostConformanceSuite() {
+    override fun newHarness(scope: CoroutineScope): HostHarness {
+        val loom = InMemoryLoom()
+        val clock: () -> Instant = { Instant.fromEpochMilliseconds(0) }
+        val clients = SeamRoomFactory(loom = loom, scope = scope, clock = clock)
+        return HostHarness(
+            host = LoomRoomHost(loom, Pattern("room-host"), clock = clock),
+            connect = { clients.adopt(loom.join(InMemoryTag("room-host")), SessionRole.Joiner) },
+        )
+    }
+}
+```
