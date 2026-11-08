@@ -148,6 +148,10 @@ class GameSpectateTest {
      * Once the host returns at quorum, the background voter loop and the spectator loop run
      * concurrently. Each change must build on the other's, so the spectator's learner-only change
      * cannot drop the half-admitted voter, and the voter's promotion cannot drop the spectator.
+     *
+     * This pins [HostMembership]'s lock, not the original defect: it passes on the code before the
+     * fix, whose spectator retry happened to read the live voter set, and it reds when the lock is
+     * removed from the fix, which demotes the late voter.
      */
     @Test
     fun spectatorAndVoterAdmittedConcurrentlyBothStay() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {

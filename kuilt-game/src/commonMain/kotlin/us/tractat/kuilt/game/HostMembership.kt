@@ -27,9 +27,10 @@ import us.tractat.kuilt.raft.changeMembershipWithRetry
  *
  * [changeMembershipWithRetry] resends the same absolute target after a
  * `MembershipChangeInProgressException`, and with a second writer that target can be stale (#3128).
- * Under this lock there is no second writer on this node, so the only entry that can commit between
- * attempts is the engine finalising a joint config it already appended — and
- * [RaftNode.membership] adopts a config on append, so the target was computed from that config.
+ * Under this lock there is no second writer on this node, so the only refusal is a config entry
+ * already in this node's log: its own joint config settling, or an uncommitted config it inherited
+ * on winning an election. [RaftNode.membership] adopts a config on append, so the target was
+ * computed from that entry, and committing it changes nothing the target depends on.
  *
  * That premise is the whole guarantee: it holds only while nothing else on the host calls
  * [RaftNode.changeMembership]. A caller that changes the host's membership directly through
@@ -48,10 +49,18 @@ internal class HostMembership(private val node: RaftNode, self: NodeId) {
     /** The spectators this host has admitted as permanent learners. */
     val spectators: StateFlow<Set<NodeId>> = _spectators.asStateFlow()
 
-    /** Admit [joiner] as a learner, then promote it to voter. Every other member is kept. */
+    /**
+     * Admit [joiner] as a learner, then promote it to voter. Every other member is kept.
+     *
+     * A joiner that is already a voter is left alone: two admission loops (the latecomer loop and
+     * the eviction's replacement) can both pick the same peer, and the second must not add a voter
+     * to the learner set as well.
+     */
     suspend fun admitVoter(joiner: NodeId): Unit = lock.withLock {
-        commit { it.copy(learners = it.learners + joiner) }
-        commit { ClusterConfig(voters = it.voters + joiner, learners = it.learners - joiner) }
+        if (joiner !in node.membership.value.voters) {
+            commit { it.copy(learners = it.learners + joiner) }
+            commit { it.copy(voters = it.voters + joiner, learners = it.learners - joiner) }
+        }
         _voters.update { it + joiner }
     }
 

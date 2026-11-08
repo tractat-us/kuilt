@@ -1031,11 +1031,12 @@ private suspend fun nextVoterPeer(
     excluded: Set<NodeId>,
     presence: GamePresence,
 ): NodeId {
-    // Combine peers and announced so the exclusion set refreshes whenever either changes:
-    // a spectator that declares just before connecting is still excluded.
-    return combine(seam.peers, presence.announced) { peerSet, _ ->
+    // Combine peers, announced and the admitted rosters so the exclusion set refreshes whenever
+    // any of them changes: a spectator that declares just before connecting is still excluded, and
+    // a peer another admission loop has just admitted is not picked again.
+    return combine(seam.peers, presence.announced, membership.voters, membership.spectators) { peerSet, _, voters, spectators ->
         val currentSpectators = presence.spectators().map { NodeId(it.value) }.toSet()
-        val allExcluded = membership.voters.value + membership.spectators.value + excluded + currentSpectators
+        val allExcluded = voters + spectators + excluded + currentSpectators
         peerSet.map { NodeId(it.value) }.firstOrNull { it !in allExcluded }
     }
         .filterNotNull()
@@ -1056,10 +1057,10 @@ private suspend fun nextSpectatorPeer(
 ): NodeId {
     // Combine presence announcements with connected peers so the result stays fresh as
     // new spectator declarations arrive or new peers connect.
-    return combine(presence.announced, seam.peers) { _, peerSet ->
+    return combine(presence.announced, seam.peers, admitted) { _, peerSet, admittedIds ->
         val spectatorNodeIds = presence.spectators().map { NodeId(it.value) }.toSet()
         val connectedPeerIds = peerSet.map { NodeId(it.value) }.toSet()
-        (spectatorNodeIds intersect connectedPeerIds - admitted.value).firstOrNull()
+        (spectatorNodeIds intersect connectedPeerIds - admittedIds).firstOrNull()
     }
         .filterNotNull()
         .first()
