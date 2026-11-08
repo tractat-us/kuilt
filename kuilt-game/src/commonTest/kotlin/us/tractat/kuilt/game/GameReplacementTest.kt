@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
@@ -32,6 +33,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -105,6 +107,73 @@ class GameReplacementTest {
             .mapNotNull { decodeAppInt(it) }
             .first()
         assertEquals(1, replAction, "replacement must replay the committed action from before departure")
+    }
+
+    /**
+     * Evicting a lost voter and admitting its replacement must keep an admitted spectator (#3135).
+     *
+     * The eviction and the replacement's promotion are both membership changes; neither may drop
+     * the spectator from the learner set, or it stops receiving the log.
+     */
+    @Test
+    fun replacingALostVoterKeepsTheSpectator() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val loom = InMemoryLoom()
+        val (hostRaw, j1Raw, deadRaw) = seats(loom, 3)
+        val spectateRaw = loom.join(InMemoryTag("spectator"))
+        val spectatorId = NodeId(spectateRaw.selfId.value)
+
+        val livenessConfig = fastLivenessConfig()
+        var nowMs = 0L
+        val clock = { Instant.fromEpochMilliseconds(nowMs) }
+
+        val hostDeferred = async {
+            backgroundScope.gameHost(
+                hostRaw,
+                peerCount = 3,
+                allowSpectators = true,
+                maxSpectators = 1,
+                raftConfig = fastRaftConfig(seed = 1L),
+                livenessConfig = livenessConfig,
+                clock = clock,
+            )
+        }
+        val j1Deferred = async { backgroundScope.gameJoin(j1Raw, raftConfig = fastRaftConfig(seed = 2L)) }
+        val dead = FaultySeam(deadRaw, backgroundScope)
+        val deadDeferred = async { backgroundScope.gameJoin(dead, raftConfig = fastRaftConfig(seed = 3L)) }
+        val spectateDeferred = async {
+            backgroundScope.gameSpectate(spectateRaw, raftConfig = fastRaftConfig(seed = 5L))
+        }
+
+        val host = hostDeferred.await()
+        j1Deferred.await()
+        deadDeferred.await()
+        val spectator = spectateDeferred.await()
+        assertEquals(setOf(spectatorId), host.node.membership.value.learners, "spectator must be a learner before the loss")
+
+        dead.partition(Direction.Outbound)
+        val windowMs = livenessConfig.timeout.inWholeMilliseconds +
+            livenessConfig.reconnectWindow.inWholeMilliseconds +
+            livenessConfig.interval.inWholeMilliseconds * 4
+        nowMs = windowMs
+        advanceTimeBy(windowMs)
+        runCurrent()
+        awaitVoterCount(host.node, expectedCount = 2)
+
+        val replacementRaw = loom.join(InMemoryTag("replacement"))
+        backgroundScope.gameJoin(replacementRaw, raftConfig = fastRaftConfig(seed = 4L))
+        awaitVoterCount(host.node, expectedCount = 3)
+
+        TurnSequencer(host.node, Int.serializer()).propose(7)
+        val spectatorSaw = withTimeoutOrNull(5.seconds) {
+            spectator.node.committedFrom(1).mapNotNull { decodeAppInt(it) }.first { it == 7 }
+        }
+        val after = host.node.membership.value
+
+        assertAll(
+            { assertTrue(NodeId(replacementRaw.selfId.value) in after.voters, "replacement must be a voter: $after") },
+            { assertEquals(setOf(spectatorId), after.learners, "spectator evicted from learners: $after") },
+            { assertEquals(7, spectatorSaw, "spectator must keep receiving entries committed after the replacement") },
+        )
     }
 
     /**

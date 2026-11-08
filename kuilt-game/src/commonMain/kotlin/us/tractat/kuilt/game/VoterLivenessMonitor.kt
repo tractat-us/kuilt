@@ -12,11 +12,9 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.liveness.PartitionEvent
-import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
-import us.tractat.kuilt.raft.changeMembershipWithRetry
 import kotlin.time.Instant
 
 /**
@@ -35,7 +33,7 @@ import kotlin.time.Instant
  * but each subscribes to a per-peer filtered view ([GamePerPeerSeam]) of a single shared
  * [MutableSharedFlow], satisfying the ADR-034 single-collection contract.
  *
- * On [PartitionEvent.PeerLost] (leader only): evicts the dead voter via [changeMembershipWithRetry],
+ * On [PartitionEvent.PeerLost] (leader only): evicts the dead voter through [HostMembership.evict],
  * re-opens admission, runs [admitVotersUntil] for one replacement, then starts a fresh detector for
  * the new voter. Graceful leave ([GamePresence.vacaters]) triggers eviction immediately without
  * waiting the reconnect window.
@@ -50,10 +48,8 @@ import kotlin.time.Instant
  * @param node The leader [RaftNode] (may or may not currently hold the leader role).
  * @param seam The game seam (used for [PeerId] extraction and [nextVoterPeer]).
  * @param mux The [MuxSeam] wrapping [seam]; the liveness channel ([HEARTBEAT_CHANNEL]) is a view on it.
- * @param voters The mutable live voter set (shared with the admission loop; mutations are serialised
- *   by the single background eviction coroutine).
- * @param spectatorIds The mutable spectator NodeId set (passed to [ClusterConfig] to preserve learners).
- * @param peerCount Total configured voter count; used to re-open admission to exactly one replacement.
+ * @param membership The host's one membership writer, shared with the admission and spectator loops;
+ *   every eviction and replacement goes through it, so neither drops a spectator or another voter.
  * @param presence The [GamePresence] instance; used to detect vacaters and re-open/re-close admission.
  * @param config [HeartbeatConfig] driving ping interval, timeout, and reconnect window.
  * @param clock Clock for liveness measurements; injected for virtual-time test determinism.
@@ -63,9 +59,7 @@ internal class VoterLivenessMonitor(
     private val node: RaftNode,
     private val seam: Seam,
     private val mux: MuxSeam,
-    private val voters: MutableSet<NodeId>,
-    private val spectatorIds: MutableSet<NodeId>,
-    private val peerCount: Int,
+    private val membership: HostMembership,
     private val presence: GamePresence,
     private val config: HeartbeatConfig,
     private val clock: () -> Instant,
@@ -93,7 +87,7 @@ internal class VoterLivenessMonitor(
         launchLivenessFan()
 
         // Start one detector per initial admitted voter (excluding self).
-        voters.filter { it != self }.forEach { voterId ->
+        membership.voters.value.filter { it != self }.forEach { voterId ->
             detectorJobs[voterId] = launchDetectorFor(voterId)
         }
 
@@ -131,7 +125,7 @@ internal class VoterLivenessMonitor(
         presence.announced.collect {
             val newVacaters = presence.vacaters()
                 .map { NodeId(it.value) }
-                .filter { it in voters && it !in seenVacaters && it != self }
+                .filter { it in membership.voters.value && it !in seenVacaters && it != self }
             newVacaters.forEach { vacaterId ->
                 seenVacaters += vacaterId
                 // Cancel the detector job for this voter — it's leaving voluntarily.
@@ -145,7 +139,7 @@ internal class VoterLivenessMonitor(
      * Processes evictions from [evictions]: removes the dead voter, re-opens admission for one
      * replacement, then starts a fresh detector for the replacement.
      *
-     * Only the Raft **leader** calls [changeMembershipWithRetry]; non-leaders skip the eviction.
+     * Only the Raft **leader** changes membership; non-leaders skip the eviction.
      * If leadership has transferred by the time eviction fires, the new leader's own loop handles
      * the eviction — or the evicted peer's seat remains open until another PeerLost fires.
      */
@@ -158,36 +152,34 @@ internal class VoterLivenessMonitor(
             // Skip if not leader — only the leader can commit membership changes.
             if (node.role.value !is RaftRole.Leader) continue
             // Skip if already evicted (e.g. duplicate signal from detector + vacate).
-            if (lostId !in voters) continue
+            if (lostId !in membership.voters.value) continue
 
             // Cancel the stale detector job (if still running — vacate path cancels it first).
             detectorJobs.remove(lostId)?.cancel()
 
             // Remove the dead voter and commit the shrunken config.
-            voters.remove(lostId)
             evictedVoterIds += lostId
-            node.changeMembershipWithRetry(ClusterConfig(voters = voters.toSet(), learners = spectatorIds.toSet()))
+            membership.evict(lostId)
 
             // Re-open admission so a new gameJoin can take the freed seat.
             presence.declareAdmissionOpen()
 
             // Admit exactly one replacement voter, excluding evicted peers so a gracefully-departing
             // peer (still connected) cannot immediately reclaim its own freed seat.
-            val votersBeforeAdmit = voters.toSet()
+            val votersBeforeAdmit = membership.voters.value
             admitVotersUntil(
-                node,
                 seam,
-                voters,
-                spectatorIds + evictedVoterIds,
+                membership,
                 target = votersBeforeAdmit.size + 1,
                 presence,
+                excluded = evictedVoterIds.toSet(),
             )
 
             // Re-close admission with the refreshed voter set.
-            presence.declareAdmissionClosed(voters)
+            presence.declareAdmissionClosed(membership.voters.value)
 
             // Start a liveness detector for the replacement voter (the one not in votersBeforeAdmit).
-            val newVoterId = voters.firstOrNull { it !in votersBeforeAdmit }
+            val newVoterId = membership.voters.value.firstOrNull { it !in votersBeforeAdmit }
             if (newVoterId != null) {
                 detectorJobs[newVoterId] = launchDetectorFor(newVoterId)
             }

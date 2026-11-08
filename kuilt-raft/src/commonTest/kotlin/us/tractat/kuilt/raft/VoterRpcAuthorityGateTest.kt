@@ -138,8 +138,8 @@ class VoterRpcAuthorityGateTest {
      * the gate left the entire `:kuilt-raft` suite green, and was caught only by 18 of `:kuilt-game`'s
      * tests — the module where `gameJoin`/`gameSpectate` actually construct this seed. A `:kuilt-raft`
      * refactor could therefore delete a load-bearing arm of this predicate, run `:kuilt-raft:build`,
-     * and ship a broken join path. The three steps below reproduce `GameNode`'s admit sequence
-     * (`admitLearnerThenVoter`: wire in as a learner, then promote) in terms this module owns.
+     * and ship a broken join path. The three steps below reproduce `gameHost`'s admit sequence
+     * (`HostMembership.admitVoter`: wire in as a learner, then promote) in terms this module owns.
      */
     @Test
     fun preBootstrapLearnerSeed_acceptsTheLeadersFrames_catchesUp_andIsPromoted() =

@@ -34,7 +34,6 @@ import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.RaftStorage
 import us.tractat.kuilt.raft.SeamRaftTransport
-import us.tractat.kuilt.raft.changeMembershipWithRetry
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -503,17 +502,16 @@ public suspend fun CoroutineScope.gameHost(
     )
     node.awaitLeadership()
 
-    val voters = mutableSetOf(self)
-    // spectatorIds tracks NodeIds admitted as spectators so the voter loop skips them.
-    val spectatorIds = mutableSetOf<NodeId>()
-    admitToReturnPolicy(node, seam, voters, spectatorIds, peerCount, presence, returnAt)
-    launchSpectatorManagement(node, seam, voters, spectatorIds, presence, allowSpectators, maxSpectators)
+    // The one membership writer the admission, spectator and eviction loops share (#3135).
+    val membership = HostMembership(node, self)
+    admitToReturnPolicy(seam, membership, peerCount, presence, returnAt)
+    launchSpectatorManagement(seam, membership, presence, allowSpectators, maxSpectators)
 
     // Voter liveness monitoring — optional; enabled when the caller supplies a [livenessConfig].
     // The leader observes PeerLost events and evicts the dead voter, then re-opens the admission
     // loop for a replacement. Graceful leave (vacate signal) is also handled here.
     if (livenessConfig != null) {
-        VoterLivenessMonitor(this, node, seam, mux, voters, spectatorIds, peerCount, presence, livenessConfig, clock).start()
+        VoterLivenessMonitor(this, node, seam, mux, membership, presence, livenessConfig, clock).start()
     }
 
     return GameSession(node, seam, appMux, presence)
@@ -936,14 +934,12 @@ private val DEFAULT_SPECTATE_ADMISSION_TIMEOUT = 10.seconds
  * the roster reaches [peerCount] or the scope is cancelled at session end — the admission door
  * does not close on a timer, so a latecomer is admitted whenever it connects, however late. A
  * give-up failure propagates to the caller (fail-loud, no swallow); cancellation tears admission
- * down. After the synchronous phase, only the background coroutine touches [voters], so no
- * synchronization is needed.
+ * down. Every membership change goes through [membership], which the spectator and eviction
+ * loops share.
  */
 private suspend fun CoroutineScope.admitToReturnPolicy(
-    node: RaftNode,
     seam: Seam,
-    voters: MutableSet<NodeId>,
-    spectatorIds: MutableSet<NodeId>,
+    membership: HostMembership,
     peerCount: Int,
     presence: GamePresence,
     returnAt: ReturnPolicy,
@@ -952,18 +948,18 @@ private suspend fun CoroutineScope.admitToReturnPolicy(
         ReturnPolicy.FullMembership -> peerCount
         ReturnPolicy.Quorum -> peerCount / 2 + 1
     }
-    admitVotersUntil(node, seam, voters, spectatorIds, target = returnThreshold, presence)
+    admitVotersUntil(seam, membership, target = returnThreshold, presence)
 
-    if (voters.size < peerCount) {
+    if (membership.voters.value.size < peerCount) {
         launch {
-            admitVotersUntil(node, seam, voters, spectatorIds, target = peerCount, presence)
-            presence.declareAdmissionClosed(voters)
+            admitVotersUntil(seam, membership, target = peerCount, presence)
+            presence.declareAdmissionClosed(membership.voters.value)
         }
     } else {
         // FullMembership mode (or Quorum with peerCount == 1): the roster is already full.
         // Publish the signal synchronously so any joiner that arrives after this point can
         // detect the full roster immediately without waiting for the background loop.
-        presence.declareAdmissionClosed(voters)
+        presence.declareAdmissionClosed(membership.voters.value)
     }
 }
 
@@ -980,24 +976,21 @@ private suspend fun CoroutineScope.admitToReturnPolicy(
  * peer's MuxSeam setup and silently lose the frame under StandardTestDispatcher.
  */
 private fun CoroutineScope.launchSpectatorManagement(
-    node: RaftNode,
     seam: Seam,
-    voters: MutableSet<NodeId>,
-    spectatorIds: MutableSet<NodeId>,
+    membership: HostMembership,
     presence: GamePresence,
     allowSpectators: Boolean,
     maxSpectators: Int,
 ) {
     launch {
-        var admitted = spectatorIds.size
+        var admitted = membership.spectators.value.size
         while (true) {
-            val spectatorId = nextSpectatorPeer(presence, seam, spectatorIds)
+            val spectatorId = nextSpectatorPeer(presence, seam, membership.spectators)
             if (!allowSpectators || admitted >= maxSpectators) {
                 presence.declareSpectatorsClosed()
                 break
             }
-            admitSpectatorLearner(node, voters, spectatorIds, spectatorId)
-            spectatorIds += spectatorId
+            membership.admitSpectator(spectatorId)
             admitted++
         }
     }
@@ -1007,28 +1000,26 @@ private fun CoroutineScope.launchSpectatorManagement(
  * Admit connecting voter peers as learner→voter until the cluster reaches [target] voters.
  *
  * Drives the shared admit loop used by both the synchronous return-watermark phase and the
- * background latecomer phase of [gameHost]. Mutates [voters] in place as each peer is promoted.
- * Skips any peer whose NodeId appears in [spectatorIds] — those are permanent learners that
- * must not consume a voter seat.
+ * background latecomer phase of [gameHost], and by [VoterLivenessMonitor]'s replacement. Each
+ * promotion goes through [membership], which keeps every other member. Skips any admitted spectator
+ * — a permanent learner must not consume a voter seat — and any peer in [excluded].
  */
 internal suspend fun admitVotersUntil(
-    node: RaftNode,
     seam: Seam,
-    voters: MutableSet<NodeId>,
-    spectatorIds: Set<NodeId>,
+    membership: HostMembership,
     target: Int,
     presence: GamePresence,
+    excluded: Set<NodeId> = emptySet(),
 ) {
-    while (voters.size < target) {
-        val joinerId = nextVoterPeer(seam, voters, spectatorIds, presence)
-        admitLearnerThenVoter(node, voters, joinerId)
-        voters += joinerId
+    while (membership.voters.value.size < target) {
+        val joinerId = nextVoterPeer(seam, membership, excluded, presence)
+        membership.admitVoter(joinerId)
     }
 }
 
 /**
- * Suspends until a voter-intending peer appears in [seam.peers] that is neither in [admitted]
- * nor in [spectatorIds], then returns that peer's [NodeId].
+ * Suspends until a voter-intending peer appears in [seam.peers] that is neither an admitted voter,
+ * an admitted spectator, nor in [excluded], then returns that peer's [NodeId].
  *
  * Spectator NodeIds are excluded: they are identified by checking [presence.spectators] and
  * mapping to [NodeId]. This ensures a spectator peer connecting to the mesh never consumes
@@ -1036,15 +1027,16 @@ internal suspend fun admitVotersUntil(
  */
 private suspend fun nextVoterPeer(
     seam: Seam,
-    admitted: Set<NodeId>,
-    spectatorIds: Set<NodeId>,
+    membership: HostMembership,
+    excluded: Set<NodeId>,
     presence: GamePresence,
 ): NodeId {
-    // Combine peers and announced so the exclusion set refreshes whenever either changes:
-    // a spectator that declares just before connecting is still excluded.
-    return combine(seam.peers, presence.announced) { peerSet, _ ->
+    // Combine peers, announced and the admitted rosters so the exclusion set refreshes whenever
+    // any of them changes: a spectator that declares just before connecting is still excluded, and
+    // a peer another admission loop has just admitted is not picked again.
+    return combine(seam.peers, presence.announced, membership.voters, membership.spectators) { peerSet, _, voters, spectators ->
         val currentSpectators = presence.spectators().map { NodeId(it.value) }.toSet()
-        val allExcluded = admitted + spectatorIds + currentSpectators
+        val allExcluded = voters + spectators + excluded + currentSpectators
         peerSet.map { NodeId(it.value) }.firstOrNull { it !in allExcluded }
     }
         .filterNotNull()
@@ -1061,37 +1053,15 @@ private suspend fun nextVoterPeer(
 private suspend fun nextSpectatorPeer(
     presence: GamePresence,
     seam: Seam,
-    admitted: Set<NodeId>,
+    admitted: StateFlow<Set<NodeId>>,
 ): NodeId {
     // Combine presence announcements with connected peers so the result stays fresh as
     // new spectator declarations arrive or new peers connect.
-    return combine(presence.announced, seam.peers) { _, peerSet ->
+    return combine(presence.announced, seam.peers, admitted) { _, peerSet, admittedIds ->
         val spectatorNodeIds = presence.spectators().map { NodeId(it.value) }.toSet()
         val connectedPeerIds = peerSet.map { NodeId(it.value) }.toSet()
-        (spectatorNodeIds intersect connectedPeerIds - admitted).firstOrNull()
+        (spectatorNodeIds intersect connectedPeerIds - admittedIds).firstOrNull()
     }
         .filterNotNull()
         .first()
-}
-
-/** Admit [spectatorId] as a permanent learner (never voter) in the cluster. */
-private suspend fun admitSpectatorLearner(
-    node: RaftNode,
-    currentVoters: Set<NodeId>,
-    currentLearners: Set<NodeId>,
-    spectatorId: NodeId,
-) {
-    node.changeMembershipWithRetry(
-        ClusterConfig(voters = currentVoters, learners = currentLearners + spectatorId),
-    )
-}
-
-/** Admit [joiner] first as a learner, then promote to voter, using bounded retry. */
-private suspend fun admitLearnerThenVoter(
-    node: RaftNode,
-    currentVoters: Set<NodeId>,
-    joiner: NodeId,
-) {
-    node.changeMembershipWithRetry(ClusterConfig(voters = currentVoters, learners = setOf(joiner)))
-    node.changeMembershipWithRetry(ClusterConfig(voters = currentVoters + joiner))
 }

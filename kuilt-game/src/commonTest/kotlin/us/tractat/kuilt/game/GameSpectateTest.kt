@@ -9,6 +9,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
@@ -17,6 +18,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.raft.Committed
+import us.tractat.kuilt.raft.NodeId
 import us.tractat.kuilt.raft.RaftNode
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -26,6 +28,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Acceptance tests for [gameSpectate] — the permanent, non-voting learner entry point.
@@ -78,6 +81,115 @@ class GameSpectateTest {
         assertAll(
             { assertEquals(77, spectatorAction, "spectator must replay the committed action") },
             { assertIs<RaftRole.Learner>(spectatorRole, "spectator must stay Learner, never become a voter") },
+        )
+    }
+
+    /**
+     * A voter admitted after a spectator must not evict the spectator (#3135).
+     *
+     * In [ReturnPolicy.Quorum] mode the host returns at a majority and keeps admitting voters in
+     * the background, so a spectator can be admitted before the last voter arrives. Admitting
+     * that voter changes membership twice; neither change may drop the spectator from the
+     * learner set, or it stops receiving the log.
+     */
+    @Test
+    fun voterAdmittedAfterSpectatorKeepsTheSpectator() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val loom = InMemoryLoom()
+        val (hostSeam, j1Seam, spectateSeam) = seats(loom, 3)
+        val spectatorId = NodeId(spectateSeam.selfId.value)
+
+        val hostDeferred = async {
+            backgroundScope.gameHost(
+                hostSeam,
+                peerCount = 3,
+                returnAt = ReturnPolicy.Quorum,
+                allowSpectators = true,
+                maxSpectators = 1,
+                raftConfig = fastRaftConfig(seed = 1L),
+                clock = inertTestClock,
+            )
+        }
+        val j1Deferred = async { backgroundScope.gameJoin(j1Seam, raftConfig = fastRaftConfig(seed = 2L)) }
+        val spectateDeferred = async {
+            backgroundScope.gameSpectate(spectateSeam, raftConfig = fastRaftConfig(seed = 3L))
+        }
+        val host = hostDeferred.await()
+        j1Deferred.await()
+        val spectator = spectateDeferred.await()
+
+        // Precondition: the spectator is a learner and there are two voters, so the third voter
+        // below really is admitted after the spectator.
+        val before = host.node.membership.value
+        assertAll(
+            { assertEquals(setOf(spectatorId), before.learners, "spectator must be a learner before the late voter") },
+            { assertEquals(2, before.voters.size, "two voters before the late voter, was ${before.voters}") },
+        )
+
+        val j2Seam = loom.join(InMemoryTag("late-voter"))
+        val j2 = backgroundScope.gameJoin(j2Seam, raftConfig = fastRaftConfig(seed = 4L))
+        val j2Id = NodeId(j2Seam.selfId.value)
+        host.node.membership.first { j2Id in it.voters }
+
+        TurnSequencer(host.node, Int.serializer()).propose(99)
+        val spectatorSaw = withTimeoutOrNull(5.seconds) { appEntries(spectator.node).first { it == 99 } }
+        val after = host.node.membership.value
+
+        assertAll(
+            { assertIs<RaftRole.Follower>(j2.node.role.value, "late joiner must be a voter") },
+            { assertEquals(setOf(spectatorId), after.learners, "spectator evicted from learners: $after") },
+            { assertEquals(99, spectatorSaw, "spectator must keep receiving entries committed after the late voter") },
+        )
+    }
+
+    /**
+     * A spectator and a voter admitted at the same time must both end up in the config, and the
+     * voter must stay a voter (#3135).
+     *
+     * Once the host returns at quorum, the background voter loop and the spectator loop run
+     * concurrently. Each change must build on the other's, so the spectator's learner-only change
+     * cannot drop the half-admitted voter, and the voter's promotion cannot drop the spectator.
+     *
+     * This pins [HostMembership]'s lock, not the original defect: it passes on the code before the
+     * fix, whose spectator retry happened to read the live voter set, and it reds when the lock is
+     * removed from the fix, which demotes the late voter. It relies on this schedule to make the two
+     * admissions overlap; [HostMembershipTest] forces and witnesses that overlap directly.
+     */
+    @Test
+    fun spectatorAndVoterAdmittedConcurrentlyBothStay() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val loom = InMemoryLoom()
+        val (hostSeam, j1Seam, j2Seam, spectateSeam) = seats(loom, 4)
+        val spectatorId = NodeId(spectateSeam.selfId.value)
+        val voterIds = listOf(hostSeam, j1Seam, j2Seam).map { NodeId(it.selfId.value) }.toSet()
+
+        val hostDeferred = async {
+            backgroundScope.gameHost(
+                hostSeam,
+                peerCount = 3,
+                returnAt = ReturnPolicy.Quorum,
+                allowSpectators = true,
+                maxSpectators = 1,
+                raftConfig = fastRaftConfig(seed = 1L),
+                clock = inertTestClock,
+            )
+        }
+        val j1Deferred = async { backgroundScope.gameJoin(j1Seam, raftConfig = fastRaftConfig(seed = 2L)) }
+        val j2Deferred = async { backgroundScope.gameJoin(j2Seam, raftConfig = fastRaftConfig(seed = 4L)) }
+        val spectateDeferred = async {
+            backgroundScope.gameSpectate(spectateSeam, raftConfig = fastRaftConfig(seed = 3L))
+        }
+        val host = hostDeferred.await()
+        j1Deferred.await()
+        j2Deferred.await()
+        val spectator = spectateDeferred.await()
+
+        TurnSequencer(host.node, Int.serializer()).propose(42)
+        val spectatorSaw = withTimeoutOrNull(5.seconds) { appEntries(spectator.node).first { it == 42 } }
+        val after = host.node.membership.value
+
+        assertAll(
+            { assertEquals(voterIds, after.voters, "every voter must stay a voter: $after") },
+            { assertEquals(setOf(spectatorId), after.learners, "the spectator must stay a learner: $after") },
+            { assertEquals(42, spectatorSaw, "spectator must keep receiving committed entries") },
         )
     }
 
