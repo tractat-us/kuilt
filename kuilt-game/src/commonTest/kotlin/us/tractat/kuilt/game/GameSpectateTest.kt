@@ -151,7 +151,8 @@ class GameSpectateTest {
      *
      * This pins [HostMembership]'s lock, not the original defect: it passes on the code before the
      * fix, whose spectator retry happened to read the live voter set, and it reds when the lock is
-     * removed from the fix, which demotes the late voter.
+     * removed from the fix, which demotes the late voter. It relies on this schedule to make the two
+     * admissions overlap; [HostMembershipTest] forces and witnesses that overlap directly.
      */
     @Test
     fun spectatorAndVoterAdmittedConcurrentlyBothStay() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {

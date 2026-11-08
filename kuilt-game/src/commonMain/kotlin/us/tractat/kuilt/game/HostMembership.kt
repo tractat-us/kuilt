@@ -27,10 +27,10 @@ import us.tractat.kuilt.raft.changeMembershipWithRetry
  *
  * [changeMembershipWithRetry] resends the same absolute target after a
  * `MembershipChangeInProgressException`, and with a second writer that target can be stale (#3128).
- * Under this lock there is no second writer on this node, so the only refusal is a config entry
- * already in this node's log: its own joint config settling, or an uncommitted config it inherited
- * on winning an election. [RaftNode.membership] adopts a config on append, so the target was
- * computed from that entry, and committing it changes nothing the target depends on.
+ * Under this lock there is no second writer on this node, and each change returns only once it has
+ * committed, so the only refusal left is an uncommitted config this node inherited on winning an
+ * election. [RaftNode.membership] adopts a config on append, so the target was computed from that
+ * inherited entry, and committing it changes nothing the target depends on.
  *
  * That premise is the whole guarantee: it holds only while nothing else on the host calls
  * [RaftNode.changeMembership]. A caller that changes the host's membership directly through
