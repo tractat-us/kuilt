@@ -129,6 +129,25 @@ class CausalMapTest {
     }
 
     /**
+     * A remove names only the dots under the key it removes. The map holds a second key, written by
+     * another replica, so a remove that shipped the whole shared context would retire `note` too,
+     * on every peer, the remover included. Every other remove fixture holds one key, where the
+     * key's dots and the whole context are the same set and the two cannot be told apart.
+     */
+    @Test
+    fun aRemoveDeltaNamesOnlyTheRemovedKeysDots() {
+        val doc = pollByA.then { it.write(b, "note", "question", 1) }
+        val questionDot = pollByA["poll"]?.entries?.get("question")?.dots.orEmpty().single()
+        val votesDot = pollByA["poll"]?.entries?.get("votes")?.dots.orEmpty().single()
+        val delta = doc.remove("poll").delta
+        assertAll(
+            { assertEquals(setOf("poll", "note"), doc.keys, "precondition: two keys") },
+            { assertEquals(DotContext.of(questionDot, votesDot), delta.context) },
+            { assertEquals(setOf(1), doc.piece(delta).valuesAt("note", "question")) },
+        )
+    }
+
+    /**
      * A write's frame does not grow with the rest of the map. Each extra key is written by its own
      * replica, so a frame that carried the shared context would grow by one version-vector entry
      * per key.
@@ -250,6 +269,78 @@ class CausalMapTest {
         }
     }
 
+    /**
+     * One fresh dot written under two fields. Every set-valued check passes, since `dots` is a set;
+     * a later MV write to `votes` would retire the dot and take `question` with it.
+     */
+    @Test
+    fun aDotWrittenAtTwoPositionsIsRejected() {
+        val failure = assertFailsWith<IllegalArgumentException> {
+            pollByA.apply(b, "poll", DotMap()) { slot ->
+                val dot = slot.mint()
+                CausalMap.Change(DotMap(mapOf("question" to DotFun(mapOf(dot to 1)), "votes" to DotFun(mapOf(dot to 1)))))
+            }
+        }
+        assertTrue(failure.message.orEmpty().contains("one position"), "${failure.message}")
+    }
+
+    /**
+     * A held dot re-carried where it is and at a second field. This replica's own join drops the
+     * second copy, so the absorption checks pass, but the delta carries both, and a peer that has
+     * not seen the dot yet would hold it live in two places.
+     */
+    @Test
+    fun aHeldDotReCarriedAtASecondPositionIsRejected() {
+        val questionDot = pollByA["poll"]?.entries?.get("question")?.dots.orEmpty().single()
+        val failure = assertFailsWith<IllegalArgumentException> {
+            pollByA.apply(b, "poll", DotMap()) { _ ->
+                CausalMap.Change(
+                    DotMap(mapOf("question" to DotFun(mapOf(questionDot to 1)), "other" to DotFun(mapOf(questionDot to 1)))),
+                )
+            }
+        }
+        assertTrue(failure.message.orEmpty().contains("one position"), "${failure.message}")
+    }
+
+    /**
+     * A nested bottom in a change is left out of the delta. Shipped as written, `question ↦ {}`
+     * would be dropped by the first join of the delta with itself, so the delta would not be
+     * idempotent.
+     */
+    @Test
+    fun aNestedBottomInAChangeIsLeftOutOfTheDelta() {
+        val delta = pollByA.apply(b, "poll", DotMap()) { slot ->
+            val votes = mvWrite(slot.narrow(slot.store.entries["votes"] ?: DotFun()), 4)
+            CausalMap.Change(DotMap(mapOf("question" to DotFun(), "votes" to votes.store)), votes.retired)
+        }.delta
+        assertAll(
+            { assertEquals(setOf("votes"), delta["poll"]?.entries?.keys) },
+            { assertEquals(delta, delta.piece(delta)) },
+        )
+    }
+
+    /**
+     * The minter skips a dot of its own replica that the context already holds above the
+     * contiguous run. Here the context is `{A:1} + (A,3)`, so A's next two dots are `(A,2)` and
+     * `(A,4)`. This pins the skip against a counter that only increments; it is not a change of
+     * behaviour, since minting through `DotContext.add` skipped the same dots.
+     */
+    @Test
+    fun mintingSkipsADotTheContextAlreadyHolds() {
+        val empty = CausalMap.empty<String, DotMap<String, DotFun<Int>>>()
+        val first = empty.write(a, "k", "f1", 1)
+        val second = empty.piece(first).write(a, "k", "f2", 2)
+        val third = empty.piece(first).piece(second).write(a, "k", "f3", 3)
+        val gapped = empty.piece(first).piece(third)
+        val delta = gapped.apply(a, "k", DotMap()) { slot ->
+            CausalMap.Change(DotMap(mapOf("p" to DotFun(mapOf(slot.mint() to 0)), "q" to DotFun(mapOf(slot.mint() to 1)))))
+        }.delta
+        assertAll(
+            { assertTrue(gapped.context.contains(Dot(a, 3L)) && !gapped.context.contains(Dot(a, 2L)), "precondition: a gap at (A,2)") },
+            { assertEquals(setOf(Dot(a, 2L), Dot(a, 4L)), delta["k"]?.dots) },
+        )
+    }
+
     /** Two dots in one change — a presence dot and a value dot, the shape sub-issue (d) needs. */
     @Test
     fun aChangeMayMintSeveralDots() {
@@ -264,7 +355,9 @@ class CausalMapTest {
     /**
      * Across a random history of three replicas — writes, field removes and whole-key removes over
      * two outer keys, with concurrent remove and recreate of the same key and random gossip — no
-     * dot is ever minted twice, and every replica converges once all have gossiped.
+     * dot is ever minted twice, and joining the replicas' final states gives the same map in
+     * either fold order. Gossip is random, so the replicas are not asserted to agree with each
+     * other.
      *
      * Every pick is drawn from a sorted list, so the trajectory is a function of the seed on every
      * target (`forbidHashOrderedSeededDraw`).
@@ -322,6 +415,60 @@ class CausalMapTest {
         val encoded = json.encodeToString(inner, withBottom)
         val ser = CausalMap.serializer(String.serializer(), DotFun.serializer(Int.serializer()))
         assertFailsWith<IllegalArgumentException> { json.decodeFromString(ser, encoded) }
+    }
+
+    private val rawJson = Json { allowStructuredMapKeys = true }
+    private val rawSer = Causal.serializer(DotMap.serializer(String.serializer(), DotMap.serializer(String.serializer(), DotFun.serializer(Int.serializer()))))
+    private val docSer = CausalMap.serializer(String.serializer(), DotMap.serializer(String.serializer(), DotFun.serializer(Int.serializer())))
+
+    /** Encode `{k ↦ fields}` under [context] as a bare `Causal`, which checks nothing, and decode it as a map. */
+    private fun decodeRaw(fields: Map<String, DotFun<Int>>, context: DotContext): Doc =
+        rawJson.decodeFromString(docSer, rawJson.encodeToString(rawSer, Causal(DotMap(mapOf("k" to DotMap(fields))), context)))
+
+    /** Each fixture below has exactly one defect, and the refusal must name that one. */
+    private fun assertDecodeRefused(fragment: String, fields: Map<String, DotFun<Int>>, context: DotContext) {
+        val failure = assertFailsWith<IllegalArgumentException> { decodeRaw(fields, context) }
+        assertTrue(failure.message.orEmpty().contains(fragment), "expected \"$fragment\" in: ${failure.message}")
+    }
+
+    /** The control: one dot, witnessed, at one position, no bottom anywhere. It decodes. */
+    @Test
+    fun aWellFormedRawStateDecodes() {
+        val fields = mapOf("f" to DotFun(mapOf(Dot(a, 1L) to 1)))
+        assertEquals(setOf(Dot(a, 1L)), decodeRaw(fields, DotContext.of(Dot(a, 1L)))["k"]?.dots)
+    }
+
+    /**
+     * A stored dot the context has not witnessed: `(A,3)` under `vv{A:2}`. Accepted, the next
+     * `apply` by A would mint `(A,3)` again and hold it live at two keys.
+     */
+    @Test
+    fun aDecodedDotTheContextHasNotWitnessedIsRejected() {
+        assertDecodeRefused(
+            "not witnessed",
+            mapOf("f" to DotFun(mapOf(Dot(a, 3L) to 1))),
+            DotContext.of(Dot(a, 1L), Dot(a, 2L)),
+        )
+    }
+
+    /** A bottom store one level down, which a check of the top-level keys alone cannot see. */
+    @Test
+    fun aDecodedNestedBottomIsRejected() {
+        assertDecodeRefused(
+            "bottom",
+            mapOf("f" to DotFun(mapOf(Dot(a, 1L) to 1)), "g" to DotFun()),
+            DotContext.of(Dot(a, 1L)),
+        )
+    }
+
+    /** One dot at two fields: a later write that retires it at one would delete the other. */
+    @Test
+    fun aDecodedDotAtTwoPositionsIsRejected() {
+        assertDecodeRefused(
+            "one position",
+            mapOf("f" to DotFun(mapOf(Dot(a, 1L) to 1)), "g" to DotFun(mapOf(Dot(a, 1L) to 1))),
+            DotContext.of(Dot(a, 1L)),
+        )
     }
 
     /** A `CausalMap` encodes as its bare `Causal`, so the dot family's canonical sorts apply. */
