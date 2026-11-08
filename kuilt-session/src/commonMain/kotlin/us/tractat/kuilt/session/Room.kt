@@ -425,7 +425,9 @@ public interface Room {
      * Leave the room cleanly. Idempotent.
      *
      * **A room that has left has no members, on either role.** Its [roster] reads empty, each of its
-     * [channel] views lists only this peer, and every [incomingFrom] flow completes. The roster empties
+     * [channel] views lists only this peer and reads [us.tractat.kuilt.core.SeamState.Torn], and every
+     * [incomingFrom] flow completes. The `Torn` is how a consumer holding only a channel view learns
+     * the room has ended, including a view it first asks for after the leave. The roster empties
      * first, so a reader that sees its flow complete already reads the empty roster. That keeps one
      * inference sound: a member's flow completed while the member is still listed means a newer
      * admission, never the end of this room. No [MembershipEvent.Left] is emitted for those members,

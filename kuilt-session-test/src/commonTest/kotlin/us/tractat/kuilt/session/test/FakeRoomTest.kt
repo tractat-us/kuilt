@@ -13,8 +13,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
@@ -498,6 +500,59 @@ class FakeRoomTest {
         val room = FakeRoom()
         room.leave()
         room.leave() // must not throw
+    }
+
+    /**
+     * A room that has left reads Torn on its channel views, as the real room does (#3129): a view
+     * already held and a view first minted after the leave both read it, with the leave's reason.
+     */
+    @Test
+    fun `leave tears every channel view`() = runTest {
+        val room = FakeRoom()
+        val held = room.channel("held")
+        val before = held.state.value
+        room.leave()
+        assertAll(
+            { assertEquals(SeamState.Woven, before, "rig: the view is live before the leave") },
+            { assertEquals(SeamState.Torn(CloseReason.Normal), held.state.value, "a view held across the leave") },
+            {
+                assertEquals(
+                    SeamState.Torn(CloseReason.Normal),
+                    room.channel("minted-after").state.value,
+                    "a view first minted after the leave",
+                )
+            },
+        )
+    }
+
+    /** An error leave tears with an error, as the real room maps `LeaveReason.Error` onto `CloseReason.Error`. */
+    @Test
+    fun `an error leave tears with an error reason`() = runTest {
+        val room = FakeRoom()
+        room.leave(LeaveReason.Error("boom"))
+        val state = assertIs<SeamState.Torn>(room.channel("c").state.value)
+        assertIs<CloseReason.Error>(state.reason, "got ${state.reason}")
+    }
+
+    /** Losing the host ends the room, so it tears it too. */
+    @Test
+    fun `hostLost tears every channel view`() = runTest {
+        val room = FakeRoom(initialRole = SessionRole.Joiner)
+        val view = room.channel("c")
+        backgroundScope.launch { room.events.collect { } }
+        room.hostLost(AT)
+        assertIs<SeamState.Torn>(view.state.value)
+    }
+
+    /** Torn is terminal: a later leave does not overwrite the reason a transport tear already published. */
+    @Test
+    fun `a leave after tearSeam keeps the first reason`() = runTest {
+        val room = FakeRoom()
+        val view = room.channel("c")
+        val tear = CloseReason.Error(IllegalStateException("transport"))
+        room.tearSeam(tear)
+        room.leave()
+        assertEquals(SeamState.Torn(tear), view.state.value)
     }
 
     @Test
