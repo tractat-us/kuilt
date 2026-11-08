@@ -481,9 +481,9 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
 ## Testing a room host
 
 **Intent:** you are writing your own `RoomHost`, or wrapping a shipped one, and want to know it hands rooms to `onRoom` and takes them back the way the shipped hosts do. Don't hand-roll a test per host for "the room is left when the scope is cancelled".
-**Primitive:** subclass `PerConnectionRoomHostConformanceSuite` (`:kuilt-conformance`) for a host that opens one room per accepted connection, or `SingleRoomHostConformanceSuite` for a host that opens one room and hands it out once. Both are arms of the sealed `RoomHostConformanceSuite`, so you pick the arm your host is and get only the cases that apply to it.
+**Primitive:** subclass `PerConnectionRoomHostConformanceSuite` (`:kuilt-conformance`) for a host that opens one room per accepted connection, or `SingleRoomHostConformanceSuite` for a host that opens one room and hands it out once. Both are the only arms of `RoomHostConformanceSuite`, so you pick the arm your host is and get only the cases that apply to it.
 
-What it pins, for both arms: cancelling the scope that runs `start()` ends every handler still running and leaves every room. A per-connection host leaves a room once its handler returns or fails, and goes on accepting. A single-room host's room stays live after its handler returns, and a handler failure fails `start()`. What a tear does to a handler that is still running is not pinned here: #3129 records why that is not settled.
+What it pins, for both arms: cancelling the scope that runs `start()` ends every handler still running and leaves every room. A per-connection host leaves a room once its handler returns or fails, and goes on accepting. A single-room host's room stays live after its handler returns, and a handler failure fails `start()`. What a tear does to a handler that is still running is not pinned by these cases.
 
 A room counts as left when its channel views read `Torn`. Your `connect` has to keep the client connected for the whole case and must never redial; `SeamRoomFactory.adopt(seam, SessionRole.Joiner)` builds a client that does neither.
 

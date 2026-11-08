@@ -16,10 +16,14 @@ import kotlin.time.Instant
 /**
  * [KtorRoomHost] satisfies [PerConnectionRoomHostConformanceSuite].
  *
- * Through its loom-taking constructor over [PerConnectionLoom], in virtual time, rather than over a
- * WebSocket. What these cases pin is the accept loop's handling of each room and handler, which is
- * the same code whichever loom feeds it. Over Ktor's test engine the same cases would also need a
- * client that never redials after its host leaves, and a real-time clock for every wait.
+ * Through its loom-taking constructor over [PerConnectionLoom], on the test scheduler, rather than
+ * over a WebSocket. What these cases pin is the accept loop's handling of each room and handler,
+ * which is the same code whichever loom feeds it. Over Ktor's test engine the same cases would also
+ * need a client that never redials after its host leaves, and a real-time clock for every wait.
+ *
+ * The scheduler is virtual but the host's rooms are not: `KtorRoomHost` builds them with the system
+ * clock and the default heartbeat. No case here reads either. A case that waits on a partition would
+ * need both threaded through the internal constructor first.
  */
 class KtorRoomHostConformanceTest : PerConnectionRoomHostConformanceSuite() {
     override fun newHarness(scope: CoroutineScope): HostHarness {
@@ -38,6 +42,10 @@ class KtorRoomHostConformanceTest : PerConnectionRoomHostConformanceSuite() {
      * Each connection gets its own mesh because one [InMemoryLoom] is one flat room, so two
      * connections on it would join each other. Hosting is the only weave it answers; a client end
      * comes from [connect], so nothing can redial through it.
+     *
+     * [connect] hands the host its seam before the accept loop has built a room on it, so the
+     * client's one Hello can arrive first. That is safe only because an [InMemoryLoom] seam buffers
+     * what arrives before anything collects it. A loom that dropped those frames would admit nobody.
      */
     private class PerConnectionLoom : Loom {
         private val accepted = Channel<Seam>(Channel.UNLIMITED)

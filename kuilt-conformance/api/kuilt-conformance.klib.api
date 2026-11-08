@@ -1284,6 +1284,28 @@ abstract class us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite 
     final fun rejectedConnectionIsStructurallyExcluded(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite.rejectedConnectionIsStructurallyExcluded|rejectedConnectionIsStructurallyExcluded(){}[0]
 }
 
+abstract class us.tractat.kuilt.conformance/RoomHostConformanceSuite { // us.tractat.kuilt.conformance/RoomHostConformanceSuite|null[0]
+    open val awaitBudget // us.tractat.kuilt.conformance/RoomHostConformanceSuite.awaitBudget|{}awaitBudget[0]
+        open fun <get-awaitBudget>(): kotlin.time/Duration // us.tractat.kuilt.conformance/RoomHostConformanceSuite.awaitBudget.<get-awaitBudget>|<get-awaitBudget>(){}[0]
+
+    abstract fun newHarness(kotlinx.coroutines/CoroutineScope): us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness // us.tractat.kuilt.conformance/RoomHostConformanceSuite.newHarness|newHarness(kotlinx.coroutines.CoroutineScope){}[0]
+
+    final class HostHarness { // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness|null[0]
+        constructor <init>(us.tractat.kuilt.session/RoomHost, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.session/Room>) // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.<init>|<init>(us.tractat.kuilt.session.RoomHost;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.session.Room>){}[0]
+
+        final val connect // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.connect|{}connect[0]
+            final fun <get-connect>(): kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.session/Room> // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.connect.<get-connect>|<get-connect>(){}[0]
+        final val host // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.host|{}host[0]
+            final fun <get-host>(): us.tractat.kuilt.session/RoomHost // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.host.<get-host>|<get-host>(){}[0]
+    }
+
+    // Targets: [apple]
+    final fun scopeCancelEndsAll() // us.tractat.kuilt.conformance/RoomHostConformanceSuite.scopeCancelEndsAll|scopeCancelEndsAll(){}[0]
+
+    // Targets: [wasmJs]
+    final fun scopeCancelEndsAll(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomHostConformanceSuite.scopeCancelEndsAll|scopeCancelEndsAll(){}[0]
+}
+
 abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat.kuilt.conformance/SeamConformanceSuite|null[0]
     constructor <init>() // us.tractat.kuilt.conformance/SeamConformanceSuite.<init>|<init>(){}[0]
 
@@ -1918,28 +1940,6 @@ final class us.tractat.kuilt.conformance/SeamCapabilities { // us.tractat.kuilt.
         final val FULL // us.tractat.kuilt.conformance/SeamCapabilities.Companion.FULL|{}FULL[0]
             final fun <get-FULL>(): us.tractat.kuilt.conformance/SeamCapabilities // us.tractat.kuilt.conformance/SeamCapabilities.Companion.FULL.<get-FULL>|<get-FULL>(){}[0]
     }
-}
-
-sealed class us.tractat.kuilt.conformance/RoomHostConformanceSuite { // us.tractat.kuilt.conformance/RoomHostConformanceSuite|null[0]
-    open val awaitBudget // us.tractat.kuilt.conformance/RoomHostConformanceSuite.awaitBudget|{}awaitBudget[0]
-        open fun <get-awaitBudget>(): kotlin.time/Duration // us.tractat.kuilt.conformance/RoomHostConformanceSuite.awaitBudget.<get-awaitBudget>|<get-awaitBudget>(){}[0]
-
-    abstract fun newHarness(kotlinx.coroutines/CoroutineScope): us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness // us.tractat.kuilt.conformance/RoomHostConformanceSuite.newHarness|newHarness(kotlinx.coroutines.CoroutineScope){}[0]
-
-    final class HostHarness { // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness|null[0]
-        constructor <init>(us.tractat.kuilt.session/RoomHost, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.session/Room>) // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.<init>|<init>(us.tractat.kuilt.session.RoomHost;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.session.Room>){}[0]
-
-        final val connect // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.connect|{}connect[0]
-            final fun <get-connect>(): kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.session/Room> // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.connect.<get-connect>|<get-connect>(){}[0]
-        final val host // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.host|{}host[0]
-            final fun <get-host>(): us.tractat.kuilt.session/RoomHost // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.host.<get-host>|<get-host>(){}[0]
-    }
-
-    // Targets: [apple]
-    final fun scopeCancelEndsAll() // us.tractat.kuilt.conformance/RoomHostConformanceSuite.scopeCancelEndsAll|scopeCancelEndsAll(){}[0]
-
-    // Targets: [wasmJs]
-    final fun scopeCancelEndsAll(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomHostConformanceSuite.scopeCancelEndsAll|scopeCancelEndsAll(){}[0]
 }
 
 final object us.tractat.kuilt.conformance/CapabilityGaps { // us.tractat.kuilt.conformance/CapabilityGaps|null[0]

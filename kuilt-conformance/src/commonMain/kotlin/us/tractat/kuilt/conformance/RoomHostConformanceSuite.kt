@@ -6,6 +6,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -33,7 +35,7 @@ import kotlin.time.Duration.Companion.seconds
  * `onRoom` handler when the handler returns, when it fails, and when the host's scope is cancelled.
  *
  * A host hands each room it opens to `onRoom`, and how many rooms that is splits hosts in two. So
- * this suite is a sealed pair rather than one class with a cardinality flag. Subclass the one your
+ * this suite is a closed pair rather than one class with a cardinality flag. Subclass the one your
  * host is:
  *  - [PerConnectionRoomHostConformanceSuite] for a host that opens one room per accepted connection
  *    and keeps accepting, like `KtorRoomHost`;
@@ -47,15 +49,19 @@ import kotlin.time.Duration.Companion.seconds
  * [RoomHost.start]. Being the type is what makes "this case does not apply to my host" impossible to
  * write.
  *
+ * The pair is closed by an `internal` constructor rather than `sealed`: a sealed class's constructor
+ * is protected, and the wasmJs test runner refuses to register a test class without a public or
+ * internal one, which reds every inherited case there before it runs.
+ *
  * **What this suite does not pin.** Whether a handler that is still running is ended when its room's
- * connection tears, or when its last member leaves. #3129 records why that is not settled, and no
- * case here depends on the answer. Every case holds the room's connection open for its whole length.
+ * connection tears, or when its last member leaves. That is not settled, and no case here depends on
+ * the answer (#3129). Every case holds the room's connection open for its whole length.
  *
  * ## How a room is observed to have left
  *
  * Through the room's own public signal: a room that has left reads [SeamState.Torn] on its channel
- * views, which `RoomConformanceSuite.channelStateTornAfterLeave` makes an obligation of every room.
- * That reading is a claim about the *host's* leave only because nothing else in a case can tear the
+ * views. `SeamRoom`, which every shipped host builds its rooms with, does so because its `leave` ends
+ * by closing its seam, which every channel view's state forwards. That reading is a claim about the *host's* leave only because nothing else in a case can tear the
  * room: the client stays connected until the case's cleanup. A harness whose transport tears the
  * host's side for some other reason would make the leave cases green without a leave, so
  * [HostHarness.connect] states what a connection has to promise.
@@ -68,11 +74,12 @@ import kotlin.time.Duration.Companion.seconds
  * no case may wait on a signal that simply never comes. `advanceUntilIdle` is never used: a room's
  * heartbeat re-arms forever, so it would never return.
  *
- * Every shipped host runs here under virtual time, `KtorRoomHost` included, through its loom-taking
- * constructor over an in-memory per-connection loom. Nothing these cases assert needs a real socket.
+ * Every shipped host runs here on the test scheduler, `KtorRoomHost` included, through its
+ * loom-taking constructor over an in-memory per-connection loom. Nothing these cases assert needs a
+ * real socket, and nothing reads a room's clock.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-public sealed class RoomHostConformanceSuite {
+public abstract class RoomHostConformanceSuite internal constructor() {
 
     /**
      * What a case needs from the host under test.
@@ -158,7 +165,7 @@ public sealed class RoomHostConformanceSuite {
     /** A started host: its `start()` job, and the failure `start()` ended with, if any. */
     internal class Running(val job: Job, val failure: CompletableDeferred<Throwable>)
 
-    /** Every room the host handed to `onRoom`, in order, and how many times each handler threw. */
+    /** Every room the host handed to `onRoom`, in order, and the host's `start()` once launched. */
     internal class HandlerLog {
         private val _rooms = MutableStateFlow<List<Room>>(emptyList())
         val rooms: StateFlow<List<Room>> = _rooms
@@ -191,7 +198,15 @@ public sealed class RoomHostConformanceSuite {
             try {
                 body(h)
             } finally {
-                clients.value.forEach { it.leave() }
+                // One guard per client, so a leave that throws cannot skip the rest or replace the
+                // case's own failure. Nothing here is cancelled, so a cancellation is the leave's own.
+                clients.value.forEach { client ->
+                    try {
+                        client.leave()
+                    } catch (_: Throwable) {
+                        currentCoroutineContext().ensureActive()
+                    }
+                }
             }
         }
 
@@ -215,7 +230,7 @@ public sealed class RoomHostConformanceSuite {
 
     /** Connect one client and wait until it is admitted. A client that never is fails here. */
     internal suspend fun connectAdmitted(h: HostHarness, log: HandlerLog): Room {
-        val client = h.connect()
+        val client = awaitOrFail("connect() to return a client room", seen = { log.describe() }) { h.connect() }
         awaitOrFail("a client to be admitted", seen = { log.describe() }) {
             client.roster.first { it.isNotEmpty() }
         }
