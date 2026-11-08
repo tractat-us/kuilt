@@ -984,6 +984,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     final fun broadcastDeliversRoomFrameTaggedWithSender() // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]
 
     // Targets: [apple]
+    final fun channelStateTornAfterLeave() // us.tractat.kuilt.conformance/RoomConformanceSuite.channelStateTornAfterLeave|channelStateTornAfterLeave(){}[0]
+
+    // Targets: [apple]
     final fun hostFactoryAssignsHostRole() // us.tractat.kuilt.conformance/RoomConformanceSuite.hostFactoryAssignsHostRole|hostFactoryAssignsHostRole(){}[0]
 
     // Targets: [apple]
@@ -1096,6 +1099,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun broadcastDeliversRoomFrameTaggedWithSender(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.broadcastDeliversRoomFrameTaggedWithSender|broadcastDeliversRoomFrameTaggedWithSender(){}[0]
+
+    // Targets: [wasmJs]
+    final fun channelStateTornAfterLeave(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.channelStateTornAfterLeave|channelStateTornAfterLeave(){}[0]
 
     // Targets: [wasmJs]
     final fun hostFactoryAssignsHostRole(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.hostFactoryAssignsHostRole|hostFactoryAssignsHostRole(){}[0]

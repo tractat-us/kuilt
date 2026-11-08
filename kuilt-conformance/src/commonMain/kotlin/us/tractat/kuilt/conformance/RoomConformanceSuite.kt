@@ -1135,9 +1135,11 @@ public abstract class RoomConformanceSuite {
      *
      * Two views per room: one taken **before** the leave, which is the view a consumer already
      * holds, and one taken **after**, so a room cannot pass by tearing only the views it had already
-     * handed out. The joiner leaves first so that each side's `Torn` is caused by its own leave and
-     * not by the other side's. On the joiner's side, the host leaving first would end the room by
-     * host loss, which is a different path.
+     * handed out. The joiner leaves first so that its `Torn` is caused by its own leave: the host
+     * leaving first would end the joiner's room by host loss, a different path. On a per-connection
+     * fabric the joiner's leave also tears the host's seam, so the host room may already have left
+     * by itself and the host's `leave()` here is the idempotent second call. The obligation holds
+     * either way: after `leave()` returns, the views read `Torn`.
      *
      * The precondition is part of the obligation, not decoration: a room whose views read `Torn`
      * from the start would satisfy every later line.

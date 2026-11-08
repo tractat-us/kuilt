@@ -16,7 +16,7 @@ val frame = room.incoming.first()
 // frame.sender == PeerId("alice")
 ```
 
-Lifecycle helpers: `leave(reason)` (idempotent; silences subsequent sends).
+Lifecycle helpers: `leave(reason)` (idempotent; silences subsequent sends and tears every channel view), `tearSeam(reason)` (a transport tear; the first tear's reason stands).
 
 Roster helpers: `addMember(member)`, `removeMember(peerId, reason)`.
 

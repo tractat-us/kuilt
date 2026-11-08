@@ -436,6 +436,7 @@ public abstract class us/tractat/kuilt/conformance/RoomConformanceSuite {
 	public fun <init> ()V
 	public final fun aTokenMintedForAnotherRoomIsRefused ()V
 	public final fun broadcastDeliversRoomFrameTaggedWithSender ()V
+	public final fun channelStateTornAfterLeave ()V
 	public fun getAwaitBudget-FghU774 ()Lkotlin/time/Duration;
 	public final fun getFastHeartbeatConfig ()Lus/tractat/kuilt/liveness/HeartbeatConfig;
 	public fun getMemberInboxCapacity ()I

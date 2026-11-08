@@ -541,7 +541,8 @@ class FakeRoomTest {
         val view = room.channel("c")
         backgroundScope.launch { room.events.collect { } }
         room.hostLost(AT)
-        assertIs<SeamState.Torn>(view.state.value)
+        val state = assertIs<SeamState.Torn>(view.state.value)
+        assertIs<CloseReason.Error>(state.reason, "host loss leaves with an error, got ${state.reason}")
     }
 
     /** Torn is terminal: a later leave does not overwrite the reason a transport tear already published. */
