@@ -206,32 +206,37 @@ public sealed class RoomHostConformanceSuite {
     /** Connect one client and wait until it is admitted. A client that never is fails here. */
     internal suspend fun connectAdmitted(h: HostHarness, log: HandlerLog): Room {
         val client = h.connect()
-        awaitOrFail("a client to be admitted (handed out so far: ${log.rooms.value.size} room(s))") {
+        awaitOrFail("a client to be admitted", seen = { "rooms handed to onRoom: ${log.rooms.value.size}" }) {
             client.roster.first { it.isNotEmpty() }
         }
         return client
     }
 
     internal suspend fun HandlerLog.awaitRooms(count: Int, expected: String): List<Room> =
-        awaitOrFail("$expected — wanted $count, have ${rooms.value.size}") {
+        awaitOrFail("$expected — wanted $count", seen = { "rooms handed to onRoom: ${rooms.value.size}" }) {
             rooms.first { it.size >= count }
         }
 
     internal suspend fun Room.awaitMember(expected: String) {
-        awaitOrFail("$expected (roster ${roster.value.map { it.id.value }})") { roster.first { it.isNotEmpty() } }
+        awaitOrFail(expected, seen = { "roster ${roster.value.map { it.id.value }}" }) { roster.first { it.isNotEmpty() } }
     }
 
     internal suspend fun Room.awaitTorn(expected: String) {
         val view = channel(PROBE_CHANNEL)
-        awaitOrFail("$expected (last state ${view.state.value})") { view.state.first { it is SeamState.Torn } }
+        awaitOrFail(expected, seen = { "channel state ${view.state.value}" }) { view.state.first { it is SeamState.Torn } }
     }
 
     internal fun Room.isTorn(): Boolean = channel(PROBE_CHANNEL).state.value is SeamState.Torn
 
-    internal suspend fun <T> awaitOrFail(waitingFor: String, block: suspend () -> T): T =
+    /**
+     * Run [block] bounded by [awaitBudget]; on expiry fail naming [waitingFor] and what [seen] reads
+     * **at expiry**, not at the call, so the message describes the state that made the wait fail.
+     */
+    internal suspend fun <T> awaitOrFail(waitingFor: String, seen: () -> String = { "" }, block: suspend () -> T): T =
         withTimeoutOrNull(awaitBudget) { block() }
             ?: throw AssertionError(
-                "RoomHostConformanceSuite: waited $awaitBudget of VIRTUAL time for $waitingFor",
+                "RoomHostConformanceSuite: waited $awaitBudget of VIRTUAL time for $waitingFor" +
+                    seen().let { if (it.isEmpty()) "" else "; at expiry, $it" },
             )
 
     internal companion object {

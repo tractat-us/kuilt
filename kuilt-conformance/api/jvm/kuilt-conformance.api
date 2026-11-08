@@ -321,6 +321,12 @@ public final class us/tractat/kuilt/conformance/ObligationDeclaration$Proven : u
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract class us/tractat/kuilt/conformance/PerConnectionRoomHostConformanceSuite : us/tractat/kuilt/conformance/RoomHostConformanceSuite {
+	public fun <init> ()V
+	public final fun failingHandlerLeavesRoomAndLoopContinues ()V
+	public final fun returningHandlerLeavesRoom ()V
+}
+
 public abstract class us/tractat/kuilt/conformance/PrincipalAttestationConformanceSuite {
 	public fun <init> ()V
 	public final fun attestedPrincipalIsReportedForAdmittedPeer ()V
@@ -562,6 +568,18 @@ public final class us/tractat/kuilt/conformance/RoomFanoutIsolationConformanceSu
 	public final fun getServerLoom ()Lus/tractat/kuilt/core/Loom;
 }
 
+public abstract class us/tractat/kuilt/conformance/RoomHostConformanceSuite {
+	public fun getAwaitBudget-UwyO8pc ()J
+	public abstract fun newHarness (Lkotlinx/coroutines/CoroutineScope;)Lus/tractat/kuilt/conformance/RoomHostConformanceSuite$HostHarness;
+	public final fun scopeCancelEndsAll ()V
+}
+
+public final class us/tractat/kuilt/conformance/RoomHostConformanceSuite$HostHarness {
+	public fun <init> (Lus/tractat/kuilt/session/RoomHost;Lkotlin/jvm/functions/Function1;)V
+	public final fun getConnect ()Lkotlin/jvm/functions/Function1;
+	public final fun getHost ()Lus/tractat/kuilt/session/RoomHost;
+}
+
 public final class us/tractat/kuilt/conformance/SampleEvidenceReport {
 	public fun <init> (II)V
 	public final fun getDistinctSamples ()I
@@ -672,6 +690,12 @@ public abstract class us/tractat/kuilt/conformance/SeamConformanceSuite {
 	public final fun stateStaysTornAfterClose ()V
 	public final fun survivorStopsAdvertisingADepartedPeer ()V
 	public final fun wovenSeamCapabilityIsHonest ()V
+}
+
+public abstract class us/tractat/kuilt/conformance/SingleRoomHostConformanceSuite : us/tractat/kuilt/conformance/RoomHostConformanceSuite {
+	public fun <init> ()V
+	public final fun failingHandlerFailsStart ()V
+	public final fun returningHandlerKeepsRoomLive ()V
 }
 
 public abstract class us/tractat/kuilt/conformance/WireCodecConformanceSuite {
