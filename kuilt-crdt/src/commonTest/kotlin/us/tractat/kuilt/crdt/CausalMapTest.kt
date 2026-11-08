@@ -83,7 +83,7 @@ class CausalMapTest {
         )
     }
 
-    /** Iain's ruling on #3126: a remove resets the subtree; only writes it had not seen survive. */
+    /** A remove resets the subtree: only writes the remover had not seen survive. */
     @Test
     fun aRemoveResetsTheSubtreeAndKeepsOnlyUnseenWrites() {
         val byB = pollByA.then { it.write(b, "poll", "votes", 4) }
@@ -341,7 +341,7 @@ class CausalMapTest {
         )
     }
 
-    /** Two dots in one change — a presence dot and a value dot, the shape sub-issue (d) needs. */
+    /** Two dots in one change: a presence dot and a value dot under one key. */
     @Test
     fun aChangeMayMintSeveralDots() {
         val delta = CausalMap.empty<String, DotMap<String, DotFun<Int>>>().apply(a, "k", DotMap()) { slot ->

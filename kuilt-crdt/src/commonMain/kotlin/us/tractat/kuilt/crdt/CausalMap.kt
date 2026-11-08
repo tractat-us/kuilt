@@ -287,8 +287,12 @@ private inline fun requireOneOccurrencePerDot(store: DotStore<*>, message: () ->
 
 /**
  * [CausalMap]'s serializer: the map's `Causal<DotMap<K, V>>` exactly as [Causal]'s own serializer
- * writes it, so it inherits the dot family's canonical order. Decoding refuses a key whose store is
- * bottom, which no [CausalMap] path produces.
+ * writes it, so it inherits the dot family's canonical order.
+ *
+ * Decoding throws [IllegalArgumentException] for a state no [CausalMap] path produces: a stored dot
+ * the context has not witnessed, a dot at two positions, or a bottom store at any depth. The last
+ * check compares the decoded store with itself minus its bottoms, so it needs `V`'s `equals` to be
+ * structural, as [CausalMap.apply]'s checks do.
  */
 @OptIn(ExperimentalSerializationApi::class)
 public class CausalMapSerializer<K, V : DotStore<V>>(
