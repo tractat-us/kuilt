@@ -118,6 +118,35 @@ class DrainingGenerationReconnectTest {
             assertIs<MembershipEvent.Resumed>(resumed.await())
         }
 
+    /**
+     * The other interleaving (#3151): the dying generation tears just **after** the re-weave hands it
+     * back, before the machine has seen it `Woven`. Nothing but a weave re-points the handle, so a
+     * wait for `Woven` alone would sit out the whole reconnect window. The fireworks-compose CI run
+     * that read `dials=1` 45 s after the cut fits this shape.
+     */
+    @Test
+    fun `a generation that tears while the re-weave waits for Woven is dialled again at once`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val h = harness(releaseTornOnFirstReweave = true)
+
+            h.hostRoom.roster.first { it.size == 1 }
+            h.joinerRoom.roster.first { it.isNotEmpty() }
+            assertNotNull(h.joinerRoom.resumeToken)
+            assertEquals(1, h.dials(), "precondition: one base dial to join")
+
+            val resumed = async {
+                h.joinerRoom.events.first { it is MembershipEvent.Resumed || it is MembershipEvent.HostLost }
+            }
+
+            h.cutFirstLink()
+            runCurrent()
+
+            assertEquals(2, h.reweaves(), "the stale generation's re-weave, then one that dials (re-weaves: ${h.reweaves()})")
+            assertEquals(2, h.dials(), "the joiner must dial again as soon as its generation tears")
+            assertTrue(resumed.isCompleted, "the resume over the fresh generation must have landed")
+            assertIs<MembershipEvent.Resumed>(resumed.await())
+        }
+
     // ── Harness ──────────────────────────────────────────────────────────────
 
     private class Harness(
@@ -133,8 +162,12 @@ class DrainingGenerationReconnectTest {
      * A host room over a [MuxServerLoom] hub and a joiner over a [MuxClientLoom] whose base is a
      * [peerMesh] spoke — the topology `KtorMeshClientLoom` produces. Only the **first** base is wrapped
      * in a [DrainingSeam]; every later dial is a plain spoke.
+     *
+     * @param releaseTornOnFirstReweave release the draining base's `Torn` the moment the first
+     *   re-weave hands that base back, so the handle tears after the machine has its seam but before
+     *   it has seen `Woven`.
      */
-    private suspend fun TestScope.harness(): Harness {
+    private suspend fun TestScope.harness(releaseTornOnFirstReweave: Boolean = false): Harness {
         val dispatcher = coroutineContext[ContinuationInterceptor]
         checkNotNull(dispatcher) { "the test dispatcher must be present in the test coroutine context" }
         val source = InMemoryConnectionSource()
@@ -184,7 +217,9 @@ class DrainingGenerationReconnectTest {
             roomId = null,
             reweave = {
                 reweaves++
-                muxClient.join(tag)
+                muxClient.join(tag).also {
+                    if (releaseTornOnFirstReweave && reweaves == 1) checkNotNull(first).releaseTorn()
+                }
             },
         ).also { it.start() }
 
