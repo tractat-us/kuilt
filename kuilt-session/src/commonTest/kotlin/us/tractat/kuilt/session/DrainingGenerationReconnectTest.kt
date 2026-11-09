@@ -68,6 +68,11 @@ import kotlin.time.Instant
  */
 class DrainingGenerationReconnectTest {
 
+    private companion object {
+        /** How many re-weaves have their fresh generation killed in the tight-loop test. */
+        const val KILLED_GENERATIONS = 8
+    }
+
     private val config = HeartbeatConfig(
         interval = 100.milliseconds,
         timeout = 200.milliseconds,
@@ -147,6 +152,46 @@ class DrainingGenerationReconnectTest {
             assertIs<MembershipEvent.Resumed>(resumed.await())
         }
 
+    /**
+     * The immediate retry is bounded: a base that dies on **every** dial is retried at most once at
+     * once per tear, then at the normal interval, rather than in a tight loop that redials as fast as
+     * the network allows for the whole reconnect window.
+     *
+     * Every fresh generation through re-weave [KILLED_GENERATIONS] has its link cut the moment it is
+     * handed back. An unbounded retry would run all of them in zero virtual time; the bounded one
+     * re-weaves twice, the stale generation and one immediate dial, and then waits an interval.
+     */
+    @Test
+    fun `a base that dies on every dial is retried at the interval and not in a tight loop`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val h = harness(releaseTornOnFirstReweave = true, killFreshGenerationsThrough = KILLED_GENERATIONS)
+
+            h.hostRoom.roster.first { it.size == 1 }
+            h.joinerRoom.roster.first { it.isNotEmpty() }
+            assertNotNull(h.joinerRoom.resumeToken)
+
+            val resumed = async {
+                h.joinerRoom.events.first { it is MembershipEvent.Resumed || it is MembershipEvent.HostLost }
+            }
+
+            h.cutFirstLink()
+            runCurrent()
+
+            assertEquals(
+                2,
+                h.reweaves(),
+                "with no virtual time passed, only the stale generation and one immediate dial may have run",
+            )
+            assertFalse(resumed.isCompleted, "every generation so far has died")
+
+            // At two re-weaves per interval the last killed generation is passed well inside the
+            // window, and the next dial survives.
+            repeat(KILLED_GENERATIONS) { advanceTimeBy(config.interval.inWholeMilliseconds) }
+            runCurrent()
+            assertTrue(h.reweaves() > KILLED_GENERATIONS, "the loop must carry on past the killed generations")
+            assertIs<MembershipEvent.Resumed>(resumed.await())
+        }
+
     // ── Harness ──────────────────────────────────────────────────────────────
 
     private class Harness(
@@ -166,8 +211,14 @@ class DrainingGenerationReconnectTest {
      * @param releaseTornOnFirstReweave release the draining base's `Torn` the moment the first
      *   re-weave hands that base back, so the handle tears after the machine has its seam but before
      *   it has seen `Woven`.
+     * @param killFreshGenerationsThrough cut the link of every base a re-weave dials, up to and
+     *   including this re-weave number, so each fresh generation dies as soon as it is handed back.
+     *   Zero (the default) leaves every fresh generation alone.
      */
-    private suspend fun TestScope.harness(releaseTornOnFirstReweave: Boolean = false): Harness {
+    private suspend fun TestScope.harness(
+        releaseTornOnFirstReweave: Boolean = false,
+        killFreshGenerationsThrough: Int = 0,
+    ): Harness {
         val dispatcher = coroutineContext[ContinuationInterceptor]
         checkNotNull(dispatcher) { "the test dispatcher must be present in the test coroutine context" }
         val source = InMemoryConnectionSource()
@@ -193,11 +244,13 @@ class DrainingGenerationReconnectTest {
         var dials = 0
         var first: DrainingSeam? = null
         var firstLink: Pair<Connection, Connection>? = null
+        var latestLink: Pair<Connection, Connection>? = null
         val base = object : Loom {
             override suspend fun weave(rendezvous: Rendezvous): Seam {
                 dials++
                 val (serverConn, clientConn) = connectionPair()
                 source.offer(serverConn)
+                latestLink = serverConn to clientConn
                 val spoke = peerMesh(clientId, listOf(clientConn), dispatcher, Random(dials.toLong()))
                 if (dials > 1) return spoke
                 firstLink = serverConn to clientConn
@@ -217,8 +270,14 @@ class DrainingGenerationReconnectTest {
             roomId = null,
             reweave = {
                 reweaves++
+                val dialsBefore = dials
                 muxClient.join(tag).also {
                     if (releaseTornOnFirstReweave && reweaves == 1) checkNotNull(first).releaseTorn()
+                    if (dials > dialsBefore && reweaves <= killFreshGenerationsThrough) {
+                        val (serverConn, clientConn) = checkNotNull(latestLink)
+                        serverConn.close()
+                        clientConn.close()
+                    }
                 }
             },
         ).also { it.start() }
