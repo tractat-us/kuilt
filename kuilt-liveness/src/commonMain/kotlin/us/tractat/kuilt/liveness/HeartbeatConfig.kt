@@ -33,7 +33,8 @@ public data class HeartbeatConfig(
     /**
      * Per-call deadline for a single `Room.resume(token)` awaiting the host's
      * `ResumeAck`/`Reject`. When it elapses with no verdict the call returns
-     * `ResumeResult.TimedOut` instead of parking indefinitely.
+     * `ResumeResult.TimedOut` instead of parking indefinitely. A call whose seam tears first
+     * returns `TimedOut` at once, without waiting this out: no reply can come back over it.
      *
      * Defaults to [timeout] (15 s): a resume is a single round-trip to the host, so the
      * same single-RPC deadline that governs heartbeat responsiveness fits it — and it is

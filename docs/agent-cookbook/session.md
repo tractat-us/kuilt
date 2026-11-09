@@ -69,7 +69,8 @@ public suspend fun resumeAfterDropSample(room: Room): Boolean {
         // window and a token for another room are terminal, a window the host has not opened
         // yet is not. See classifyRejectCodeSample.
         is ResumeResult.Refused -> outcome.code.retryable
-        ResumeResult.TimedOut -> true // no reply within resumeTimeout — the host is unreachable now
+        // No reply within resumeTimeout, or the seam tore under the Resume: the host is unreachable now.
+        ResumeResult.TimedOut -> true
         // We never asked: this room is already over (left, or the host was lost), or the frame
         // could not be sent. Re-join fresh.
         ResumeResult.WindowClosed -> false

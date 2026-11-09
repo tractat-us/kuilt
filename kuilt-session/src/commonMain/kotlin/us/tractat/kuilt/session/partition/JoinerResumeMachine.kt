@@ -479,8 +479,8 @@ internal class JoinerResumeMachine(
             // The last refusal this loop has already reported, by its per-episode index. [refusal] is
             // sticky, so without this a single reject would be re-reported on every later iteration.
             var reportedRefusals = 0
-            // #3151: did the previous attempt end on its generation tearing, and so skip the retry
-            // interval? Bounds the immediate retry to one per consecutive tear (see below).
+            // #3151: did the previous attempt skip the retry interval because its generation tore?
+            // Never two immediate retries in a row (see below); every interval the loop waits re-arms it.
             var retriedAtOnce = false
             while (!ok) {
                 // Bail the instant the room goes terminal (e.g. leave() mid-window), even if
@@ -490,7 +490,9 @@ internal class JoinerResumeMachine(
                 if (host.isTerminal()) return@withTimeoutOrNull false
                 val reweaved = runCatchingCancellable { reweaveFn() }
                 if (reweaved.isFailure) {
-                    // Transient re-weave failure (base not back yet) — retry until the deadline.
+                    // Transient re-weave failure (base not back yet) — retry until the deadline. The
+                    // interval waited here re-arms the #3151 immediate retry, as the one below does.
+                    retriedAtOnce = false
                     delay(heartbeatConfig.interval)
                     continue
                 }
@@ -634,8 +636,10 @@ internal class JoinerResumeMachine(
                     // #3151: the generation this attempt resumed onto tore under it, so no reply can
                     // come and the next weave will dial a fresh base. Waiting an interval first only
                     // spends the window: the observed cost was resumeTimeout + interval (20 s at the
-                    // defaults) for an in-process socket. At most once per consecutive tear, so a base
-                    // that dies on every dial is retried at the normal cadence, not in a tight loop.
+                    // defaults) for an in-process socket. Never twice in a row: an immediate retry is
+                    // always followed by an interval wait, so a base that dies on every dial alternates
+                    // an immediate retry with an interval-spaced one — at most two dials per interval,
+                    // never a tight loop.
                     if (seam.state.value is SeamState.Torn && !retriedAtOnce) {
                         retriedAtOnce = true
                         logger.info { "resume.generation-torn host=$hostId roomId=${token.roomId.value} → re-weaving at once" }

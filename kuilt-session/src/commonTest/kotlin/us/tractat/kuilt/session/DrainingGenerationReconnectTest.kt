@@ -110,6 +110,10 @@ class DrainingGenerationReconnectTest {
             assertTrue(h.reweaves() >= 1, "the roster drop must have started a re-weave (re-weaves: ${h.reweaves()})")
             assertEquals(1, h.dials(), "the first re-weave must have reused the draining generation")
             assertFalse(resumed.isCompleted, "nothing can have resumed over the dying generation")
+            assertTrue(
+                h.firstBase().deadBroadcasts >= 1,
+                "the rig fired: the Resume went out on the dying generation while its Torn was held",
+            )
 
             // The dying generation now tears.
             h.firstBase().releaseTorn()
@@ -146,6 +150,14 @@ class DrainingGenerationReconnectTest {
             h.cutFirstLink()
             runCurrent()
 
+            // The rig fired: the tear landed before the wait for Woven saw a value, so no Resume went
+            // out on the dying generation. Were it to land during the flight instead, that is the
+            // first test's interleaving, and this test would no longer pin `first { Woven }`.
+            assertEquals(
+                0,
+                h.firstBase().deadBroadcasts,
+                "the tear must land before the machine sees the dying generation Woven",
+            )
             assertEquals(2, h.reweaves(), "the stale generation's re-weave, then one that dials (re-weaves: ${h.reweaves()})")
             assertEquals(2, h.dials(), "the joiner must dial again as soon as its generation tears")
             assertTrue(resumed.isCompleted, "the resume over the fresh generation must have landed")
@@ -153,16 +165,16 @@ class DrainingGenerationReconnectTest {
         }
 
     /**
-     * The immediate retry is bounded: a base that dies on **every** dial is retried at most once at
-     * once per tear, then at the normal interval, rather than in a tight loop that redials as fast as
-     * the network allows for the whole reconnect window.
+     * The immediate retry is bounded: never two in a row. A base that dies on **every** dial
+     * alternates an immediate retry with one an interval later — at most two dials per interval —
+     * rather than redialling as fast as the network allows for the whole reconnect window.
      *
      * Every fresh generation through re-weave [KILLED_GENERATIONS] has its link cut the moment it is
      * handed back. An unbounded retry would run all of them in zero virtual time; the bounded one
      * re-weaves twice, the stale generation and one immediate dial, and then waits an interval.
      */
     @Test
-    fun `a base that dies on every dial is retried at the interval and not in a tight loop`() =
+    fun `a base that dies on every dial alternates an immediate retry with an interval wait`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val h = harness(releaseTornOnFirstReweave = true, killFreshGenerationsThrough = KILLED_GENERATIONS)
 
@@ -341,8 +353,20 @@ private class DrainingSeam(
     override val state: StateFlow<SeamState> = _state.asStateFlow()
     override val incoming: Flow<Swatch> = delegate.incoming.onCompletion { released.await() }
 
+    /**
+     * Broadcasts that reached this base after its delegate had torn, whether or not the `Torn` was
+     * still held: frames the joiner sent into the dead generation. The receipt that tells the two
+     * interleavings apart — the `Resume` goes out here only when the machine saw this generation
+     * `Woven` before it tore.
+     */
+    var deadBroadcasts: Int = 0
+        private set
+
     override suspend fun broadcast(payload: ByteArray) {
-        if (delegate.state.value is SeamState.Torn) return
+        if (delegate.state.value is SeamState.Torn) {
+            deadBroadcasts++
+            return
+        }
         delegate.broadcast(payload)
     }
 

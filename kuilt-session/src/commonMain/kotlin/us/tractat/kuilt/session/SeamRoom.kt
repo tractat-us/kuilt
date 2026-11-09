@@ -3837,7 +3837,8 @@ internal class SeamRoom(
      * - Host replies [AdmitMessage.Reject] → [ResumeResult.Refused], carrying the host's
      *   [RejectCode] so the caller can tell an elapsed window from an invalid token from a window
      *   the host has not opened yet (#2364).
-     * - Host says nothing within `HeartbeatConfig.resumeTimeout` → [ResumeResult.TimedOut].
+     * - Host says nothing within `HeartbeatConfig.resumeTimeout`, or the seam the `Resume` went out
+     *   on tears first so that no reply can arrive → [ResumeResult.TimedOut].
      *
      * **Not valid** after [MembershipEvent.HostLost] — the room is terminal at that point and this
      * returns [ResumeResult.WindowClosed] without asking the host. Callers should guard with
