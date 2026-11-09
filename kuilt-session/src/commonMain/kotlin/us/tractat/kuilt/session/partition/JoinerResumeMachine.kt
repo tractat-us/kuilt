@@ -476,6 +476,9 @@ internal class JoinerResumeMachine(
             // The last refusal this loop has already reported, by its per-episode index. [refusal] is
             // sticky, so without this a single reject would be re-reported on every later iteration.
             var reportedRefusals = 0
+            // #3151: did the previous attempt end on its generation tearing, and so skip the retry
+            // interval? Bounds the immediate retry to one per consecutive tear (see below).
+            var retriedAtOnce = false
             while (!ok) {
                 // Bail the instant the room goes terminal (e.g. leave() mid-window), even if
                 // the cancellation of this job hasn't propagated yet — so we never re-weave
@@ -512,10 +515,17 @@ internal class JoinerResumeMachine(
                     failureReason = FailureReason.Unrecoverable
                     return@withTimeoutOrNull false
                 }
+                // #3151: wait for Woven OR Torn. A resumable loom can hand back a generation that is
+                // draining but not yet Torn, and when that generation then tears nothing re-points the
+                // handle, since only a weave does. `first { Woven }` alone would then wait out the whole
+                // window. A Torn here skips the resume; the tear check below re-weaves at once.
                 val result = runCatchingCancellable {
-                    seam.state.first { it is SeamState.Woven }
-                    host.restartIncomingCollect()
-                    resume(token)
+                    if (seam.state.first { it is SeamState.Woven || it is SeamState.Torn } is SeamState.Torn) {
+                        null
+                    } else {
+                        host.restartIncomingCollect()
+                        resume(token)
+                    }
                 }.getOrNull()
                 if (result is ResumeResult.Success) {
                     // #1618 evidence capture: the resume landed — this tear recovered without
@@ -617,6 +627,18 @@ internal class JoinerResumeMachine(
                         ok = true
                         continue
                     }
+
+                    // #3151: the generation this attempt resumed onto tore under it, so no reply can
+                    // come and the next weave will dial a fresh base. Waiting an interval first only
+                    // spends the window: the observed cost was resumeTimeout + interval (20 s at the
+                    // defaults) for an in-process socket. At most once per consecutive tear, so a base
+                    // that dies on every dial is retried at the normal cadence, not in a tight loop.
+                    if (seam.state.value is SeamState.Torn && !retriedAtOnce) {
+                        retriedAtOnce = true
+                        logger.info { "resume.generation-torn host=$hostId roomId=${token.roomId.value} → re-weaving at once" }
+                        continue
+                    }
+                    retriedAtOnce = false
                     delay(heartbeatConfig.interval)
                 }
             }
