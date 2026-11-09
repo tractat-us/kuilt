@@ -290,7 +290,8 @@ public sealed interface ResumeResult {
 
     /**
      * No verdict — neither `ResumeAck` nor `Reject` — arrived within
-     * [HeartbeatConfig.resumeTimeout][us.tractat.kuilt.liveness.HeartbeatConfig.resumeTimeout].
+     * [HeartbeatConfig.resumeTimeout][us.tractat.kuilt.liveness.HeartbeatConfig.resumeTimeout],
+     * or the seam the `Resume` went out on tore first, so that no verdict could arrive (#3151).
      *
      * The host is unreachable *right now*: it is gone, the link is black-holed, or the reply
      * was lost. **Not** a refusal — deliberately distinct from [WindowClosed], which conflates
