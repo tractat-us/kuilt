@@ -35,6 +35,7 @@ import us.tractat.kuilt.core.fabric.peerMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
@@ -153,14 +154,18 @@ class DrainingGenerationReconnectTest {
             // The rig fired: the tear landed before the wait for Woven saw a value, so no Resume went
             // out on the dying generation. Were it to land during the flight instead, that is the
             // first test's interleaving, and this test would no longer pin `first { Woven }`.
-            assertEquals(
-                0,
-                h.firstBase().deadBroadcasts,
-                "the tear must land before the machine sees the dying generation Woven",
+            assertAll(
+                {
+                    assertEquals(
+                        0,
+                        h.firstBase().deadBroadcasts,
+                        "the tear must land before the machine sees the dying generation Woven",
+                    )
+                },
+                { assertEquals(2, h.reweaves(), "the stale generation's re-weave, then one that dials (re-weaves: ${h.reweaves()})") },
+                { assertEquals(2, h.dials(), "the joiner must dial again as soon as its generation tears") },
+                { assertTrue(resumed.isCompleted, "the resume over the fresh generation must have landed") },
             )
-            assertEquals(2, h.reweaves(), "the stale generation's re-weave, then one that dials (re-weaves: ${h.reweaves()})")
-            assertEquals(2, h.dials(), "the joiner must dial again as soon as its generation tears")
-            assertTrue(resumed.isCompleted, "the resume over the fresh generation must have landed")
             assertIs<MembershipEvent.Resumed>(resumed.await())
         }
 
