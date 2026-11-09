@@ -7,11 +7,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -476,6 +479,9 @@ internal class JoinerResumeMachine(
             // The last refusal this loop has already reported, by its per-episode index. [refusal] is
             // sticky, so without this a single reject would be re-reported on every later iteration.
             var reportedRefusals = 0
+            // #3151: did the previous attempt skip the retry interval because its generation tore?
+            // Never two immediate retries in a row (see below); every interval the loop waits re-arms it.
+            var retriedAtOnce = false
             while (!ok) {
                 // Bail the instant the room goes terminal (e.g. leave() mid-window), even if
                 // the cancellation of this job hasn't propagated yet — so we never re-weave
@@ -484,7 +490,9 @@ internal class JoinerResumeMachine(
                 if (host.isTerminal()) return@withTimeoutOrNull false
                 val reweaved = runCatchingCancellable { reweaveFn() }
                 if (reweaved.isFailure) {
-                    // Transient re-weave failure (base not back yet) — retry until the deadline.
+                    // Transient re-weave failure (base not back yet) — retry until the deadline. The
+                    // interval waited here re-arms the #3151 immediate retry, as the one below does.
+                    retriedAtOnce = false
                     delay(heartbeatConfig.interval)
                     continue
                 }
@@ -512,10 +520,17 @@ internal class JoinerResumeMachine(
                     failureReason = FailureReason.Unrecoverable
                     return@withTimeoutOrNull false
                 }
+                // #3151: wait for Woven OR Torn. A resumable loom can hand back a generation that is
+                // draining but not yet Torn, and when that generation then tears nothing re-points the
+                // handle, since only a weave does. `first { Woven }` alone would then wait out the whole
+                // window. A Torn here skips the resume; the tear check below re-weaves at once.
                 val result = runCatchingCancellable {
-                    seam.state.first { it is SeamState.Woven }
-                    host.restartIncomingCollect()
-                    resume(token)
+                    if (seam.state.first { it is SeamState.Woven || it is SeamState.Torn } is SeamState.Torn) {
+                        null
+                    } else {
+                        host.restartIncomingCollect()
+                        resume(token)
+                    }
                 }.getOrNull()
                 if (result is ResumeResult.Success) {
                     // #1618 evidence capture: the resume landed — this tear recovered without
@@ -617,6 +632,20 @@ internal class JoinerResumeMachine(
                         ok = true
                         continue
                     }
+
+                    // #3151: the generation this attempt resumed onto tore under it, so no reply can
+                    // come and the next weave will dial a fresh base. Waiting an interval first only
+                    // spends the window: the observed cost was resumeTimeout + interval (20 s at the
+                    // defaults) for an in-process socket. Never twice in a row: an immediate retry is
+                    // always followed by an interval wait, so a base that dies on every dial alternates
+                    // an immediate retry with an interval-spaced one — at most two dials per interval,
+                    // never a tight loop.
+                    if (seam.state.value is SeamState.Torn && !retriedAtOnce) {
+                        retriedAtOnce = true
+                        logger.info { "resume.generation-torn host=$hostId roomId=${token.roomId.value} → re-weaving at once" }
+                        continue
+                    }
+                    retriedAtOnce = false
                     delay(heartbeatConfig.interval)
                 }
             }
@@ -725,9 +754,10 @@ internal class JoinerResumeMachine(
      * Await the shared flight [deferred] under the [HeartbeatConfig.resumeTimeout] deadline
      * (#1587). A host that never replies — gone, black-holed, or a lost reply — must not park
      * the caller forever. On expiry, resolve the flight as [ResumeResult.TimedOut] *for every
-     * caller of it* ([completeFlight] completes the shared deferred and clears the single-flight
-     * slot iff this flight still owns it) so the owner and every joined caller are released
-     * together and a subsequent [resume] starts a fresh flight.
+     * caller of it* ([completeFlight] clears the single-flight slot and completes the shared
+     * deferred iff this flight still owns it) so the owner and every joined caller are released
+     * together and a subsequent [resume] starts a fresh flight. A flight a reply took just before
+     * the deadline keeps that reply's verdict: the deadline then only awaits it.
      *
      * Both caller kinds route through here — the owner (after broadcasting) and a joined caller
      * (the `!ownsFlight` early return) — so neither can hang. A late-arriving ResumeAck/Reject
@@ -738,12 +768,52 @@ internal class JoinerResumeMachine(
      * Only [withTimeoutOrNull]'s own deadline yields null here; an *external* cancellation (e.g.
      * the auto-reconnect window elapsing around an internal [resume]) propagates through
      * unchanged, preserving cancellation discipline.
+     *
+     * **A flight whose seam tears settles at once (#3151).** The reply to a `Resume` can only come
+     * back over the generation it went out on, so once [seam] reads [SeamState.Torn] no verdict can
+     * arrive and waiting out the deadline only spends the reconnect window. The flight then settles
+     * as [ResumeResult.TimedOut] for every caller, exactly as the deadline would have settled it.
      */
     private suspend fun awaitFlightBounded(
         deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
     ): ResumeResult.JoinerOutcome =
-        withTimeoutOrNull(heartbeatConfig.resumeTimeout) { deferred.await() }
-            ?: ResumeResult.TimedOut.also { completeFlight(deferred, it) }
+        withTimeoutOrNull(heartbeatConfig.resumeTimeout) { awaitVerdictOrTear(deferred) }
+            ?: settleOrAwait(deferred, ResumeResult.TimedOut)
+
+    /**
+     * Settle [deferred] as [result] if it still holds the slot, then return whatever it finally
+     * holds: [result], or the verdict of whoever took it first ([completeFlight]).
+     */
+    private suspend fun settleOrAwait(
+        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
+        result: ResumeResult.JoinerOutcome,
+    ): ResumeResult.JoinerOutcome {
+        completeFlight(deferred, result)
+        return deferred.await()
+    }
+
+    /**
+     * The flight's verdict, or — if [seam] tears first — [ResumeResult.TimedOut] settled on the
+     * shared flight. Returns whatever the flight finally holds rather than `TimedOut` outright, so a
+     * verdict that raced the tear is the one reported.
+     *
+     * The verdict is the first `select` clause, so an already-settled flight (the send-failure path)
+     * wins over a seam that is also already torn.
+     */
+    private suspend fun awaitVerdictOrTear(
+        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
+    ): ResumeResult.JoinerOutcome = coroutineScope {
+        val tear = async { seam.state.first { it is SeamState.Torn } }
+        val verdict = select<ResumeResult.JoinerOutcome?> {
+            deferred.onAwait { it }
+            tear.onAwait { null }
+        }
+        tear.cancel()
+        verdict ?: run {
+            logger.info { "resume.flight-torn self=${seam.selfId.value} → settling the flight as TimedOut" }
+            settleOrAwait(deferred, ResumeResult.TimedOut)
+        }
+    }
 
     /**
      * Resolve a failed resume flight as [ResumeResult.WindowClosed] (the send-failure /
@@ -754,16 +824,25 @@ internal class JoinerResumeMachine(
         completeFlight(deferred, ResumeResult.WindowClosed)
 
     /**
-     * Complete the shared flight [deferred] with [result], clearing the single-flight slot
-     * only if this flight still owns it — a raced reply may already have taken it. Completion
-     * runs outside [lock]; it is a no-op on the deferred when a raced ResumeAck/Reject already
-     * completed it.
+     * Settle the shared flight [deferred] as [result] **only if it still holds the single-flight
+     * slot**, deciding that under [lock]; otherwise leave it alone.
+     *
+     * A flight that has left the slot was taken by whoever settles it: the room's ResumeAck handler
+     * ([takePendingFlight], which emits `Resumed` and then completes [ResumeResult.Success] outside
+     * the lock), [rejectFlight], or `leave()` ([takePendingFlight] again, completing
+     * [ResumeResult.WindowClosed]). Every one of them completes synchronously after taking, so a
+     * caller that finds the slot gone only has to await. Completing regardless — as this did before
+     * the #3155 review — let a tear or a deadline land between the ack's take and its completion and
+     * report `TimedOut` for a room that had already announced `Resumed`; the reconnect loop then
+     * retried into a second `Resumed` or a contradictory `HostLost`.
      */
     private fun completeFlight(
         deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
         result: ResumeResult.JoinerOutcome,
     ) {
-        lock.withLock { if (pendingResume === deferred) pendingResume = null }
-        deferred.complete(result)
+        val owned = lock.withLock {
+            (pendingResume === deferred).also { if (it) pendingResume = null }
+        }
+        if (owned) deferred.complete(result)
     }
 }
