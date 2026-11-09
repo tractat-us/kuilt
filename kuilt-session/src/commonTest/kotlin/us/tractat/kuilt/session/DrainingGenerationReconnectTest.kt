@@ -264,9 +264,17 @@ private class DrainingSeam(
         }
     }
 
-    /** Let the delegate's held `Torn` through: the draining generation is now visibly dead. */
+    /**
+     * Let the delegate's held `Torn` through: the draining generation is now visibly dead.
+     *
+     * Published here, synchronously, rather than left to the mirroring coroutine: one dispatch hop
+     * fewer between the release and the channel view above this seam tearing. The second test in
+     * [DrainingGenerationReconnectTest] depends on that hop count to land the tear before the
+     * machine's wait for `Woven` sees its first value.
+     */
     fun releaseTorn() {
         released.complete(Unit)
+        delegate.state.value.let { if (it is SeamState.Torn) _state.value = it }
     }
 
     override val selfId: PeerId get() = delegate.selfId
