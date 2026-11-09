@@ -7,11 +7,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
@@ -760,12 +763,41 @@ internal class JoinerResumeMachine(
      * Only [withTimeoutOrNull]'s own deadline yields null here; an *external* cancellation (e.g.
      * the auto-reconnect window elapsing around an internal [resume]) propagates through
      * unchanged, preserving cancellation discipline.
+     *
+     * **A flight whose seam tears settles at once (#3151).** The reply to a `Resume` can only come
+     * back over the generation it went out on, so once [seam] reads [SeamState.Torn] no verdict can
+     * arrive and waiting out the deadline only spends the reconnect window. The flight then settles
+     * as [ResumeResult.TimedOut] for every caller, exactly as the deadline would have settled it.
      */
     private suspend fun awaitFlightBounded(
         deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
     ): ResumeResult.JoinerOutcome =
-        withTimeoutOrNull(heartbeatConfig.resumeTimeout) { deferred.await() }
+        withTimeoutOrNull(heartbeatConfig.resumeTimeout) { awaitVerdictOrTear(deferred) }
             ?: ResumeResult.TimedOut.also { completeFlight(deferred, it) }
+
+    /**
+     * The flight's verdict, or — if [seam] tears first — [ResumeResult.TimedOut] settled on the
+     * shared flight. Returns whatever the flight finally holds rather than `TimedOut` outright, so a
+     * verdict that raced the tear is the one reported.
+     *
+     * The verdict is the first `select` clause, so an already-settled flight (the send-failure path)
+     * wins over a seam that is also already torn.
+     */
+    private suspend fun awaitVerdictOrTear(
+        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
+    ): ResumeResult.JoinerOutcome = coroutineScope {
+        val tear = async { seam.state.first { it is SeamState.Torn } }
+        val verdict = select<ResumeResult.JoinerOutcome?> {
+            deferred.onAwait { it }
+            tear.onAwait { null }
+        }
+        tear.cancel()
+        verdict ?: run {
+            logger.info { "resume.flight-torn self=${seam.selfId.value} → settling the flight as TimedOut" }
+            completeFlight(deferred, ResumeResult.TimedOut)
+            deferred.await()
+        }
+    }
 
     /**
      * Resolve a failed resume flight as [ResumeResult.WindowClosed] (the send-failure /
