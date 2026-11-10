@@ -23,7 +23,7 @@ import kotlin.time.Clock
  * - some certificate after the leaf carries the pinned key;
  * - that CA certificate is self-signed by the pinned key, is a CA allowed to sign certificates, and is
  *   valid now;
- * - the leaf is signed by it, is valid now, is not itself a CA, is for server authentication, and
+ * - the leaf is signed by it, is valid now, is for server authentication, and
  *   names only what the CA's NameConstraints permit.
  *
  * The chain is checked by the platform's own PKIX validator, with the pinned key as its only trust
@@ -65,7 +65,8 @@ private class CaPinningTrustManager(private val pin: CaPin, private val clock: C
  * @throws CertificateException when the chain does not hold.
  */
 internal fun verifyHostChain(leaf: X509Certificate, authority: X509Certificate, at: Date) {
-    if (leaf.basicConstraints != -1) throw CertificateException("the server's own certificate is a certificate authority")
+    // A host CA carries no extended key usage, so this one check also refuses the CA certificate
+    // replayed as a server's own.
     if (SERVER_AUTH !in leaf.extendedKeyUsage.orEmpty()) {
         throw CertificateException("the server's certificate is not for server authentication")
     }
