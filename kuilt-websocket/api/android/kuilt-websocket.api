@@ -132,6 +132,29 @@ public final class us/tractat/kuilt/websocket/WebSocketFabricKt {
 	public static synthetic fun webSocketMeshLoomJoin-wcfUuww$default (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/core/DeliveryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lkotlin/random/Random;ILjava/lang/Object;)Lus/tractat/kuilt/websocket/KtorMeshClientLoom;
 }
 
+public final class us/tractat/kuilt/websocket/tls/CaPin {
+	public static final field Companion Lus/tractat/kuilt/websocket/tls/CaPin$Companion;
+	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/websocket/tls/CaPin;
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (Ljava/lang/String;Ljava/lang/Object;)Z
+	public static final fun equals-impl0 (Ljava/lang/String;Ljava/lang/String;)Z
+	public final fun getEncoded ()Ljava/lang/String;
+	public fun hashCode ()I
+	public static fun hashCode-impl (Ljava/lang/String;)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (Ljava/lang/String;)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/websocket/tls/CaPin$Companion {
+	public final fun of-GWeTyh8 (Ljava/security/PublicKey;)Ljava/lang/String;
+	public final fun parse-GWeTyh8 (Ljava/lang/String;)Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/websocket/tls/CaPinningTrustManagerKt {
+	public static final fun caPinningTrustManager-tKy1TRU (Ljava/lang/String;Lkotlin/time/Clock;)Ljavax/net/ssl/X509TrustManager;
+}
+
 public final class us/tractat/kuilt/websocket/tls/DevTlsIdentity {
 	public final fun getCertificate ()Ljava/security/cert/X509Certificate;
 	public final fun getFingerprintSha256 ()Ljava/lang/String;
@@ -146,6 +169,91 @@ public final class us/tractat/kuilt/websocket/tls/DevTlsIdentityKt {
 	public static synthetic fun generateDevTlsIdentity$default (Ljava/lang/String;JLjava/util/List;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/websocket/tls/DevTlsIdentity;
 	public static final fun tapTlsConnector (Lio/ktor/server/engine/ApplicationEngine$Configuration;Lus/tractat/kuilt/websocket/tls/DevTlsIdentity;ILjava/lang/String;)V
 	public static synthetic fun tapTlsConnector$default (Lio/ktor/server/engine/ApplicationEngine$Configuration;Lus/tractat/kuilt/websocket/tls/DevTlsIdentity;ILjava/lang/String;ILjava/lang/Object;)V
+}
+
+public final class us/tractat/kuilt/websocket/tls/HostCertificateAuthority {
+	public static final field Companion Lus/tractat/kuilt/websocket/tls/HostCertificateAuthority$Companion;
+	public final fun certificatePem ()Ljava/lang/String;
+	public final fun getCertificate ()Ljava/security/cert/X509Certificate;
+	public final fun getPin-BGtNCa8 ()Ljava/lang/String;
+	public final fun issue-9UzQJO8 (Lus/tractat/kuilt/websocket/tls/HostNames;ILkotlin/time/Clock;)Lus/tractat/kuilt/websocket/tls/HostTlsIdentity;
+}
+
+public final class us/tractat/kuilt/websocket/tls/HostCertificateAuthority$Companion {
+	public final fun mint-exY8QGI (Ljava/lang/String;Lus/tractat/kuilt/websocket/tls/PermittedNames;JLkotlin/time/Clock;)Lus/tractat/kuilt/websocket/tls/HostCertificateAuthority;
+}
+
+public final class us/tractat/kuilt/websocket/tls/HostNames {
+	public fun <init> (Ljava/util/List;Ljava/util/List;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDnsNames ()Ljava/util/List;
+	public final fun getIpAddresses ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/websocket/tls/HostTlsIdentity {
+	public static final field Companion Lus/tractat/kuilt/websocket/tls/HostTlsIdentity$Companion;
+	public final fun encode ()[B
+	public final fun getAuthority ()Lus/tractat/kuilt/websocket/tls/HostCertificateAuthority;
+	public final fun getCaPin-BGtNCa8 ()Ljava/lang/String;
+	public final fun getCertificateChain ()Ljava/util/List;
+	public final fun getLeafCertificate ()Ljava/security/cert/X509Certificate;
+	public final fun getLeafPrivateKey ()Ljava/security/PrivateKey;
+	public final fun getNames ()Lus/tractat/kuilt/websocket/tls/HostNames;
+	public final fun reissue-9UzQJO8 (Lus/tractat/kuilt/websocket/tls/HostNames;ILkotlin/time/Clock;)Lus/tractat/kuilt/websocket/tls/HostTlsIdentity;
+}
+
+public final class us/tractat/kuilt/websocket/tls/HostTlsIdentity$Companion {
+	public final fun decode ([B)Lus/tractat/kuilt/websocket/tls/HostTlsIdentity;
+}
+
+public final class us/tractat/kuilt/websocket/tls/IpRange {
+	public static final field Companion Lus/tractat/kuilt/websocket/tls/IpRange$Companion;
+	public fun <init> (Ljava/net/InetAddress;I)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getNetwork ()Ljava/net/InetAddress;
+	public final fun getPrefixLength ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/websocket/tls/IpRange$Companion {
+	public final fun parse (Ljava/lang/String;)Lus/tractat/kuilt/websocket/tls/IpRange;
+}
+
+public final class us/tractat/kuilt/websocket/tls/LeafLifetime {
+	public static final field Companion Lus/tractat/kuilt/websocket/tls/LeafLifetime$Companion;
+	public static final field MAX_DAYS I
+	public static final synthetic fun box-impl (I)Lus/tractat/kuilt/websocket/tls/LeafLifetime;
+	public static fun constructor-impl (I)I
+	public fun equals (Ljava/lang/Object;)Z
+	public static fun equals-impl (ILjava/lang/Object;)Z
+	public static final fun equals-impl0 (II)Z
+	public final fun getDays ()I
+	public fun hashCode ()I
+	public static fun hashCode-impl (I)I
+	public fun toString ()Ljava/lang/String;
+	public static fun toString-impl (I)Ljava/lang/String;
+	public final synthetic fun unbox-impl ()I
+}
+
+public final class us/tractat/kuilt/websocket/tls/LeafLifetime$Companion {
+	public final fun getMaximum-nDjHe74 ()I
+}
+
+public final class us/tractat/kuilt/websocket/tls/PermittedNames {
+	public static final field Companion Lus/tractat/kuilt/websocket/tls/PermittedNames$Companion;
+	public fun <init> (Ljava/util/List;Ljava/util/List;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDnsNames ()Ljava/util/List;
+	public final fun getIpRanges ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/websocket/tls/PermittedNames$Companion {
+	public final fun getLocalNetwork ()Lus/tractat/kuilt/websocket/tls/PermittedNames;
 }
 
 public final class us/tractat/kuilt/websocket/tls/PinnedTlsKt {
