@@ -438,7 +438,7 @@ store.delete(key)
 check(store.read(key) == null)
 ```
 
-## A certificate the host mints
+## A host-minted certificate
 
 **Intent:** serve `wss://` from a host on a local network that has no domain name. You want a certificate the host mints itself, kept across restarts, that a joining device trusts from one short value handed over with the join code. Don't hand-roll a self-signed certificate per run, a `keytool` step, an `X509TrustManager` that accepts anything, or a pin on the leaf's whole certificate. That last one breaks the moment the laptop's address changes.
 **Primitive:** `HostCertificateAuthority` (`:kuilt-websocket`, JVM and Android). `mint` makes an ECDSA P-256 CA that is name-constrained to `PermittedNames`, and `issue` signs a leaf of at most 825 days (`LeafLifetime`). `HostTlsIdentity.encode`/`decode` keep the pair, and `reissue` re-signs the leaf under the same key. The peer side is `caPinningTrustManager(CaPin, clock)`, a plain `X509TrustManager` that checks the chain against the CA's pin.
