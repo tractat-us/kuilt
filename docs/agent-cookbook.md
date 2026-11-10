@@ -47,6 +47,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | splitting a big blob into frames — picking a chunk size, or chasing a `FrameTooLargeException` that only appears once a peer drops | `Room.maxPayloadBytes` / `Seam.maxPayloadBytes` | [Payload limits](agent-cookbook/fabrics.md#payload-limits) |
 | a `seenIds` set to skip already-handled messages | `GSet` / kuilt dedup | [Dedup](agent-cookbook/replication.md#dedup) |
 | saving bytes so they survive a restart — a write-temp-then-`fsync`-then-atomic-rename dance, a per-platform file helper, an IndexedDB wrapper, "did that write actually land before we crashed?" | `DurableStore` + `StoreKey` | [Durable storage](agent-cookbook/fabrics.md#durable-storage) |
+| `wss://` from a LAN host with no domain — a self-signed certificate per run, a trust-everything `X509TrustManager`, a pin that breaks when the host's address changes | `HostCertificateAuthority` + `caPinningTrustManager(CaPin, clock)` | [A certificate the host mints](agent-cookbook/fabrics.md#a-certificate-the-host-mints) |
 | a Raft node's term, vote and log that must survive a restart — a node that comes back having forgotten who it voted for, an `expect`/`actual` `RaftStorage` per platform, a SQLite or IndexedDB schema for consensus state | `DurableStoreRaftStorage.open(store)` | [Durable consensus state](agent-cookbook/consensus.md#durable-consensus-state) |
 | a per-line flush loop in a log/telemetry exporter — or a fix for "capturing logs is slow", "the app stalls when it logs a lot" | `WarpLogRecordExporter.export(records)` + `installLogCapture` | [Telemetry & log capture](agent-cookbook/otel.md#telemetry--log-capture) |
 | stamping the session/game/request a log line belongs to — an MDC equivalent, a global holding "the current session" for a log mapper to read, lines from one session tagged with another's id | `withLogContext` | [Telemetry & log capture](agent-cookbook/otel.md#telemetry--log-capture) |
@@ -80,7 +81,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 
 The detail lives in seven family pages; each holds the sections named beside it.
 
-- [Fabrics](agent-cookbook/fabrics.md) — discovery, transports, the seam, payload limits, pumps, durable storage.
+- [Fabrics](agent-cookbook/fabrics.md) — discovery, transports, the seam, payload limits, pumps, durable storage, a certificate the host mints.
 - [Session](agent-cookbook/session.md) — rejoin & reconnect, liveness & presence, per-member frames, a last frame before leaving, host election & the lobby.
 - [Replication](agent-cookbook/replication.md) — replicated data, scaling to many peers, dealing cards, sealed boxes, dedup, archiving what the live replica forgets.
 - [Consensus](agent-cookbook/consensus.md) — consensus & turns, when one of the peers is a server, durable consensus state.

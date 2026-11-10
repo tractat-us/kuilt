@@ -8,7 +8,8 @@ transport of your own when kuilt doesn't already ship the one you need, and for 
 every transport has to get right: sending a message to yourself, how big a single message
 may be, reading from a connection for as long as a session lasts, and telling a connection
 that has ended for good from one that has merely gone quiet. It is also where to keep
-bytes safely on disk so they survive the app being closed.
+bytes safely on disk so they survive the app being closed, and where a host with no domain
+name mints the certificate that encrypts its local network connections.
 
 ## Discovery
 
@@ -435,4 +436,34 @@ check(store.read(StoreKey("never-written")) == null)
 
 store.delete(key)
 check(store.read(key) == null)
+```
+
+## A certificate the host mints
+
+**Intent:** serve `wss://` from a host on a local network that has no domain name. You want a certificate the host mints itself, kept across restarts, that a joining device trusts from one short value handed over with the join code. Don't hand-roll a self-signed certificate per run, a `keytool` step, an `X509TrustManager` that accepts anything, or a pin on the leaf's whole certificate. That last one breaks the moment the laptop's address changes.
+**Primitive:** `HostCertificateAuthority` (`:kuilt-websocket`, JVM and Android). `mint` makes an ECDSA P-256 CA that is name-constrained to `PermittedNames`, and `issue` signs a leaf of at most 825 days (`LeafLifetime`). `HostTlsIdentity.encode`/`decode` keep the pair, and `reissue` re-signs the leaf under the same key. The peer side is `caPinningTrustManager(CaPin, clock)`, a plain `X509TrustManager` that checks the chain against the CA's pin.
+
+The pin names the CA, not the certificate, so re-signing for a new address costs no peer a thing. A `CaPin` has one form: base64url SHA-256 of the CA's public key, 43 characters, safe in a URL. The trust manager refuses a leaf the pinned key did not sign, an expired leaf, and a leaf naming anything outside the CA's constraints. The server must send `certificateChain`, the leaf and then the CA, since the peer finds the CA there. A browser can't pin, so it installs `certificatePem()` instead. Because the CA is constrained, a phone that installs it trusts it for LAN names alone. The bytes from `encode` hold both private keys: keep them with a `DurableStore` (above) somewhere only the host's user can read.
+
+<!-- verbatim from kuilt-websocket/src/jvmAndAndroidTest/kotlin/us/tractat/kuilt/websocket/tls/HostTlsStoryTest.kt#aHostMintsKeepsAndReissuesWhileAPeerPinsTheCa -->
+```kotlin
+val clock = mintClock
+
+// First start: mint the CA and a leaf for today's names, and keep both.
+val authority = HostCertificateAuthority.mint("Alice's laptop", PermittedNames.LocalNetwork, 3650.days, clock)
+val names = HostNames(listOf("localhost", "alice.local"), listOf(InetAddress.getByName("192.168.1.20")))
+val kept: ByteArray = authority.issue(names, LeafLifetime.Maximum, clock).encode()
+
+// The pin travels out of band, beside the join code: 43 characters, URL-safe.
+val pin: String = authority.pin.encoded
+
+// Next start, on a new network: load, re-sign for the new address, keep again.
+val loaded = HostTlsIdentity.decode(kept)
+val moved = HostNames(listOf("localhost", "alice.local"), listOf(InetAddress.getByName("10.0.0.7")))
+val identity = if (loaded.names == moved) loaded else loaded.reissue(moved, LeafLifetime.Maximum, clock)
+
+// A peer holding only the pin trusts the re-signed leaf: same CA, same pin.
+val trust = caPinningTrustManager(CaPin.parse(pin), clock)
+trust.checkServerTrusted(identity.certificateChain.toTypedArray(), "ECDHE_ECDSA")
+assertEquals(loaded.leafCertificate.publicKey, identity.leafCertificate.publicKey)
 ```
