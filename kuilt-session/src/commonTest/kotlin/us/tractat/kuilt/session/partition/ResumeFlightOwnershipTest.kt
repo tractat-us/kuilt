@@ -161,12 +161,14 @@ class ResumeFlightOwnershipTest {
             val stillPending = machine.hasPendingFlight()
             machine.takePendingFlight()?.complete(ResumeResult.Success)
             runCurrent()
+            val ownerResult = owner.await()
+            val joinedResult = joined.await()
 
             assertAll(
                 { assertEquals(1, sent, "precondition: the owner sent once the host appeared") },
                 { assertTrue(stillPending, "the joined caller must not settle the flight before its send + bound") },
-                { assertEquals(ResumeResult.Success, owner.await()) },
-                { assertEquals(ResumeResult.Success, joined.await()) },
+                { assertEquals(ResumeResult.Success, ownerResult) },
+                { assertEquals(ResumeResult.Success, joinedResult) },
             )
         }
 
