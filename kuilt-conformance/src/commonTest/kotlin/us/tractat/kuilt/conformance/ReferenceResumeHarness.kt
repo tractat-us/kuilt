@@ -9,12 +9,15 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.Tag
+import us.tractat.kuilt.session.Room
+import us.tractat.kuilt.session.RoomFactory
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.assertNotNull
@@ -23,9 +26,10 @@ import kotlin.time.Instant
 /**
  * Exercises the real controller and room mapping; only window setup and observation are injected.
  *
- * [ignoreSecret] is the suite's own positive control, never a fixture: it swaps every presented
- * secret for the enrolled one before the real controller sees it — the host that checks only the
- * public fields of a token (#3165) — so a property claiming to catch that host can be shown to red.
+ * [ignoreSecret] is the suite's own positive control, never a fixture: every joiner room it hands
+ * out replaces the secret of any token it is asked to present with its own real one — so a forgery
+ * arrives at the host indistinguishable from the member, which is what a room that does not check
+ * the secret (#3165) amounts to — and a property claiming to catch that room can be shown to red.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun referenceResumeHarness(
@@ -68,24 +72,27 @@ internal fun referenceResumeHarness(
                 scope = controllerScope,
             )
             controller = real
-            val enrolled = mutableMapOf<PeerId, ResumeSecret>()
             object : JoinerReconnectController by real {
-                override suspend fun enroll(peerId: PeerId): ResumeSecret =
-                    real.enroll(peerId).also { enrolled[peerId] = it }
-
-                override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict {
-                    val presented = enrolled[token.peerId]
-                        ?.takeIf { ignoreSecret }
-                        ?.let { token.copy(secret = it) }
-                        ?: token
-                    return real.tryResume(presented, at).also { verdicts.add(it) }
-                }
+                override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
+                    real.tryResume(token, at).also { verdicts.add(it) }
             }
         },
     )
+    val joinerFactory = if (!ignoreSecret) factory else object : RoomFactory {
+        override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
+            factory.host(pattern, memberName, roomId)
+
+        override suspend fun join(tag: Tag, memberName: String?): Room {
+            val room = factory.join(tag, memberName)
+            return object : Room by room {
+                override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome =
+                    room.resume(room.resumeToken?.let { token.copy(secret = it.secret) } ?: token)
+            }
+        }
+    }
     return RoomConformanceSuite.ResumeHarness(
         hostFactory = factory,
-        joinerFactory = factory,
+        joinerFactory = joinerFactory,
         prepare = { token, verdict ->
             val real = assertNotNull(controller, "the host must install the observed controller")
             when (verdict) {

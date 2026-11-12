@@ -436,9 +436,13 @@ public abstract class RoomConformanceSuite {
                         )
                     },
                     {
-                        val observed = h.hostVerdicts()
-                        assertEquals(2, observed.size, "the host must render a verdict for each resume")
-                        assertIs<ResumeResult.TokenInvalid>(observed.first(), "the forgery must reach token rejection")
+                        // Where the forgery is refused — before the window controller or inside it —
+                        // is the room's business; that it never spends the window is not.
+                        assertEquals(
+                            listOf<ResumeResult.HostVerdict>(ResumeResult.Success),
+                            h.hostVerdicts().filter { it == ResumeResult.Success },
+                            "only the genuine resume may be granted",
+                        )
                     },
                     { assertEquals(2, h.resumeRequests(), "the joiner must actually send both resumes") },
                 )
