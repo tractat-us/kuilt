@@ -21,6 +21,7 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -64,6 +65,10 @@ class HostReconnectControllerInjectionTest {
                 JoinerReconnectEvent.WindowOpened(peerId, expiresAt = SENTINEL_EXPIRES_AT, detectedAt = at),
             )
         }
+
+        // Never answers `Success`, so there is no window a wrong secret could spend and nothing to
+        // check one against: the enrolment obligation (#3165) is met by refusing every resume.
+        override suspend fun enroll(peerId: PeerId, secret: ResumeSecret) = Unit
 
         override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
             ResumeResult.WindowNotYetOpen
