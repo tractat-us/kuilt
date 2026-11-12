@@ -104,6 +104,27 @@ the rest; a new weight is a new edge, so the group's fairness history restarts a
 front. Nothing public applies the steps yet: the single-writer engine's `apply` (Task L3 of #3173)
 will, under one lock, against the ledger it diffed.
 
+Children the app creates while running go under a group marked `runtimeChildren`.
+`Topology.attachRuntimeChild(group, name, ledger, generation)` and
+`detachRuntimeChild(group, name, ledger)` list the steps for one child, at the marker's weight,
+under a name of any spelling that never collides with a declared child. A reload that keeps the
+marker keeps the child and its history; one that drops the marker closes it. Every detach leaves a
+retired edge in the ledger for good, so keep a child that comes back often attached between uses.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleRuntimeChildren -->
+```kotlin
+    // Named like the declared lane `x`, and still its own child: runtime names have their own namespace.
+    val tenant = pool.runtimeChildId(listOf("tenants"), "x")
+    check(tenant != pool.groupId("tenants", "x"))
+    val attach = pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0)
+    check(attach.map { it::class } == listOf(TopologyStep.Prepare::class, TopologyStep.Activate::class))
+    check((attach.first() as TopologyStep.Prepare).record.weight == Weight.of(2))
+    apply(attach)
+    // Asking again is harmless, and a reload that keeps the marker keeps the child.
+    check(pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0).isEmpty())
+    check(Topology.diff(pool, ledger, generation = 0).isEmpty())
+```
+
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyFromDocument -->
 ```kotlin
     // As decoded from the file: names and weight text, nothing checked yet.
