@@ -46,6 +46,19 @@ public interface LedgerCell {
  * under some other peer's scheduling would be a penalty this peer has no standing to impose.
  * Seating a genuinely new generation is the seat bump's job ([schedule]), not the clamp's.
  *
+ * That memory is a value too: [memory] exports it as an [AllocatorMemory] and the secondary
+ * constructor takes one back, so a single-process caller can persist it beside its ledger, and can
+ * ask "who would go next" of a throwaway allocator built over a copy without moving this one.
+ *
+ * ## Two ways to drive it
+ *
+ * - [schedule] runs grants until nothing more can move, against one [Demand] view, and writes them
+ *   through a [LedgerCell]. That is the replicated node's shape: it tops children up to a target.
+ * - [pickChild] makes **one** pick on a ledger value, with the seat and wake step reading one view
+ *   (who is *waiting*) and the pick reading another (who is *eligible* for this slot). That is a
+ *   lease's shape: a slot that only some children can run on must not make the others look idle,
+ *   or the next time they are eligible they would be clamped as wakers they never were.
+ *
  * ## Thread-safety
  *
  * **Not thread-safe.** That state is plain mutable maps, so one allocator belongs to one peer and
@@ -61,6 +74,30 @@ public class FairShareAllocator(
 ) {
     private val wakeOffsets = HashMap<AttachmentId, Rational>()
     private val demandingObserved = HashMap<AttachmentId, Boolean>()
+
+    /**
+     * An allocator that resumes from [memory], as if it were the allocator [memory] was exported
+     * from. Building one over a copy of a live allocator's [FairShareAllocator.memory] gives a
+     * throwaway that picks exactly as the live one would next.
+     */
+    public constructor(self: ReplicaId, policy: PolicyConfig, memory: AllocatorMemory) : this(self, policy) {
+        wakeOffsets.putAll(memory.wakeOffsets)
+        demandingObserved.putAll(memory.demandingObserved)
+    }
+
+    /**
+     * What this allocator remembers right now, as an immutable value with its maps in key order.
+     * A copy: later calls on this allocator do not change it. Costs one sort of each map, so read
+     * it to persist or to preview, not on every pick.
+     */
+    public val memory: AllocatorMemory
+        get() = AllocatorMemory(
+            wakeOffsets = wakeOffsets.entries.sortedBy { it.key }.associate { it.key to it.value },
+            demandingObserved = demandingObserved.entries.sortedBy { it.key }.associate { it.key to it.value },
+        )
+
+    /** The demanding state [edge] was last observed in, or `null` when it has never been observed. */
+    internal fun lastObservedDemanding(edge: AttachmentId): Boolean? = demandingObserved[edge]
 
     /**
      * Run allocation rounds at [parent] until nothing more can be delegated: build the policy
@@ -102,6 +139,66 @@ public class FairShareAllocator(
             grants++
         }
         return grants
+    }
+
+    /**
+     * Make **one** pick at [parent]: seat the newborns and clamp the wakers exactly as [schedule]
+     * does, reading [waiting], then choose one child among those [eligible] wants, on the seated
+     * state. Nothing is delegated: the caller delegates [ChildPick.grant] on [ChildPick.ledger],
+     * which every child of [parent] is already seated on, so that delegation cannot hand a newborn
+     * the lifetime credit an unseated delegation would (#1752).
+     *
+     * The two views are separate because a lease is for one slot. A child that is waiting but
+     * cannot run on this slot is still competing: it must count toward the front a newborn is
+     * seated at, and it must be observed as demanding, so that when a slot it *can* run on comes
+     * up it is not clamped as a waker. Feeding [eligible] to the wake step instead would forfeit
+     * the turn of every child that merely could not run on the last few slots.
+     *
+     * The size of the grant is whatever [eligible]'s [Demand.maximumUsefulGrant] says, trimmed as
+     * [HeddlePolicy.pick] trims it, so a lease's reservation rides there and the allocator's own
+     * [PolicyConfig.quantum] can be left unbounded. The deadline is then `ev + reservation / w`.
+     *
+     * The wake memory advances whether or not a child is picked: a pick that finds nothing still
+     * observed who was waiting. The returned ledger is a new value; [ledger] is not changed.
+     *
+     * @param waiting each child edge's appetite for the seat and wake step: [Demand.NONE] for a
+     *   child that wants no service at all.
+     * @param eligible each child edge's appetite for this pick: [Demand.NONE] for a child that
+     *   cannot take this grant. A child [eligible] wants should also be one [waiting] wants.
+     * @return the seated ledger and the grant, or `null` when no child can be granted anything:
+     *   none is eligible, none is seated, or [parent] holds nothing.
+     */
+    public fun pickChild(
+        parent: GroupId,
+        ledger: EntitlementLedger,
+        waiting: (AttachmentId) -> Demand,
+        eligible: (AttachmentId) -> Demand,
+    ): ChildPick? {
+        val cell = ValueCell(ledger)
+        settleJoiners(parent, cell, waiting)
+        val seated = cell.current
+        val grant = pickOne(seated, parent, earmarked = 0L, eligible) ?: return null
+        return ChildPick(seated, grant)
+    }
+
+    /**
+     * Seat every unseated active child of [parent] in [ledger], at the front of the seated ones as
+     * [demand] sees them, **without** observing anything: the wake memory is left exactly as it
+     * was. For a delegation that is not a pick, which must still never cross an unseated edge, and
+     * which has no fresh view of who is waiting to observe. Returns [ledger] itself when nothing
+     * under [parent] is unseated.
+     */
+    internal fun seatUnseated(
+        parent: GroupId,
+        ledger: EntitlementLedger,
+        demand: (AttachmentId) -> Demand,
+    ): EntitlementLedger {
+        val edges = policyEdges(ledger, parent, demand)
+        val unseated = edges.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
+        if (unseated.isEmpty()) return ledger
+        val front = HeddlePolicy.front(edges, excluding = unseated) ?: Rational.ZERO
+        val patch = seatPatch(ledger, unseated, front) ?: return ledger
+        return ledger.piece(patch.delta)
     }
 
     /**
@@ -227,18 +324,23 @@ public class FairShareAllocator(
      * One patch seating each of [unseated] at [front]. [EntitlementLedger.seat] refuses an edge that
      * already carries a gauge, so an id whose seat arrived between the front being read and this
      * patch being built is simply skipped rather than re-seated.
+     *
+     * The seats are gathered into one gauge map and assembled once. Joining them one at a time
+     * copied the growing patch on every seat, which made a cohort of `n` newborns cost `n²` (5,000
+     * of them took 4.9 s on a Kotlin/Native debug build, #3173).
      */
     private fun seatPatch(
         s: EntitlementLedger,
         unseated: Set<AttachmentId>,
         front: Rational,
     ): Patch<EntitlementLedger>? {
-        var seated: EntitlementLedger? = null
+        val gauges = LinkedHashMap<AttachmentId, Gauge>()
         for (id in unseated.sorted()) {
-            val patch = s.seat(id, front) ?: continue
-            seated = seated?.piece(patch.delta) ?: patch.delta
+            val seat = s.seat(id, front) ?: continue
+            gauges[id] = checkNotNull(seat.delta.gauge(id)) { "a seat patch for ${id.value} carries no gauge" }
         }
-        return seated?.let(::Patch)
+        if (gauges.isEmpty()) return null
+        return Patch(EntitlementLedger.of(gauges = gauges))
     }
 
     /**
@@ -317,8 +419,29 @@ public class FairShareAllocator(
         }
     }
 
+    /** A [LedgerCell] over a value, for [pickChild]: one caller, no other writer. */
+    private class ValueCell(override var current: EntitlementLedger) : LedgerCell {
+        override fun mutateOrSkip(transform: (EntitlementLedger) -> Patch<EntitlementLedger>?): Boolean {
+            val patch = transform(current) ?: return false
+            current = current.piece(patch.delta)
+            return true
+        }
+    }
+
     private companion object {
         /** A backstop against a policy that never runs dry; one call never applies more grants. */
         const val MAX_ROUNDS_PER_CALL: Int = 100_000
     }
 }
+
+/**
+ * One [FairShareAllocator.pickChild] result: the [grant] to delegate, and the [ledger] it must be
+ * delegated on, in which every active child of the parent is seated.
+ *
+ * @property ledger the input ledger with the newborns seated; nothing has been delegated yet.
+ * @property grant the child edge picked and the trimmed amount the policy would grant it.
+ */
+public data class ChildPick(
+    public val ledger: EntitlementLedger,
+    public val grant: Grant,
+)
