@@ -714,9 +714,10 @@ public class EntitlementLedger private constructor(
      * this the published RETIRED patch would carry no witness and a laggard that received RETIRED before
      * the draining `release`/`spend` deltas would transiently false-fire [LedgerConflict.ClosureViolation].
      * Carrying the proposer's observed witness ships the drained counters alongside RETIRED (§5.1, §10.10).
-     * `internal` — control-plane support.
+     * [HeddleInternalApi] — control-plane support.
      */
-    internal fun drainWitnessFor(edge: AttachmentId): EntitlementLedger = drainWitness(edge)
+    @HeddleInternalApi
+    public fun drainWitnessFor(edge: AttachmentId): EntitlementLedger = drainWitness(edge)
 
     /**
      * The **§4 generation-move**: drain each fenced retired edge in [finals] and re-home everything it
@@ -756,9 +757,9 @@ public class EntitlementLedger private constructor(
      * ## The two inputs, and why neither is read from a gossip view
      *
      *  - **[finals]** — per fenced edge, each replica's log-recorded [SlotFinals] from its
-     *    [ControlCommand.QuiesceAck]. Base slots are single-writer, and the acking replica has
+     *    `ControlCommand.QuiesceAck`. Base slots are single-writer, and the acking replica has
      *    marked the edge locally unwritable, so these values are *final* and consensus-recorded.
-     *  - **`this`** — the control plane's own accumulated relocation state ([FenceState.relocations]).
+     *  - **`this`** — the control plane's own accumulated relocation state (`FenceState.relocations`).
      *    The relocation families and a fenced edge's base slots are control-plane-owned exclusively
      *    (§6.3), so `this` holds their true values with no data-plane read at all.
      *
@@ -780,7 +781,7 @@ public class EntitlementLedger private constructor(
      * at `donor` and a retired `s` is no longer any group's live inbound, so [transfer] can never
      * write that key again: the row is frozen at barrier time at its own writer, which is exactly
      * what makes it declarable. That is also what puts the carry on the H5 control-plane path, whose
-     * receiver ([FenceState.relocations]) is log-pure and holds no data-plane row at all.
+     * receiver (`FenceState.relocations`) is log-pure and holds no data-plane row at all.
      *
      * The carry is **not** a key move into `transfers[key(t)]` — that slot belongs to the donor and
      * ordinary [transfer] writes it concurrently, so two writers on one max-joined slot would erase
@@ -834,9 +835,10 @@ public class EntitlementLedger private constructor(
      * (`heddle-design.md` §8.1). Draining a slot whose owner never promised is precisely the
      * fabricate-beyond-owner violation the fence exists to prevent.
      *
-     * `internal` — the caller is [HeddleControlPlane]'s apply loop, which alone holds log-pure inputs.
+     * [HeddleInternalApi] — the caller is `HeddleControlPlane`'s apply loop, which alone holds log-pure inputs.
      */
-    internal fun relocationPatch(
+    @HeddleInternalApi
+    public fun relocationPatch(
         liveEdge: AttachmentId,
         finals: Map<AttachmentId, Map<ReplicaId, SlotFinals>>,
     ): Relocation {
@@ -1126,7 +1128,7 @@ public class EntitlementLedger private constructor(
         }
 
     /**
-     * The **base** slots of [edge], by replica — the shape a [ControlCommand.QuiesceAck]
+     * The **base** slots of [edge], by replica — the shape a `ControlCommand.QuiesceAck`
      * declares. Read on the acking peer's own complete state (for its own slot) at the moment it
      * marks [edge] locally unwritable, or over every replica for a test that models a converged view.
      * `internal` — barrier + test support.
@@ -1139,8 +1141,9 @@ public class EntitlementLedger private constructor(
     internal fun baseFinalsOn(edge: AttachmentId): Map<ReplicaId, SlotFinals> =
         replicasOnEdge(edge).associateWith { r -> baseFinalsOn(edge, r) }
 
-    /** [r]'s own base slots on [edge] — its [ControlCommand.QuiesceAck] payload. */
-    internal fun baseFinalsOn(edge: AttachmentId, r: ReplicaId): SlotFinals = SlotFinals(
+    /** [r]'s own base slots on [edge] — its `ControlCommand.QuiesceAck` payload. */
+    @HeddleInternalApi
+    public fun baseFinalsOn(edge: AttachmentId, r: ReplicaId): SlotFinals = SlotFinals(
         issued = slot(issued, edge, r),
         returned = slot(returned, edge, r),
         leafSpent = slot(leafSpent, edge, r),
@@ -1231,7 +1234,7 @@ public class EntitlementLedger private constructor(
      * checkpoint written here is `grossEv(issuedAfter)`, which for an unseated edge is
      * `issuedAfter / w`, and [seat] refuses forever afterwards because a gauge now exists. The join
      * cannot repair it either — `max` on a floor that is already the minimum is a no-op. So a
-     * caller driving this must seat first; `HeddleNode.settleJoiners` does, and `HeddleNode.pickOne`
+     * caller driving this must seat first; [FairShareAllocator.schedule] does, and it
      * additionally refuses a gauge-absent edge as a candidate so a mid-round `Activate` cannot slip
      * through the gap.
      */
@@ -1756,7 +1759,7 @@ public class EntitlementLedger private constructor(
     // Enumeration + test-support accessors (internal — used by validate and tests)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** The record set under [id] (empty if unknown) — `internal`, test support. */
+    /** The record set under [id] (empty if unknown) — [HeddleInternalApi], test support. */
     internal fun recordsOf(id: AttachmentId): Set<AttachmentRecord> = records[id] ?: emptySet()
 
     /** Every edge id mentioned by any component. */
@@ -1771,9 +1774,10 @@ public class EntitlementLedger private constructor(
      * This is the exact predicate [LedgerConflict.DualActiveInbound] fires on. The **H5 control plane**
      * reads it *before* applying an `activate` proposal so the log's serialization can refuse the
      * loser of two overlapping reshapes as a structured conflict — instead of letting both apply and
-     * quarantine the lineage (design §9, §5.2, §10.11). `internal` — control-plane + test support.
+     * quarantine the lineage (design §9, §5.2, §10.11). [HeddleInternalApi] — control-plane + test support.
      */
-    internal fun liveInboundEdges(child: GroupId): List<AttachmentId> =
+    @HeddleInternalApi
+    public fun liveInboundEdges(child: GroupId): List<AttachmentId> =
         allEdges()
             .filter { e ->
                 recordOf(e)?.child == child &&
@@ -1785,19 +1789,22 @@ public class EntitlementLedger private constructor(
      * The **RETIRED inbound** edges of [child] — every non-divergent edge whose record targets [child]
      * and whose lifecycle is [Lifecycle.RETIRED]. These are the edges a raced advisory-retire may have
      * stranded budget on ([reconcileStranded]); the **H5 control plane** reads it on its log-pure
-     * projection to gate a reconciliation witness (§9 #3, §5.4). `internal` — control-plane + test support.
+     * projection to gate a reconciliation witness (§9 #3, §5.4). [HeddleInternalApi] — control-plane + test support.
      */
-    internal fun retiredInboundEdges(child: GroupId): List<AttachmentId> =
+    @HeddleInternalApi
+    public fun retiredInboundEdges(child: GroupId): List<AttachmentId> =
         allEdges().filter { recordOf(it)?.child == child && lifecycleOf(it) == Lifecycle.RETIRED }.sorted()
 
     /** The edge ids carrying a base `issued` slot — the control plane's reconciliation witness-shape gate. */
-    internal fun issuedEdges(): Set<AttachmentId> = issued.keys
+    @HeddleInternalApi
+    public fun issuedEdges(): Set<AttachmentId> = issued.keys
 
     /** The edge ids carrying a `returned` slot — the control plane's reconciliation witness-shape gate. */
     internal fun returnedEdges(): Set<AttachmentId> = returned.keys
 
     /** The edge ids carrying an `issuedRelocIn` slot — where a re-home's credit legally lands. */
-    internal fun issuedRelocInEdges(): Set<AttachmentId> = issuedRelocIn.keys
+    @HeddleInternalApi
+    public fun issuedRelocInEdges(): Set<AttachmentId> = issuedRelocIn.keys
 
     /**
      * The donors holding a transfer row at [edge]'s path key — the rows a generation move off [edge]
@@ -1807,12 +1814,13 @@ public class EntitlementLedger private constructor(
     internal fun transferDonorsOn(edge: AttachmentId): Set<ReplicaId> =
         transfers[PathKey.of(edge)]?.keys ?: emptySet()
 
-    /** The donor rows recorded at [path] (empty if none) — `internal`, test support. */
-    internal fun transfersAt(path: PathKey): Map<ReplicaId, GCounter> = transfers[path] ?: emptyMap()
+    /** The donor rows recorded at [path] (empty if none) — [HeddleInternalApi], test support. */
+    @HeddleInternalApi
+    public fun transfersAt(path: PathKey): Map<ReplicaId, GCounter> = transfers[path] ?: emptyMap()
 
     /**
      * The donors an earlier move carried a row *onto* [edge] for — exactly the set
-     * [unackedCarriedDonors] enumerates, before either of its filters. `internal`, test support: an
+     * [unackedCarriedDonors] enumerates, before either of its filters. [HeddleInternalApi], test support: an
      * arm asserting that a donor was or was not *refused* has to establish first that the
      * enumeration reaches it at all, or it proves nothing about the filters.
      */
@@ -1821,9 +1829,10 @@ public class EntitlementLedger private constructor(
 
     /**
      * `transferRelocIn − transferRelocOut` for one hand-off at [edge] — the residual
-     * [unackedCarriedDonors] filters on. `internal`, test support.
+     * [unackedCarriedDonors] filters on. [HeddleInternalApi], test support.
      */
-    internal fun carriedResidualOn(edge: AttachmentId, donor: ReplicaId, to: ReplicaId): Long =
+    @HeddleInternalApi
+    public fun carriedResidualOn(edge: AttachmentId, donor: ReplicaId, to: ReplicaId): Long =
         carriedResidual(PathKey.of(edge), donor, to)
 
     /** Every group named as a parent or child by any (singleton or divergent) record. */
@@ -1844,34 +1853,39 @@ public class EntitlementLedger private constructor(
     }
 
     /** Total minted supply. */
-    internal fun mintedTotal(): Long = minted.values.fold(0L) { acc, m -> checkedAdd(acc, m.amount) }
+    @HeddleInternalApi
+    public fun mintedTotal(): Long = minted.values.fold(0L) { acc, m -> checkedAdd(acc, m.amount) }
 
     /**
      * The distinct roots supply has been minted at, sorted — one on a healthy ledger. More is the
-     * [LedgerConflict.MultipleRoots] fault (#1751). `internal` — test support.
+     * [LedgerConflict.MultipleRoots] fault (#1751). [HeddleInternalApi] — test support.
      *
      * A zero-amount record counts: it is still evidence of a mint act on a second tree, and
      * excluding it would make the report depend on an amount the fault has nothing to do with.
      */
-    internal fun mintedRoots(): List<GroupId> = minted.values.mapTo(HashSet()) { it.root }.sorted()
+    @HeddleInternalApi
+    public fun mintedRoots(): List<GroupId> = minted.values.mapTo(HashSet()) { it.root }.sorted()
 
     /**
      * Total service charged where an edge is a path's final edge (the conservation term), at
      * **effective** values — a relocation moves leaf spend between edges in equal and opposite
      * amounts, so this sum is invariant under any move.
      */
-    internal fun leafSpentTotal(): Long =
+    @HeddleInternalApi
+    public fun leafSpentTotal(): Long =
         allEdges().fold(0L) { acc, e -> checkedAdd(acc, effLeafSpentTotal(e)) }
 
-    /** [r]'s effective issuance across [edge] — `issued + issuedRelocIn`. `internal`, test support. */
-    internal fun effectiveIssued(edge: AttachmentId, r: ReplicaId): Long = effIssuedSlot(edge, r)
+    /** [r]'s effective issuance across [edge] — `issued + issuedRelocIn`. [HeddleInternalApi], test support. */
+    @HeddleInternalApi
+    public fun effectiveIssued(edge: AttachmentId, r: ReplicaId): Long = effIssuedSlot(edge, r)
 
     /**
      * The raw **stored** slot value of one counter [family] at `(edge, r)`. Every family is grow-only,
      * so this value never falls under [piece] — the property the lattice rests on, and the one the
-     * derived effective reads deliberately do not have. `internal`, test support.
+     * derived effective reads deliberately do not have. [HeddleInternalApi], test support.
      */
-    internal fun storedSlot(family: CounterFamily, edge: AttachmentId, r: ReplicaId): Long =
+    @HeddleInternalApi
+    public fun storedSlot(family: CounterFamily, edge: AttachmentId, r: ReplicaId): Long =
         slot(counterMap(family), edge, r)
 
     private fun counterMap(family: CounterFamily): Map<AttachmentId, GCounter> = when (family) {
@@ -1889,9 +1903,10 @@ public class EntitlementLedger private constructor(
     /**
      * The sub-ledger restricted to [id]'s own components (plus its path's transfer
      * rows). Pins the projection homomorphism (design §10.8): restriction to an
-     * edge's components commutes with [piece]. `internal` — test support.
+     * edge's components commutes with [piece]. [HeddleInternalApi] — test support.
      */
-    internal fun projectEdge(id: AttachmentId): EntitlementLedger = of(
+    @HeddleInternalApi
+    public fun projectEdge(id: AttachmentId): EntitlementLedger = of(
         records = records[id]?.let { mapOf(id to it) } ?: emptyMap(),
         issued = issued[id]?.let { mapOf(id to it) } ?: emptyMap(),
         returned = returned[id]?.let { mapOf(id to it) } ?: emptyMap(),
@@ -2035,7 +2050,8 @@ public class EntitlementLedger private constructor(
          * this exists so this phase's lattice-law tests can construct arbitrary
          * states of the still-inert lattice.
          */
-        internal fun of(
+        @HeddleInternalApi
+        public fun of(
             records: Map<AttachmentId, Set<AttachmentRecord>> = emptyMap(),
             minted: Map<MintId, MintRecord> = emptyMap(),
             issued: Map<AttachmentId, GCounter> = emptyMap(),
@@ -2075,9 +2091,10 @@ private class LineageWalk(val edges: List<AttachmentId>?, val onCycle: Boolean) 
 /**
  * The nine per-edge [GCounter] families of [EntitlementLedger] — four base, five relocation.
  * Names one family for [EntitlementLedger.storedSlot], whose contract is that **every** family is
- * grow-only: no `piece` on any state may lower a stored slot. `internal` — test + derivation support.
+ * grow-only: no `piece` on any state may lower a stored slot. [HeddleInternalApi] — test + derivation support.
  */
-internal enum class CounterFamily {
+@HeddleInternalApi
+public enum class CounterFamily {
     ISSUED,
     RETURNED,
     LEAF_SPENT,

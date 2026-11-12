@@ -155,6 +155,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [kuilt-deal](https://tractat-us.github.io/kuilt/api/kuilt-deal/index.html): Cryptographically fair card dealing and dealer-less random seed agreement over a kuilt Seam.
 - [kuilt-gossip](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-gossip/module.md): Partial-mesh overlay for a kuilt Seam: broadcast floods to a few neighbours rather than everyone, so large sessions scale.
 - [kuilt-heddle](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-heddle/module.md): Fair-share scheduling of one pooled resource across peers with no central referee, and it keeps working while the network is partitioned.
+- [kuilt-heddle-core](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-heddle-core/module.md): The fair-share policy and entitlement ledger behind kuilt-heddle, on their own: decide who gets the next slice of a shared resource, with no network, Raft or coroutines.
 - [kuilt-liveness](https://tractat-us.github.io/kuilt/api/kuilt-liveness/index.html): Peer-liveness detection over a kuilt Seam: heartbeats, partition events and reachability.
 - [kuilt-session](https://tractat-us.github.io/kuilt/api/kuilt-session/index.html): Membership-aware Room over a kuilt Loom: admit/identify handshake, roster, reconnect tokens and partition detection.
 - [kuilt-stream](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-stream/module.md): Wraps a byte stream as a kuilt Connection, with length-prefix framing and oversize protection.

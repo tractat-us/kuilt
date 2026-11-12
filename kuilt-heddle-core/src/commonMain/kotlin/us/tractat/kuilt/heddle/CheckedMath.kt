@@ -11,7 +11,8 @@ package us.tractat.kuilt.heddle
  */
 
 /** Add [a] and [b], throwing [ArithmeticException] on `Long` overflow. */
-internal fun checkedAdd(a: Long, b: Long): Long {
+@HeddleInternalApi
+public fun checkedAdd(a: Long, b: Long): Long {
     val sum = a + b
     // Overflow iff a and b share a sign that differs from the result's sign.
     if ((a xor sum) and (b xor sum) < 0L) {
@@ -37,7 +38,8 @@ internal fun checkedNegate(a: Long): Long {
 }
 
 /** Multiply [a] and [b], throwing [ArithmeticException] on `Long` overflow. */
-internal fun checkedMul(a: Long, b: Long): Long {
+@HeddleInternalApi
+public fun checkedMul(a: Long, b: Long): Long {
     if (a == 0L || b == 0L) return 0L
     val product = a * b
     // The division round-trip fails on overflow; the MIN_VALUE/-1 pair overflows

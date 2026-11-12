@@ -136,6 +136,7 @@ Replace `<version>` with the latest release shown on the Maven Central badge at 
 | `kuilt-raft` | all | Raft consensus — leader election, log replication, snapshots, dynamic membership, linearizable reads, leadership transfer. |
 | `kuilt-session` | all | Membership-aware `Room` (`SeamRoom`): handshake, roster, reconnect tokens, partition detection. |
 | `kuilt-heddle` | all | Fair-share scheduling of a pooled resource across peers, with no central referee: each group gets the slice it was promised, an idle group lends its share to a busy one, and it survives a partition. |
+| `kuilt-heddle-core` | all | The fair-share policy and ledger behind `kuilt-heddle`, on their own: decide who gets the next slice of a shared resource in one process, with no network. |
 
 **Fabrics**
 
