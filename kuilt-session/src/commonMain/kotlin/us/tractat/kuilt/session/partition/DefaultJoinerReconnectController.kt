@@ -73,6 +73,13 @@ public class DefaultJoinerReconnectController(
         }
         val result: ResumeResult.HostVerdict =
             mutex.withLock {
+                // The secret is checked FIRST, inside the same critical section that spends the
+                // window, so a forgery can neither consume the window nor learn its state (#3165).
+                // Any member can write the other three fields of a token for any other member.
+                val enrolled = secrets[token.peerId]
+                if (enrolled == null || !enrolled.matches(token.secret)) {
+                    return@withLock ResumeResult.TokenInvalid("secret-mismatch")
+                }
                 val state = windows[token.peerId]
                 when {
                     // No window has been opened for this peer at all — the fast-reconnect race
