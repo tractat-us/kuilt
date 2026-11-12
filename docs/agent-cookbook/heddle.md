@@ -96,7 +96,12 @@ heddle. Renaming or moving a child is a delete plus an add, and the new child st
 fairness history. `Topology.lower(generation)` turns the checked tree into the `AttachmentRecord`s
 a ledger is prepared with, sorted, under ids that are the same on every target and never collide
 however the names are spelt: `root/acme/batch@1:1#0` is `batch` in `acme`, at weight 1,
-generation 0, and `groupId("acme", "batch")` names the group.
+generation 0, and `groupId("acme", "batch")` names the group. On a reload,
+`Topology.diff(new, ledger, generation)` lists the `TopologyStep`s from what the ledger holds to
+`new`, reading which edges exist from the ledger rather than from the old tree, so it works after
+a restart, retires what an earlier reload left draining, and after a partial apply lists exactly
+the rest; a new weight is a new edge, so the group's fairness history restarts at its parent's
+front.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyFromDocument -->
 ```kotlin

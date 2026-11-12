@@ -82,6 +82,7 @@ public sealed interface TopologyStep {
  *   generation the ledger holds, so a caller that lost its counter still never reuses an id.
  * @throws IllegalArgumentException if [ledger] was minted at a different root — a change of root
  *   is not a reload — or if [generation] is negative.
+ * @sample us.tractat.kuilt.heddle.sampleTopologyDiff
  */
 public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, generation: Long): List<TopologyStep> {
     require(generation >= 0L) { "a generation is >= 0, was $generation" }

@@ -303,6 +303,87 @@ sealed interface us.tractat.kuilt.heddle/TopologyParse { // us.tractat.kuilt.hed
     }
 }
 
+sealed interface us.tractat.kuilt.heddle/TopologyStep { // us.tractat.kuilt.heddle/TopologyStep|null[0]
+    abstract val child // us.tractat.kuilt.heddle/TopologyStep.child|{}child[0]
+        abstract fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/TopologyStep.child.<get-child>|<get-child>(){}[0]
+
+    final class Activate : us.tractat.kuilt.heddle/TopologyStep { // us.tractat.kuilt.heddle/TopologyStep.Activate|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/TopologyStep.Activate.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val child // us.tractat.kuilt.heddle/TopologyStep.Activate.child|{}child[0]
+            final fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/TopologyStep.Activate.child.<get-child>|<get-child>(){}[0]
+        final val edge // us.tractat.kuilt.heddle/TopologyStep.Activate.edge|{}edge[0]
+            final fun <get-edge>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/TopologyStep.Activate.edge.<get-edge>|<get-edge>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/TopologyStep.Activate.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/TopologyStep.Activate.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/AttachmentId = ..., us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/TopologyStep.Activate // us.tractat.kuilt.heddle/TopologyStep.Activate.copy|copy(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyStep.Activate.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyStep.Activate.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyStep.Activate.toString|toString(){}[0]
+    }
+
+    final class Close : us.tractat.kuilt.heddle/TopologyStep { // us.tractat.kuilt.heddle/TopologyStep.Close|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/TopologyStep.Close.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val child // us.tractat.kuilt.heddle/TopologyStep.Close.child|{}child[0]
+            final fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/TopologyStep.Close.child.<get-child>|<get-child>(){}[0]
+        final val edge // us.tractat.kuilt.heddle/TopologyStep.Close.edge|{}edge[0]
+            final fun <get-edge>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/TopologyStep.Close.edge.<get-edge>|<get-edge>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/TopologyStep.Close.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/TopologyStep.Close.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/AttachmentId = ..., us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/TopologyStep.Close // us.tractat.kuilt.heddle/TopologyStep.Close.copy|copy(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyStep.Close.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyStep.Close.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyStep.Close.toString|toString(){}[0]
+    }
+
+    final class Prepare : us.tractat.kuilt.heddle/TopologyStep { // us.tractat.kuilt.heddle/TopologyStep.Prepare|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/AttachmentRecord) // us.tractat.kuilt.heddle/TopologyStep.Prepare.<init>|<init>(us.tractat.kuilt.heddle.AttachmentRecord){}[0]
+
+        final val child // us.tractat.kuilt.heddle/TopologyStep.Prepare.child|{}child[0]
+            final fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/TopologyStep.Prepare.child.<get-child>|<get-child>(){}[0]
+        final val record // us.tractat.kuilt.heddle/TopologyStep.Prepare.record|{}record[0]
+            final fun <get-record>(): us.tractat.kuilt.heddle/AttachmentRecord // us.tractat.kuilt.heddle/TopologyStep.Prepare.record.<get-record>|<get-record>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/AttachmentRecord // us.tractat.kuilt.heddle/TopologyStep.Prepare.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/AttachmentRecord = ...): us.tractat.kuilt.heddle/TopologyStep.Prepare // us.tractat.kuilt.heddle/TopologyStep.Prepare.copy|copy(us.tractat.kuilt.heddle.AttachmentRecord){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyStep.Prepare.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyStep.Prepare.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyStep.Prepare.toString|toString(){}[0]
+    }
+
+    final class Reconcile : us.tractat.kuilt.heddle/TopologyStep { // us.tractat.kuilt.heddle/TopologyStep.Reconcile|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/TopologyStep.Reconcile.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val child // us.tractat.kuilt.heddle/TopologyStep.Reconcile.child|{}child[0]
+            final fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/TopologyStep.Reconcile.child.<get-child>|<get-child>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/TopologyStep.Reconcile.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/TopologyStep.Reconcile // us.tractat.kuilt.heddle/TopologyStep.Reconcile.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyStep.Reconcile.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyStep.Reconcile.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyStep.Reconcile.toString|toString(){}[0]
+    }
+
+    final class Retire : us.tractat.kuilt.heddle/TopologyStep { // us.tractat.kuilt.heddle/TopologyStep.Retire|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/TopologyStep.Retire.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val child // us.tractat.kuilt.heddle/TopologyStep.Retire.child|{}child[0]
+            final fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/TopologyStep.Retire.child.<get-child>|<get-child>(){}[0]
+        final val edge // us.tractat.kuilt.heddle/TopologyStep.Retire.edge|{}edge[0]
+            final fun <get-edge>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/TopologyStep.Retire.edge.<get-edge>|<get-edge>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/TopologyStep.Retire.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/TopologyStep.Retire.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/AttachmentId = ..., us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/TopologyStep.Retire // us.tractat.kuilt.heddle/TopologyStep.Retire.copy|copy(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyStep.Retire.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyStep.Retire.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyStep.Retire.toString|toString(){}[0]
+    }
+}
+
 final class us.tractat.kuilt.heddle/AttachmentRecord { // us.tractat.kuilt.heddle/AttachmentRecord|null[0]
     constructor <init>(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/Weight) // us.tractat.kuilt.heddle/AttachmentRecord.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.Weight){}[0]
 
@@ -1161,6 +1242,7 @@ final object us.tractat.kuilt.heddle/WeightSerializer : kotlinx.serialization/KS
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/groupId(kotlin/Array<out kotlin/String>...): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/groupId|groupId@us.tractat.kuilt.heddle.Topology(kotlin.Array<out|kotlin.String>...){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/lower(kotlin/Long = ...): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentRecord> // us.tractat.kuilt.heddle/lower|lower@us.tractat.kuilt.heddle.Topology(kotlin.Long){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/runtimeChildId(kotlin.collections/List<kotlin/String>, kotlin/String): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/runtimeChildId|runtimeChildId@us.tractat.kuilt.heddle.Topology(kotlin.collections.List<kotlin.String>;kotlin.String){}[0]
+final fun (us.tractat.kuilt.heddle/Topology.Companion).us.tractat.kuilt.heddle/diff(us.tractat.kuilt.heddle/Topology, us.tractat.kuilt.heddle/EntitlementLedger, kotlin/Long): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep> // us.tractat.kuilt.heddle/diff|diff@us.tractat.kuilt.heddle.Topology.Companion(us.tractat.kuilt.heddle.Topology;us.tractat.kuilt.heddle.EntitlementLedger;kotlin.Long){}[0]
 final fun us.tractat.kuilt.heddle/checkedAdd(kotlin/Long, kotlin/Long): kotlin/Long // us.tractat.kuilt.heddle/checkedAdd|checkedAdd(kotlin.Long;kotlin.Long){}[0]
 final fun us.tractat.kuilt.heddle/checkedMul(kotlin/Long, kotlin/Long): kotlin/Long // us.tractat.kuilt.heddle/checkedMul|checkedMul(kotlin.Long;kotlin.Long){}[0]
 final fun us.tractat.kuilt.heddle/draft(kotlin/String, kotlin/Function1<us.tractat.kuilt.heddle/TopologyDraft, kotlin/Unit>): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/draft|draft(kotlin.String;kotlin.Function1<us.tractat.kuilt.heddle.TopologyDraft,kotlin.Unit>){}[0]

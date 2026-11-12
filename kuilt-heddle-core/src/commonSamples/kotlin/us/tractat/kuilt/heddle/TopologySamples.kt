@@ -1,5 +1,8 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
+
 /**
  * An admin's config file, decoded in whatever format the app reads, becomes a checked
  * [Topology], or a list of every problem in it, each with an address a config page can show.
@@ -65,4 +68,41 @@ internal fun sampleTopologyDraft() {
         e
     }
     check(refused?.problems?.single()?.kind == TopologyProblem.Kind.DUPLICATE_NAME)
+}
+
+/**
+ * A reload: [Topology.diff] reads which edges the tree already has from the ledger itself, not
+ * from the tree it had before, and lists the steps to the new one in the order they must run.
+ */
+@Suppress("unused")
+internal fun sampleTopologyDiff() {
+    val before = draft("pool") {
+        group("acme", Weight.of(3)) { lane("batch") }
+    }
+    // A ledger with supply and no edges yet: the diff prepares the whole tree, then activates it.
+    var ledger = EntitlementLedger.bootstrap(before.groupId(), mapOf(ReplicaId("me") to 100L), "boot")
+    for (step in Topology.diff(before, ledger, generation = 0)) {
+        val patch = when (step) {
+            is TopologyStep.Prepare -> ledger.prepare(step.record)
+            is TopologyStep.Activate -> ledger.activate(step.edge)
+            else -> error("a new tree is only prepared and activated, not $step")
+        }
+        ledger = ledger.piece(checkNotNull(patch))
+    }
+    check(Topology.diff(before, ledger, generation = 0).isEmpty())
+
+    // A new weight is a new edge: prepare it, close and retire the old one, then activate.
+    val after = draft("pool") {
+        group("acme", Weight.of(4)) { lane("batch") }
+    }
+    val acme = after.groupId("acme")
+    val steps = Topology.diff(after, ledger, generation = 1)
+    check(
+        steps == listOf(
+            TopologyStep.Prepare(AttachmentRecord(AttachmentId("pool/acme@4:1#1"), after.groupId(), acme, Weight.of(4))),
+            TopologyStep.Close(AttachmentId("pool/acme@3:1#0"), acme),
+            TopologyStep.Retire(AttachmentId("pool/acme@3:1#0"), acme),
+            TopologyStep.Activate(AttachmentId("pool/acme@4:1#1"), acme),
+        ),
+    )
 }
