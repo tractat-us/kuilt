@@ -13,8 +13,12 @@ You put a **lane** label on a task — a plain string like `"acme/interactive"` 
 Warp carries the label but ignores it. This module reads the label and, before a task runs,
 checks a shared, weighted budget: is there room in that lane's share right now? If yes, the task
 runs and its use is charged. If not, the task simply waits — it is never thrown away — and runs
-later when the lane's share refills. Two lanes weighted three-to-one end up completing work
+later when the lane's share refills. Two lanes weighted three-to-one end up running work
 three-to-one.
+
+One catch: the charge is per *run*, not per task. Warp may run one task on two machines while its
+membership is shifting, and both runs really used the pool, so the lane pays twice. With a steady
+group that never happens.
 
 An **untagged** task (the default) skips all of this and behaves exactly as warp always has.
 
@@ -25,7 +29,10 @@ An **untagged** task (the default) skips all of this and behaves exactly as warp
 - **`HeddleAdmissionControl`** — the adapter. It plugs into warp's `AdmissionControl` gate,
   maps a task's `Lane` to a fair-share **leaf** in `:kuilt-heddle`, reserves that leaf's
   entitlement before the task runs, and charges it once the task finishes. Out of entitlement
-  ⇒ the task defers. Untagged ⇒ admitted for free.
+  ⇒ the task defers. Untagged ⇒ admitted for free. It takes either kind of heddle node, through
+  the `FairShareExecution` surface they share. A governed node that may not spend yet — it has not
+  enrolled, has departed, or has stopped at a record it cannot read — answers `GateClosed`, and the
+  task defers just as for exhaustion, with the reason logged.
 - **`TaskDescriptor.inLane(...)`** — the producer-side tagging step: copy a descriptor onto a
   lane before you enqueue it.
 
@@ -46,7 +53,7 @@ The budget itself is a `:kuilt-heddle` `EntitlementLedger` — a coordination-fr
 structure. Reserving and charging are local reads and writes of already-agreed holdings, so
 admitting a task adds **no** consensus round; warp's free path stays exactly as cheap as before.
 Entitlement flows down the weighted tree the ordinary heddle way — advertise demand, call
-`HeddleNode.schedule(parent)` — and warp's consistent-hash placement is untouched: this module
+`schedule(parent)` on the node — and warp's consistent-hash placement is untouched: this module
 answers *how much*, never *where*.
 
 See `docs/heddle-design.md` §14 (warp as the first customer) for the full design.
