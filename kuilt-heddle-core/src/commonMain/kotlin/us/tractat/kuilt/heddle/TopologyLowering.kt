@@ -180,7 +180,7 @@ internal fun effectiveGeneration(supplied: Long, ledger: EntitlementLedger): Lon
 
 private const val RUNTIME_MARKER = '!'
 
-private fun declaredChildId(parent: String, name: String): String = "$parent/${escapeSegment(name)}"
+internal fun declaredChildId(parent: String, name: String): String = "$parent/${escapeSegment(name)}"
 
 private fun runtimeChildPath(parent: String, name: String): String = "$parent/$RUNTIME_MARKER${escapeSegment(name)}"
 

@@ -370,7 +370,9 @@ straggler charge afterwards yields a **permanently unclearable**
 clearing iteration (`outstanding > 0` only) and the `n ≥ sp` precondition (§11,
 finding 2). Without (A), a straggler is a magnitude nuisance absorbed by `s`'s
 headroom; with (A), it is a permanent false violation. **So (A) is unsafe without a
-real fence, and the fence below is load-bearing, not a companion.**
+real fence, and the fence below is load-bearing, not a companion.** A ledger with a
+single writer meets it by construction, provided no open reservation's captured path
+crosses an edge of the strand being moved, since then no straggler exists.
 
 ### 6.1 Why causal stability cannot be the fence
 

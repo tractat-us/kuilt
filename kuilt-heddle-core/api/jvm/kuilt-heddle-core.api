@@ -916,6 +916,10 @@ public final class us/tractat/kuilt/heddle/Topology$RuntimeChildren$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class us/tractat/kuilt/heddle/TopologyDiffKt {
+	public static final fun diff (Lus/tractat/kuilt/heddle/Topology$Companion;Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/EntitlementLedger;J)Ljava/util/List;
+}
+
 public final class us/tractat/kuilt/heddle/TopologyDocument {
 	public static final field Companion Lus/tractat/kuilt/heddle/TopologyDocument$Companion;
 	public fun <init> (Ljava/lang/String;Ljava/util/List;)V
@@ -1100,6 +1104,72 @@ public final class us/tractat/kuilt/heddle/TopologyProblem$Kind : java/lang/Enum
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyProblem$Kind;
 	public static fun values ()[Lus/tractat/kuilt/heddle/TopologyProblem$Kind;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/TopologyStep {
+	public abstract fun getChild-urUY4Jo ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyStep$Activate : us/tractat/kuilt/heddle/TopologyStep {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun component2-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-s2VmlmU (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyStep$Activate;
+	public static synthetic fun copy-s2VmlmU$default (Lus/tractat/kuilt/heddle/TopologyStep$Activate;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyStep$Activate;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getChild-urUY4Jo ()Ljava/lang/String;
+	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyStep$Close : us/tractat/kuilt/heddle/TopologyStep {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun component2-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-s2VmlmU (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyStep$Close;
+	public static synthetic fun copy-s2VmlmU$default (Lus/tractat/kuilt/heddle/TopologyStep$Close;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyStep$Close;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getChild-urUY4Jo ()Ljava/lang/String;
+	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyStep$Prepare : us/tractat/kuilt/heddle/TopologyStep {
+	public fun <init> (Lus/tractat/kuilt/heddle/AttachmentRecord;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/AttachmentRecord;
+	public final fun copy (Lus/tractat/kuilt/heddle/AttachmentRecord;)Lus/tractat/kuilt/heddle/TopologyStep$Prepare;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyStep$Prepare;Lus/tractat/kuilt/heddle/AttachmentRecord;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyStep$Prepare;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getChild-urUY4Jo ()Ljava/lang/String;
+	public final fun getRecord ()Lus/tractat/kuilt/heddle/AttachmentRecord;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyStep$Reconcile : us/tractat/kuilt/heddle/TopologyStep {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyStep$Reconcile;
+	public static synthetic fun copy-9eHOidQ$default (Lus/tractat/kuilt/heddle/TopologyStep$Reconcile;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyStep$Reconcile;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getChild-urUY4Jo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyStep$Retire : us/tractat/kuilt/heddle/TopologyStep {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun component2-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-s2VmlmU (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyStep$Retire;
+	public static synthetic fun copy-s2VmlmU$default (Lus/tractat/kuilt/heddle/TopologyStep$Retire;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyStep$Retire;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getChild-urUY4Jo ()Ljava/lang/String;
+	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class us/tractat/kuilt/heddle/TopologyWeightSerializer : kotlinx/serialization/KSerializer {

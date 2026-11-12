@@ -20,7 +20,7 @@
 6. **D6:** `LocalHeddle` is not thread-safe and uses no atomicfu. An immutable `snapshot()` lets status and persistence readers avoid the caller's scheduling lock.
 7. **D7:** reconcile by lease, not by executor. `reconcileLeases(live)` reports mismatches in both directions. The consumer completes each orphan at its elapsed cost. An orphan never blocks a reload.
 8. **Q6:** one lease per slot. The consumer owns concurrency, so the engine has no slot gate and no executor view. It keeps only total capacity, for supply sizing. Task C runs before L1's API is frozen, because Task C is the evidence for that API.
-9. **R1: a reweight or reparent moves open leases with it (Option A).** In one all-or-nothing step, the engine:
+9. **R1: a reweight moves open leases with it (Option A).** In one all-or-nothing step, the engine:
    - releases each open lease's reservation up the old path;
    - retires the old edge, which is now at outstanding 0;
    - activates the new edge;
@@ -53,6 +53,12 @@ These override the task sections below where they differ.
    - L2 sizes the mint chunk, since mint records grow linearly with service.
 4. **Task E: `explain(leaf)` moves out of S2 into its own task, right after L1.** S2 keeps `preview` only.
 5. **Task O1: `:kuilt-heddle-otel`, after S1** (#3184). It lives in a sibling module over core + `:kuilt-otel`, so core's dependency floor stays where it is. It records metrics per group path, a span per lease, and the hold reason (`WaitExplanation`) as a structured attribute, **emitted when a leaf's reason changes**.
+6. **Task 4's contracts carry into L3 and S1** (from the #3190 reviews, 2026-11-12). They are stated on `TopologyStep`'s KDoc.
+   - **L3's `apply` diffs and applies under one lock, and keeps list order across children.** Steps are valid only against the ledger they were computed from: traffic between the diff and the apply can make a needed `Reconcile` appear (`holdings(acme) = -7`, `PersistentNegativeHoldings`). Running one child's steps ahead of another's is not a prefix, and renumbers the remaining prepares.
+   - **`reweightRehomesOpenLeasesAtomically` also asserts that no captured path names a RETIRED edge after the swap.** That is `Reconcile`'s precondition under a single writer: no open lease's captured path crosses an edge of the retired strand, or a straggler `spendCaptured` charges a drained edge and leaves a permanent conflict.
+   - **L3 decides which rule wins** when a removed child with open work sits under a reweighted parent: the parent's replacement releases the child's leases, or the removal yields `Draining`.
+   - **A reparent is never a replacement** (Iain, 2026-11-12). It is a delete plus an add (Ruling 12), so in-flight leases drain under the old id. Only a reweight re-homes leases (R1).
+   - **S1:** a PREPARED edge the diff left because nothing wants it is informational, never "reload pending". The leaf predicate S1 reports follows #3191.
 
 ## Verified in source (2026-11-12)
 
@@ -413,7 +419,7 @@ public companion object { public fun fromTopology(topology: Topology, policy: Lo
 
   Any failure leaves the state untouched and yields `Refused`.
 - **A plain removal with open leases** yields `Draining` for that child only. It finishes once those leases complete. Orphans are completed through `reconcileLeases`, so an orphan never blocks the rest of the reload (D7).
-- **KDoc and cookbook:** a reweighted or reparented group restarts at its parent's front, and its fairness history resets (R1).
+- **KDoc and cookbook:** a reweighted group restarts at its parent's front, and its fairness history resets (R1).
 
 - [ ] **Step 1: Write the failing tests.**
   - `reweightRehomesOpenLeasesAtomically`: three leases are open under acme, and acme is reweighted 3→4. All three leases are still open, their captured paths run through the new edge, `complete` charges each exactly once, `validate()` is empty, and `holdings(acme) ≥ 0` throughout.
