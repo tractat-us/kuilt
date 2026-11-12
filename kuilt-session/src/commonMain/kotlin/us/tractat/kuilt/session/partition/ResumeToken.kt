@@ -7,10 +7,10 @@ import us.tractat.kuilt.core.PeerId
  * The credential a joiner presents when reconnecting after a transport drop.
  *
  * The host validates three claims, in this order:
- * 1. The [secret] matches the one the host minted for [peerId] at admit — proves the resume is
+ * 1. The [roomId] matches the current session — prevents cross-session replay.
+ * 2. The [secret] matches the one the host minted for [peerId] at admit — proves the resume is
  *    [peerId]'s own (#3165). The room checks it **before** the window controller is asked anything,
  *    so a wrong secret leaves the real member's window open.
- * 2. The [roomId] matches the current session — prevents cross-session replay.
  * 3. The reconnect window for [peerId] is still open and unspent — prevents stale reconnects.
  *
  * [peerId], [roomId] and [issuedAt] are public knowledge inside a room — every member learns every

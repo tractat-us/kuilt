@@ -1719,15 +1719,18 @@ internal class SeamRoom(
         //
         // A `Resume` without any secret comes from a joiner that predates it: it cannot prove it is
         // the member it names, so it is refused as an invalid token, which that joiner treats as
-        // terminal. A token for a peer that is NOT a current member holds no window of any member's
-        // to spend, so the controller still decides it — a genuine late resume after an expiry
-        // keeps its `ResumeWindowExpired` answer.
+        // terminal. Two tokens can spend no window here and so go to the controller unchecked: one
+        // for a peer that is NOT a current member (a genuine late resume after an expiry keeps its
+        // `ResumeWindowExpired` answer), and one naming another room, which the controller refuses as
+        // `session-mismatch` — the reason that actually describes a token minted by another server.
         val peer = PeerId(msg.tokenPeerId)
         val presented = msg.resumeSecret
         val expected = lock.withLock { resumeSecrets[peer] }
+        val namesThisRoom = msg.tokenRoomId == _roomId.value?.value
         val verdict = when {
             presented == null -> ResumeResult.TokenInvalid("missing-secret")
-            expected != null && !expected.matches(presented) -> ResumeResult.TokenInvalid("secret-mismatch")
+            namesThisRoom && expected != null && !expected.matches(presented) ->
+                ResumeResult.TokenInvalid("secret-mismatch")
             else -> ctrl.tryResume(
                 ResumeToken(
                     peerId = peer,
