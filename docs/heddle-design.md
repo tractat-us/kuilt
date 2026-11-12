@@ -926,10 +926,15 @@ them in order.
 
 `HeddleConfig` carries the policy caps (`PolicyConfig`), the per-peer holdings cap of
 §8.2, the demand TTL, the `Quilter` and heartbeat settings, and an injectable
-`Random`. Internals follow the house rules as sketched: an atomicfu lock, no
+`Random`. Time is a dependency: the scope, the clock and the RNG are required
+injections, never defaults. Internals follow the house rules as sketched: an atomicfu lock, no
 `limitedParallelism(1)` confinement, and cancellation-safe best-effort sends.
 
 ### 11.1 The fairness draft — a builder over the topology
+
+> **Not built.** This is a proposal. Today a tree is a `List<AttachmentRecord>`
+> handed to `heddleStatic`, or a series of `prepare`/`activate` calls on a
+> governed node, which takes no starting topology at all.
 
 Declaring the group tree by hand (`prepare`/`activate` per edge) is correct but
 noisy. A small type-safe builder — the **draft**, in the loom's own word — is
@@ -1132,6 +1137,13 @@ load-smoothing idea completed. Role by role:
 
 ### 14.4 Integration sketch
 
+> **What shipped.** The opaque `Lane` on `TaskDescriptor` (in `:kuilt-warp`) and
+> execution-side enforcement (`HeddleAdmissionControl`, in the
+> `:kuilt-warp-heddle` satellite). A producer tags a descriptor with
+> `TaskDescriptor.inLane("acme/interactive")`. The `Draft` modifier `.lane()` and
+> the scoped `warp.inLane { }` below are not built, and neither is
+> producer-side admission.
+
 Minimal surface change; the envelope already exists to carry it:
 
 ```kotlin
@@ -1166,7 +1178,8 @@ decoration on a `Draft`, consistent with the opaque-tag/satellite decision above
 
 Execution-side enforcement first (no producer API beyond the tag): the ring
 owner of a task must `reserve` from the task's lane before running it —
-`HeddleNode.reserve(leaf, maximumCost)` answering `ReserveOutcome.NoHoldings` defers the task
+`reserve(leaf, maximumCost)` answering `ReserveOutcome.NoHoldings` (or, on a governed
+node, `GateClosed`) defers the task
 until entitlement flows in, throttling each lane to its share while the ring
 still decides placement. Producer-side admission (reserve at `shuttle` time,
 bounding `WorkQueue` growth itself) is the follow-on.
@@ -1276,6 +1289,10 @@ zoo is a small, separate follow-on.)
 
 ## 15. Implementation phasing
 
+> **All six phases have shipped.** The text below is the plan as written, kept
+> because its acceptance lists name the properties the tests pin. Where the
+> outcome differs, a note says so.
+
 Six phases, each independently landable as its own epic sub-issue track;
 small PRs, standard repo cadence; the invariant tests of §10 land **with**
 (never after) each phase. Ordering is a dependency chain — each phase builds
@@ -1367,13 +1384,14 @@ specified but not shipped).
 
 ### Phase 6 — Warp lane integration
 
-**Home:** `:kuilt-warp` (optional dependency on `:kuilt-heddle`), behind
-warp's experimental posture.
+**Home:** as built, the opaque `Lane` lives in `:kuilt-warp` and the
+enforcement in the `:kuilt-warp-heddle` satellite (`HeddleAdmissionControl`),
+since Gradle KMP has no optional dependency; warp core never sees a heddle type.
 **Work:** `Lane` field on `TaskDescriptor` (defaulting to a root lane),
 execution-side `reserve` in the claim path (§14.4), shared liveness/mux
 wiring through `WarpNode`.
 **Acceptance:**
-- Two lanes with weights 3:1 converge to the ratio in completed tasks on a
+- Two lanes with weights 3:1 converge to the ratio in executions (§14.4) on a
   grid simulation; the untagged default lane reproduces today's behavior
   bit-for-bit.
 - Lane exhaustion defers tasks (they stay pending) — never drops them; work
