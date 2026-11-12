@@ -62,11 +62,7 @@ class EntitlementLedgerComponentCoverageTest {
      * field. Without this the map is a place to park a stale name, and a real component could later
      * be silenced by a leftover entry that happens to match it.
      *
-     * ⚠ **Vacuous today, by construction and deliberately.** [NOT_A_COMPONENT] is empty, so this
-     * loop runs zero iterations and passes trivially — it asserts nothing about the current build
-     * and must not be read as evidence for one. It exists so that the *first* opt-out entry arrives
-     * already guarded, rather than as a hole someone has to notice and close afterwards. Its
-     * positive control is adding a bogus entry (`"nosuchfield" to "why"`) and watching it red.
+     * Its positive control is adding a bogus entry (`"nosuchfield" to "why"`) and watching it red.
      */
     @Test
     fun everyOptOutStillNamesADeclaredField() {
@@ -93,9 +89,8 @@ class EntitlementLedgerComponentCoverageTest {
         /**
          * Fields that are declared but are **not** lattice components, each with a mandatory reason.
          *
-         * Empty today, and deliberately present anyway. "Every declared field is a component" is
-         * true of both classes right now and will stop being true the first time someone writes a
-         * `by lazy` cache: the delegate materialises as a declared field named `x${'$'}delegate`,
+         * The ledger's two entries are its edge index (#3173, plan Task L0). "Every declared field is
+         * a component" stops being true the first time someone writes a `by lazy` cache: the delegate materialises as a declared field named `x${'$'}delegate`,
          * which `isSynthetic` does **not** cover. Without a place to say "not a component, because
          * it is a cache", the next author's cheapest way to a green build is to invent a
          * `LedgerComponent("x${'$'}delegate", …)` fixture — a bogus registration that makes the walk
@@ -107,7 +102,10 @@ class EntitlementLedgerComponentCoverageTest {
          * that participates in either.
          */
         val NOT_A_COMPONENT: Map<String, Map<String, String>> = mapOf(
-            "EntitlementLedger" to emptyMap(),
+            "EntitlementLedger" to mapOf(
+                "carried" to "an edge index piece hands to its result: derived state, @Transient, outside equals",
+                "index" to "the lazily built edge index: derived state, @Transient, outside equals",
+            ),
             "SlotFinals" to emptyMap(),
         )
 
