@@ -494,6 +494,11 @@ from one primitive — *close, drain, retire, re-generate*:
 - **Change weight** = new generation, same drain discipline.
 - **Insert an intermediate group** = compose the above.
 
+The reparent above keeps the child's identity, and is a ledger-level operation.
+A `Topology` (§11.1) names a child by its path, so a move at the topology level is
+a delete plus an add: the old child is closed, drained and retired with its history,
+and a new child starts under the new parent with none.
+
 ### 5.4 `MovableTree`: shipped, and deliberately not used in v1
 
 The source cites the replicated-tree move algorithm as *future* work. kuilt
@@ -901,7 +906,9 @@ Carried over from the source intact; each is a named property test (§13).
    live inbound generation (§4.4; relocation design §6.2 step 2). That weakening
    is deliberate and narrow: it applies only to an edge every peer has
    log-recorded a promise never to write again, and the re-home is the same
-   conserving move the recovery would perform, taken at charge time.
+   conserving move the recovery would perform, taken at charge time. A
+   single-writer ledger meets that fence by construction, provided no open
+   reservation's captured path crosses an edge of the strand it re-homes.
 5. **Neutral attachment initialization.** A new generation starts at the
    parent's current virtual time — the front over its *demanding* children,
    not over all its active ones (§7.2) — never with lifetime credit. The
@@ -947,36 +954,44 @@ them in order.
 injections, never defaults. Internals follow the house rules as sketched: an atomicfu lock, no
 `limitedParallelism(1)` confinement, and cancellation-safe best-effort sends.
 
-### 11.1 The fairness draft — a builder over the topology
-
-> **Not built.** This is a proposal. Today a tree is a `List<AttachmentRecord>`
-> handed to `heddleStatic`, or a series of `prepare`/`activate` calls on a
-> governed node, which takes no starting topology at all.
+### 11.1 The topology, the draft, and the diff
 
 Declaring the group tree by hand (`prepare`/`activate` per edge) is correct but
-noisy. A small type-safe builder — the **draft**, in the loom's own word — is
-pure sugar over those mutators: `group { }` is an internal node, `lane()` a leaf,
-weights are relationships among siblings. It produces an immutable topology value
-(a set of `AttachmentRecord`s plus the mint plan) that `heddleStatic`/
-`heddleGoverned` bootstrap from.
+noisy, so a tree is a value: a `Topology` (`:kuilt-heddle-core`), a named root with
+nested `Group`s and `Lane`s, each weighted against its siblings. Every way of
+building one checks it, so a `Topology` that exists is valid. An admin's file
+decodes to a `TopologyDocument`, and `Topology.from` returns either the tree or
+every problem in it at once. In code, the **draft** builds the same value:
 
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyDraft -->
 ```kotlin
-val fairness = draft {
-    group("acme", weight = 3) {
-        lane("interactive", weight = 3)
-        lane("batch", weight = 1)
+val fairness = draft("pool") {
+    group("acme", Weight.of(3)) {
+        lane("interactive", Weight.of(3, 2))
+        lane("batch")
     }
-    group("hobby", weight = 1) { lane("default") }
+    group("tenants") { runtimeChildren() }
 }
 ```
 
-Because a weight is a sibling relationship, the builder can only *create*
-generations — there is no in-place weight mutation to express, so the DSL enforces
-"change = new generation" (§3) by construction. It lowers onto a fluent runtime
-API (`acme.lane("incident", weight = 5)`) which is what *dynamic* create/reparent/
-close (§5.3) uses directly. The builder is the static-policy front door; the
-fluent API is the runtime one; both are the same topology underneath. This is an
-ergonomics layer, not a semantic addition — it changes nothing below the surface.
+A `Topology` carries no mint plan: supply is not part of the admin's view, and an
+engine tops it up itself. `Topology.lower(generation)` turns the tree into the
+`AttachmentRecord`s a ledger is prepared with, under ids that are the same on every
+target (`pool/acme/batch@1:1#0` is `batch` in `acme`, weight 1, generation 0).
+
+A reload is `Topology.diff(new, ledger, generation)`. It returns `TopologyStep`s —
+`Prepare`, `Activate`, `Close`, `Retire`, `Reconcile` — in the order §5.3 needs, and
+it reads which edges exist from the ledger rather than from the previous tree, so a
+reload after a restart, or one that arrives while an earlier one is still draining,
+needs nothing else. Because a weight is a sibling relationship, a change of weight
+is always a new generation (§3), and the group's fairness history restarts at its
+parent's front. A rename or a move is a delete plus an add (§5.3). The steps are
+applied by an interpreter that holds the ledger's only writer; the contracts it must
+keep are on `TopologyStep`.
+
+Children the consumer creates while running hang under a group marked with
+`runtimeChildren`, in their own id namespace, rather than through a fluent runtime
+API; the calls that attach and detach them are not built yet.
 
 ---
 
