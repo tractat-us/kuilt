@@ -138,7 +138,7 @@ class ResumeFlightOwnershipTest {
             lock = ReentrantLock(),
             host = host,
         )
-        machine.mintTokenIfAbsent("room-1")
+        machine.mintTokenIfAbsent("room-1", ResumeSecret.generate())
         return Rig(seam, host, machine, { reweaves }, this)
     }
 }

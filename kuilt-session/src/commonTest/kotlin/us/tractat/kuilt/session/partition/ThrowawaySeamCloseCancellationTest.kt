@@ -69,7 +69,7 @@ class ThrowawaySeamCloseCancellationTest {
                 lock = ReentrantLock(),
                 host = host,
             )
-            machine.mintTokenIfAbsent("room-1")
+            machine.mintTokenIfAbsent("room-1", ResumeSecret.generate())
 
             machine.attemptReconnect(Instant.fromEpochMilliseconds(0))
             runCurrent()
