@@ -8,6 +8,7 @@ import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.session.RoomFramePrefix
+import us.tractat.kuilt.session.partition.ResumeSecret
 
 /**
  * Wire messages that implement the admit/identify handshake.
@@ -73,6 +74,11 @@ public sealed interface AdmitMessage {
      * [identity] — the identity the new member declared in their [Hello].
      * [roomId] — the host's stable room identifier; null in bootstrap welcomes for existing members.
      *   Joiners use this to mint their [us.tractat.kuilt.session.partition.ResumeToken].
+     * [resumeSecret] — the secret the host minted for [assignedPeerId], present **only** on the
+     *   direct Welcome to that member (#3165). The roster copy every other member receives, and the
+     *   bootstrap and host-intro Welcomes, carry `null`: a bystander holding it could resume as that
+     *   member. Additive — nullable and defaulted, so an older joiner ignores it and a secretless
+     *   Welcome encodes byte-identically to the pre-#3165 form.
      */
     @Serializable
     @SerialName("welcome")
@@ -82,6 +88,7 @@ public sealed interface AdmitMessage {
         val sessionId: String,
         val deviceId: String? = null,
         val roomId: String? = null,
+        val resumeSecret: ResumeSecret? = null,
     ) : AdmitMessage
 
     /**
@@ -120,6 +127,10 @@ public sealed interface AdmitMessage {
      * [tokenPeerId] — the joiner's [us.tractat.kuilt.core.PeerId] from the original admit.
      * [tokenRoomId] — the room's stable identifier from the host's [Welcome.roomId].
      * [issuedAt] — epoch-millis when the token was issued (from the injected clock).
+     * [resumeSecret] — the secret from the joiner's own [Welcome.resumeSecret] (#3165). Nullable on
+     *   the wire only so a frame from an older joiner still decodes: a host refuses a `Resume`
+     *   without one as [RejectCode.ResumeTokenInvalid], which is terminal, so that joiner re-joins
+     *   fresh instead of resuming.
      */
     @Serializable
     @SerialName("resume")
@@ -127,6 +138,7 @@ public sealed interface AdmitMessage {
         val tokenPeerId: String,
         val tokenRoomId: String,
         val issuedAt: Long,
+        val resumeSecret: ResumeSecret? = null,
     ) : AdmitMessage
 
     /**
