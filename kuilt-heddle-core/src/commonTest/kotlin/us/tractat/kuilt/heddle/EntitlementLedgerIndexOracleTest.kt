@@ -286,7 +286,7 @@ class EntitlementLedgerIndexOracleTest {
 
         fun children(g: GroupId): List<AttachmentId> = all.filter { e -> l.recordsOf(e).any { it.parent == g } }
 
-        fun isLeaf(g: GroupId): Boolean = children(g).isEmpty()
+        fun isLeaf(g: GroupId): Boolean = children(g).none { l.lifecycle(it) == Lifecycle.ACTIVE }
 
         fun activeChildren(g: GroupId): List<EdgeSummary> =
             children(g).filter { l.lifecycle(it) == Lifecycle.ACTIVE }.mapNotNull { l.edge(it) }

@@ -90,7 +90,9 @@ class EntitlementLedgerLeafLifecycleTest {
         val charged = retired.applying(retired.spend(alice, g, 7L))
         assertAll(
             { assertEquals(19L, charged.holdings(g, alice), "the lane was charged") },
-            { assertEquals(7L, charged.edge(f)?.spent, "the charge landed on g's inbound edge") },
+            // g's own 7, plus a's 4 rolled up through f before ca retired.
+            { assertEquals(11L, charged.edge(f)?.spent, "the charge landed on g's inbound edge") },
+            { assertEquals(7L, charged.storedSlot(CounterFamily.LEAF_SPENT, f, alice), "as g's leaf spend") },
             { assertEquals(emptyList(), charged.validate(), "validate stays clean") },
             // root 70 + g 19 + leafSpent(ca) 4 + leafSpent(f) 7.
             { assertEquals(100L, conserved(charged), "conservation") },

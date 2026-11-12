@@ -345,9 +345,16 @@ public class EntitlementLedger private constructor(
      * not collapsed, and their reconciliation is a later concern.
      */
     public fun activeChildren(parent: GroupId): List<EdgeSummary> =
-        index.value.unretired[parent].orEmpty()
-            .filter { lifecycleOf(it) == Lifecycle.ACTIVE }
-            .mapNotNull { edge(it) }
+        activeChildEdges(parent).mapNotNull { edge(it) }.toList()
+
+    /**
+     * The [Lifecycle.ACTIVE] child edges of [parent], in [AttachmentId] order: the only edges entitlement
+     * can still be handed down ([delegate] refuses every other lifecycle). [activeChildren], which the
+     * allocator descends through, and [isLeaf], which gates [spend] and a node's reserve, both read this
+     * one sequence, so a group is never a leaf to one of them and a group to the other.
+     */
+    private fun activeChildEdges(parent: GroupId): Sequence<AttachmentId> =
+        index.value.unretired[parent].orEmpty().asSequence().filter { lifecycleOf(it) == Lifecycle.ACTIVE }
 
     /**
      * The single [AttachmentRecord] for [id] — its parent, child and weight — or `null` if
@@ -530,8 +537,27 @@ public class EntitlementLedger private constructor(
      */
     private fun childEdges(group: GroupId): List<AttachmentId> = index.value.children[group].orEmpty()
 
-    /** True when [group] has no child edges — the only groups at which service may be spent. */
-    public fun isLeaf(group: GroupId): Boolean = childEdges(group).isEmpty()
+    /**
+     * True when [group] has no [Lifecycle.ACTIVE] child edge (design §5.2: "leaves have no active
+     * outbound edges"). These are the only groups at which [spend] may charge service. Exactly
+     * when this is false, [activeChildren] is non-empty and the allocator can hand [group]'s
+     * holdings down, so the holdings at a group are always usable one way and never both.
+     *
+     * A child edge in any other lifecycle does not count, and each has its reason:
+     *  - **PREPARED** — nothing crosses it yet, and a reverted add may leave it prepared for good.
+     *  - **CLOSING** — no new delegation, so the allocator cannot use [group]'s holdings. If this
+     *    blocked [spend] too, a child that never drains (a crashed peer strands its earmarks, §8.1)
+     *    would freeze [group] for good. Charging [group] mid-drain is sound because [holdings]
+     *    subtracts every child's net inflow whatever its lifecycle: [group] spends only what it
+     *    holds, never what is still out at the child.
+     *  - **RETIRED** — a group a reload turns into a lane keeps its retired children's records, and
+     *    must still be charged.
+     *
+     * So a group stops being a leaf when its first child edge **activates**, not when the record
+     * lands, and becomes one again when its last active child closes. The child edges [holdings]
+     * subtracts are a different set: every child edge ever recorded, in any lifecycle.
+     */
+    public fun isLeaf(group: GroupId): Boolean = activeChildEdges(group).none()
 
     // ─────────────────────────────────────────────────────────────────────────
     // The edge index — derived, never stored (see [index])
@@ -1522,6 +1548,13 @@ public class EntitlementLedger private constructor(
      * `leafSpent(inbound(group))[r]` **and** `rollupSpent(e)[r]` for every strict-prefix
      * edge `e` — one atomic patch keeping per-edge `outstanding` correct at every level
      * (design fix 1). [amount] `0` is a no-op cancel.
+     *
+     * The `require` does not protect conservation: [holdings] subtracts `leafSpent` and every
+     * child's net inflow unconditionally, so a charge at any group stays inside what it holds. It
+     * protects the policy. A group with an ACTIVE child holds entitlement for the allocator to
+     * divide among its children (§7.3), and spending it at the group would bypass that split.
+     * [isLeaf] says when no ACTIVE child exists; a group whose children are only prepared, closing
+     * or retired is a leaf and is charged here.
      */
     public fun spend(r: ReplicaId, group: GroupId, amount: Long): Patch<EntitlementLedger>? {
         require(amount >= 0L) { "spend amount must be non-negative, was $amount" }
