@@ -30,6 +30,7 @@ import us.tractat.kuilt.session.ReservedRoomPrefix
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.assertAll
@@ -232,7 +233,7 @@ class FakeRoomTest {
 
     @Test
     fun `custom constructor args are respected`() = runTest {
-        val token = ResumeToken(PeerId("p"), RoomId("r"), issuedAt = 0L)
+        val token = ResumeToken(PeerId("p"), RoomId("r"), issuedAt = 0L, secret = ResumeSecret.generate())
         val alice = member(PeerId("alice"))
         val room = FakeRoom(
             selfId = PeerId("alice"),
@@ -479,7 +480,7 @@ class FakeRoomTest {
     @Test
     fun `resume returns Success by default`() = runTest {
         val room = FakeRoom()
-        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 0L)
+        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 0L, secret = ResumeSecret.generate())
         assertIs<ResumeResult.Success>(room.resume(token))
     }
 
@@ -487,7 +488,7 @@ class FakeRoomTest {
     fun `resume returns overridden result`() = runTest {
         val room = FakeRoom()
         room.resumeResult = ResumeResult.WindowClosed
-        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 0L)
+        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 0L, secret = ResumeSecret.generate())
         assertIs<ResumeResult.WindowClosed>(room.resume(token))
     }
 
@@ -548,14 +549,14 @@ class FakeRoomTest {
     @Test
     fun `setResumeToken updates resumeToken`() = runTest {
         val room = FakeRoom()
-        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 42L)
+        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 42L, secret = ResumeSecret.generate())
         room.setResumeToken(token)
         assertEquals(token, room.resumeToken)
     }
 
     @Test
     fun `setResumeToken to null clears resumeToken`() = runTest {
-        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 0L)
+        val token = ResumeToken(PeerId("self"), RoomId("r"), issuedAt = 0L, secret = ResumeSecret.generate())
         val room = FakeRoom(initialResumeToken = token)
         room.setResumeToken(null)
         assertNull(room.resumeToken)
