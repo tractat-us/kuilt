@@ -276,10 +276,12 @@ class HeddleNodeTest {
             h.pump()
             val id = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L)).id
 
-            // g1 gains a PREPARED child concurrently → isLeaf(g1) becomes false.
+            // g1 gains an ACTIVE child concurrently → isLeaf(g1) becomes false. A prepared child
+            // alone would not do it (#3191), and the rig would then prove nothing.
             val child = AttachmentRecord(AttachmentId("g1-child"), g1, GroupId("gc"), Weight.ONE)
-            assertTrue(node.prepare(child))
+            assertTrue(node.prepare(child) && node.activate(child.id))
             h.pump()
+            assertFalse(node.ledger.value.isLeaf(g1), "rig: g1 is no longer a leaf")
 
             // complete must NOT throw; it charges the captured path.
             node.complete(id, 6L)
@@ -294,6 +296,76 @@ class HeddleNodeTest {
         // root has children → not a leaf → reserve must refuse (else every complete throws).
         assertEquals(ReserveOutcome.NoHoldings, h.peers[0].node.reserve(root, 10L), "reserve refuses a non-leaf group")
     }
+
+    /**
+     * #3191: a group whose only child retires is a lane, so it can be reserved and charged. The
+     * reserve gate and the allocator read one predicate, so at every step of the reshape exactly
+     * one of them can use g1's holdings: `schedule(g1)` hands them down, or `reserve(g1)` earmarks
+     * them.
+     */
+    @Test
+    fun aGroupWhoseChildRetiredIsReservableAndTheAllocatorAgrees() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val ex = AttachmentId("ex")
+            val h = harness(
+                peers = 1,
+                mint = mapOf(0 to 100L),
+                topology = flatTopology() + AttachmentRecord(ex, g1, GroupId("x"), Weight.ONE),
+            )
+            h.pump()
+            val node = h.peers[0].node
+            node.advertise(e1, hungry)
+            node.schedule(root)
+            h.pump()
+            assertTrue(node.ledger.value.holdings(g1, node.self) > 0L, "rig: g1 holds entitlement")
+
+            // ex is active: g1 is a group. The allocator serves ex, and reserve refuses g1.
+            assertEquals(ReserveOutcome.NoHoldings, node.reserve(g1, 10L), "a group is not reservable")
+            node.advertise(ex, Demand(targetOutstanding = 5L, maximumUsefulGrant = 5L))
+            h.pump()
+            assertTrue(node.schedule(g1) > 0, "the allocator hands a group's holdings down")
+            h.pump()
+
+            // The reload turns g1 into a lane: ex closes. Nothing more goes down it.
+            assertTrue(node.close(ex), "rig: ex closes")
+            h.pump()
+            assertEquals(0, node.schedule(g1), "the allocator hands nothing down a closing edge")
+            val reserved = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L), "g1 is a lane once ex closes")
+            node.complete(reserved.id, 6L)
+            h.pump()
+            val l = node.ledger.value
+            assertAll(
+                { assertEquals(Lifecycle.CLOSING, l.lifecycle(ex), "rig: ex is still draining") },
+                { assertEquals(5L, l.edge(ex)?.outstanding, "rig: ex still holds its grant") },
+                { assertEquals(6L, l.edge(e1)?.spent, "the charge landed on g1's inbound edge") },
+                { assertEquals(emptyList(), l.validate(), "validate stays clean") },
+            )
+        }
+
+    /** #3191: a reverted add leaves a PREPARED child nobody will activate; the lane stays reservable. */
+    @Test
+    fun aLaneWithAStrayPreparedChildIsStillReservable() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+            h.pump()
+            val node = h.peers[0].node
+            node.advertise(e1, hungry)
+            node.schedule(root)
+            h.pump()
+            val stray = AttachmentRecord(AttachmentId("g1-stray"), g1, GroupId("gs"), Weight.ONE)
+            assertTrue(node.prepare(stray), "rig: the stray child is prepared")
+            h.pump()
+            assertEquals(Lifecycle.PREPARED, node.ledger.value.lifecycle(stray.id), "rig: and never activated")
+
+            assertEquals(0, node.schedule(g1), "the allocator hands nothing down a prepared edge")
+            val reserved = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L), "g1 is still a lane")
+            node.complete(reserved.id, 4L)
+            h.pump()
+            assertAll(
+                { assertEquals(4L, node.ledger.value.edge(e1)?.spent, "the charge landed") },
+                { assertEquals(emptyList(), node.ledger.value.validate(), "validate stays clean") },
+            )
+        }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // 4c. An invalid actualCost is rejected WITHOUT corrupting the earmark or losing the
