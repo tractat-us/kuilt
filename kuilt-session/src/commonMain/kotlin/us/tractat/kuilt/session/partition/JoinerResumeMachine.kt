@@ -705,7 +705,8 @@ internal class JoinerResumeMachine(
 
     /**
      * Attempt to resume from [token] after a transport drop: send [AdmitMessage.Resume] to
-     * the host and await the reply. The host replies [AdmitMessage.ResumeAck] →
+     * the host — to the host alone, since it carries the member's secret ([sendToHost]) — and await
+     * the reply. The host replies [AdmitMessage.ResumeAck] →
      * [ResumeResult.Success], or [AdmitMessage.Reject] → [ResumeResult.WindowClosed].
      *
      * **Concurrent calls coalesce (#1280).** A room has one reconnect credential and one host,
@@ -720,7 +721,7 @@ internal class JoinerResumeMachine(
      * host-lost *after* a successful resume. Callers that want a retry after a non-Success
      * result simply call again: sequential calls are fresh attempts.
      *
-     * State mutation (installing/joining the deferred) is under [lock]; the suspend broadcast
+     * State mutation (installing/joining the deferred) is under [lock]; the suspend send
      * is outside. A genuine [CancellationException] from the broadcast propagates, but first
      * resolves the shared deferred as [ResumeResult.WindowClosed] so joined callers are never
      * orphaned. The room's `leave()` resolves any still-pending attempt the same way (via
@@ -808,7 +809,7 @@ internal class JoinerResumeMachine(
      * together and a subsequent [resume] starts a fresh flight. A flight a reply took just before
      * the deadline keeps that reply's verdict: the deadline then only awaits it.
      *
-     * Both caller kinds route through here — the owner (after broadcasting) and a joined caller
+     * Both caller kinds route through here — the owner (after sending) and a joined caller
      * (the `!ownsFlight` early return) — so neither can hang. A late-arriving ResumeAck/Reject
      * after the slot was cleared is a no-op: [takePendingFlight]/[rejectFlight] find no pending
      * flight (or a *later* flight, which the host's single-use-per-window token still resolves

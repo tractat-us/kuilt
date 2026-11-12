@@ -7,24 +7,26 @@ import us.tractat.kuilt.core.PeerId
  * The credential a joiner presents when reconnecting after a transport drop.
  *
  * The host validates three claims, in this order:
- * 1. The [roomId] matches the current session — prevents cross-session replay.
- * 2. The [secret] matches the one the host minted for [peerId] at admit — proves the resume is
- *    [peerId]'s own (#3165). Checked **before** the window is touched, so a wrong secret leaves the
- *    real member's window open.
+ * 1. The [secret] matches the one the host minted for [peerId] at admit — proves the resume is
+ *    [peerId]'s own (#3165). The room checks it **before** the window controller is asked anything,
+ *    so a wrong secret leaves the real member's window open.
+ * 2. The [roomId] matches the current session — prevents cross-session replay.
  * 3. The reconnect window for [peerId] is still open and unspent — prevents stale reconnects.
  *
  * [peerId], [roomId] and [issuedAt] are public knowledge inside a room — every member learns every
  * id and the room id from the roster — so without [secret] any admitted member could write a token
  * for any other. The secret is the one field a bystander never sees: the host sends it only in the
- * direct `Welcome` to the member it names. A joiner whose host sent no secret (a host that predates
- * it) holds no token at all, and re-joins fresh rather than resuming.
+ * direct `Welcome` to the member it names, and the joiner sends it back only to the host. A joiner
+ * whose host sent no secret (a host that predates it) holds no token at all, so it cannot resume.
  *
  * **A token is good only against the host that minted it.** That host keeps the secret and the
- * reconnect window in memory, so a resume against a different host — a re-elected leader, or
- * another server in a cluster — finds neither, and degrades to a fresh join.
+ * reconnect window in memory, so a host that did not mint it — a re-elected leader, or another
+ * server in a cluster — refuses it.
  *
- * `@Serializable` so a joiner can persist the token across its own restart; [secret] serializes as
- * hex and should be stored as the secret it is. [toString] redacts it.
+ * **A persisted token is a bearer secret.** `@Serializable` so a joiner can keep the token across
+ * its own restart (#1593); whoever holds the stored bytes can resume as this member for as long as
+ * the host lives, so store it as you would a password. [secret] serializes as hex; [toString]
+ * redacts it.
  *
  * [issuedAt] is epoch-millis from the injected clock (never [System.currentTimeMillis]
  * directly — callers must inject via `clock: () -> Long`).
