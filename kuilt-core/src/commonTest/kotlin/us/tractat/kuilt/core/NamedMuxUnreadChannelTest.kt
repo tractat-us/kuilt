@@ -19,6 +19,10 @@ import kotlin.test.assertFailsWith
  * Found while checking #2862; it also fails with main's dispatched subscription once its
  * subscribers have started. When #2863 is fixed this test goes red: invert it then, turning
  * the expected isolation failure into a plain passing assertion.
+ *
+ * kuilt-game's `HeartbeatAnswersTest.wedgedPongSendDoesNotStallRaftAndStaysOneInFlight` leans on
+ * the same stall: it measures this floor over a `MuxSeam` to size how long it pings a wedged
+ * joiner, and its floor assertion reds as well once #2863 is fixed. Revisit both together.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class NamedMuxUnreadChannelTest {
