@@ -1742,11 +1742,9 @@ internal class SeamRoom(
      * the whole admit burst — see the comment on the assignment below, which also states what
      * that narrowing costs on a flat loom.
      *
-     * If [welcome.roomId] is set and [resumeToken] is not yet minted, mint it now using
-     * [selfId] as the peer identifier and the received [RoomId].
-     *
-     * Note: the self-admission welcome (`assignedPeerId == selfId`) is used ONLY to mint
-     * the resume token; it does not add self to the roster. Resume confirmations arrive as
+     * The self-admission welcome (`assignedPeerId == selfId`) mints [resumeToken] (once) from its
+     * [RoomId] and the secret the host sent this member alone (#3165); no other shape mints, since
+     * no other shape carries this member's secret. It does not add self to the roster. Resume confirmations arrive as
      * [AdmitMessage.ResumeAck], not as Welcome.
      */
     private fun handleWelcome(sender: PeerId, welcome: AdmitMessage.Welcome) {
@@ -1785,14 +1783,13 @@ internal class SeamRoom(
 
             // Learn the room's identity from the same frame that mints the resume token, so
             // [Room.roomId] and [ResumeToken.roomId] can never name different rooms (#1594). Placed
-            // above the self-admission branch to cover every Welcome shape a joiner accepts, exactly
-            // as the two mintTokenIfAbsent calls below do.
+            // above the self-admission branch to cover every Welcome shape a joiner accepts.
             //
-            // TWO shapes carry a roomId, not one: `admitPeer` builds a single `welcome` with
-            // `roomId = _roomId.value?.value` and both sends it to the joiner itself (the
-            // self-admission Welcome) AND hands that same object to `fanOutToOtherMembers`, which
-            // re-encodes it unchanged to every other admitted member (the roster-sync Welcome). Both
-            // therefore name the room. The bootstrap and host-intro Welcomes send null. Which shape
+            // TWO shapes carry a roomId, not one: `admitPeer` builds one `welcome` with
+            // `roomId = _roomId.value?.value`, sends a copy of it with the joiner's secret added to
+            // the joiner itself (the self-admission Welcome), and hands the secretless original to
+            // `fanOutToOtherMembers`, which re-encodes it to every other admitted member (the
+            // roster-sync Welcome). Both therefore name the room; only the first carries a secret. The bootstrap and host-intro Welcomes send null. Which shape
             // lands first does not matter: they agree on the value, and the write-once guard in
             // [adoptRoomIdIfAbsent] makes every one after the first a no-op.
             adoptRoomIdIfAbsent(welcome.roomId)
