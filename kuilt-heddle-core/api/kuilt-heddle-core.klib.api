@@ -10,6 +10,10 @@ open annotation class us.tractat.kuilt.heddle/HeddleInternalApi : kotlin/Annotat
     constructor <init>() // us.tractat.kuilt.heddle/HeddleInternalApi.<init>|<init>(){}[0]
 }
 
+open annotation class us.tractat.kuilt.heddle/TopologyDraftDsl : kotlin/Annotation { // us.tractat.kuilt.heddle/TopologyDraftDsl|null[0]
+    constructor <init>() // us.tractat.kuilt.heddle/TopologyDraftDsl.<init>|<init>(){}[0]
+}
+
 final enum class us.tractat.kuilt.heddle/CounterFamily : kotlin/Enum<us.tractat.kuilt.heddle/CounterFamily> { // us.tractat.kuilt.heddle/CounterFamily|null[0]
     enum entry ISSUED // us.tractat.kuilt.heddle/CounterFamily.ISSUED|null[0]
     enum entry ISSUED_RELOC_IN // us.tractat.kuilt.heddle/CounterFamily.ISSUED_RELOC_IN|null[0]
@@ -1113,6 +1117,15 @@ final value class us.tractat.kuilt.heddle/ServiceUnits : kotlin/Comparable<us.tr
     }
 }
 
+sealed class us.tractat.kuilt.heddle/TopologyDraft { // us.tractat.kuilt.heddle/TopologyDraft|null[0]
+    final fun group(kotlin/String, us.tractat.kuilt.heddle/Weight = ..., kotlin/Function1<us.tractat.kuilt.heddle/TopologyDraft.Group, kotlin/Unit>) // us.tractat.kuilt.heddle/TopologyDraft.group|group(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Function1<us.tractat.kuilt.heddle.TopologyDraft.Group,kotlin.Unit>){}[0]
+    final fun lane(kotlin/String, us.tractat.kuilt.heddle/Weight = ...) // us.tractat.kuilt.heddle/TopologyDraft.lane|lane(kotlin.String;us.tractat.kuilt.heddle.Weight){}[0]
+
+    final class Group : us.tractat.kuilt.heddle/TopologyDraft { // us.tractat.kuilt.heddle/TopologyDraft.Group|null[0]
+        final fun runtimeChildren(us.tractat.kuilt.heddle/Weight = ...) // us.tractat.kuilt.heddle/TopologyDraft.Group.runtimeChildren|runtimeChildren(us.tractat.kuilt.heddle.Weight){}[0]
+    }
+}
+
 final object us.tractat.kuilt.heddle/HeddlePolicy { // us.tractat.kuilt.heddle/HeddlePolicy|null[0]
     final fun front(kotlin.collections/List<us.tractat.kuilt.heddle/PolicyEdge>, kotlin.collections/Set<us.tractat.kuilt.heddle/AttachmentId> = ...): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/HeddlePolicy.front|front(kotlin.collections.List<us.tractat.kuilt.heddle.PolicyEdge>;kotlin.collections.Set<us.tractat.kuilt.heddle.AttachmentId>){}[0]
     final fun isDemanding(us.tractat.kuilt.heddle/PolicyEdge): kotlin/Boolean // us.tractat.kuilt.heddle/HeddlePolicy.isDemanding|isDemanding(us.tractat.kuilt.heddle.PolicyEdge){}[0]
@@ -1147,4 +1160,5 @@ final object us.tractat.kuilt.heddle/WeightSerializer : kotlinx.serialization/KS
 
 final fun us.tractat.kuilt.heddle/checkedAdd(kotlin/Long, kotlin/Long): kotlin/Long // us.tractat.kuilt.heddle/checkedAdd|checkedAdd(kotlin.Long;kotlin.Long){}[0]
 final fun us.tractat.kuilt.heddle/checkedMul(kotlin/Long, kotlin/Long): kotlin/Long // us.tractat.kuilt.heddle/checkedMul|checkedMul(kotlin.Long;kotlin.Long){}[0]
+final fun us.tractat.kuilt.heddle/draft(kotlin/String, kotlin/Function1<us.tractat.kuilt.heddle/TopologyDraft, kotlin/Unit>): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/draft|draft(kotlin.String;kotlin.Function1<us.tractat.kuilt.heddle.TopologyDraft,kotlin.Unit>){}[0]
 final inline fun <#A: kotlin/Any?, #B: kotlin/Any?> (kotlin.collections/Map<#A, #B>).us.tractat.kuilt.heddle/mergeValues(kotlin.collections/Map<#A, #B>, kotlin/Function2<#B, #B, #B>): kotlin.collections/Map<#A, #B> // us.tractat.kuilt.heddle/mergeValues|mergeValues@kotlin.collections.Map<0:0,0:1>(kotlin.collections.Map<0:0,0:1>;kotlin.Function2<0:1,0:1,0:1>){0§<kotlin.Any?>;1§<kotlin.Any?>}[0]

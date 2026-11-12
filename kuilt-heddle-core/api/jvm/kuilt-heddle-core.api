@@ -1019,6 +1019,25 @@ public final class us/tractat/kuilt/heddle/TopologyDocument$Node$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public abstract class us/tractat/kuilt/heddle/TopologyDraft {
+	public final fun group (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Lkotlin/jvm/functions/Function1;)V
+	public static synthetic fun group$default (Lus/tractat/kuilt/heddle/TopologyDraft;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)V
+	public final fun lane (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;)V
+	public static synthetic fun lane$default (Lus/tractat/kuilt/heddle/TopologyDraft;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;ILjava/lang/Object;)V
+}
+
+public final class us/tractat/kuilt/heddle/TopologyDraft$Group : us/tractat/kuilt/heddle/TopologyDraft {
+	public final fun runtimeChildren (Lus/tractat/kuilt/heddle/Weight;)V
+	public static synthetic fun runtimeChildren$default (Lus/tractat/kuilt/heddle/TopologyDraft$Group;Lus/tractat/kuilt/heddle/Weight;ILjava/lang/Object;)V
+}
+
+public abstract interface annotation class us/tractat/kuilt/heddle/TopologyDraftDsl : java/lang/annotation/Annotation {
+}
+
+public final class us/tractat/kuilt/heddle/TopologyDraftKt {
+	public static final fun draft (Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/heddle/Topology;
+}
+
 public final class us/tractat/kuilt/heddle/TopologyException : java/lang/IllegalArgumentException {
 	public fun <init> (Ljava/util/List;)V
 	public final fun getProblems ()Ljava/util/List;

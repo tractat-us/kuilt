@@ -128,6 +128,20 @@ fairness history.
     check(problem.kind == TopologyProblem.Kind.DUPLICATE_NAME)
 ```
 
+To write a fixed tree in code instead, use `draft(root) { group(name, weight) { … } }`. It builds
+through the same check and throws `TopologyException` with the problems `from` would list.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyDraft -->
+```kotlin
+    val fairness = draft("pool") {
+        group("acme", Weight.of(3)) {
+            lane("interactive", Weight.of(3, 2))
+            lane("batch")
+        }
+        group("tenants") { runtimeChildren() }
+    }
+```
+
 ### Run it over a network — reserve, run, charge once
 
 **Intent:** put the fair-share tally on a live connection between peers — advertise appetite,
