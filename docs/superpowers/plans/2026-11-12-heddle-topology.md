@@ -18,7 +18,7 @@
 4. **D2:** `diff` is re-entrant. **D3:** a change of root throws.
 5. **D3m (confirmed): `Topology` carries no mint plan, and supply is not part of the admin's view.** The engine tops up supply inside `acquire`/`extend` against a watermark. Total capacity sizes that watermark.
 6. **D6:** `LocalHeddle` is not thread-safe and uses no atomicfu. An immutable `snapshot()` lets status and persistence readers avoid the caller's scheduling lock.
-7. **D7:** reconcile by lease, not by executor. `reconcileLeases(live)` reports mismatches in both directions. The consumer completes each orphan at its elapsed cost. An orphan never blocks a reload.
+7. **D7:** reconcile by lease, not by executor. `reconcileLeases(live, now)` reports mismatches in both directions, with each orphan's elapsed cost from its stored `startedAt` (Amendment 8). The consumer completes each orphan at its elapsed cost. An orphan never blocks a reload.
 8. **Q6:** one lease per slot. The consumer owns concurrency, so the engine has no slot gate and no executor view. It keeps only total capacity, for supply sizing. Task C runs before L1's API is frozen, because Task C is the evidence for that API.
 9. **R1: a reweight moves open leases with it (Option A).** In one all-or-nothing step, the engine:
    - releases each open lease's reservation up the old path;
@@ -73,6 +73,14 @@ These override the task sections below where they differ.
    - **Task 5 has one generation-floor rule and caches it.** `diff`'s private `prepareGeneration` (with its adopted-PREPARED carve-out) and `effectiveGeneration` become one function. The engine caches the floor, or L0's `EdgeIndex` folds in a max generation. Each attach must not re-parse every edge (55k at Task C's scale). Task 5 also adds the lowering test's awkward-name set to the diff property generator: escaped segments, an escaped root, and `a`/`a1` siblings for the child-versus-edge tie-break. It also carries a runtime child through a reload with traffic.
    - **Ledger growth** from runtime-child churn and abandoned PREPARED edges is #3192 (needs-design). Until that is settled, the docs advise keeping runtime children attached.
    - **Release.** Maven Central carries `kuilt-heddle-core` only once L1 and P have landed, and the version number is @keddie's call. Until then, `docs/usage.md` documents publishing to Maven Local without an Android SDK: `:kuilt-crdt` and `:kuilt-heddle-core`'s `publishJvmPublicationToMavenLocal` and `publishKotlinMultiplatformPublicationToMavenLocal`.
+8. **A lease carries its start time, as data** (@keddie, 2026-11-12, from a consumer question about settling orphans after a restart). These override the task sections below where they differ.
+   - **The no-clock rule is clarified, not relaxed.** Heddle never *reads* a clock. A time the caller passes in is data, like a cost. It is stored, compared and subtracted, never sampled. Replay stays deterministic, and no id carries a timestamp (#1713).
+   - **L1:** `acquire(…, startedAt: Long)` and `admit(…, startedAt: Long)` store it on `Lease(id, leaf, reserved, startedAt)`. The unit is the cost unit, so elapsed time is a subtraction (R2: cost is time). It never enters an id or a pick, and fairness does not read it.
+   - **L2:** `reconcileLeases(live, now: Long)` reports each orphan as `Orphan(lease, elapsed = max(0, now − startedAt), granted)`. `granted` is the reservation plus the extensions already given. The clamp at 0 absorbs a clock that went backwards across a restart. It still reports and changes nothing: **which orphans to settle, and at what cap, stays the consumer's policy.** A step that will resume later belongs in `live`, so it never becomes an orphan. The documented default settlement is `complete(lease, min(elapsed, granted))`: a dead piece of work's overrun cannot be verified. A consumer with evidence may pass more.
+   - **A late `complete` on a lease that was already settled, or never existed, returns `LeaseOutcome.Unknown` and changes nothing.** It does not re-charge the difference, since that would need tombstones for settled leases. `Stale` stays the answer for an older epoch after a reset (P).
+   - **P:** `startedAt` is persisted with each lease, so start times have one source of truth and survive `persist`/`restore` atomically with the ledger.
+   - **E and S1 may read it:** `explain` shows how long a lease has run, given `now`. S1 shows in-flight age. An overrun hint (`now − startedAt > granted`) is optional.
+   - Tests: `orphanElapsedIsNowMinusStart`, `orphanElapsedClampsAtZeroWhenTheClockGoesBack`, `defaultSettlementCapsAtGranted`, `lateCompleteOfASettledLeaseIsUnknownAndChangesNothing`, `startedAtSurvivesRestore`, `startedAtNeverAffectsAPick` (the same picks with shuffled start times).
 
 ## Verified in source (2026-11-12)
 
@@ -105,7 +113,7 @@ These override the task sections below where they differ.
 - Every zero-argument `@sample` has a `@Test` in `HeddleSamplesRunTest.kt`.
 - No consumer is named. Test names look like `"c-7f3a"`, `"a/b"`, `"é#%@"`, `"#3"`.
 - All output is totally ordered and target-independent. Sort every `Set`/`Map` view, `allEdges()` included. Seeded generators walk only `List`s they built (`forbidHashOrderedSeededDraw`).
-- No clock, timestamp or `Random` in production code. Elapsed cost is a number the caller passes in. A generation is a `Long ≥ 0`.
+- No clock or `Random` in production code, and no timestamp in an id. Elapsed cost, and a lease's `startedAt` (Amendment 8), are numbers the caller passes in. A generation is a `Long ≥ 0`.
 - Gradle runs as `JAVA_HOME=$HOME/.sdkman/candidates/java/25.0.2-tem`, under `timeout 600`, with `--max-workers=6`.
 - **Pre-merge:** `./gradlew clean && timeout 600 ./gradlew :kuilt-heddle-core:build --rerun-tasks --max-workers=6`, and the tasks show EXECUTED. For a docs PR, also run `./gradlew verifyDocCitations verifySampleLinks verifySamplesAreRun verifySkillBodyBudget verifySkillDescriptionBudget`.
 - Claim each task with a Draft PR whose body says `Part of #3173` or `Part of #3176`, and close issues by hand. Commit messages are plain sentences, never "chore", and end with the Co-Authored-By line.
