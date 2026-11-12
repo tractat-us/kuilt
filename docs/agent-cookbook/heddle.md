@@ -101,7 +101,8 @@ generation 0, and `groupId("acme", "batch")` names the group. On a reload,
 `new`, reading which edges exist from the ledger rather than from the old tree, so it works after
 a restart, retires what an earlier reload left draining, and after a partial apply lists exactly
 the rest; a new weight is a new edge, so the group's fairness history restarts at its parent's
-front.
+front. Nothing public applies the steps yet: the single-writer engine's `apply` (Task L3 of #3173)
+will, under one lock, against the ledger it diffed.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyFromDocument -->
 ```kotlin
