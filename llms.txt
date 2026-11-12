@@ -36,6 +36,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Long-lived pumps](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#long-lived-pumps)
 - [A seam's terminal state](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#a-seams-terminal-state)
 - [Durable storage](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#durable-storage)
+- [A host-minted certificate](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#a-host-minted-certificate)
 - [Heddle](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md)
 - [Fair share & placement](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#fair-share--placement)
 - [Otel](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/otel.md)
