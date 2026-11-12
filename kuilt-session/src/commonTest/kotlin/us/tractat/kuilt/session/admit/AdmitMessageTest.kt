@@ -1,5 +1,7 @@
 package us.tractat.kuilt.session.admit
 
+import us.tractat.kuilt.session.partition.ResumeSecret
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -95,6 +97,29 @@ class AdmitMessageTest {
     fun `Resume round-trips`() {
         val original = AdmitMessage.Resume(tokenPeerId = "peer-1", tokenRoomId = "room-9", issuedAt = 1_700_000_000_000L)
         assertEquals(original, AdmitMessage.decode(AdmitMessage.encode(original)))
+    }
+
+    /**
+     * #3165 added the resume secret to [AdmitMessage.Welcome] and [AdmitMessage.Resume]. Both
+     * round-trip with it; and a frame without one — the roster copy a bystander receives, or a
+     * resume from an older joiner — writes no `resumeSecret` key at all, so its bytes are the
+     * pre-#3165 bytes and an older peer decodes it unchanged.
+     */
+    @Test
+    fun `Welcome and Resume round-trip their secret and a secretless frame keeps the old wire`() {
+        val secret = ResumeSecret.generate()
+        val welcome = AdmitMessage.Welcome("peer-1", "Bob", "s-1", roomId = "room-9", resumeSecret = secret)
+        val resume = AdmitMessage.Resume("peer-1", "room-9", issuedAt = 5L, resumeSecret = secret)
+        val rosterCopy = AdmitMessage.encode(welcome.copy(resumeSecret = null))
+        val legacyResume = AdmitMessage.encode(resume.copy(resumeSecret = null))
+        assertAll(
+            { assertEquals(welcome, AdmitMessage.decode(AdmitMessage.encode(welcome))) },
+            { assertEquals(resume, AdmitMessage.decode(AdmitMessage.encode(resume))) },
+            // Positive control for the two absences below: the key IS visible when written.
+            { assertTrue(AdmitMessage.encode(welcome).decodeToString().contains("resumeSecret")) },
+            { assertFalse(rosterCopy.decodeToString().contains("resumeSecret"), "roster copy wrote the key") },
+            { assertFalse(legacyResume.decodeToString().contains("resumeSecret"), "legacy resume wrote the key") },
+        )
     }
 
     @Test

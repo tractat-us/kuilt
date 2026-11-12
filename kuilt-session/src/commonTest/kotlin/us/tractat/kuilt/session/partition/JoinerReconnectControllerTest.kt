@@ -369,6 +369,64 @@ class JoinerReconnectControllerTest {
             assertIs<ResumeResult.Success>(result)
         }
 
+    // ── Resume secret (#3165) ─────────────────────────────────────────────────
+
+    /**
+     * A token naming peerA with peerB's secret — the forgery any member can write, since ids and
+     * the room id are on the roster — is refused, and peerA's own resume afterwards still succeeds.
+     * The second half is the point: a check placed after the window is spent refuses the forgery
+     * too, and only the follow-up resume tells the two apart.
+     */
+    @Test
+    fun `a wrong secret is TokenInvalid and leaves the window open`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            ctrl.onPeerUnresponsive(peerA, at = 0L)
+            testScheduler.advanceTimeBy(1)
+
+            val forged = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretB)
+            val forgedResult = ctrl.tryResume(forged, at = 1L)
+            val genuine = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretA)
+            val genuineResult = ctrl.tryResume(genuine, at = 2L)
+
+            assertAll(
+                { assertEquals(ResumeResult.TokenInvalid("secret-mismatch"), forgedResult) },
+                { assertEquals(ResumeResult.Success, genuineResult, "the forgery must not have spent the window") },
+            )
+        }
+
+    @Test
+    fun `a peer that was never enrolled is TokenInvalid even with its window open`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val stranger = PeerId("peer-never-admitted")
+            ctrl.onPeerUnresponsive(stranger, at = 0L)
+            testScheduler.advanceTimeBy(1)
+
+            val token = ResumeToken(peerId = stranger, roomId = sessionId, issuedAt = 1L, secret = secretA)
+            assertEquals(ResumeResult.TokenInvalid("secret-mismatch"), ctrl.tryResume(token, at = 1L))
+        }
+
+    @Test
+    fun `re-enrolling a peer retires its old secret`() =
+        runTest {
+            val ctrl = controller(backgroundScope)
+            val fresh = ResumeSecret(ByteArray(ResumeSecret.SIZE_BYTES) { 0x0C })
+            ctrl.enroll(peerA, fresh)
+            ctrl.onPeerUnresponsive(peerA, at = 0L)
+            testScheduler.advanceTimeBy(1)
+
+            val stale = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretA)
+            val staleResult = ctrl.tryResume(stale, at = 1L)
+            val current = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = fresh)
+            val currentResult = ctrl.tryResume(current, at = 2L)
+
+            assertAll(
+                { assertEquals(ResumeResult.TokenInvalid("secret-mismatch"), staleResult) },
+                { assertEquals(ResumeResult.Success, currentResult) },
+            )
+        }
+
     // ── Unknown peer ──────────────────────────────────────────────────────────
 
     @Test
