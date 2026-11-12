@@ -536,7 +536,7 @@ public class EntitlementLedger private constructor(
     // The edge index — derived, never stored (see [index])
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Every parent any record under [e] names. Two only for a divergent edge. */
+    /** Every parent any record under [e] names; more than one only for a divergent edge. */
     private fun parentsOf(e: AttachmentId): Set<GroupId> = records[e]?.mapTo(HashSet()) { it.parent }.orEmpty()
 
     /** Every child any record under [e] names. */
