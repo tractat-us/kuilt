@@ -3,7 +3,7 @@
 Status: **draft, revised after review**, 2026-11-12. Epic #3159. Design record: [session 1](https://github.com/tractat-us/kuilt/issues/3159#issuecomment-6756180564),
 [Iain's rulings](https://github.com/tractat-us/kuilt/issues/3159#issuecomment-6836437411), and the session 2
 conversation summarised in § Decided. Reviewed by a builder check, an opus design-architect pass and a
-Fable protocol pass; § Awaiting Iain holds what only he can answer.
+Fable protocol pass; Iain answered the two questions it raised (Decided 11, 12).
 
 ## The story
 
@@ -58,6 +58,11 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
    a design change (my call).
 10. **No mixed versions (my call).** `ProtocolVersion` bumps; an old peer is refused by the existing
     gate.
+11. **A grant is good only with the host that issued it (Iain).** After a host change — lobby
+    re-election, a cluster client on another server — returning people go through ordinary
+    admission. Host-to-host handover of trust is not built.
+12. **Revoking blocks the next return; it does not evict (Iain).** Removing someone present is the
+    app's separate call.
 
 ## Goals
 
@@ -305,15 +310,6 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
 3. Platform key stores, one slice each.
 
 Slices 1 and 2 get a spec-conformance review against this document as well as a code review.
-
-## Awaiting Iain
-
-1. **A change of host.** When the host leaves and another peer takes over (lobby re-election), or a
-   cluster client lands on another server, the new host has a different key. Should people the old
-   host let in still get back in without vetting? The spec currently says no: they fall to ordinary
-   admission.
-2. **Revoking someone who is present.** Does it evict them now, or only stop their next return? The
-   spec currently says only the next return; eviction stays the app's separate call.
 
 ## Deferred
 
