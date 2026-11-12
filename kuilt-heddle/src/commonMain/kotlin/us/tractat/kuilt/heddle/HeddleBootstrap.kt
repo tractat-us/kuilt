@@ -101,8 +101,8 @@ internal fun buildInitialLedger(
     var ledger = EntitlementLedger.bootstrap(root, mint, nonce = BOOTSTRAP_NONCE)
     for (record in topology.sortedBy { it.id }) {
         val prepared = requireNotNull(ledger.prepare(record)) {
-            "heddleStatic topology lists ${record.id} more than once: $record collides with " +
-                "${ledger.recordsOf(record.id)}"
+            "heddleStatic topology lists ${record.id} more than once: " +
+                "${topology.filter { it.id == record.id }}"
         }
         ledger = ledger.piece(prepared)
         val activated = requireNotNull(ledger.activate(record.id)) {
