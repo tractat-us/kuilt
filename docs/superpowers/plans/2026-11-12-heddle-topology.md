@@ -35,6 +35,21 @@
 
 **Dependencies:** #3171 (#3167) is about to merge. It makes `FairShareAllocator` public, with `demand: (AttachmentId) -> Demand`, makes `LedgerCell` public, and adds a cookbook route. Every task here starts after #3171 merges.
 
+## Amendments after Task C (2026-11-12, settled with the user)
+
+These override the task sections below where they differ.
+
+1. **Task 1b: problems are addressed by index path, and every subtree is walked.** This overrules Task 1's merged behaviour (#3182), which skipped the subtree under a child whose own name was empty or duplicated. A `TopologyProblem`'s address is the list of indices from the root to the node it concerns. Names are carried for display only, so two siblings both named `batch` cannot share an address.
+2. **Task L0: a ledger edge index lands before L1, as its own PR.** Task C's scale row measured `acquire` at 5k active + 50k retired edges: 42 ms on JVM and 962 ms on macOS debug, with retired edges alone making it 5–7× slower. L0 adds a parent → child-edges index, a child → inbound-edges index, and a **folded per-parent retired-outflow aggregate**. That aggregate is *not* a skip of retired children: a retired child that ever served has `issued − returned = spent > 0`, and `holdings(parent)` must keep subtracting it. Conservation pins it. L0 also cuts each operation down to one `piece`. It is measured against Task C's `LeaseScaleProbe` (`-Pheddle.scale.probe=true`), before and after.
+3. **L1 inherits Task C's findings.**
+   - Add `FairShareAllocator.pickChild(waiting, eligible)`, which makes one pick with separate waiting and eligible views.
+   - Carry the reservation through `maximumUsefulGrant`, under a long-lived allocator with an unbounded quantum.
+   - Port both fairness arms of `LeaseCharacterizationTest` onto `LocalHeddle`, and require identical `fingerprint()` strings, **before** deleting `LeasePrototype.kt` and that test. L1 inherits the 0.03 overall-share bar. The 0.15 window bar is not validated.
+   - Seating a large newborn cohort is quadratic in `seatPatch`. Fix it in L1 or file it.
+   - L2 sizes the mint chunk, since mint records grow linearly with service.
+4. **Task E: `explain(leaf)` moves out of S2 into its own task, right after L1.** S2 keeps `preview` only.
+5. **Task O1: `:kuilt-heddle-otel`, after S1** (#3184). It lives in a sibling module over core + `:kuilt-otel`, so core's dependency floor stays where it is. It records metrics per group path, a span per lease, and the hold reason (`WaitExplanation`) as a structured attribute, **emitted when a leaf's reason changes**.
+
 ## Verified in source (2026-11-12)
 
 - **A single writer is already serialized, so local `mint` is sound.** This holds only while one process writes. Two processes would each keep their own ledger, and persistence would become last-writer-wins on the stored bytes. Excluding a second writer is the consumer's job.
@@ -274,7 +289,7 @@ Same verification and docs rules. Commit "heddle-core: runtime children in their
 
 ---
 
-### Task L1: `LocalHeddle`, leases with time as the cost [after Task C]
+### Task L1: `LocalHeddle`, leases with time as the cost [after Task C and L0; see Amendments 2–3]
 
 This is one of the two riskiest tasks. Lift Task C's prototype, adjusted by its findings.
 
@@ -478,7 +493,7 @@ Same rules. Commit "heddle-core: LocalHeddle status with severity-graded issues 
 
 ---
 
-### Task S2: `explain(leaf)` and the diff preview [after S1]
+### Task S2: `explain(leaf)` and the diff preview [after S1; `explain` moves to Task E, see Amendment 4]
 
 **Interfaces (produced):**
 ```kotlin
@@ -534,12 +549,16 @@ Same rules. Commit "heddle-core: explain a waiting leaf and preview a reload (#3
 | 2 | 1 | C, L1 | |
 | 3 | 1 | anything | independent, off the consumer's path |
 | 4 | 2 | L1, L2 | |
-| L1 | C | 2, 4 | riskiest (with L3) |
+| 1b | 1 | 2, 3, C | index-path problem addresses (Amendment 1) |
+| L0 | C | 2, 3, 1b, 4 | ledger edge index + folded retired outflow (Amendment 2) |
+| L1 | C, L0 | 2, 4 | riskiest (with L3) |
+| E | L1 | L2, L3, 5 | `explain(leaf)`, split out of S2 (Amendment 4) |
 | L2 | L1 | 4, 5 | |
 | 5 | 4 | L2, L3 | |
 | L3 | 4, L1 | 5, L2 | riskiest |
 | P | L2, L3 | S1 | |
 | S1 | 5, L3 | P | |
-| S2 | S1 | P | |
+| S2 | S1 | P, O1 | `preview` only |
+| O1 | S1 | S2, P | `:kuilt-heddle-otel` (#3184) |
 
 Task A (#3172) was dropped from the plan: it merged as #3175.
