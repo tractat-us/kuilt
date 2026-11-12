@@ -85,7 +85,8 @@ attachments, and enrolling or departing peers. Grants and charges stay local.
 
 Every peer reads the same agreed record of those decisions. A peer that meets
 an entry it cannot read stops spending rather than guess. It answers
-`GateClosed` for good, until a version that reads the entry arrives. So give
+`GateClosed` until a version that reads the entry arrives; a restart stops
+at the same entry. So give
 the record a Raft node of its own, and upgrade peers together.
 
 A decision call that times out can still take effect later. Check before you
