@@ -43,6 +43,10 @@ public class DefaultJoinerReconnectController(
     // Per-peer window state, keyed by PeerId.
     private val windows = mutableMapOf<PeerId, WindowState>()
 
+    // Per-peer resume secret, minted by the host at admit (#3165). Guarded by [mutex] with
+    // [windows], so the secret check and the window spend in [tryResume] are one decision.
+    private val secrets = mutableMapOf<PeerId, ResumeSecret>()
+
     private val _events = MutableSharedFlow<JoinerReconnectEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<JoinerReconnectEvent> = _events.asSharedFlow()
 
@@ -51,6 +55,13 @@ public class DefaultJoinerReconnectController(
         at: Long,
     ) {
         scope.launch { openWindow(peerId, at) }
+    }
+
+    override suspend fun enroll(
+        peerId: PeerId,
+        secret: ResumeSecret,
+    ) {
+        mutex.withLock { secrets[peerId] = secret }
     }
 
     override suspend fun tryResume(
