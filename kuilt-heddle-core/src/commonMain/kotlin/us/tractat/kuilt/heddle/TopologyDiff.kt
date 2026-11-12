@@ -67,7 +67,8 @@ public sealed interface TopologyStep {
  * it no longer wants, and activate the replacements.
  *
  * **Ownership comes from the ledger.** Every edge in [ledger] whose id is in the form
- * [Topology.lower] writes, and whose child lies under [new]'s root, belongs to the diff — whichever
+ * [Topology.lower] or [Topology.attachRuntimeChild] writes, and whose child lies under [new]'s
+ * root, belongs to the diff — whichever
  * topology wrote it, and whether or not the caller still has that topology. So an edge left
  * closing by an earlier reload is still retired by this one, and a diff after a restart needs
  * nothing but the ledger.
@@ -104,8 +105,10 @@ public sealed interface TopologyStep {
  * activations of brand-new children, then closes from the top down, retires from the bottom up,
  * the activations of replacement edges from the top down, and last the [TopologyStep.Reconcile]s
  * of internal groups whose old edges carried work. Within a phase, steps sort by depth, then child
- * id, then edge id. A replacement edge activates only after its predecessor retires, so a child
- * never has two inbound edges carrying work.
+ * id, then edge id, except that a child's steps that cannot be refused come first: the close and
+ * retire of a runtime child's abandoned prepared edge, and a retire with nothing outstanding. A
+ * replacement edge activates only after its predecessor retires, so a child never has two inbound
+ * edges carrying work.
  *
  * @param generation a counter, `>= 0`, for the edges this diff prepares. It is raised past every
  *   generation the ledger holds, so a caller that lost its counter still never reuses an id.
