@@ -47,3 +47,80 @@ internal fun EntitlementLedger.activeTriples(): List<ActiveTriple> =
         .map { checkNotNull(record(it)) { "divergent active edge ${it.value}" } }
         .map { ActiveTriple(it.parent, it.child, it.weight) }
         .sortedWith(compareBy<ActiveTriple> { it.child }.thenBy { it.parent })
+
+/**
+ * What [applyAll] did: the [ledger] after it, the children whose steps it stopped, sorted, and the
+ * children whose [TopologyStep.Reconcile] actually moved something, in step order.
+ */
+internal data class Applied(val ledger: EntitlementLedger, val refused: List<GroupId>, val reconciled: List<GroupId>)
+
+/**
+ * The reference interpreter for a [Topology.diff]: apply [steps] to [ledger] in order, per child.
+ *
+ * A step the ledger refuses stops the rest of that child's steps, and the retires of its ancestors
+ * later in the list, which belong to the same removal and cannot succeed while it holds work. Every
+ * other child carries on. A [TopologyStep.Reconcile] that finds nothing to move is a success.
+ */
+internal fun applyAll(steps: List<TopologyStep>, ledger: EntitlementLedger): Applied {
+    var current = ledger
+    val refused = ArrayList<GroupId>()
+    val reconciled = ArrayList<GroupId>()
+    fun ancestorOfRefused(child: GroupId) = refused.any { it.value.startsWith(child.value + "/") }
+    for (step in steps) {
+        if (step.child in refused) continue
+        if (step is TopologyStep.Retire && ancestorOfRefused(step.child)) {
+            refused += step.child
+            continue
+        }
+        val patched: EntitlementLedger? = when (step) {
+            is TopologyStep.Prepare -> current.prepare(step.record)?.let { current.piece(it) }
+            is TopologyStep.Activate -> current.activate(step.edge)?.let { current.piece(it) }
+            is TopologyStep.Close -> current.close(step.edge)?.let { current.piece(it) }
+            is TopologyStep.Retire -> current.retire(step.edge)?.let { current.piece(it) }
+            is TopologyStep.Reconcile -> when (val move = current.reconcileLocally(step.child)) {
+                is Relocation.Moved -> current.piece(move.patch).also { reconciled += step.child }
+                Relocation.Nothing -> current
+                is Relocation.Refused -> null
+            }
+        }
+        if (patched == null) refused += step.child else current = patched
+    }
+    return Applied(current, refused.sorted(), reconciled)
+}
+
+/**
+ * Hand every unit [holder] holds back up to the root, deepest group first, so every edge with
+ * nothing spent below it drains to `outstanding == 0`. A group whose lineage is quarantined holds
+ * nothing and is skipped.
+ */
+internal fun drainAll(ledger: EntitlementLedger, holder: ReplicaId = BOOT_HOLDER): EntitlementLedger {
+    var current = ledger
+    val groups = ledger.allEdges().mapNotNull { ledger.record(it)?.child }.distinct()
+        .sortedWith(compareByDescending<GroupId> { g -> g.value.count { it == '/' } }.thenBy { it })
+    for (group in groups) {
+        val edge = current.lineageOf(group)?.lastOrNull() ?: continue
+        val held = current.holdings(group, holder)
+        if (held > 0L) {
+            current = current.piece(checkNotNull(current.release(holder, edge, held)) { "release refused at ${group.value}" })
+        }
+    }
+    return current
+}
+
+/**
+ * Delegate [amount] from the root down to [group] along its live lineage, edge by edge; `null` if
+ * any hop is refused.
+ */
+internal fun delegateDown(ledger: EntitlementLedger, group: GroupId, amount: Long, holder: ReplicaId = BOOT_HOLDER): EntitlementLedger? {
+    var current = ledger
+    for (edge in ledger.lineageOf(group) ?: return null) {
+        current = current.piece(current.delegate(holder, edge, amount) ?: return null)
+    }
+    return current
+}
+
+/** Every edge into [child] that is [Lifecycle.ACTIVE] or [Lifecycle.CLOSING], sorted. */
+internal fun EntitlementLedger.liveInto(child: GroupId): List<AttachmentId> =
+    allEdges()
+        .filter { record(it)?.child == child && lifecycle(it).let { l -> l == Lifecycle.ACTIVE || l == Lifecycle.CLOSING } }
+        .sorted()
