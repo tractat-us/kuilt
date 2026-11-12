@@ -35,6 +35,12 @@ import kotlin.time.TimeSource
  * - backlogged: every leaf's overall share within **0.01** of 3:1:1, every 500-step window within **0.05**;
  * - churn: every leaf's overall share within **0.03** of waiting-GPS, every 500-step window within **0.15**.
  *
+ * What the churn bar can see, measured on JVM by editing the prototype: feeding the **eligible** set
+ * to wake detection moves the overall error from 0.0108 to 0.0737 (red) while the window stays
+ * under its bar (0.1234); dropping idle forfeiture altogether moves them to 0.1047 and 0.1661 (both
+ * red). So the overall bound is the sharper instrument, and the window bound alone would miss the
+ * first mistake.
+ *
  * ## Scale
  *
  * 5,000 runtime-style children under one lane plus 50,000 retired edges, built through the ledger's
@@ -61,6 +67,15 @@ class LeaseCharacterizationTest {
             { assertEquals(0, run.nothingEligible, "a backlogged leaf is always eligible") },
             { assertTrue(run.maxOverallError(run.idealWaiting) <= 0.01, "overall share vs 3:1:1: ${run.maxOverallError(run.idealWaiting)}") },
             { assertTrue(run.maxWindowError(run.idealWaiting) <= 0.05, "500-step window vs 3:1:1: ${run.maxWindowError(run.idealWaiting)}") },
+            // The pins: identical on every target, since the walk is over Lists and the allocator sorts.
+            {
+                assertEquals(
+                    "a=12015 b=4006 c=4004 acquires=5001 completes=4999 nothingEligible=0 overruns=2783 extends=3023 " +
+                        "inlineOverruns=1373 filtered=0 wakes=0 mints=502 minUnspent=40",
+                    run.fingerprint(),
+                )
+            },
+            { assertEquals(0.0225, run.maxWindowError(run.idealWaiting), PIN_TOLERANCE, "pinned window error") },
         )
     }
 
@@ -80,6 +95,15 @@ class LeaseCharacterizationTest {
             { assertTrue(run.wakes > 0, "a leaf went idle and came back: ${run.wakes}") },
             { assertTrue(run.maxOverallError(run.idealWaiting) <= 0.03, "overall share vs waiting-GPS: ${run.maxOverallError(run.idealWaiting)}") },
             { assertTrue(run.maxWindowError(run.idealWaiting) <= 0.15, "500-step window vs waiting-GPS: ${run.maxWindowError(run.idealWaiting)}") },
+            {
+                assertEquals(
+                    "a=8334 b=3975 c=4136 acquires=4037 completes=4034 nothingEligible=1929 overruns=2294 extends=2489 " +
+                        "inlineOverruns=1118 filtered=2699 wakes=1511 mints=413 minUnspent=40",
+                    run.fingerprint(),
+                )
+            },
+            { assertEquals(0.0108, run.maxOverallError(run.idealWaiting), PIN_TOLERANCE, "pinned overall error") },
+            { assertEquals(0.0483, run.maxWindowError(run.idealWaiting), PIN_TOLERANCE, "pinned window error") },
         )
     }
 
@@ -213,6 +237,15 @@ class LeaseCharacterizationTest {
             val wantTotal = want.sum()
             if (gotTotal == 0.0 || wantTotal == 0.0) return 0.0
             return LEAVES.indices.maxOf { abs(got[it] / gotTotal - want[it] / wantTotal) }
+        }
+
+        /** Every integer the run produced, in one string, so a pin mismatch shows the whole row. */
+        fun fingerprint(): String {
+            val totals = totals()
+            return LEAVES.indices.joinToString(" ") { "${LEAVES[it].value}=${totals[it]}" } +
+                " acquires=$acquires completes=$completes nothingEligible=$nothingEligible overruns=$overrunCompletes " +
+                "extends=$extends inlineOverruns=$inlineOverruns filtered=$filteredAcquires wakes=$wakes " +
+                "mints=$mints minUnspent=$minUnspent"
         }
 
         fun report(arm: String): String {
@@ -355,6 +388,7 @@ class LeaseCharacterizationTest {
         const val WINDOW = 500
         const val TIMED = 10
         const val PRIMITIVE_REPS = 5
+        const val PIN_TOLERANCE = 1e-4
         const val CAPACITY = 8L
         const val MAX_RESERVATION = 5L
         const val MAX_ACTUAL = 8
