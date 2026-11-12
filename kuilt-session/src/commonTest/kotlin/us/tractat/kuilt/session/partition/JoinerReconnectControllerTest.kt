@@ -32,13 +32,21 @@ class JoinerReconnectControllerTest {
     // Clock always returns 0; virtual time is advanced via testScheduler.
     private val fixedClock: () -> Long = { 0L }
 
-    private fun controller(scope: kotlinx.coroutines.CoroutineScope) =
+    // Fixed, distinct secrets, so a token's secret is chosen by the test rather than drawn.
+    private val secretA = ResumeSecret(ByteArray(ResumeSecret.SIZE_BYTES) { 0x0A })
+    private val secretB = ResumeSecret(ByteArray(ResumeSecret.SIZE_BYTES) { 0x0B })
+
+    /** A controller with [peerA] and [peerB] enrolled, as the host enrols each member at admit. */
+    private suspend fun controller(scope: kotlinx.coroutines.CoroutineScope) =
         DefaultJoinerReconnectController(
             roomId = sessionId,
             reconnectWindowMs = windowMs,
             clock = fixedClock,
             scope = scope,
-        )
+        ).also {
+            it.enroll(peerA, secretA)
+            it.enroll(peerB, secretB)
+        }
 
     // ── Window opened ─────────────────────────────────────────────────────────
 
@@ -109,7 +117,7 @@ class JoinerReconnectControllerTest {
             ctrl.onPeerUnresponsive(peerA, at = 0L)
             testScheduler.advanceTimeBy(1) // flush WindowOpened
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 30_000L)
+            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 30_000L, secret = secretA)
             val result = ctrl.tryResume(token, at = 30_000L)
 
             testScheduler.advanceUntilIdle()
@@ -130,7 +138,7 @@ class JoinerReconnectControllerTest {
             ctrl.onPeerUnresponsive(peerA, at = 0L)
             testScheduler.advanceTimeBy(1)
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L)
+            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretA)
             ctrl.tryResume(token, at = 1L)
 
             val secondResult = ctrl.tryResume(token, at = 2L)
@@ -150,7 +158,7 @@ class JoinerReconnectControllerTest {
             testScheduler.advanceTimeBy(windowMs)
             testScheduler.runCurrent()
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = windowMs + 1L)
+            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = windowMs + 1L, secret = secretA)
             val result = ctrl.tryResume(token, at = windowMs + 1L)
             assertIs<ResumeResult.WindowClosed>(result)
         }
@@ -267,7 +275,7 @@ class JoinerReconnectControllerTest {
             ctrl.onPeerRecovered(peerA, at = 1L)
             testScheduler.advanceTimeBy(1)
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 2L)
+            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 2L, secret = secretA)
             assertEquals(
                 ResumeResult.Success,
                 ctrl.tryResume(token, at = 2L),
@@ -323,7 +331,7 @@ class JoinerReconnectControllerTest {
             ctrl.expire(peerA, at = 1_000L)
             testScheduler.advanceTimeBy(1)
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1_001L)
+            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1_001L, secret = secretA)
             val result = ctrl.tryResume(token, at = 1_001L)
             assertIs<ResumeResult.WindowClosed>(result)
         }
@@ -337,7 +345,7 @@ class JoinerReconnectControllerTest {
             ctrl.onPeerUnresponsive(peerA, at = 0L)
             testScheduler.advanceTimeBy(1)
 
-            val token = ResumeToken(peerId = peerA, roomId = otherSession, issuedAt = 1L)
+            val token = ResumeToken(peerId = peerA, roomId = otherSession, issuedAt = 1L, secret = secretA)
             val result = ctrl.tryResume(token, at = 1L)
 
             assertIs<ResumeResult.TokenInvalid>(result)
@@ -352,11 +360,11 @@ class JoinerReconnectControllerTest {
             testScheduler.advanceTimeBy(1)
 
             // Wrong session — should bounce.
-            val badToken = ResumeToken(peerId = peerA, roomId = otherSession, issuedAt = 1L)
+            val badToken = ResumeToken(peerId = peerA, roomId = otherSession, issuedAt = 1L, secret = secretA)
             ctrl.tryResume(badToken, at = 1L)
 
             // Correct session — window must still be open.
-            val goodToken = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 2L)
+            val goodToken = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 2L, secret = secretA)
             val result = ctrl.tryResume(goodToken, at = 2L)
             assertIs<ResumeResult.Success>(result)
         }
@@ -368,7 +376,7 @@ class JoinerReconnectControllerTest {
         runTest {
             val ctrl = controller(backgroundScope)
 
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 0L)
+            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 0L, secret = secretA)
             val result = ctrl.tryResume(token, at = 0L)
             assertIs<ResumeResult.WindowNotYetOpen>(result)
         }
@@ -384,7 +392,7 @@ class JoinerReconnectControllerTest {
     fun `a window that never opened is distinguishable from one that expired`() =
         runTest {
             val ctrl = controller(backgroundScope)
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 0L)
+            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 0L, secret = secretA)
 
             val neverOpened = ctrl.tryResume(token, at = 0L)
 
@@ -414,7 +422,7 @@ class JoinerReconnectControllerTest {
             ctrl.expire(peerA, at = 1_000L)
             testScheduler.advanceTimeBy(1)
 
-            val tokenB = ResumeToken(peerId = peerB, roomId = sessionId, issuedAt = 1_001L)
+            val tokenB = ResumeToken(peerId = peerB, roomId = sessionId, issuedAt = 1_001L, secret = secretB)
             val result = ctrl.tryResume(tokenB, at = 1_001L)
             assertIs<ResumeResult.Success>(result)
         }
