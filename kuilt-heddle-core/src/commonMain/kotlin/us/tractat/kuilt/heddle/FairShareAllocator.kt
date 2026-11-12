@@ -76,15 +76,16 @@ public class FairShareAllocator(
      *   the holdings it may delegate: a later completion charges its captured path without a gate,
      *   relying on the earmark to have kept the units, so delegating them would overspend (design
      *   §10.1, §10.7).
-     * @param demand the current appetite per child edge; an edge absent from the map wants nothing.
-     *   Called afresh each time the policy input is built.
+     * @param demand the current appetite of one child edge, [Demand.NONE] for an edge that wants
+     *   nothing. Asked once per active child each time the policy input is built, so it should
+     *   answer from live state rather than a copy taken before the call.
      * @return the count of grants applied this call.
      */
     public fun schedule(
         parent: GroupId,
         ledger: LedgerCell,
         earmarked: Long,
-        demand: () -> Map<AttachmentId, Demand>,
+        demand: (AttachmentId) -> Demand,
     ): Int {
         settleJoiners(parent, ledger, demand)
         var grants = 0
@@ -112,7 +113,7 @@ public class FairShareAllocator(
     public fun virtualTime(
         ledger: EntitlementLedger,
         parent: GroupId,
-        demand: () -> Map<AttachmentId, Demand>,
+        demand: (AttachmentId) -> Demand,
     ): Rational? = HeddlePolicy.front(policyEdges(ledger, parent, demand))
 
     /**
@@ -132,7 +133,7 @@ public class FairShareAllocator(
         s: EntitlementLedger,
         parent: GroupId,
         earmarked: Long,
-        demand: () -> Map<AttachmentId, Demand>,
+        demand: (AttachmentId) -> Demand,
     ): Grant? {
         val localHoldings = s.holdings(parent, self) - earmarked
         if (localHoldings <= 0L) return null
@@ -155,15 +156,14 @@ public class FairShareAllocator(
     private fun policyEdges(
         s: EntitlementLedger,
         parent: GroupId,
-        demand: () -> Map<AttachmentId, Demand>,
+        demand: (AttachmentId) -> Demand,
     ): List<PolicyEdge> {
-        val wanted = demand()
         return s.activeChildren(parent).mapNotNull { summary ->
             val record = s.record(summary.attachment) ?: return@mapNotNull null
             PolicyEdge(
                 record = record,
                 summary = summary,
-                demand = wanted[summary.attachment] ?: Demand.NONE,
+                demand = demand(summary.attachment),
                 gauge = s.gauge(summary.attachment),
                 baseIssued = s.baseIssuance(summary.attachment),
                 virtualOffset = wakeOffsets[summary.attachment] ?: Rational.ZERO,
@@ -201,7 +201,7 @@ public class FairShareAllocator(
      *
      * Publishes at most one patch.
      */
-    private fun settleJoiners(parent: GroupId, ledger: LedgerCell, demand: () -> Map<AttachmentId, Demand>) {
+    private fun settleJoiners(parent: GroupId, ledger: LedgerCell, demand: (AttachmentId) -> Demand) {
         val s = ledger.current
         val edges = policyEdges(s, parent, demand)
         forgetDepartedChildren(edges, s, parent)

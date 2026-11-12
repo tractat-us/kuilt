@@ -81,12 +81,18 @@ class FairShareAllocatorTest {
     /** Competing, so the clamp state machine sees it, but `maximumUsefulGrant = 0` trims every grant to nothing. */
     private val competingUnservable = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 0L)
 
+    /** A fixed appetite per edge; every edge not named wants nothing. */
+    private fun demandOf(vararg wants: Pair<AttachmentId, Demand>): (AttachmentId) -> Demand {
+        val byEdge = mapOf(*wants)
+        return { edge -> byEdge[edge] ?: Demand.NONE }
+    }
+
     /**
      * One edge's effective virtual service (raw plus clamp): with [edge] the only child competing,
      * the front *is* that edge's effective virtual service. Reads, never writes.
      */
     private fun FairShareAllocator.effectiveVirtualService(cell: InMemoryLedgerCell, edge: AttachmentId): Rational =
-        assertNotNull(virtualTime(cell.current, root) { mapOf(edge to hungry) }, "root has active children")
+        assertNotNull(virtualTime(cell.current, root, demandOf(edge to hungry)), "root has active children")
 
     @Test
     fun aWakingChildIsClampedToTheFrontInsteadOfBursting() {
@@ -94,13 +100,13 @@ class FairShareAllocatorTest {
         val allocator = FairShareAllocator(self, policy)
 
         // g1 runs alone to its target; g2 is observed idle, so its next demand is a wake.
-        allocator.schedule(root, cell, earmarked = 0L) { mapOf(e1 to Demand(200L, 10L)) }
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to Demand(200L, 10L)))
         assertAll(
             { assertEquals(200L, issued(cell, e1), "e1 runs alone to its target") },
             { assertEquals(0L, issued(cell, e2), "e2 never demanded") },
         )
 
-        allocator.schedule(root, cell, earmarked = 0L) { mapOf(e1 to hungry, e2 to hungry) }
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to hungry, e2 to hungry))
         assertAll(
             { assertEquals(150L, issued(cell, e2), "the waker takes its fair half, not a burst") },
             { assertEquals(350L, issued(cell, e1), "the incumbent keeps its half of what is left") },
@@ -111,13 +117,16 @@ class FairShareAllocatorTest {
     fun aNewbornAndAWakerInOneRoundAreSeatedOnTheSameFront() {
         val cell = flatLedger(mapOf(self to 500L))
         val allocator = FairShareAllocator(self, policy)
-        allocator.schedule(root, cell, earmarked = 0L) { mapOf(e1 to Demand(200L, 10L)) }
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to Demand(200L, 10L)))
 
         // One round: e3 is born and e2 wakes. Nothing is servable, so the gauge reads back as the seat.
         val e3 = newborn(cell, "e3")
-        val granted = allocator.schedule(root, cell, earmarked = 0L) {
-            mapOf(e1 to competingUnservable, e2 to competingUnservable, e3 to competingUnservable)
-        }
+        val granted = allocator.schedule(
+            root,
+            cell,
+            earmarked = 0L,
+            demandOf(e1 to competingUnservable, e2 to competingUnservable, e3 to competingUnservable),
+        )
         assertAll(
             { assertEquals(0, granted, "nothing is servable in the joining round") },
             {
@@ -129,7 +138,7 @@ class FairShareAllocatorTest {
             },
         )
 
-        allocator.schedule(root, cell, earmarked = 0L) { mapOf(e1 to hungry, e2 to hungry, e3 to hungry) }
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to hungry, e2 to hungry, e3 to hungry))
         assertAll(
             { assertEquals(100L, issued(cell, e3), "the newborn takes a third of what is left") },
             { assertEquals(100L, issued(cell, e2), "and so does the waker, clamped to the same front") },
@@ -157,7 +166,7 @@ class FairShareAllocatorTest {
         val b = ReplicaId("b")
         val onB = flatLedger(mapOf(a to 100L, b to 200L))
         val e3 = newborn(onB, "e3")
-        FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L) { mapOf(e1 to hungry, e2 to hungry) }
+        FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L, demandOf(e1 to hungry, e2 to hungry))
         val onA = InMemoryLedgerCell(onB.current)
         assertAll(
             { assertEquals(100L, issued(onA, e1), "A sees e1's run") },
@@ -165,7 +174,7 @@ class FairShareAllocatorTest {
             { assertEquals(Rational.ZERO, assertNotNull(onA.current.gauge(e3)).floor, "and e3 seated at the origin") },
         )
 
-        FairShareAllocator(a, policy).schedule(root, onA, earmarked = 0L) { mapOf(e1 to hungry, e3 to hungry) }
+        FairShareAllocator(a, policy).schedule(root, onA, earmarked = 0L, demandOf(e1 to hungry, e3 to hungry))
         assertAll(
             { assertEquals(100L, issued(onA, e3), "an unclamped first sight honours e3's deficit in full") },
             { assertEquals(100L, issued(onA, e1), "and e1, 100 ahead, takes none of A's grants") },
@@ -180,21 +189,24 @@ class FairShareAllocatorTest {
         val allocator = FairShareAllocator(self, policy)
         val starved = newborn(cell, "e3")
 
-        allocator.schedule(root, cell, earmarked = 0L) { mapOf(e1 to Demand(200L, 10L), starved to competingUnservable) }
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to Demand(200L, 10L), starved to competingUnservable))
         assertEquals(200L, issued(cell, e1), "e1 runs alone to its target")
 
         // e2 wakes into a front of mean(e1 at 200, e3 at 0) = 100, then runs its 20.
-        allocator.schedule(root, cell, earmarked = 0L) {
-            mapOf(e1 to competingUnservable, e2 to Demand(20L, 10L), starved to competingUnservable)
-        }
+        allocator.schedule(
+            root,
+            cell,
+            earmarked = 0L,
+            demandOf(e1 to competingUnservable, e2 to Demand(20L, 10L), starved to competingUnservable),
+        )
         assertAll(
             { assertEquals(20L, issued(cell, e2), "the waker takes the last 20") },
             { assertEquals(Rational.of(120L), allocator.effectiveVirtualService(cell, e2), "clamped by 100, then ran 20") },
         )
 
         // e2 sleeps; then e1 stops too, and e2 re-wakes into a front of e3 alone, at 0.
-        allocator.schedule(root, cell, earmarked = 0L) { mapOf(e1 to competingUnservable, starved to competingUnservable) }
-        allocator.schedule(root, cell, earmarked = 0L) { mapOf(e2 to hungry, starved to competingUnservable) }
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to competingUnservable, starved to competingUnservable))
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e2 to hungry, starved to competingUnservable))
 
         assertEquals(
             Rational.of(120L),
@@ -208,13 +220,13 @@ class FairShareAllocatorTest {
         val cell = flatLedger(mapOf(self to 100L))
         val allocator = FairShareAllocator(self, policy)
 
-        val granted = allocator.schedule(root, cell, earmarked = 40L) { mapOf(e1 to hungry, e2 to hungry) }
+        val granted = allocator.schedule(root, cell, earmarked = 40L, demandOf(e1 to hungry, e2 to hungry))
         assertAll(
             { assertEquals(6, granted, "60 delegable units at a quantum of 10") },
             { assertEquals(60L, issued(cell, e1) + issued(cell, e2), "the 40 earmarked units stay at the root") },
             { assertEquals(40L, cell.current.holdings(root, self), "…where the reservation can still spend them") },
         )
-        assertEquals(0, allocator.schedule(root, cell, earmarked = 40L) { mapOf(e1 to hungry) }, "and a rerun finds nothing")
+        assertEquals(0, allocator.schedule(root, cell, earmarked = 40L, demandOf(e1 to hungry)), "and a rerun finds nothing")
     }
 
     /**
@@ -242,7 +254,7 @@ class FairShareAllocatorTest {
         }
         val allocator = FairShareAllocator(self, policy)
 
-        allocator.schedule(root, cell, earmarked = 0L) { mapOf(e1 to hungry, e2 to hungry, late.id to hungry) }
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to hungry, e2 to hungry, late.id to hungry))
         assertAll(
             { assertTrue(injected, "the rig fired: the late edge arrived after the seat, before a pick") },
             { assertEquals(0L, issued(base, late.id), "it took no grant this round") },
@@ -251,7 +263,7 @@ class FairShareAllocatorTest {
         )
 
         // The next round seats it; `seat` refusing it would leave the gauge absent.
-        allocator.schedule(root, base, earmarked = 0L) { mapOf(late.id to hungry) }
+        allocator.schedule(root, base, earmarked = 0L, demandOf(late.id to hungry))
         assertNotNull(base.current.gauge(late.id), "seated on the following round")
     }
 }

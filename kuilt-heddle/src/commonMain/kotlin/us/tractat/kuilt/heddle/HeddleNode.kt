@@ -548,14 +548,10 @@ public class HeddleNode internal constructor(
     // ─────────────────────────────────────────────────────────────────────────────
 
     /**
-     * The folded **live** demand per edge, for the allocator. A fresh read of [demandTracker] on
-     * every call, so a slot that ages out between two policy reads is gone from the second. Always
-     * called under [lock].
+     * One edge's folded **live** demand, for the allocator. Reads [demandTracker] afresh on every
+     * call, so a slot that has aged out is never served. Always called under [lock].
      */
-    private fun liveDemand(): Map<AttachmentId, Demand> {
-        val live = demandTracker.live()
-        return live.values.flatMapTo(HashSet()) { it.perEdge.keys }.associateWith { foldDemand(live, it) }
-    }
+    private fun liveDemand(edge: AttachmentId): Demand = foldDemand(demandTracker.live(), edge)
 
     /** Fold the live slots' demand for [edge] by taking the most optimistic appetite (design §6). */
     private fun foldDemand(live: Map<ReplicaId, DemandBoard>, edge: AttachmentId): Demand {
