@@ -148,7 +148,7 @@ The PoC also pins the target every candidate is measured against: seating at the
 
 #1713's recommendation. `initialVirtualTime` becomes a constant; the effective seat
 materialises *locally on first demand* as a recomputed wake offset, which is what
-`HeddleNode.wakeOffsets` already is. Its appeal is real and worth stating plainly:
+`FairShareAllocator.wakeOffsets` already is. Its appeal is real and worth stating plainly:
 
 - It collapses **two** mechanisms into one. §7.2 already has a rule for "a child joins
   the competing set" — the §10.6 wake clamp — and a newborn is definitionally a child
@@ -169,7 +169,8 @@ Every one of those is true. A still fails, for a reason none of them touches.
 
 ## 4. Critical soundness finding — A's seat is not recomputable
 
-**`HeddleNode.wakeOffsets` is a per-boot, in-memory `HashMap`** (`HeddleNode.kt:178`).
+**`FairShareAllocator.wakeOffsets` is a per-boot, in-memory `HashMap`** (`:kuilt-heddle-core`;
+a `HeddleNode` builds its one allocator when it starts).
 It is never replicated (deliberately — §7.2), never persisted, and never rebuilt from
 anything. Today that is harmless: losing a wake clamp on restart costs one child a
 bounded idle-credit clamp, and §7.2's justification is exactly that — "divergent offsets
@@ -217,8 +218,9 @@ origin.
 ### 4.1 The newborn discriminator — dissolved, not solved
 
 #1713 names the discriminator as A's open sub-problem, and it is genuinely hard:
-`refreshWakeClamps` deliberately declines to clamp on first sight (`HeddleNode.kt:170-176`
-— an id that has never been observed is never treated as a wake, because forfeiting a
+the wake clamp deliberately declines to clamp on first sight (`FairShareAllocator.settleJoiners`
+counts only an id it has seen idle as a waker, and the class KDoc gives the reason — an id
+that has never been observed is never treated as a wake, because forfeiting a
 deficit accrued under another peer's scheduling is "a penalty this peer has no standing
 to impose"). Distinguishing a newborn from a first-sighted pre-existing edge needs a
 log anchor that `heddleStatic` cannot have, and the data-plane `lifecycle` read is
@@ -489,7 +491,7 @@ apply time.
 
 ## 7. Closing the escape hatch
 
-Both `HeddleNode.prepare(record)` (`HeddleNode.kt:232`) and
+Both `HeddleNode.prepare(record)` and
 `GovernedHeddleNode.prepare(record)` (`HeddleGoverned.kt:194`) accept a hand-built
 `AttachmentRecord`, so an arbitrary seat stays constructible whichever fix lands. Under B
 a hand-built seat is already **inert** — nothing reads the field. That is
@@ -559,7 +561,8 @@ numbers have drifted a few lines since it was written):
 1. **"No `parentVirtualTime` / `front` / `isDemanding` / `wakeOffsets` /
    `refreshWakeClamps` exists on `main`" — now false.** All five ship. §10.6 is wired:
    `policyEdges` passes `wakeOffsets[…]` into `PolicyEdge.virtualOffset`
-   (`HeddleNode.kt:502`), not the default `ZERO`.
+   (`FairShareAllocator.policyEdges`, in `:kuilt-heddle-core` since #3171), not the
+   default `ZERO`.
 2. **"#1700 ships no test for `prepareNeutral` at all" — now false.** Both branches are
    pinned (`prepareNeutralRefusesAnOriginSeatOnAStaleEmptyView`,
    `prepareNeutralSeatsAGenuineFirstGenerationAtTheOrigin`). The recommendation to land
