@@ -155,10 +155,10 @@ class FairShareAllocatorTest {
      * A's round between them instead of paying e3 its deficit.
      *
      * **e2 is load-bearing.** It is the non-joiner that holds that front at 100. Run e1 alone on B
-     * instead, as `HeddleNodeTest.firstObservationOfADemandingEdgeIsNotTreatedAsAWake` does, and
-     * the only non-joiner sits idle at the origin: the wrongly-detected wake clamps e3 to 0, which
-     * moves nothing, and the test stays green with first sight counted as a wake. Measured: that
-     * mutation reds this test and leaves the node-level one green.
+     * instead and the only non-joiner sits idle at the origin: the wrongly-detected wake clamps e3
+     * to 0, which moves nothing, and the test stays green with first sight counted as a wake. The
+     * node-level twin, `HeddleNodeTest.firstObservationOfADemandingEdgeIsNotTreatedAsAWake`, was
+     * written that way and could not see the mutation until #3177 gave it the same e2.
      */
     @Test
     fun aFirstObservationIsNotAWake() {

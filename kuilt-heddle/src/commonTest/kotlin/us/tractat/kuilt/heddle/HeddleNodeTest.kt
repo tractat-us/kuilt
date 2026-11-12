@@ -811,10 +811,20 @@ class HeddleNodeTest {
      * the replicated [Gauge], a *locally* first-sighted edge is seated by this peer's own bump at
      * the front it is joining, so it can never be behind — the deficit under test is only
      * reachable when the seat was written **elsewhere**, at a time when the front was lower. So
-     * peer B seats `e3` at the origin and then runs `e1` up to 200 on its own holdings; peer A
-     * merges that and meets `e3` for the first time already 200 behind. If A treated first sight
-     * as a wake it would clamp `e3` forward to A's front — level with `e1` — and A's grants would
-     * then alternate between them instead of going to the child that is actually owed them.
+     * peer B seats `e3` at the origin and then runs `e1` and `e2` up to 100 each on its own
+     * holdings; peer A merges that and meets all three for the first time, `e3` already 100
+     * behind. If A treated first sight as a wake, `e1` and `e3` would both be joiners, `e3` would
+     * be clamped forward to the front over the one non-joiner — `e2`, at 100 — and A's grants
+     * would then alternate between `e1` and `e3` instead of going to the child that is owed them.
+     *
+     * **`e2` is load-bearing, and so is its bounded target** (issue #3177). It is the non-joiner
+     * that holds the front away from the origin; without it the only non-joiner sits idle at 0, the
+     * wrongly-detected wake clamps `e3` to 0, which moves nothing, and this test stays green with
+     * first sight counted as a wake — which is how it stood until #3177. And demand is replicated
+     * here, so B's advertisement of `e2` is live on A: an unbounded target would leave `e2`
+     * demanding there, make it a third first-sighted "waker", leave no non-joiner at all, and null
+     * the front. `targetOutstanding = 100` lets B fill it exactly, so on A it is active but not
+     * competing. The core twin is `FairShareAllocatorTest.aFirstObservationIsNotAWake`.
      */
     @Test
     fun firstObservationOfADemandingEdgeIsNotTreatedAsAWake() = runTest(
@@ -828,14 +838,23 @@ class HeddleNodeTest {
         val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
 
         // B introduces e3 and schedules: the bump seats e1, e2 and e3 together at the origin (no
-        // front yet), and B then spends its own 200 on e1 alone. A never sees this round.
+        // front yet), and B then spends its own 200 on e1 and e2, 100 each. e2's target is exactly
+        // the 100 it gets, so it stops competing. A never sees this round.
         val behind = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
         assertTrue(b.prepare(behind) && b.activate(behind.id))
         b.advertise(e1, hungrier)
+        b.advertise(e2, Demand(targetOutstanding = 100L, maximumUsefulGrant = 10L))
         b.schedule(root)
         h.pump()
         assertAll(
-            { assertEquals(200L, a.ledger.value.edge(e1)!!.issued, "A merged e1's run") },
+            { assertEquals(100L, a.ledger.value.edge(e1)!!.issued, "A merged e1's run") },
+            {
+                assertEquals(
+                    100L,
+                    a.ledger.value.edge(e2)!!.issued,
+                    "…and e2's, the non-joiner that holds the front away from the origin (the rig)",
+                )
+            },
             {
                 assertEquals(
                     Rational.ZERO,
@@ -845,9 +864,16 @@ class HeddleNodeTest {
             },
         )
 
-        // A's first sight of e3, 200 behind. Unclamped, every one of A's 100 units is owed to it.
+        // A's first sight of e3, 100 behind. Unclamped, every one of A's 100 units is owed to it.
         a.advertise(e1, hungrier)
         a.advertise(behind.id, hungrier)
+        // The rig's other half: e2 is filled, so on A only e1 (100) and e3 (0) compete. Were e2
+        // still demanding this would read 200/3 and the mutation would have no non-joiner to use.
+        assertEquals(
+            Rational.of(50L),
+            a.parentVirtualTime(root),
+            "only e1 and e3 compete on A — e2 is active but filled, the non-joiner off the origin",
+        )
         a.schedule(root)
         h.pump()
 
@@ -862,9 +888,9 @@ class HeddleNodeTest {
             },
             {
                 assertEquals(
-                    200L,
+                    100L,
                     ledger.edge(e1)!!.issued,
-                    "…and e1, 200 ahead, takes none of A's grants — a clamp would have levelled them " +
+                    "…and e1, 100 ahead, takes none of A's grants — a clamp would have levelled them " +
                         "and split the round",
                 )
             },
