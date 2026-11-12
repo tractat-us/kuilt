@@ -20,7 +20,6 @@ import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
@@ -202,7 +201,8 @@ class RoomResumeTest {
             peerId = joinerRoom.selfId,
             roomId = RoomId("room-xyz"), // wrong room
             issuedAt = 0L,
-            secret = ResumeSecret.generate(),
+            // The member's real secret, so the room check is the only thing this token gets wrong.
+            secret = assertNotNull(joinerRoom.resumeToken, "the joiner must hold its token").secret,
         )
 
         val result = joinerRoom.resume(badToken)
