@@ -421,10 +421,11 @@ class JoinerReconnectControllerTest {
             testScheduler.advanceTimeBy(1)
 
             val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretA)
+            val result = ctrl.tryResume(token, at = 1L)
             assertAll(
                 { assertEquals(secretA, again, "re-enrolment must not rotate the secret") },
                 { assertTrue(!secretA.matches(secretB), "two members must not share a secret") },
-                { assertEquals(ResumeResult.Success, ctrl.tryResume(token, at = 1L)) },
+                { assertEquals(ResumeResult.Success, result) },
             )
         }
 
