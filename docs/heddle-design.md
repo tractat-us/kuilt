@@ -94,12 +94,29 @@ relay apportioning propose bandwidth across rooms is the obvious second
 customer — so the dependency arrow points *from* warp *to* the heddle:
 
 ```text
-:kuilt-heddle
-    depends on :kuilt-core, :kuilt-crdt, :kuilt-quilter, :kuilt-liveness
-    control-plane adapter depends on :kuilt-raft
+:kuilt-heddle-core   the policy, the ledger and the local allocator — no network
+    depends on :kuilt-crdt, kotlinx-serialization
+:kuilt-heddle        the node and the Raft-governed control plane
+    depends on :kuilt-heddle-core, :kuilt-core, :kuilt-crdt, :kuilt-raft,
+               :kuilt-quilter, :kuilt-liveness
+               (and :kuilt-store, which arrives through :kuilt-raft)
 :kuilt-warp-heddle   (satellite, alongside :kuilt-warp-planning/-ml/-compiler)
     depends on :kuilt-warp + :kuilt-heddle   (lane-tagged scheduling, §14)
 ```
+
+**The split is at the network.** `:kuilt-heddle-core` holds everything that is
+arithmetic over a ledger: `HeddlePolicy`, `EntitlementLedger`, and
+`FairShareAllocator`, the one copy of the pick-and-grant loop with its seat bump
+and wake clamps. A consumer that only needs to decide shares in one process takes
+that module alone. `HeddleNode` is the allocator plus replication, a demand board
+and reservations. `verifyHeddleCoreDependencies` reds the build if core's main
+classpaths ever resolve `:kuilt-core`, `:kuilt-raft`, `:kuilt-quilter`,
+`:kuilt-liveness` or the coroutines runtime.
+
+The control plane still reads ledger state no consumer should — the finals a
+replica declares on a fenced edge and the projections behind them. Those
+declarations sit in core behind the `@HeddleInternalApi` opt-in, because
+`internal` cannot cross a module boundary.
 
 Warp core carries only an *opaque* lane tag (a warp-local envelope field,
 defaulting to a root lane), so its serialized wire format never references this
@@ -114,8 +131,8 @@ underway (`:kuilt-warp-planning`, `:kuilt-warp-ml`, `:kuilt-warp-compiler`,
 `:kuilt-warp-runtime`; see `docs/warp-roadmap.md`). What warp's whole program
 lacks — at any phase — is a notion of *fairness*. `:kuilt-heddle` slots into
 that real program as the missing apportionment layer (§14), while remaining
-independently consumable. Same experimental posture as the warp satellites:
-out of `:kuilt-bom` and `kuilt.publish` until it earns its way in.
+independently consumable. Both modules are published and constrained by
+`:kuilt-bom`, like every other `kuilt.kmp-library` module.
 
 ## Vocabulary — source concept → kuilt concept
 
