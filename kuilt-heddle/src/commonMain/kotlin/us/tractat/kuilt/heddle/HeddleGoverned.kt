@@ -350,8 +350,9 @@ public class GovernedHeddleNode internal constructor(
      * [LedgerConflict.PersistentNegativeHoldings] / [LedgerConflict.PerEdgeSafety] with zero real overspend
      * (issue #1665). The strand does **not** self-heal. [reconcile] re-homes it onto the child's live lineage
      * through the log — net inflow *and* any service already spent *through* the stranded edge — restoring
-     * conservation and clearing the conflicts. Only a **transfer-tangled** strand stays carved out. Until
-     * reconciled it is the same safe stranding class as a crashed peer's holdings (§8.1).
+     * conservation and clearing the conflicts. Hand-offs made on the strand move with it; [reconcile] lists
+     * the strands it refuses rather than move wrongly. Until reconciled it is the same safe stranding class
+     * as a crashed peer's holdings (§8.1).
      */
     public suspend fun retire(edge: AttachmentId, timeout: Duration? = null): ControlOutcome {
         // Advisory local drain gate: refuse only a *clear* drain violation (outstanding > 0 in the
@@ -440,10 +441,12 @@ public class GovernedHeddleNode internal constructor(
      * edge; a RETIRED inbound edge that does not share the live edge's **parent** (§5.2's telescoping
      * precondition — reparenting across parents stays legal, re-homing a strand across one does not);
      * no RETIRED inbound edge; a barrier not yet open; a barrier still missing acks; nothing left
-     * stranded (already reconciled); or a **transfer-tangled** strand, where a replica's acked finals
-     * leave it net-negative on the edge and re-homing faithfully would have to move transfer rows too
-     * (out of scope). A refusal leaves the conflicts standing — safe and recoverable — never a silent
-     * conservation break.
+     * stranded (already reconciled); a replica whose acked finals show it returned more than it was
+     * issued on a fenced edge; fenced edges that together cannot cover what was charged through them;
+     * or a hand-off an earlier move carried whose donor has not acked
+     * (`EntitlementLedger.relocationPatch` states each precondition). Hand-offs are not a refusal on
+     * their own: the transfer rows on a fenced edge move with the strand (#2366). A refusal leaves the
+     * conflicts standing — safe and recoverable — never a silent conservation break.
      */
     public suspend fun reconcile(child: GroupId, timeout: Duration? = null): ControlOutcome {
         // §9 #3 leader-authority courtesy check — cheap, and it keeps recovery driven from a node that
