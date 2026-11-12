@@ -393,7 +393,8 @@ public class HeddleNode internal constructor(
      * Earmark up to [maximumCost] service units against this peer's holdings at leaf
      * [leaf], returning [ReserveOutcome.Reserved] with a [ReservationId] to complete against,
      * or [ReserveOutcome.NoHoldings] if the peer's *available* holdings (holdings minus
-     * outstanding earmarks) at [leaf] cannot cover it — or [leaf] is not a reservable leaf.
+     * outstanding earmarks) at [leaf] cannot cover it — or [leaf] is not a reservable leaf: it has an
+     * ACTIVE child edge ([EntitlementLedger.isLeaf]), or its lineage is quarantined.
      * A static node has no write gate, so it never answers [GateClosed]. The earmark is **local state, not replicated** (design §4.4): the reserved
      * units simply stay `outstanding` on the leaf edge until spent, which the accounting
      * already charges. A crashed peer strands its earmarks (design §8.1).
@@ -402,7 +403,10 @@ public class HeddleNode internal constructor(
         require(maximumCost > 0L) { "maximumCost must be positive, was $maximumCost" }
         return lock.withLock {
             val s = ledger.value
-            // Reject a non-leaf group up front (else every completion would throw), and
+            // Reject a group with an ACTIVE child up front: its holdings are the allocator's to
+            // hand down (`schedule`), and work reserved there would bypass the split. This is the
+            // predicate `spend` gates on, and it is false exactly when `activeChildren` (the
+            // allocator's descent) is non-empty, so the two cannot disagree (#3191). Then
             // capture the entitlement path NOW, while the topology is valid (design §4.4):
             // the completion charges these exact captured edges, never a later recompute.
             if (!s.isLeaf(leaf)) return@withLock ReserveOutcome.NoHoldings

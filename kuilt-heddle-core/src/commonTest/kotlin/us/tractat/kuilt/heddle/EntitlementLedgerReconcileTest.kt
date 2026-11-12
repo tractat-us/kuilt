@@ -52,12 +52,10 @@ class EntitlementLedgerReconcileTest {
     // #1916 — the cross-parent reparent: `g` moves out from under `a` and in under `b`.
     private val a = GroupId("a")
     private val b = GroupId("b")
-    private val la = GroupId("la")
     private val ea = AttachmentId("ea") // root → a
     private val eb = AttachmentId("eb") // root → b
     private val e5 = AttachmentId("e5") // a → g,  stranded by the raced retire
     private val e6 = AttachmentId("e6") // b → g,  the CROSS-PARENT reparent generation
-    private val e7 = AttachmentId("e7") // a → la, a leaf for `a` to spend its phantom credit through
 
     private fun rec(id: AttachmentId, parent: GroupId, child: GroupId) =
         AttachmentRecord(id, parent, child, Weight.ONE)
@@ -528,13 +526,11 @@ class EntitlementLedgerReconcileTest {
         val move = EntitlementLedger.ZERO.relocationPatch(e6, mapOf(e5 to l.baseFinalsOn(e5)))
         var spent = l.piece(assertIs<Relocation.Moved>(move).patch)
 
-        // `g` is a leaf, so its phantom 10 spends directly. `a` is not (the retired `e5` is still a
-        // child edge of it), so it delegates its phantom 10 to a leaf of its own and spends there.
+        // Both spend directly. `g` is a leaf, and so is `a`: its one child edge `e5` is retired, and a
+        // leaf is a group with no ACTIVE child edge (#3191).
+        assertTrue(spent.isLeaf(a), "rig: a has no active child, so its recovered 10 is spent at a itself")
         spent = spent.piece(assertNotNull(spent.spend(p3, g, 10L), "g's re-homed 10 is spendable").delta)
-        spent = spent.piece(spent.prepare(rec(e7, a, la))!!.delta)
-        spent = spent.piece(spent.activate(e7)!!.delta)
-        spent = spent.piece(assertNotNull(spent.delegate(p3, e7, 10L), "a's recovered 10 is delegable").delta)
-        spent = spent.piece(assertNotNull(spent.spend(p3, la, 10L), "…and spendable").delta)
+        spent = spent.piece(assertNotNull(spent.spend(p3, a, 10L), "a's recovered 10 is spendable too").delta)
 
         assertAll(
             { assertEquals(10L, spent.mintedTotal(), "the mint was never raised") },

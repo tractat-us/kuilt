@@ -303,7 +303,8 @@ class TopologyDiffPropertyTest {
             val lane = lanes[r.nextInt(lanes.size)]
             val amount = 1L + r.nextInt(5)
             val spent = r.nextLong(0, amount + 1)
-            // A lane that was once a group still has child edges, and the ledger charges only leaves.
+            // The ledger charges only leaves. A lane whose old children are closing or retired is one,
+            // so this skips only a lane that still has an ACTIVE child mid-reload (#3191).
             if (!current.isLeaf(lane)) return@repeat
             val delegated = delegateDown(current, lane, amount) ?: return@repeat
             current = delegated

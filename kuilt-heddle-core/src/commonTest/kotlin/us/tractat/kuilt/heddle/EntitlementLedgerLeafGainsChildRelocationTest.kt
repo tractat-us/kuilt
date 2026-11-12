@@ -29,11 +29,10 @@ import kotlin.test.assertTrue
  *
  * `EntitlementLedger.holdings`' KDoc says the split "keeps conservation topology-independent when a
  * former leaf later gains a child". That reshape is the shape — and the ordering is load-bearing,
- * not decoration. `spend` `require`s `isLeaf(group)` and `childEdges` ignores lifecycle entirely,
- * so `isLeaf(h2)` flips false the instant `f2`'s **record** lands: preparing the child before the
- * leaf spend turns step 3 into an `IllegalArgumentException`. Activating `f2` is not optional
- * either — `PREPARED` is not a live edge, so `spend(p, h3, ·)` would find no lineage and return
- * `null`.
+ * not decoration. `spend` `require`s `isLeaf(group)`, and `isLeaf(h2)` flips false the instant
+ * `f2` **activates** (#3191): activating the child before the leaf spend turns step 3 into an
+ * `IllegalArgumentException`. Activating `f2` is not optional either — `PREPARED` is not a live
+ * edge, so `spend(p, h3, ·)` would find no lineage and return `null`.
  *
  * ```
  *  1. mint 100 at root                          minted            = 100
@@ -147,7 +146,7 @@ class EntitlementLedgerLeafGainsChildRelocationTest {
             },
             // The reshape actually happened: h2 is no longer a leaf, and f2 is the child that ended it.
             { assertTrue(l.isLeaf(h3), "h3 is the new leaf") },
-            { assertTrue(!l.isLeaf(h2), "h2 stopped being a leaf when f2's record landed") },
+            { assertTrue(!l.isLeaf(h2), "h2 stopped being a leaf when f2 activated") },
             { assertEquals(3L, l.storedSlot(CounterFamily.LEAF_SPENT, f2, p), "the post-reshape charge is f2's leaf spend") },
             // …and the strand is a real strand: conservation is broken by exactly the stranded
             // holdings, so "restored" below is a claim about the move rather than about nothing.

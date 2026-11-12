@@ -145,7 +145,8 @@ witness** (fix 2). Overflow-checked adds throughout.
   r) return null`; delta bumps `returned(edge)[r] += amount`. `−` at child, `+` at parent.
 - **`transfer(group, from, to, amount)`** — `from != to`; `if amount > holdings(group, from)
   return null`; append to `from`'s own row `transfers[pathKey(group)][from][to] += amount`.
-- **`spend(r, group, amount)`** — `require isLeaf(group)`; `if amount > holdings(group, r)
+- **`spend(r, group, amount)`** — `require isLeaf(group)` (no `ACTIVE` child edge; see
+  `activeChildren` below); `if amount > holdings(group, r)
   return null`; `leafSpent(inbound(group))[r] += amount` and `rollupSpent(e)[r] += amount`
   for each strict-prefix edge `e`. One atomic patch. `cancel = spend(0)` (no-op);
   `actualCost > maximumCost` rejected, never recorded. (`reserve`/`complete` are the H4
@@ -268,6 +269,18 @@ older version does not decode. The version handling that implies is a deliberate
 — a per-edge read, at effective values. `activeChildren(g)` = summaries of the
 `ACTIVE` edges among `childEdges(g)`, sorted by id. Prepared, closing and retired
 children are not scheduling candidates.
+
+`isLeaf(g)` = `activeChildren(g)` is empty: no `ACTIVE` child edge (design §5.2). It reads the
+same edges, so a group the allocator descends into can never also be charged, and the leaf
+predicate never refuses one it does not descend into (#3191). Such a group can still be
+uncharged for other reasons: the root has no edge to charge, and a quarantined lineage holds
+nothing. It is not `childEdges(g)` is empty. A reload that turns a group into a lane closes its
+children, and they stay `CLOSING` while their open work drains. The lane must be chargeable at
+once, since nothing can be delegated across a closing edge, so nothing else could use what it
+holds. Afterwards it keeps its retired children's records for good. A reverted add can leave a
+`PREPARED` child for good, and across peers a crashed peer's stranded earmarks can keep a child
+`CLOSING` forever. Charging a group while a child drains is sound because `holdings` subtracts
+every child's net inflow whatever its lifecycle.
 
 ## `validate(): List<LedgerConflict>` (fix 3)
 
