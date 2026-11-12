@@ -23,8 +23,13 @@ tasks.withType<Test>().configureEach {
 }
 
 kotlin {
+    // The control plane reads ledger state no consumer should (the relocation fence's finals and
+    // the edge projections behind them). Those declarations live in :kuilt-heddle-core behind
+    // @HeddleInternalApi, because `internal` cannot cross the module boundary.
+    compilerOptions { optIn.add("us.tractat.kuilt.heddle.HeddleInternalApi") }
     sourceSets {
         commonMain.dependencies {
+            api(project(":kuilt-heddle-core"))
             api(project(":kuilt-crdt"))
             api(project(":kuilt-core"))
             api(project(":kuilt-raft"))
